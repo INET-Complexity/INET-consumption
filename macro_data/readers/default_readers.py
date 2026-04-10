@@ -48,7 +48,6 @@ from macro_data.readers.icio_sea_matching import (
 )
 from macro_data.readers.io_tables.icio_reader import ICIOReader, split_gfcf_column
 from macro_data.readers.io_tables.industries import AGGREGATED_INDUSTRIES
-from macro_data.readers.io_tables.mappings import ICIO_AGGREGATE, ICIO_ALL
 from macro_data.readers.population_data.compustat_banks_reader import (
     CompustatBanksReader,
 )
@@ -174,7 +173,7 @@ class DataReaders:
         ecb_reader (ECBReader): ECB data reader
         compustat_firms (CompustatFirmsReader): Compustat firms data reader
         compustat_banks (CompustatBanksReader): Compustat banks data reader
-        emissions (EmissionsReader): Emissions data reader
+        emissions (Optional[EmissionsReader]): Emissions data reader
         regions_dict (Optional[dict[Country, list[Region]]]): Regional disaggregation mapping
     """
 
@@ -192,7 +191,7 @@ class DataReaders:
     ecb_reader: ECBReader
     compustat_firms: CompustatFirmsReader
     compustat_banks: CompustatBanksReader
-    emissions: EmissionsReader
+    emissions: Optional[EmissionsReader]
     regions_dict: Optional[dict[Country, list[Region]]] = None
 
     @classmethod
@@ -213,6 +212,7 @@ class DataReaders:
         use_disagg_can_2014_reader: bool = False,
         use_provincial_can_reader: bool = False,
         regions_dict: dict[Country, list[Region]] = None,
+        allow_missing_emissions: bool = False,
     ):
         if regions_dict:
             all_regions = [region for regions in regions_dict.values() for region in regions]
@@ -222,16 +222,12 @@ class DataReaders:
             proxy_country_dict = {country: country for country in country_names}
 
         raw_data_path = Path(raw_data_path)
-        short_names = {country_name: country_name.to_two_letter_code() for country_name in country_names}
-
         if single_icio_survey:
             all_years = [simulation_year]
         else:
             all_years = range(exog_data_range[0], exog_data_range[1] + 1)
 
         datapaths = DataPaths.default_paths(raw_data_path, all_years)
-
-        icio_mapping = ICIO_AGGREGATE if aggregate_industries else ICIO_ALL
 
         goods_criticality = GoodsCriticalityReader.from_csv(path=datapaths.goods_criticality_path)
         exchange_rates = ExchangeRatesReader.from_csv(path=datapaths.exchange_rates_path)
@@ -458,7 +454,16 @@ class DataReaders:
             imf_reader.prune(prune_date)
             world_bank.prune(prune_date)
 
-        emissions = EmissionsReader.read_price_data(datapaths.emissions_path)
+        try:
+            emissions = EmissionsReader.read_price_data(datapaths.emissions_path)
+        except FileNotFoundError:
+            if not allow_missing_emissions:
+                raise
+            warnings.warn(
+                "Emissions CSV files not found in raw data. Continuing with emissions disabled.",
+                DataFilterWarning,
+            )
+            emissions = None
 
         return cls(
             icio=icio,

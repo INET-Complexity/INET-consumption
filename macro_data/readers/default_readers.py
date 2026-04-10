@@ -173,7 +173,7 @@ class DataReaders:
         ecb_reader (ECBReader): ECB data reader
         compustat_firms (CompustatFirmsReader): Compustat firms data reader
         compustat_banks (CompustatBanksReader): Compustat banks data reader
-        emissions (EmissionsReader): Emissions data reader
+        emissions (Optional[EmissionsReader]): Emissions data reader
         regions_dict (Optional[dict[Country, list[Region]]]): Regional disaggregation mapping
     """
 
@@ -191,7 +191,7 @@ class DataReaders:
     ecb_reader: ECBReader
     compustat_firms: CompustatFirmsReader
     compustat_banks: CompustatBanksReader
-    emissions: EmissionsReader
+    emissions: Optional[EmissionsReader]
     regions_dict: Optional[dict[Country, list[Region]]] = None
 
     @classmethod
@@ -212,6 +212,7 @@ class DataReaders:
         use_disagg_can_2014_reader: bool = False,
         use_provincial_can_reader: bool = False,
         regions_dict: dict[Country, list[Region]] = None,
+        allow_missing_emissions: bool = False,
     ):
         if regions_dict:
             all_regions = [region for regions in regions_dict.values() for region in regions]
@@ -453,7 +454,16 @@ class DataReaders:
             imf_reader.prune(prune_date)
             world_bank.prune(prune_date)
 
-        emissions = EmissionsReader.read_price_data(datapaths.emissions_path)
+        try:
+            emissions = EmissionsReader.read_price_data(datapaths.emissions_path)
+        except FileNotFoundError:
+            if not allow_missing_emissions:
+                raise
+            warnings.warn(
+                "Emissions CSV files not found in raw data. Continuing with emissions disabled.",
+                DataFilterWarning,
+            )
+            emissions = None
 
         return cls(
             icio=icio,

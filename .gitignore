@@ -1,12 +1,10 @@
-# Byte-compiled / optimized / DLL files
+# Python bytecode / extensions
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
 
-# Distribution / packaging
+# Packaging / build
 .Python
 build/
 develop-eggs/
@@ -27,18 +25,18 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
-# Installer logs
+# Logs / databases
+*.log
 pip-log.txt
 pip-delete-this-directory.txt
+db.sqlite3
+db.sqlite3-journal
 
-# Unit test / coverage reports
+# Tests / coverage
 htmlcov/
 .tox/
 .nox/
@@ -52,56 +50,15 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
+# Docs build
 docs/_build/
+/site
 
-# PyBuilder
-target/
-
-# Jupyter Notebook
+# Jupyter / IPython
 .ipynb_checkpoints
 *.ipynb
-
-# IPython
 profile_default/
 ipython_config.py
-
-# pyenv
-.python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
 
 # Environments
 .env
@@ -111,52 +68,50 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.python-version
+__pypackages__/
 
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-#MacOS
-**/.DS_Store
-
-# mypy
+# Tool caches
 .mypy_cache/
 .dmypy.json
 dmypy.json
-
-# Pyre type checker
 .pyre/
 
-# custom ignores
-# Default ignored files
+# IDE / editor
+.idea/
+.vscode/
 /shelf/
 /workspace.xml
-# Editor-based HTTP Client requests
 /httpRequests/
-# Datasource local storage ignored files
 /dataSources/
 /dataSources.local.xml
-# IDE files
-.idea/
+.spyderproject
+.spyproject
+.ropeproject
+*.swp
+*.bak
+*.tmp
 
-# Confidential data backups (keep locally, do not commit)
+# OS files
+**/.DS_Store
+
+# Project local data / experiments
 spoof_data/original_hfcs/
 spoof_data/original_compustat/
-
-# Only track README.md in spoof_data, ignore other markdown files
 spoof_data/*.md
 !spoof_data/README.md
 
-# Debugging experiments (local only)
 debugging_experiments/
-
-# Dev folders where large data files are stored
 dev/
 inet-macro-dev/
 macro-dev/
+
+# Generated model/data artifacts
+*.h5
+*.parquet
+*.pkl
+
+# Local run_model data
+run_model/data/raw_data/
+run_model/data/output_data/
+run_model/data/output_datadata.pkl

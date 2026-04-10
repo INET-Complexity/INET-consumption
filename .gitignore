@@ -160,3 +160,31 @@ debugging_experiments/
 dev/
 inet-macro-dev/
 macro-dev/
+
+# Raw and output data
+run_model/data
+
+# File formats
+*.py[cod]
+*.so
+*.log
+*.sqlite3
+*.env
+*.DS_Store
+*.ipynb_checkpoints/
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
+*.pyc
+*.csv
+*.gz
+*.xlsx
+*.png
+*.xls
+*.tex
+*.md
+*.parquet
+*.pkl
+*.pdf

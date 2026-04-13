@@ -399,9 +399,7 @@ def compile_national_accounts_data(
         "Gross Value Added - B, C, D, E (Growth)": get_growth_values(
             "Gross Value Added - B, C, D, E", fallback_column="GDP"
         ),
-        "Gross Value Added - B, C, D, E (Value)": get_growth(
-            "Gross Value Added - B, C, D, E", fallback_column="GDP"
-        )
+        "Gross Value Added - B, C, D, E (Value)": get_growth("Gross Value Added - B, C, D, E", fallback_column="GDP")
         * industry_vectors["Value Added in LCU"].iloc[[1, 2, 3, 4]].sum(),
         "Gross Value Added - C (Growth)": get_growth_values("Gross Value Added - C", fallback_column="GDP"),
         "Gross Value Added - C (Value)": get_growth("Gross Value Added - C", fallback_column="GDP")
@@ -434,7 +432,9 @@ def compile_national_accounts_data(
         "Gross Value Added - O, P, Q (Growth)": get_growth_values("Gross Value Added - O, P, Q", fallback_column="GDP"),
         "Gross Value Added - O, P, Q (Value)": get_growth("Gross Value Added - O, P, Q", fallback_column="GDP")
         * industry_vectors["Value Added in LCU"].iloc[[14, 15, 16]].sum(),
-        "Gross Value Added - R, S, T, U (Growth)": get_growth_values("Gross Value Added - R, S, T, U", fallback_column="GDP"),
+        "Gross Value Added - R, S, T, U (Growth)": get_growth_values(
+            "Gross Value Added - R, S, T, U", fallback_column="GDP"
+        ),
         "Gross Value Added - R, S, T, U (Value)": get_growth("Gross Value Added - R, S, T, U", fallback_column="GDP")
         * industry_vectors["Value Added in LCU"].iloc[[17]].sum(),
     }

@@ -1,6 +1,7 @@
+import numpy as np
+
 from macro_data.configuration.countries import Country
 from macro_data.readers.exogenous_data import ExogenousCountryData
-import numpy as np
 
 
 class TestExogenous:

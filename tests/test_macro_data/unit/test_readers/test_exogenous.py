@@ -39,22 +39,22 @@ class TestExogenous:
         for column in oecd_only_columns:
             assert merged_growth[column].equals(oecd_growth.loc[merged_growth.index, column])
 
-    # def test__nominal_and_real_hh_to_gdp_ratios_are_consistent(self, readers, industry_data):
-    #     country = Country("FRA")
-    #     data = ExogenousCountryData.from_data_readers(
-    #         country_name=country,
-    #         readers=readers,
-    #         year=2014,
-    #         quarter=1,
-    #         industry_vectors=industry_data[country]["industry_vectors"],
-    #     )
+    def test__nominal_and_real_hh_to_gdp_ratios_are_consistent(self, readers, industry_data):
+        country = Country("FRA")
+        data = ExogenousCountryData.from_data_readers(
+            country_name=country,
+            readers=readers,
+            year=2014,
+            quarter=1,
+            industry_vectors=industry_data[country]["industry_vectors"],
+        )
 
-    #     nominal_ratio = data.national_accounts["Household Consumption (Value)"] / data.national_accounts["GDP (Value)"]
-    #     real_ratio = data.national_accounts["Real Household Consumption (Value)"] / data.national_accounts[
-    #         "Real GDP (Value)"
-    #     ]
+        nominal_ratio = data.national_accounts["Household Consumption (Value)"] / data.national_accounts["GDP (Value)"]
+        real_ratio = (
+            data.national_accounts["Real Household Consumption (Value)"] / data.national_accounts["Real GDP (Value)"]
+        )
 
-    #     assert np.allclose(nominal_ratio, real_ratio, equal_nan=True)
+        assert np.allclose(nominal_ratio, real_ratio, equal_nan=True)
 
     def test__exogenous(self, readers, industry_data):
         country = Country("FRA")

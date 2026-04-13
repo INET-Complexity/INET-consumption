@@ -50,9 +50,9 @@ class TestExogenous:
         )
 
         nominal_ratio = data.national_accounts["Household Consumption (Value)"] / data.national_accounts["GDP (Value)"]
-        real_ratio = data.national_accounts["Real Household Consumption (Value)"] / data.national_accounts[
-            "Real GDP (Value)"
-        ]
+        real_ratio = (
+            data.national_accounts["Real Household Consumption (Value)"] / data.national_accounts["Real GDP (Value)"]
+        )
 
         assert np.allclose(nominal_ratio, real_ratio, equal_nan=True)
 

@@ -135,7 +135,6 @@ class DataWrapper:
         raw_data_path: Path | str,
         single_hfcs_survey: bool = True,
         single_icio_survey: bool = True,
-        allow_missing_emissions: bool = False,
     ) -> "DataWrapper":
         """
         Create a DataWrapper instance from a configuration.
@@ -212,7 +211,6 @@ class DataWrapper:
             use_disagg_can_2014_reader=configuration.can_disaggregation,
             use_provincial_can_reader=use_provincial_can_reader,
             regions_dict=regions_dict,
-            allow_missing_emissions=allow_missing_emissions,
         )
 
         if regions_dict:
@@ -222,18 +220,17 @@ class DataWrapper:
         # override industries
         industries = readers.icio[year].industries
 
+        emission_factors = readers.emissions.get_emissions_factors(year)
+
         add_emissions = False
-        if readers.emissions is None:
-            emission_factors = {"coal": 0.0, "oil": 0.0, "gas": 0.0, "coke_refining": 0.0}
+
+        if all([emitting_ind in industries for emitting_ind in ["B05a", "B05b", "B05c"]]):
+            emission_factors["coke_refining"] = get_coke_refining_emissions(
+                readers.icio[year], emission_factors, country_names + ["ROW"], year
+            )
+            add_emissions = True
         else:
-            emission_factors = readers.emissions.get_emissions_factors(year)
-            if all([emitting_ind in industries for emitting_ind in ["B05a", "B05b", "B05c"]]):
-                emission_factors["coke_refining"] = get_coke_refining_emissions(
-                    readers.icio[year], emission_factors, country_names + ["ROW"], year
-                )
-                add_emissions = True
-            else:
-                emission_factors["coke_refining"] = np.mean(list(emission_factors.values()))
+            emission_factors["coke_refining"] = np.mean(list(emission_factors.values()))
 
         single_firm_dict = {
             country: configuration.country_configs[country].single_firm_per_industry for country in country_names

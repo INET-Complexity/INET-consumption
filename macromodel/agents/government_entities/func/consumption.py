@@ -288,7 +288,6 @@ class ConstantGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         else:
             growth_factor = 1 + self.default_growth
 
-
         return np.maximum(
             0.0,
             (1 + expected_inflation)

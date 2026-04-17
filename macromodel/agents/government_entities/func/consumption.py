@@ -25,6 +25,16 @@ from macromodel.forecaster.forecaster import (
 )
 
 
+def _normalise_government_consumption_weights(previous_desired_government_consumption: np.ndarray) -> np.ndarray:
+    """Return stable industry weights for government consumption targets."""
+    weights = np.asarray(previous_desired_government_consumption, dtype=float)
+    weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
+    weights_sum = weights.sum()
+    if weights_sum <= 0.0:
+        return np.full(weights.shape, 1.0 / len(weights))
+    return weights / weights_sum
+
+
 class GovernmentConsumptionSetter(ABC):
     """Abstract base class for government consumption strategies.
 
@@ -200,14 +210,10 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             )
 
         # Weighted by prices
+        consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
         return np.maximum(
             0.0,
-            (1 + expected_inflation)
-            * current_good_prices
-            / initial_good_prices
-            * consumption
-            * previous_desired_government_consumption
-            / previous_desired_government_consumption.sum(),
+            (1 + expected_inflation) * current_good_prices / initial_good_prices * consumption * consumption_weights,
         )
 
 
@@ -396,14 +402,10 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
             )
 
         # Weighted by prices
+        consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
         return np.maximum(
             0.0,
-            (1 + expected_inflation)
-            * current_good_prices
-            / initial_good_prices
-            * consumption
-            * previous_desired_government_consumption
-            / previous_desired_government_consumption.sum(),
+            (1 + expected_inflation) * current_good_prices / initial_good_prices * consumption * consumption_weights,
         )
 
 
@@ -479,11 +481,16 @@ class ExogenousGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             )
         if current_time >= len(exogenous_total_consumption):
             raise ValueError("No exogenous data available beyond this point.")
+        if not np.isfinite(exogenous_total_consumption[current_time]):
+            raise ValueError(
+                "ExogenousGovernmentConsumptionSetter: non-finite exogenous government consumption with "
+                f"current_time={current_time}, value={exogenous_total_consumption[current_time]}"
+            )
+        consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
         return (
             (1 + expected_inflation)
             * current_good_prices
             / initial_good_prices
             * exogenous_total_consumption[current_time]
-            * previous_desired_government_consumption
-            / previous_desired_government_consumption.sum()
+            * consumption_weights
         )

@@ -1,0 +1,49 @@
+# Data configuration (FRA)
+countries: ['FRA']
+year: 2014
+quarter: 1
+time_unit: 3
+prune_date: null
+purpose: "Consumption module"
+author: INET - Andrea Gurgone
+aggregate_industries: false
+can_disaggregation: false
+seed: 38
+aggregation_structure: null
+
+
+country_configs:
+  FRA:
+    firms_configuration:
+      constructor: Default
+      zero_initial_deposits: false
+      zero_initial_debt: false
+      initial_inventory_to_input_fraction: 0
+      intermediate_inputs_utilisation_rate: 1.0
+      capital_inputs_utilisation_rate: 1.0
+
+    banks_configuration:
+      constructor: Default
+      long_term_firm_loan_maturity: 60
+      consumption_exp_loan_maturity: 12
+      mortgage_maturity: 120
+      interest_rates:
+        consumption_loans_markup: 0.01
+        mortgage_markup: 0.1
+        household_overdraft_markup: 0.01
+
+    central_bank_configuration:
+      inflation_target: 0.02
+
+    single_bank: false
+    single_firm_per_industry: true
+    single_government_entity: false
+    scale: 10000
+    eu_proxy_country: null
+    carbon_price: 0.0
+
+row_data_config:
+  fit_imports: false
+  fit_exports: false
+  assume_one_exporter_by_industry: true
+

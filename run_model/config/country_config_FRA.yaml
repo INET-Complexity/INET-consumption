@@ -1,0 +1,461 @@
+FRA:
+  economy:
+    functions:
+      growth:
+        name: GrowthManualForecastingAutoReg
+        path_name: growth
+        parameters:
+          lags: 1
+          value: 0.0
+      house_price_index:
+        name: HPIManualForecastingAutoReg
+        path_name: house_price_index
+        parameters:
+          lags: 1
+          value: 0.0
+      inflation:
+        name: InflationManualForecastingAutoReg
+        path_name: inflation
+        parameters:
+          lags: 1
+          value: 0.0
+
+  individuals:
+    functions:
+      demography:
+        name: NoAging
+        path_name: demography
+        parameters: {}
+      income:
+        name: DefaultIncomeSetter
+        path_name: income
+        parameters: {}
+      labour_inputs:
+        name: ScaledIndividualsProductivitySetter
+        path_name: labour_inputs
+        parameters:
+          decrease_unemployed: 0.0
+          increase_employed: 0.0
+      reservation_wages:
+        name: DefaultReservationWageSetter
+        path_name: reservation_wages
+        parameters:
+          unemployed_reservation_wage_timespan: 0
+
+  households:
+    functions:
+      consumption:
+        name: DefaultHouseholdConsumption
+        path_name: consumption
+        parameters:
+          consumption_smoothing_fraction: 0.0
+          consumption_smoothing_window: 12
+          elasticity_of_substitution: 1.0
+          minimum_consumption_fraction: 1.0
+      financial_assets:
+        name: DefaultFinancialAssets
+        path_name: financial_assets
+        parameters:
+          income_from_fa_noise_std: 0.0
+      insolvency:
+        name: DefaultHouseholdInsolvencyHandler
+        path_name: insolvency
+        parameters: {}
+      investment:
+        name: DefaultHouseholdInvestment
+        path_name: investment
+        parameters: {}
+      property:
+        name: DefaultHouseholdDemandForProperty
+        path_name: property
+        parameters:
+          cost_comparison_temperature: 1.0
+          maximum_price_income_coefficient: 5.0
+          maximum_price_income_exponent: 1.0
+          maximum_price_noise_mean: 0.0
+          maximum_price_noise_variance: 0.3
+          maximum_rent_income_coefficient: 0.2
+          maximum_rent_income_exponent: 0.0
+          partial_rent_inflation_delay: 1
+          partial_rent_inflation_indexation: 0.0
+          price_decrease_mean: 0.0
+          price_decrease_probability: 0.0
+          price_decrease_variance: 0.0
+          price_initial_markup: 0.0
+          probability_stay_in_owned_property: 0.5
+          probability_stay_in_rented_property: 0.5
+          psychological_pressure_of_renting: 0.1
+          rent_decrease_mean: 0.0
+          rent_decrease_probability: 0.0
+          rent_decrease_variance: 0.0
+          rent_initial_markup: 0.0
+      rent:
+        name: ConstantRentSetter
+        path_name: rent
+        parameters:
+          new_property_rent_markup: 0.1
+          offered_rent_decrease: 0.03
+          partial_rent_inflation_indexation: 0.0
+      saving_rates:
+        name: AverageSavingRatesSetter
+        path_name: saving_rates
+        parameters:
+          independents:
+            - Income
+            - Debt
+      social_transfers:
+        name: EqualSocialTransfersSetter
+        path_name: social_transfers
+        parameters:
+          independents:
+            - Income
+            - Debt
+      target_credit:
+        name: DefaultHouseholdTargetCredit
+        path_name: target_credit
+        parameters:
+          down_payment_fraction: 1.0
+      wealth:
+        name: DefaultWealthSetter
+        path_name: wealth
+        parameters:
+          other_real_assets_depreciation_rate: 0.05
+    parameters:
+      take_consumption_weights_by_income_quantile: false
+    substitution_bundles:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+    take_consumption_weights_by_income_quantile: false
+
+  firms:
+    calculate_hill_exponent: true
+    functions:
+      bought_goods_distributor:
+        name: BoughtGoodsDistributorIIPrio
+        path_name: bought_goods_distributor
+        parameters: {}
+      demand_estimator:
+        name: DefaultDemandEstimator
+        path_name: demand_estimator
+        parameters:
+          firm_growth_adjustment_speed: 0.0
+          sectoral_growth_adjustment_speed: 0.0
+      demand_for_goods:
+        name: DefaultDemandSetter
+        path_name: demand_for_goods
+        parameters: {}
+      demography:
+        name: DefaultFirmDemography
+        path_name: demography
+        parameters: {}
+      desired_labour:
+        name: DefaultDesiredLabourSetter
+        path_name: desired_labour
+        parameters:
+          consider_capital_inputs: 1.0
+          consider_intermediate_inputs: false
+      excess_demand:
+        name: ConstrainedExcessDemandSetter
+        path_name: excess_demand
+        parameters:
+          consider_capital_inputs: 1.0
+          consider_intermediate_inputs: 0.0
+          consider_labour_inputs: 0.0
+      growth_estimator:
+        name: DefaultGrowthEstimator
+        path_name: growth_estimator
+        parameters: {}
+      labour_productivity:
+        name: WorkEffortLabourProductivitySetter
+        path_name: labour_productivity
+        parameters:
+          consider_capital_inputs: true
+          consider_intermediate_inputs: true
+          max_increase_in_work_effort: 1.5
+          work_effort_increase_speed: 1.0
+      offered_wage_setter:
+        name: DefaultOfferedWageSetter
+        path_name: offered_wage_setter
+        parameters:
+          labour_market_tightness_markup_scale: 0.5
+          markup_time_span: 4
+      prices:
+        name: DefaultPriceSetter
+        path_name: prices
+        parameters:
+          price_setting_noise_std: 0.05
+          price_setting_speed_cp: 0.0
+          price_setting_speed_dp: 0.0
+          price_setting_speed_gf: 1.0
+      production:
+        name: PureLeontief
+        path_name: production
+        parameters: {}
+      productivity_growth:
+        name: SimpleTFPGrowth
+        path_name: productivity_growth
+        parameters: {}
+      productivity_investment_planner:
+        name: NoProductivityInvestmentPlanner
+        path_name: productivity_investment_planner
+        parameters:
+          hurdle_rate: 0.15
+          investment_effectiveness: 0.1
+          investment_elasticity: 0.3
+          max_investment_fraction: 0.1
+          n_firms: 18
+          potential_weight: 0.3
+          price_weight: 0.4
+          technical_diminishing_returns: 0.5
+          technical_investment_effectiveness: 0.15
+          tfp_investment_share: 0.4
+          usage_weight: 0.3
+      profit_estimator:
+        name: DefaultFirmProfitsSetter
+        path_name: profit_estimator
+        parameters: {}
+      target_capital_inputs:
+        name: FinancialTargetCapitalInputsSetter
+        path_name: target_capital_inputs
+        parameters:
+          credit_gap_fraction: 0.0
+          target_capital_inputs_fraction: 0.0
+      target_credit:
+        name: DefaultTargetCreditSetter
+        path_name: target_credit
+        parameters: {}
+      target_intermediate_inputs:
+        name: FinancialTargetIntermediateInputsSetter
+        path_name: target_intermediate_inputs
+        parameters:
+          credit_gap_fraction: 0.0
+          target_intermediate_inputs_fraction: 0.0
+      target_production:
+        name: DefaultTargetProductionSetter
+        path_name: target_production
+        parameters:
+          capital_inputs_target_considers_capital_inputs: 1.0
+          capital_inputs_target_considers_intermediate_inputs: 0.0
+          capital_inputs_target_considers_labour_inputs: 0.0
+          existing_inventory_fraction: 0.0
+          financial_constrains_fraction: 0.0
+          intermediate_inputs_target_considers_capital_inputs: 1.0
+          intermediate_inputs_target_considers_intermediate_inputs: 0.0
+          intermediate_inputs_target_considers_labour_inputs: 0.0
+          maximum_debt_to_equity_ratio: 2.0
+          target_inventory_to_production_fraction: 0.0
+      technical_coefficients_growth:
+        name: NoOpTechnicalGrowth
+        path_name: technical_coefficients_growth
+        parameters:
+          diminishing_returns_factor: 0.5
+          investment_effectiveness: 0.15
+      wage_setter:
+        name: WorkEffortFirmWageSetter
+        path_name: wage_setter
+        parameters:
+          labour_market_tightness_markup_scale: 0.0
+          markup_time_span: 4
+          max_increase_in_work_effort: 1.5
+    parameters:
+      arbitrage_intensity: 2.0
+      bundle_significance_threshold: 0.1
+      capital_inputs_delay:
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+        - 0
+      capital_inputs_utilisation_rate: 1.0
+      depreciation_rates:
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+        - 0.0
+      enable_bundle_arbitrage: false
+      intermediate_inputs_utilisation_rate: 1.0
+      max_productivity_cash_fraction: 0.3
+      max_productivity_investment_fraction: 0.15
+      potential_weight: 0.3
+      price_weight: 0.4
+      technical_diminishing_returns: 0.5
+      technical_investment_effectiveness: 0.15
+      tfp_base_growth_rate: 0.0025
+      tfp_investment_elasticity: 0.3
+      tfp_investment_share: 0.4
+      usage_weight: 0.3
+    substitution_bundles:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+      - 12
+      - 13
+      - 14
+      - 15
+      - 16
+      - 17
+
+  government_entities:
+    functions:
+      consumption:
+        name: AutoregressiveGovernmentConsumptionSetter
+        path_name: consumption
+        parameters:
+          consistency: 1.0
+
+  central_government:
+    functions:
+      social_benefits:
+        name: GrowthSocialBenefitsSetter
+        path_name: social_benefits
+        parameters: {}
+      social_housing:
+        name: DefaultSocialHousing
+        path_name: social_housing
+        parameters:
+          rent_as_fraction_of_unemployment_rate: 0.25
+
+  central_bank:
+    functions:
+      policy_rate:
+        name: PolednaPolicyRate
+        path_name: policy_rate
+        parameters: {}
+
+  banks:
+    functions:
+      demography:
+        name: DefaultBankDemography
+        path_name: demography
+        parameters:
+          solvency_ratio: 0.05
+      interest_rates:
+        name: DefaultInterestRatesSetter
+        path_name: interest_rates
+        parameters: {}
+      profit_estimator:
+        name: DefaultBankProfitsSetter
+        path_name: profit_estimator
+        parameters: {}
+    parameters:
+      capital_adequacy_ratio: 0.08
+      firm_loans_debt_to_equity_ratio: 0.03
+      firm_loans_return_on_assets_ratio: 0.05
+      firm_loans_return_on_equity_ratio: 0.05
+      household_consumption_loan_maturity: 1
+      household_consumption_loans_loan_to_income_ratio: 0.05
+      long_term_firm_loan_maturity: 60
+      mortgage_debt_service_to_income_ratio: 0.05
+      mortgage_loan_to_income_ratio: 0.05
+      mortgage_loan_to_value_ratio: 0.05
+      mortgage_maturity: 120
+      short_term_firm_loan_maturity: 20
+
+  exchange_rates:
+    exchange_rate_type: constant
+
+  labour_market:
+    functions:
+      clearing:
+        name: PolednaLabourMarketClearer
+        path_name: clearing
+        parameters:
+          allow_switching_industries: true
+          compare_with_normalised_inputs: true
+          consider_reservation_wages: true
+          firing_cost_fraction: 0.0
+          firing_speed: 1.0
+          hiring_cost_fraction: 0.0
+          hiring_speed: 1.0
+          individuals_quitting: false
+          individuals_quitting_temperature: 1.0
+          optimised_hiring: true
+          random_firing_probability: 0.0
+          round_target_employment: true
+          sorted_firing: true
+
+  housing_market:
+    functions:
+      clearing:
+        name: AutomaticHousingMarketClearer
+        path_name: clearing
+        parameters:
+          random_assignment_shock_variance: 0.0
+      value:
+        name: DefaultPropertyValueSetter
+        path_name: value
+        parameters:
+          random_fluctuation_std: 0.0
+
+  credit_market:
+    functions:
+      clearing:
+        name: WaterBucketCreditMarketClearer
+        path_name: clearing
+        parameters:
+          allow_household_loans: true
+          allow_short_term_firm_loans: true
+          consider_loan_type_fractions: true
+          credit_supply_temperature: 0.0
+          creditor_minimum_fill: 0.0
+          creditor_selection_is_deterministic: true
+          debtor_minimum_fill: 0.0
+          firms_max_number_of_banks_visiting: 5
+          households_max_number_of_banks_visiting: 5
+          interest_rates_selection_temperature: 0.0
+
+  forecasting_window: 60
+  assume_zero_growth: false
+  assume_zero_noise: false

@@ -9,6 +9,7 @@ import environs
 @dataclass
 class Config:
     data_dir: Path = Path("data/hfcs")
+    config_dir: Path = Path("config/")
     api_dotenv_path: Path = Path("/Users/andone/.ssh/macro_ts_api_keys.env")
     model_dotenv_path: Path = Path(__file__).with_name(".env")
     country_name: str = "France"

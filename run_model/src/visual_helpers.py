@@ -92,6 +92,7 @@ def build_macro_output_df(model, country_code):
     """
     shallow = model.shallow_df_dict()[country_code].copy()
     gdp_components = model.get_country_gdp_components_df(country_code).copy()
+    periods_per_year = 12 / model.timestep.increment
 
     out = pd.DataFrame(index=shallow.index)
 
@@ -231,7 +232,7 @@ def build_macro_output_df(model, country_code):
             debt = build_column("debt")
             gdp = build_column("gdp")
             if debt is not None and gdp is not None:
-                out[name] = debt / gdp
+                out[name] = debt / (periods_per_year * gdp)
                 return out[name]
             return None
         return assign(name, name)

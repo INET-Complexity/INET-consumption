@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import numpy as np
+import pandas as pd
 
 from macromodel.configurations import CountryConfiguration
 
@@ -38,3 +40,13 @@ def align_country_configuration_to_data(
         planner_params["n_firms"] = n_industries
 
     return cfg
+
+
+def unpack_cell(x):
+    if isinstance(x, np.ndarray):
+        if x.size == 1:
+            return x.item()
+        return x.tolist()
+    if isinstance(x, list) and len(x) == 1:
+        return x[0]
+    return x

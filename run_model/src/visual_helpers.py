@@ -1,6 +1,9 @@
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+from src.helpers import unpack_cell
 
 
 def plot_output(
@@ -75,19 +78,18 @@ def plot_output(
     fig.show()
 
 
-def build_macro_output_df(cfg, model, country_code):
-    """Build a macro output dataframe with derived indicators used in notebooks.
+def build_macro_output_df(model, country_code):
+    """Build a macro output dataframe with all derived output columns.
 
     Args:
-        cfg: Notebook/runtime config (kept for backwards compatibility).
+        cfg: Notebook/runtime config kept for call-site compatibility.
         model: Simulation instance.
+        plot_columns: Unused, kept for call-site compatibility.
         country_code: ISO3 country code.
 
     Returns:
-        pd.DataFrame with derived columns such as consumption/GDP ratios and GDP growth.
+        pd.DataFrame containing all available macro output columns.
     """
-    del cfg
-
     shallow = model.shallow_df_dict()[country_code].copy()
     gdp_components = model.get_country_gdp_components_df(country_code).copy()
 
@@ -101,56 +103,188 @@ def build_macro_output_df(cfg, model, country_code):
                 return gdp_components[candidate]
         return None
 
-    gdp = first_available("GDP_Expenditure", "GDP_Output", "GDP_Income")
-    hh_cons = first_available("Household Consumption")
-    gov_cons = first_available("Government Consumption")
-    exports = first_available("Exports", "+Exports")
-    imports = first_available("Imports", "-Imports")
-    gfcf = first_available("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF")
+    def assign(name, *candidates):
+        if name in out.columns:
+            return out[name]
 
-    if gdp is not None:
-        out["GDP"] = gdp
-        out["GDP Growth"] = gdp.pct_change()
-
-    if hh_cons is not None:
-        out["Household Consumption"] = hh_cons
-    if gov_cons is not None:
-        out["Government Consumption"] = gov_cons
-    if exports is not None:
-        out["Exports"] = exports
-    if imports is not None:
-        out["Imports"] = imports
-    if gfcf is not None:
-        out["GFCF"] = gfcf
-
-    if hh_cons is not None and gov_cons is not None:
-        out["Total Consumption"] = hh_cons + gov_cons
-
-    if gdp is not None:
-        if hh_cons is not None:
-            out["Household Consumption to GDP"] = hh_cons / gdp
-        if gov_cons is not None:
-            out["Government Consumption to GDP"] = gov_cons / gdp
-        if "Total Consumption" in out.columns:
-            out["Total Consumption to GDP"] = out["Total Consumption"] / gdp
-        if gfcf is not None:
-            out["Investment to GDP"] = gfcf / gdp
-        if exports is not None and imports is not None:
-            out["Net Exports to GDP"] = (exports - imports) / gdp
-
-    passthrough_cols = [
-        "CPI",
-        "PPI",
-        "Unemployment Rate",
-        "Central Bank Policy Rate",
-        "Consumption Expansion Loan Debt",
-        "Mortgage Debt",
-        "Wages",
-        "Profits",
-    ]
-    for col in passthrough_cols:
-        series = first_available(col)
+        series = first_available(*candidates)
         if series is not None:
-            out[col] = series
+            out[name] = series
+        return series
+
+    # Start with direct aliases from model output.
+    direct_columns = {
+        "gdp": ("GDP_Expenditure", "GDP_Output", "GDP_Income"),
+        "household consumption": ("Household Consumption", "+Household_Consumption"),
+        "government consumption": ("Government Consumption", "+Government_Consumption"),
+        "exports": ("Exports", "+Exports"),
+        "imports": ("Imports", "-Imports"),
+        "gfcf": ("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF"),
+        "cpi": ("CPI",),
+        "ppi": ("PPI",),
+        "unemployment rate": ("Unemployment Rate",),
+        "central bank policy rate": ("Central Bank Policy Rate",),
+        "consumption expansion loan debt": ("Consumption Expansion Loan Debt",),
+        "mortgage debt": ("Mortgage Debt",),
+        "wages": ("Wages", "+Wages"),
+        "profits": ("Profits", "+Operating_Surplus"),
+        "taxes paid on production": ("Taxes Paid on Production", "-Taxes_on_Production"),
+        "taxes on products": ("Taxes on Products", "+Taxes_on_Products", "+Central_Government_Product_Taxes"),
+    }
+
+    def build_column(name):
+        if name in out.columns:
+            return out[name]
+        if name in direct_columns:
+            return assign(name, *direct_columns[name])
+        if name == "total consumption":
+            hh_cons = build_column("household consumption")
+            gov_cons = build_column("government consumption")
+            if hh_cons is not None and gov_cons is not None:
+                out[name] = hh_cons + gov_cons
+                return out[name]
+            return None
+        if name == "gdp growth":
+            gdp = build_column("gdp")
+            if gdp is not None:
+                out[name] = gdp.pct_change()
+                return out[name]
+            return None
+        if name == "household consumption to gdp":
+            hh_cons = build_column("household consumption")
+            gdp = build_column("gdp")
+            if hh_cons is not None and gdp is not None:
+                out[name] = hh_cons / gdp
+                return out[name]
+            return None
+        if name == "government consumption to gdp":
+            gov_cons = build_column("government consumption")
+            gdp = build_column("gdp")
+            if gov_cons is not None and gdp is not None:
+                out[name] = gov_cons / gdp
+                return out[name]
+            return None
+        if name == "total consumption to gdp":
+            total_cons = build_column("total consumption")
+            gdp = build_column("gdp")
+            if total_cons is not None and gdp is not None:
+                out[name] = total_cons / gdp
+                return out[name]
+            return None
+        if name == "investment to gdp":
+            gfcf = build_column("gfcf")
+            gdp = build_column("gdp")
+            if gfcf is not None and gdp is not None:
+                out[name] = gfcf / gdp
+                return out[name]
+            return None
+        if name == "net exports to gdp":
+            exports = build_column("exports")
+            imports = build_column("imports")
+            gdp = build_column("gdp")
+            if exports is not None and imports is not None and gdp is not None:
+                out[name] = (exports - imports) / gdp
+                return out[name]
+            return None
+        if name in {"fiscal revenue", "revenues", "revenue"}:
+            if "revenue" in df_gov_ts.columns:
+                out[name] = df_gov_ts["revenue"]
+                return out[name]
+            return None
+        if name in {"fiscal expenditure", "government expenditure", "spending"}:
+            if "government expenditure" in df_gov_ts.columns:
+                out[name] = df_gov_ts["government expenditure"]
+                return out[name]
+            return None
+        if name == "deficit":
+            if "deficit" in df_gov_ts.columns:
+                out[name] = df_gov_ts["deficit"]
+                return out[name]
+            return None
+        if name == "debt":
+            if "debt" in df_gov_ts.columns:
+                out[name] = df_gov_ts["debt"]
+                return out[name]
+            return None
+        if name in {"fiscal revenue to gdp", "revenues to gdp"}:
+            revenues = build_column("fiscal revenue")
+            gdp = build_column("gdp")
+            if revenues is not None and gdp is not None:
+                out[name] = revenues / gdp
+                return out[name]
+            return None
+        if name in {"fiscal expenditure to gdp", "government expenditure to gdp", "spending to gdp"}:
+            spending = build_column("fiscal expenditure")
+            gdp = build_column("gdp")
+            if spending is not None and gdp is not None:
+                out[name] = spending / gdp
+                return out[name]
+            return None
+        if name == "deficit to gdp":
+            deficit = build_column("deficit")
+            gdp = build_column("gdp")
+            if deficit is not None and gdp is not None:
+                out[name] = deficit / gdp
+                return out[name]
+            return None
+        if name == "debt to gdp":
+            debt = build_column("debt")
+            gdp = build_column("gdp")
+            if debt is not None and gdp is not None:
+                out[name] = debt / gdp
+                return out[name]
+            return None
+        return assign(name, name)
+
+    # Analyse government revenues and spending
+    gov_ts_dict = model.countries[country_code].central_government.ts.__dict__["dicts"]
+    cb_ts_dict = model.countries[country_code].central_bank.ts.__dict__["dicts"]
+    df_cb_ts = pd.DataFrame({k: [x for x in v] for k, v in cb_ts_dict.items()})
+    df_cb_ts = df_cb_ts.map(unpack_cell)
+    df_gov_ts = pd.DataFrame({k: [x for x in v] for k, v in gov_ts_dict.items()})
+    df_gov_ts = df_gov_ts.map(unpack_cell)
+    df_gov_ts["government expenditure"] = df_gov_ts["revenue"] - df_gov_ts["deficit"]
+    df_gov_ts["interest on debt"] = df_gov_ts["debt"] * df_cb_ts["policy_rate"]
+    for column in df_gov_ts.columns:
+        out[column.lower()] = df_gov_ts[column]
+    for column in df_cb_ts.columns:
+        if column.lower() not in out.columns:
+            out[column.lower()] = df_cb_ts[column]
+
+    all_columns = [
+        "gdp",
+        "gdp growth",
+        "household consumption",
+        "government consumption",
+        "total consumption",
+        "household consumption to gdp",
+        "government consumption to gdp",
+        "total consumption to gdp",
+        "exports",
+        "imports",
+        "gfcf",
+        "investment to gdp",
+        "net exports to gdp",
+        "cpi",
+        "ppi",
+        "unemployment rate",
+        "central bank policy rate",
+        "consumption expansion loan debt",
+        "mortgage debt",
+        "wages",
+        "profits",
+        "taxes paid on production",
+        "taxes on products",
+        "fiscal revenue",
+        "fiscal expenditure",
+        "deficit",
+        "debt",
+        "fiscal revenue to gdp",
+        "fiscal expenditure to gdp",
+        "deficit to gdp",
+        "debt to gdp",
+    ]
+    for column in all_columns:
+        build_column(column)
 
     return out

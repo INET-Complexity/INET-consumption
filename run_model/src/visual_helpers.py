@@ -6,6 +6,12 @@ from plotly.subplots import make_subplots
 from src.helpers import unpack_cell
 
 
+def _categorical_colors(n_colors):
+    if n_colors <= 0:
+        return []
+    return [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, n_colors)]
+
+
 def plot_output(
     df,
     no_rows,
@@ -73,6 +79,292 @@ def plot_output(
         height=base_height * no_rows,
         width=base_width * no_cols,
         title_text=country_code,
+        template="plotly_white",
+    )
+    fig.show()
+
+
+def plot_mc(
+    mc,
+    cols,
+    no_rows=None,
+    no_cols=None,
+    country_code=None,
+    line_opacity=0.5,
+    line_width=1.0,
+    base_height=220,
+    base_width=320,
+):
+    """Plot Monte Carlo trajectories with one subplot per requested series.
+
+    Parameters
+    ----------
+    mc:
+        A ``MonteCarloResult`` or a dataframe indexed by ``seed`` and simulation time.
+    cols:
+        Columns to plot. Each subplot overlays one line per seed.
+    no_rows, no_cols:
+        Optional subplot grid dimensions. If omitted, a near-square grid is used.
+    country_code:
+        Optional title override.
+    """
+    combined = mc.combined if hasattr(mc, "combined") else mc
+    if not isinstance(combined, pd.DataFrame):
+        raise TypeError("mc must be a MonteCarloResult or a pandas DataFrame.")
+    if combined.index.nlevels < 2:
+        raise ValueError("mc dataframe must be indexed by seed and simulation time.")
+
+    available_cols = [col for col in cols if col in combined.columns]
+    if not available_cols:
+        raise ValueError("None of the requested cols are present in the Monte Carlo output.")
+
+    n_plots = len(available_cols)
+    if no_cols is None and no_rows is None:
+        no_cols = int(np.ceil(np.sqrt(n_plots)))
+        no_rows = int(np.ceil(n_plots / no_cols))
+    elif no_cols is None:
+        no_cols = int(np.ceil(n_plots / no_rows))
+    elif no_rows is None:
+        no_rows = int(np.ceil(n_plots / no_cols))
+
+    seeds = combined.index.get_level_values(0).unique()
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+
+    for idx, col_name in enumerate(available_cols):
+        row = (idx // no_cols) + 1
+        col = (idx % no_cols) + 1
+
+        for seed_idx, seed in enumerate(seeds):
+            seed_df = combined.xs(seed, level=0)
+            fig.add_trace(
+                go.Scatter(
+                    x=seed_df.index,
+                    y=seed_df[col_name],
+                    mode="lines",
+                    name=f"seed {seed}",
+                    showlegend=(idx == 0),
+                    opacity=line_opacity,
+                    line={"width": line_width},
+                    legendgroup=f"seed-{seed_idx}",
+                ),
+                row=row,
+                col=col,
+            )
+
+    title = country_code if country_code is not None else "Monte Carlo trajectories"
+    fig.update_layout(
+        height=base_height * no_rows,
+        width=base_width * no_cols,
+        title_text=title,
+        template="plotly_white",
+    )
+    fig.show()
+
+
+def plot_sensitivity(
+    sensitivity,
+    cols,
+    no_rows=None,
+    no_cols=None,
+    country_code=None,
+    aggregate_seeds=True,
+    line_width=2.0,
+    line_opacity=1.0,
+    base_height=220,
+    base_width=320,
+):
+    """Plot sensitivity trajectories with one subplot per requested series.
+
+    Parameters
+    ----------
+    sensitivity:
+        A ``SensitivityResult`` or a dataframe indexed by parameter, value,
+        seed, and simulation time.
+    cols:
+        Columns to plot. Each subplot overlays one line per parameter value.
+    aggregate_seeds:
+        If True, average over seeds before plotting. If False, plot every seed
+        path with the same color family grouped by parameter value.
+    """
+    combined = sensitivity.combined if hasattr(sensitivity, "combined") else sensitivity
+    if not isinstance(combined, pd.DataFrame):
+        raise TypeError("sensitivity must be a SensitivityResult or a pandas DataFrame.")
+    if combined.index.nlevels < 4:
+        raise ValueError("Sensitivity dataframe must be indexed by parameter, value, seed, and time.")
+
+    available_cols = [col for col in cols if col in combined.columns]
+    if not available_cols:
+        raise ValueError("None of the requested cols are present in the sensitivity output.")
+
+    n_plots = len(available_cols)
+    if no_cols is None and no_rows is None:
+        no_cols = int(np.ceil(np.sqrt(n_plots)))
+        no_rows = int(np.ceil(n_plots / no_cols))
+    elif no_cols is None:
+        no_cols = int(np.ceil(n_plots / no_rows))
+    elif no_rows is None:
+        no_rows = int(np.ceil(n_plots / no_cols))
+
+    parameter_values = combined.index.get_level_values("value").unique()
+    colors = [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, max(len(parameter_values), 1))]
+    color_by_value = {value: color for value, color in zip(parameter_values, colors)}
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+
+    for idx, col_name in enumerate(available_cols):
+        row = (idx // no_cols) + 1
+        col = (idx % no_cols) + 1
+
+        for value in parameter_values:
+            value_df = combined.xs(value, level="value")
+            color = color_by_value[value]
+            if aggregate_seeds:
+                series = value_df.groupby(level="time")[col_name].mean()
+                x_vals = series.index
+                y_vals = series.values
+                name = f"{value}"
+                opacity = line_opacity
+            else:
+                value_seed_df = value_df[col_name]
+                for seed_idx, (seed, seed_series) in enumerate(value_seed_df.groupby(level="seed")):
+                    time_series = seed_series.droplevel("seed")
+                    fig.add_trace(
+                        go.Scatter(
+                            x=time_series.index,
+                            y=time_series.values,
+                            mode="lines",
+                            name=f"{value} | seed {seed}",
+                            showlegend=(idx == 0 and seed_idx == 0),
+                            opacity=0.35,
+                            line={"width": 1.0, "color": color},
+                            legendgroup=f"value-{value}",
+                        ),
+                        row=row,
+                        col=col,
+                    )
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=x_vals,
+                    y=y_vals,
+                    mode="lines",
+                    name=name,
+                    showlegend=(idx == 0),
+                    opacity=opacity,
+                    line={"width": line_width, "color": color},
+                    legendgroup=f"value-{value}",
+                ),
+                row=row,
+                col=col,
+            )
+
+    title = country_code if country_code is not None else "Sensitivity trajectories"
+    fig.update_layout(
+        height=base_height * no_rows,
+        width=base_width * no_cols,
+        title_text=title,
+        template="plotly_white",
+    )
+    fig.show()
+
+
+def plot_sensitivity_summary(
+    sensitivity,
+    cols,
+    no_rows=None,
+    no_cols=None,
+    country_code=None,
+    band=(0.1, 0.9),
+    line_width=2.0,
+    band_opacity=0.18,
+    base_height=220,
+    base_width=320,
+):
+    """Plot mean trajectories plus percentile bands across seeds by parameter value."""
+    combined = sensitivity.combined if hasattr(sensitivity, "combined") else sensitivity
+    if not isinstance(combined, pd.DataFrame):
+        raise TypeError("sensitivity must be a SensitivityResult or a pandas DataFrame.")
+    if combined.index.nlevels < 4:
+        raise ValueError("Sensitivity dataframe must be indexed by parameter, value, seed, and time.")
+    if len(band) != 2 or not 0 <= band[0] <= band[1] <= 1:
+        raise ValueError("band must be a tuple like (0.1, 0.9).")
+
+    available_cols = [col for col in cols if col in combined.columns]
+    if not available_cols:
+        raise ValueError("None of the requested cols are present in the sensitivity output.")
+
+    n_plots = len(available_cols)
+    if no_cols is None and no_rows is None:
+        no_cols = int(np.ceil(np.sqrt(n_plots)))
+        no_rows = int(np.ceil(n_plots / no_cols))
+    elif no_cols is None:
+        no_cols = int(np.ceil(n_plots / no_rows))
+    elif no_rows is None:
+        no_rows = int(np.ceil(n_plots / no_cols))
+
+    parameter_values = combined.index.get_level_values("value").unique()
+    colors = [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, max(len(parameter_values), 1))]
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+
+    for idx, col_name in enumerate(available_cols):
+        row = (idx // no_cols) + 1
+        col = (idx % no_cols) + 1
+
+        for color, value in zip(colors, parameter_values):
+            value_df = combined.xs(value, level="value")
+            grouped = value_df.groupby(level="time")[col_name]
+            mean_ts = grouped.mean()
+            lower_ts = grouped.quantile(band[0])
+            upper_ts = grouped.quantile(band[1])
+
+            fig.add_trace(
+                go.Scatter(
+                    x=lower_ts.index,
+                    y=lower_ts.values,
+                    mode="lines",
+                    line={"width": 0, "color": color},
+                    hoverinfo="skip",
+                    showlegend=False,
+                    legendgroup=f"value-{value}",
+                ),
+                row=row,
+                col=col,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=upper_ts.index,
+                    y=upper_ts.values,
+                    mode="lines",
+                    line={"width": 0, "color": color},
+                    fill="tonexty",
+                    fillcolor=color.replace("45%)", f"45%, {band_opacity})").replace("hsl", "hsla"),
+                    hoverinfo="skip",
+                    name=f"{value} band",
+                    showlegend=False,
+                    legendgroup=f"value-{value}",
+                ),
+                row=row,
+                col=col,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=mean_ts.index,
+                    y=mean_ts.values,
+                    mode="lines",
+                    name=f"{value}",
+                    showlegend=(idx == 0),
+                    line={"width": line_width, "color": color},
+                    legendgroup=f"value-{value}",
+                ),
+                row=row,
+                col=col,
+            )
+
+    title = country_code if country_code is not None else "Sensitivity summary"
+    fig.update_layout(
+        height=base_height * no_rows,
+        width=base_width * no_cols,
+        title_text=title,
         template="plotly_white",
     )
     fig.show()

@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import dataclass
+from itertools import islice
+from typing import Iterable, Optional
+
+import pandas as pd
+from joblib import Parallel, delayed
+
+from macro_data import DataWrapper
+from macromodel.configurations import CountryConfiguration, SimulationConfiguration
+from macromodel.simulation import Simulation
+from src.visual_helpers import build_macro_output_df
+
+
+@dataclass(frozen=True)
+class MonteCarloResult:
+    """Container for Monte Carlo outputs indexed by simulation seed."""
+
+    by_seed: dict[int, pd.DataFrame]
+    combined: pd.DataFrame
+
+    def get_seed(self, seed: int) -> pd.DataFrame:
+        """Return the output dataframe for a single seed."""
+        return self.by_seed[int(seed)]
+
+    def to_parquet(self, path: str) -> None:
+        """Persist the combined output table for later inspection."""
+        self.combined.to_parquet(path)
+
+    def to_pickle(self, path: str) -> None:
+        """Persist the combined output table when parquet is not desired."""
+        self.combined.to_pickle(path)
+
+
+def _chunked(values: list[int], chunk_size: int) -> list[list[int]]:
+    """Split a list of seeds into fixed-size chunks."""
+    if chunk_size <= 0:
+        raise ValueError("batch_size must be a positive integer.")
+
+    iterator = iter(values)
+    chunks = []
+    while True:
+        chunk = list(islice(iterator, chunk_size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return chunks
+
+
+def _run_single_seed(
+    *,
+    seed: int,
+    datawrapper: DataWrapper,
+    country_configurations: dict[str, CountryConfiguration],
+    t_max: int,
+    country_code: str,
+    simulation_configuration: Optional[SimulationConfiguration] = None,
+) -> tuple[int, pd.DataFrame]:
+    """Run one seeded simulation and extract macro output time series."""
+    if simulation_configuration is None:
+        configuration = SimulationConfiguration(
+            country_configurations=deepcopy(country_configurations),
+            t_max=t_max,
+            seed=int(seed),
+        )
+    else:
+        configuration = deepcopy(simulation_configuration)
+        configuration.country_configurations = deepcopy(country_configurations)
+        configuration.t_max = t_max
+        configuration.seed = int(seed)
+
+    model = Simulation.from_datawrapper(
+        datawrapper=datawrapper,
+        simulation_configuration=configuration,
+    )
+    model.run()
+
+    output_df = build_macro_output_df(model, country_code=country_code).copy()
+    output_df.index.name = output_df.index.name or "time"
+
+    return int(seed), output_df
+
+
+def _run_seed_batch(
+    *,
+    seeds: list[int],
+    datawrapper: DataWrapper,
+    country_configurations: dict[str, CountryConfiguration],
+    t_max: int,
+    country_code: str,
+    simulation_configuration: Optional[SimulationConfiguration] = None,
+) -> list[tuple[int, pd.DataFrame]]:
+    """Run a batch of seeds sequentially inside one worker process."""
+    return [
+        _run_single_seed(
+            seed=seed,
+            datawrapper=datawrapper,
+            country_configurations=country_configurations,
+            t_max=t_max,
+            country_code=country_code,
+            simulation_configuration=simulation_configuration,
+        )
+        for seed in seeds
+    ]
+
+
+def run_seeded_monte_carlo(
+    *,
+    datawrapper: DataWrapper,
+    country_configurations: dict[str, CountryConfiguration],
+    country_code: str,
+    seeds: Iterable[int],
+    t_max: int,
+    simulation_configuration: Optional[SimulationConfiguration] = None,
+    n_jobs: int = -1,
+    backend: str = "loky",
+    verbose: int = 0,
+    batch_size: int = 1,
+) -> MonteCarloResult:
+    """Run the model in parallel over a predefined list of random seeds.
+
+    Parameters
+    ----------
+    datawrapper:
+        The preprocessed model data used to instantiate each simulation.
+    country_configurations:
+        Mapping passed to ``SimulationConfiguration(country_configurations=...)``.
+    country_code:
+        ISO3 code used to extract outputs with ``build_macro_output_df``.
+    seeds:
+        Predefined random seeds, one per Monte Carlo run.
+    t_max:
+        Simulation horizon passed into ``SimulationConfiguration``.
+    simulation_configuration:
+        Optional baseline configuration to clone before overriding seed, t_max,
+        and country_configurations.
+    n_jobs:
+        Number of parallel workers. Uses all available workers by default.
+    backend:
+        Joblib backend. ``loky`` is the default process-based backend.
+    verbose:
+        Joblib verbosity level.
+    batch_size:
+        Number of seeds handled sequentially by each joblib worker. Values
+        greater than 1 reduce process-spawning and serialization overhead for
+        large Monte Carlo runs.
+
+    Returns
+    -------
+    MonteCarloResult
+        ``by_seed`` stores one dataframe per seed.
+        ``combined`` concatenates all runs into one dataframe indexed by
+        ``seed`` and simulation time.
+    """
+    seed_list = [int(seed) for seed in seeds]
+    if not seed_list:
+        raise ValueError("At least one seed must be provided.")
+    if len(set(seed_list)) != len(seed_list):
+        raise ValueError("Seeds must be unique. Duplicate seeds would overwrite results in the output mapping.")
+    if country_code not in country_configurations:
+        raise ValueError(f"Country code '{country_code}' is missing from country_configurations.")
+    if country_code not in datawrapper.synthetic_countries:
+        raise ValueError(f"Country code '{country_code}' is not available in the provided datawrapper.")
+
+    seed_batches = _chunked(seed_list, batch_size)
+    batch_runs = Parallel(n_jobs=n_jobs, backend=backend, verbose=verbose)(
+        delayed(_run_seed_batch)(
+            seeds=seed_batch,
+            datawrapper=datawrapper,
+            country_configurations=country_configurations,
+            t_max=t_max,
+            country_code=country_code,
+            simulation_configuration=simulation_configuration,
+        )
+        for seed_batch in seed_batches
+    )
+
+    runs = [run for batch in batch_runs for run in batch]
+    by_seed = {seed: df for seed, df in runs}
+    combined = pd.concat(by_seed, names=["seed"])
+
+    return MonteCarloResult(by_seed=by_seed, combined=combined)

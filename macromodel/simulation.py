@@ -10,6 +10,7 @@ exchange rates, and rest-of-world effects. It provides functionality to:
 """
 
 import logging
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,6 +97,16 @@ class Simulation:
                     f"Country {country} not found in the data configuration. Please use a valid data configuration."
                 )
             if not check_compatibility(data_configuration.country_configs[country], country_sim_conf):  # type: ignore
+                mismatches = get_compatibility_mismatches(data_configuration.country_configs[country], country_sim_conf)
+                warning_message = (
+                    f"Configuration mismatch for {country}. "
+                    "Resetting firm-dependent synthetic data. "
+                    f"Mismatches: {'; '.join(mismatches)}"
+                )
+                logging.warning(
+                    warning_message,
+                )
+                warnings.warn(warning_message, stacklevel=2)
                 datawrapper.synthetic_countries[country].reset_firm_function_dependent(
                     **country_sim_conf.firms.reset_params,
                     zero_initial_debt=False,
@@ -513,19 +524,58 @@ def check_compatibility(
     Returns:
         bool: True if configurations are compatible, False otherwise
     """
+    return len(get_compatibility_mismatches(country_data_configuration, country_sim_configuration)) == 0
+
+
+def get_compatibility_mismatches(
+    country_data_configuration: CountryDataConfiguration, country_sim_configuration: CountryConfiguration
+) -> list[str]:
+    """Describe mismatches between preprocessing and simulation configurations."""
     firm_data_conf = country_data_configuration.firms_configuration
+    bank_data_conf = country_data_configuration.banks_configuration
 
     firm_sim_reset_params = country_sim_configuration.firms.reset_params
+    bank_sim_params = country_sim_configuration.banks.parameters
 
-    test_cases = [
-        firm_data_conf.initial_inventory_to_input_fraction
-        == firm_sim_reset_params["initial_inventory_to_input_fraction"],
-        firm_data_conf.capital_inputs_utilisation_rate == firm_sim_reset_params["capital_inputs_utilisation_rate"],
-        firm_data_conf.intermediate_inputs_utilisation_rate
-        == firm_sim_reset_params["intermediate_inputs_utilisation_rate"],
+    comparisons = [
+        (
+            "firms.initial_inventory_to_input_fraction",
+            firm_data_conf.initial_inventory_to_input_fraction,
+            firm_sim_reset_params["initial_inventory_to_input_fraction"],
+        ),
+        (
+            "firms.capital_inputs_utilisation_rate",
+            firm_data_conf.capital_inputs_utilisation_rate,
+            firm_sim_reset_params["capital_inputs_utilisation_rate"],
+        ),
+        (
+            "firms.intermediate_inputs_utilisation_rate",
+            firm_data_conf.intermediate_inputs_utilisation_rate,
+            firm_sim_reset_params["intermediate_inputs_utilisation_rate"],
+        ),
+        (
+            "banks.long_term_firm_loan_maturity",
+            bank_data_conf.long_term_firm_loan_maturity,
+            bank_sim_params.long_term_firm_loan_maturity,
+        ),
+        (
+            "banks.consumption_exp_loan_maturity / household_consumption_loan_maturity",
+            bank_data_conf.consumption_exp_loan_maturity,
+            bank_sim_params.household_consumption_loan_maturity,
+        ),
+        (
+            "banks.mortgage_maturity",
+            bank_data_conf.mortgage_maturity,
+            bank_sim_params.mortgage_maturity,
+        ),
     ]
 
-    return all(test_cases)
+    mismatches = []
+    for name, data_value, sim_value in comparisons:
+        if data_value != sim_value:
+            mismatches.append(f"{name}: data_config={data_value}, country_config={sim_value}")
+
+    return mismatches
 
 
 @njit

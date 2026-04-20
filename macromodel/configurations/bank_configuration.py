@@ -38,7 +38,7 @@ class BankParameters(BaseModel):
     firm_loans_return_on_equity_ratio: float = Field(ge=0, le=1, default=0.05)
     firm_loans_return_on_assets_ratio: float = Field(ge=0, le=1, default=0.05)
     household_consumption_loans_loan_to_income_ratio: float = Field(ge=0, le=1, default=0.05)
-    mortgage_loan_to_income_ratio: float = Field(ge=0, le=1, default=0.05)
+    mortgage_loan_to_income_ratio: float = Field(ge=0, le=30, default=0.05)
     mortgage_loan_to_value_ratio: float = Field(ge=0, le=1, default=0.05)
     mortgage_debt_service_to_income_ratio: float = Field(ge=0, le=1, default=0.05)
     household_consumption_loan_maturity: int = Field(ge=0, default=1)

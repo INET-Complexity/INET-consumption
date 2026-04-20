@@ -40,7 +40,7 @@ FRA:
         name: DefaultReservationWageSetter
         path_name: reservation_wages
         parameters:
-          unemployed_reservation_wage_timespan: 0
+          unemployed_reservation_wage_timespan: 8 # 0
 
   households:
     functions:
@@ -69,25 +69,25 @@ FRA:
         name: DefaultHouseholdDemandForProperty
         path_name: property
         parameters:
-          cost_comparison_temperature: 1.0
-          maximum_price_income_coefficient: 5.0
-          maximum_price_income_exponent: 1.0
-          maximum_price_noise_mean: 0.0
-          maximum_price_noise_variance: 0.3
-          maximum_rent_income_coefficient: 0.2
-          maximum_rent_income_exponent: 0.0
+          cost_comparison_temperature: 0.001  # 1.0
+          maximum_price_income_coefficient: 42.9  # 5.0
+          maximum_price_income_exponent: 0.789  # 1.0
+          maximum_price_noise_mean: -0.0177  # 0.0
+          maximum_price_noise_variance: 0.1684  # 0.3
+          maximum_rent_income_coefficient: 17.2166  # 0.2
+          maximum_rent_income_exponent: 0.3464  # 0.0
           partial_rent_inflation_delay: 1
-          partial_rent_inflation_indexation: 0.0
-          price_decrease_mean: 0.0
-          price_decrease_probability: 0.0
-          price_decrease_variance: 0.0
+          partial_rent_inflation_indexation: 1.0  # 0.0
+          price_decrease_mean: 1.4531  # 0.0
+          price_decrease_probability: 0.1964  # 0.0
+          price_decrease_variance: 0.4889  # 0.0
           price_initial_markup: 0.0
-          probability_stay_in_owned_property: 0.5
-          probability_stay_in_rented_property: 0.5
-          psychological_pressure_of_renting: 0.1
-          rent_decrease_mean: 0.0
-          rent_decrease_probability: 0.0
-          rent_decrease_variance: 0.0
+          probability_stay_in_owned_property: 0.9875  # 0.5
+          probability_stay_in_rented_property: 0.875  # 0.5
+          psychological_pressure_of_renting: 0.4  # 0.1
+          rent_decrease_mean: 1.6559  # 0.0
+          rent_decrease_probability: 0.2848  # 0.0
+          rent_decrease_variance: 0.7855  # 0.0
           rent_initial_markup: 0.0
       rent:
         name: ConstantRentSetter
@@ -95,7 +95,7 @@ FRA:
         parameters:
           new_property_rent_markup: 0.1
           offered_rent_decrease: 0.03
-          partial_rent_inflation_indexation: 0.0
+          partial_rent_inflation_indexation: 1.0  # 0.0
       saving_rates:
         name: AverageSavingRatesSetter
         path_name: saving_rates
@@ -250,16 +250,16 @@ FRA:
         name: DefaultTargetProductionSetter
         path_name: target_production
         parameters:
-          capital_inputs_target_considers_capital_inputs: 1.0
-          capital_inputs_target_considers_intermediate_inputs: 0.0
-          capital_inputs_target_considers_labour_inputs: 0.0
+          capital_inputs_target_considers_capital_inputs: 0.18  # 1.0
+          capital_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
+          capital_inputs_target_considers_labour_inputs: 0.53  # 0.0
           existing_inventory_fraction: 0.0
           financial_constrains_fraction: 0.0
-          intermediate_inputs_target_considers_capital_inputs: 1.0
-          intermediate_inputs_target_considers_intermediate_inputs: 0.0
-          intermediate_inputs_target_considers_labour_inputs: 0.0
+          intermediate_inputs_target_considers_capital_inputs: 0.18  # 1.0
+          intermediate_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
+          intermediate_inputs_target_considers_labour_inputs: 0.53  # 0.0
           maximum_debt_to_equity_ratio: 2.0
-          target_inventory_to_production_fraction: 0.0
+          target_inventory_to_production_fraction: 0.1 # 0.0
       technical_coefficients_growth:
         name: NoOpTechnicalGrowth
         path_name: technical_coefficients_growth
@@ -295,7 +295,7 @@ FRA:
         - 0
         - 0
         - 0
-      capital_inputs_utilisation_rate: 1.0
+      capital_inputs_utilisation_rate: 0.85  # 1.0
       depreciation_rates:
         - 0.0
         - 0.0
@@ -316,7 +316,7 @@ FRA:
         - 0.0
         - 0.0
       enable_bundle_arbitrage: false
-      intermediate_inputs_utilisation_rate: 1.0
+      intermediate_inputs_utilisation_rate: 0.85 # 1.0
       max_productivity_cash_fraction: 0.3
       max_productivity_investment_fraction: 0.15
       potential_weight: 0.3
@@ -380,7 +380,7 @@ FRA:
         name: DefaultBankDemography
         path_name: demography
         parameters:
-          solvency_ratio: 0.05
+          solvency_ratio: 0.1  # 0.05
       interest_rates:
         name: DefaultInterestRatesSetter
         path_name: interest_rates
@@ -391,20 +391,44 @@ FRA:
         parameters: {}
     parameters:
       capital_adequacy_ratio: 0.08
-      firm_loans_debt_to_equity_ratio: 0.03
+      firm_loans_debt_to_equity_ratio: 1.0  # 0.03
       firm_loans_return_on_assets_ratio: 0.05
-      firm_loans_return_on_equity_ratio: 0.05
+      firm_loans_return_on_equity_ratio: 0.15  # 0.05
       household_consumption_loan_maturity: 1
-      household_consumption_loans_loan_to_income_ratio: 0.05
-      long_term_firm_loan_maturity: 60
-      mortgage_debt_service_to_income_ratio: 0.05
-      mortgage_loan_to_income_ratio: 0.05
-      mortgage_loan_to_value_ratio: 0.05
-      mortgage_maturity: 120
-      short_term_firm_loan_maturity: 20
+      household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
+      long_term_firm_loan_maturity: 8 # 60
+      mortgage_debt_service_to_income_ratio: 0.35  # 0.05
+      mortgage_loan_to_income_ratio: 5.25  # 0.05
+      mortgage_loan_to_value_ratio: 0.8  # 0.05
+      mortgage_maturity: 100 #  120
+      short_term_firm_loan_maturity: 1 # 20
 
   exchange_rates:
     exchange_rate_type: constant
+
+  # goods market actually defined at the simulation level 
+  # goods_market:
+  #   functions:
+  #     clearing:
+  #       name: WaterBucketGoodsMarketClearer
+  #       path_name: clearing
+  #       parameters:
+  #         consider_trade_proportions: true
+  #         consider_buyer_priorities: true
+  #         additionally_available_factor: 0.2
+  #         price_markup: 0.2
+  #         price_temperature: 2.0
+  #         prio_domestic_sellers: false
+  #         prio_high_prio_buyers: false
+  #         prio_high_prio_sellers: false
+  #         real_country_prioritisation: 10.0
+  #         probability_keeping_previous_seller: 0.0
+  #         trade_temperature: 0.0
+  #         seller_selection_distribution_type: additive
+  #         seller_minimum_fill: 0.9
+  #         buyer_minimum_fill_macro: 0.0
+  #         buyer_minimum_fill_micro: 0.95
+  #         deterministic: true
 
   labour_market:
     functions:
@@ -448,13 +472,15 @@ FRA:
           allow_household_loans: true
           allow_short_term_firm_loans: true
           consider_loan_type_fractions: true
-          credit_supply_temperature: 0.0
+          credit_supply_temperature: 2  # 0.0
           creditor_minimum_fill: 0.0
           creditor_selection_is_deterministic: true
           debtor_minimum_fill: 0.0
           firms_max_number_of_banks_visiting: 5
           households_max_number_of_banks_visiting: 5
           interest_rates_selection_temperature: 0.0
+
+
 
   forecasting_window: 60
   assume_zero_growth: false

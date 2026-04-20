@@ -536,7 +536,7 @@ def build_macro_output_df(model, country_code):
     df_cb_ts = df_cb_ts.map(unpack_cell)
     df_gov_ts = pd.DataFrame({k: [x for x in v] for k, v in gov_ts_dict.items()})
     df_gov_ts = df_gov_ts.map(unpack_cell)
-    df_gov_ts["government expenditure"] = df_gov_ts["revenue"] - df_gov_ts["deficit"]
+    df_gov_ts["government expenditure"] = df_gov_ts["revenue"] + df_gov_ts["deficit"]
     df_gov_ts["interest on debt"] = df_gov_ts["debt"] * df_cb_ts["policy_rate"]
     for column in df_gov_ts.columns:
         out[column.lower()] = df_gov_ts[column]

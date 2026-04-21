@@ -18,6 +18,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 
 import numpy as np
+import pandas as pd
 
 
 class SocialBenefitsSetter(ABC):
@@ -224,6 +225,13 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
     - Economic condition consideration
     """
 
+    @staticmethod
+    def _build_prediction_features(historic_ppi_inflation: np.ndarray, current_unemployment_rate: float) -> pd.DataFrame:
+        return pd.DataFrame(
+            [[historic_ppi_inflation[-1], current_unemployment_rate]],
+            columns=["Real CPI Inflation", "Unemployment Rate"],
+        )
+
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,
@@ -245,7 +253,9 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         """
         if model is None:
             return prev_unemployment_benefits
-        pred = model.predict(np.array([[historic_ppi_inflation[-1], current_unemployment_rate]]))[0]
+        pred = model.predict(
+            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
+        )[0]
         return pred
 
     def compute_regular_transfer_to_households(
@@ -269,5 +279,7 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         """
         if model is None:
             return prev_regular_transfer_to_households
-        pred = model.predict(np.array([[historic_ppi_inflation[-1], current_unemployment_rate]]))[0]
+        pred = model.predict(
+            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
+        )[0]
         return pred

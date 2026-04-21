@@ -137,9 +137,7 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
             other_benefits_model = build_other_benefits_model(
                 benefits_inflation_data, regression_window=regression_window
             )
-            last_observation = (
-                benefits_inflation_data[["Real CPI Inflation", "Unemployment Rate"]].iloc[-1].values.reshape(1, -1)
-            )
+            last_observation = benefits_inflation_data[["Real CPI Inflation", "Unemployment Rate"]].iloc[[-1]]
 
             if unemployment_benefits_model:
                 current_unemployment_benefits = (

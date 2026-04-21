@@ -513,6 +513,27 @@ def build_macro_output_df(model, country_code):
                 out[name] = spending / gdp
                 return out[name]
             return None
+        if name == "unemp_benefits_to_expenditure":
+            unemployment_benefits = build_column("unemployment_benefits_by_individual")
+            spending = build_column("fiscal expenditure")
+            if unemployment_benefits is not None and spending is not None:
+                out[name] = unemployment_benefits / spending
+                return out[name]
+            return None
+        if name == "other_benefits_to_expenditure":
+            other_benefits = build_column("total_other_benefits")
+            spending = build_column("fiscal expenditure")
+            if other_benefits is not None and spending is not None:
+                out[name] = other_benefits / spending
+                return out[name]
+            return None
+        if name == "gov_consumption_to_expenditure":
+            government_consumption = build_column("government consumption")
+            spending = build_column("fiscal expenditure")
+            if government_consumption is not None and spending is not None:
+                out[name] = government_consumption / spending
+                return out[name]
+            return None
         if name == "deficit to gdp":
             deficit = build_column("deficit")
             gdp = build_column("gdp")
@@ -570,6 +591,9 @@ def build_macro_output_df(model, country_code):
         "taxes on products",
         "fiscal revenue",
         "fiscal expenditure",
+        "unemp_benefits_to_expenditure",
+        "other_benefits_to_expenditure",
+        "gov_consumption_to_expenditure",
         "deficit",
         "debt",
         "fiscal revenue to gdp",

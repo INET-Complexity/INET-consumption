@@ -453,6 +453,13 @@ def build_macro_output_df(model, country_code):
                 out[name] = gdp.pct_change()
                 return out[name]
             return None
+        if name == "real gdp":
+            gdp = build_column("gdp")
+            ppi = build_column("ppi")
+            if gdp is not None and ppi is not None:
+                out[name] = gdp / ppi
+                return out[name]
+            return None
         if name == "expected gdp growth":
             if "estimated_growth" in out.columns:
                 out[name] = out["estimated_growth"]
@@ -596,6 +603,7 @@ def build_macro_output_df(model, country_code):
 
     all_columns = [
         "gdp",
+        "real gdp",
         "gdp growth",
         "expected gdp growth",
         "household consumption",

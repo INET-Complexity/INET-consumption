@@ -430,6 +430,16 @@ def build_macro_output_df(model, country_code):
             return out[name]
         if name in direct_columns:
             return assign(name, *direct_columns[name])
+        if name == "unemployment benefits":
+            if "total_unemployment_benefits" in out.columns:
+                out[name] = out["total_unemployment_benefits"]
+                return out[name]
+            return None
+        if name == "other benefits":
+            if "total_household_social_transfers" in out.columns:
+                out[name] = out["total_household_social_transfers"]
+                return out[name]
+            return None
         if name == "total consumption":
             hh_cons = build_column("household consumption")
             gov_cons = build_column("government consumption")
@@ -441,6 +451,11 @@ def build_macro_output_df(model, country_code):
             gdp = build_column("gdp")
             if gdp is not None:
                 out[name] = gdp.pct_change()
+                return out[name]
+            return None
+        if name == "expected gdp growth":
+            if "estimated_growth" in out.columns:
+                out[name] = out["estimated_growth"]
                 return out[name]
             return None
         if name == "household consumption to gdp":
@@ -499,6 +514,11 @@ def build_macro_output_df(model, country_code):
                 out[name] = df_gov_ts["debt"]
                 return out[name]
             return None
+        if name == "interest payments on debt":
+            if "interest_payments_on_debt" in df_gov_ts.columns:
+                out[name] = df_gov_ts["interest_payments_on_debt"]
+                return out[name]
+            return None
         if name in {"fiscal revenue to gdp", "revenues to gdp"}:
             revenues = build_column("fiscal revenue")
             gdp = build_column("gdp")
@@ -514,14 +534,14 @@ def build_macro_output_df(model, country_code):
                 return out[name]
             return None
         if name == "unemp_benefits_to_expenditure":
-            unemployment_benefits = build_column("unemployment_benefits_by_individual")
+            unemployment_benefits = build_column("unemployment benefits")
             spending = build_column("fiscal expenditure")
             if unemployment_benefits is not None and spending is not None:
                 out[name] = unemployment_benefits / spending
                 return out[name]
             return None
         if name == "other_benefits_to_expenditure":
-            other_benefits = build_column("total_other_benefits")
+            other_benefits = build_column("other benefits")
             spending = build_column("fiscal expenditure")
             if other_benefits is not None and spending is not None:
                 out[name] = other_benefits / spending
@@ -532,6 +552,13 @@ def build_macro_output_df(model, country_code):
             spending = build_column("fiscal expenditure")
             if government_consumption is not None and spending is not None:
                 out[name] = government_consumption / spending
+                return out[name]
+            return None
+        if name == "interest_payments_on_debt_to_expenditure":
+            interest_payments = build_column("interest payments on debt")
+            spending = build_column("fiscal expenditure")
+            if interest_payments is not None and spending is not None:
+                out[name] = interest_payments / spending
                 return out[name]
             return None
         if name == "deficit to gdp":
@@ -558,16 +585,19 @@ def build_macro_output_df(model, country_code):
     df_gov_ts = pd.DataFrame({k: [x for x in v] for k, v in gov_ts_dict.items()})
     df_gov_ts = df_gov_ts.map(unpack_cell)
     df_gov_ts["government expenditure"] = df_gov_ts["revenue"] + df_gov_ts["deficit"]
-    df_gov_ts["interest on debt"] = df_gov_ts["debt"] * df_cb_ts["policy_rate"]
     for column in df_gov_ts.columns:
         out[column.lower()] = df_gov_ts[column]
     for column in df_cb_ts.columns:
         if column.lower() not in out.columns:
             out[column.lower()] = df_cb_ts[column]
+    estimated_growth = model.countries[country_code].economy.ts.__dict__["dicts"].get("estimated_growth")
+    if estimated_growth is not None and "estimated_growth" not in out.columns:
+        out["estimated_growth"] = pd.Series([unpack_cell(x) for x in estimated_growth], index=out.index)
 
     all_columns = [
         "gdp",
         "gdp growth",
+        "expected gdp growth",
         "household consumption",
         "government consumption",
         "total consumption",
@@ -585,6 +615,8 @@ def build_macro_output_df(model, country_code):
         "central bank policy rate",
         "consumption expansion loan debt",
         "mortgage debt",
+        "unemployment benefits",
+        "other benefits",
         "wages",
         "profits",
         "taxes paid on production",
@@ -594,8 +626,10 @@ def build_macro_output_df(model, country_code):
         "unemp_benefits_to_expenditure",
         "other_benefits_to_expenditure",
         "gov_consumption_to_expenditure",
+        "interest_payments_on_debt_to_expenditure",
         "deficit",
         "debt",
+        "interest payments on debt",
         "fiscal revenue to gdp",
         "fiscal expenditure to gdp",
         "deficit to gdp",
@@ -603,5 +637,16 @@ def build_macro_output_df(model, country_code):
     ]
     for column in all_columns:
         build_column(column)
+
+    out = out.drop(
+        columns=[
+            "real unemployment benefits",
+            "nominal unemployment benefits",
+            "real other benefits",
+            "total_other_benefits",
+            "unemployment_benefits_by_individual",
+        ],
+        errors="ignore",
+    )
 
     return out

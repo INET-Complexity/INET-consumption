@@ -193,7 +193,7 @@ class DataConfiguration(BaseModel):
     Attributes:
         year (int): Initial year for the simulation
         quarter (int): Initial quarter (1-4) for the simulation
-        time_unit (int): Time unit for the simulation (1-12), in months
+        time_unit (int): Number of months in one simulation period
         prune_date (date, optional): Date to prune data before
         country_configs (dict[Country, CountryDataConfiguration]): Per-country configurations
         row_data_config (ROWDataConfiguration): Rest of world configuration
@@ -222,7 +222,7 @@ class DataConfiguration(BaseModel):
 
     year: int
     quarter: int = 1
-    time_unit: int = Field(4, ge=1, le=12)
+    time_unit: int = Field(3, ge=1, le=12)
     prune_date: Optional[date] = None
     country_configs: dict[Country, CountryDataConfiguration]
     row_data_config: ROWDataConfiguration = ROWDataConfiguration()
@@ -248,6 +248,9 @@ class DataConfiguration(BaseModel):
         Raises:
             ValueError: If validation fails
         """
+        if 12 % self.time_unit != 0:
+            raise ValueError("time_unit must divide 12 so one model year contains an integer number of periods.")
+
         # Check EU proxy countries
         for country, country_config in self.country_configs.items():
             if country_config.eu_proxy_country is None and not country.is_eu_country:

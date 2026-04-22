@@ -21,3 +21,14 @@ def test_read_config(gen_data_config_path):
     # check that creating the Configuration object with the modified config_dict raises a KeyError
     with pytest.raises(ValidationError):
         DataConfiguration(**config_dict)
+
+
+def test_invalid_time_unit(gen_data_config_path):
+    with open(gen_data_config_path, "r") as f:
+        config_dict = yaml.safe_load(f)
+
+    config_dict["country_configs"] = split_country_configs(config_dict["country_configs"])
+    config_dict["time_unit"] = 5
+
+    with pytest.raises(ValidationError):
+        DataConfiguration(**config_dict)

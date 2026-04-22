@@ -11,6 +11,8 @@ single_government_entity:
   false
 year:
   2014
+time_unit:
+  3
 seed:
   0
 aggregate_industries:

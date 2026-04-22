@@ -23,6 +23,8 @@ industries:
   - R_S
 year:
   2014
+time_unit:
+  3
 prune_date:
   "2010-01-01"
 

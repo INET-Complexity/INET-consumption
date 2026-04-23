@@ -176,6 +176,7 @@ class SyntheticCountry:
         country: Country,
         year: int,
         quarter: int,
+        time_unit: int,
         country_configuration: CountryDataConfiguration,
         industries: list[str],
         readers: DataReaders,
@@ -199,6 +200,7 @@ class SyntheticCountry:
             country (Country): The EU country to create synthetic data for
             year (int): Base year for data generation
             quarter (int): Base quarter for data generation
+            time_unit (int): Simulation period length in months
             country_configuration (CountryDataConfiguration): Country-specific settings
             industries (list[str]): List of industry sectors to model
             readers (DataReaders): Data source readers
@@ -355,6 +357,7 @@ class SyntheticCountry:
         proxy_country: Country,
         year: int,
         quarter: int,
+        time_unit: int,
         country_configuration: CountryDataConfiguration,
         industries: list[str],
         readers: DataReaders,
@@ -381,6 +384,7 @@ class SyntheticCountry:
             proxy_country (Country): The EU country to use as a template
             year (int): Base year for data generation
             quarter (int): Base quarter for data generation
+            time_unit (int): Simulation period length in months
             country_configuration (CountryDataConfiguration): Country-specific settings
             industries (list[str]): List of industry sectors to model
             readers (DataReaders): Data source readers

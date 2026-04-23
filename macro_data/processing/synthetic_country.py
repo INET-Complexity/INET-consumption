@@ -233,7 +233,13 @@ class SyntheticCountry:
         )
 
         central_bank = DefaultSyntheticCentralBank.from_readers(
-            country, year, quarter, readers, exogenous_country_data, country_configuration.central_bank_configuration
+            country,
+            year,
+            quarter,
+            readers,
+            exogenous_country_data,
+            country_configuration.central_bank_configuration,
+            time_unit=time_unit,
         )
 
         population: SyntheticHFCSPopulation = SyntheticHFCSPopulation.from_readers(
@@ -415,7 +421,13 @@ class SyntheticCountry:
         )
 
         central_bank = DefaultSyntheticCentralBank.from_readers(
-            country, year, quarter, readers, exogenous_country_data, country_configuration.central_bank_configuration
+            country,
+            year,
+            quarter,
+            readers,
+            exogenous_country_data,
+            country_configuration.central_bank_configuration,
+            time_unit=time_unit,
         )
 
         population_ratio = readers.world_bank.get_population(

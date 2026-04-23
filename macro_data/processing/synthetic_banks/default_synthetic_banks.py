@@ -147,6 +147,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
         banks_data_configuration: BanksDataConfiguration,
         quarter: int,
         inflation_data: pd.DataFrame,
+        time_unit: int,
         exchange_rate_from_eur: float = 1.0,
         proxy_eu_country: Optional[Country] = None,
     ) -> "DefaultSyntheticBanks":
@@ -171,6 +172,8 @@ class DefaultSyntheticBanks(SyntheticBanks):
             banks_data_configuration (BanksDataConfiguration): Preprocessing configuration
             quarter (int): Reference quarter for preprocessing
             inflation_data (pd.DataFrame): Historical inflation data
+            time_unit (int): Simulation period length in months. Historical quoted
+                annual rates are converted to per-period units using this value.
             exchange_rate_from_eur (float, optional): Exchange rate for conversion. Defaults to 1.0.
             proxy_eu_country (Optional[Country], optional): EU country for proxy data. Defaults to None.
 
@@ -186,6 +189,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
                 scale=scale,
                 quarter=quarter,
                 inflation_data=inflation_data,
+                time_unit=time_unit,
                 exchange_rate_from_eur=exchange_rate_from_eur,
                 proxy_eu_country=proxy_eu_country,
             )
@@ -220,11 +224,15 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_ect,
             hh_mortgage_passthrough,
             hh_mortgage_rate,
-        ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year)
+        ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit)
 
-        initial_central_bank_policy_rate = (
-            readers.policy_rates.get_policy_rates(country_name).loc[f"{year}-Q{quarter}", "Policy Rate"].values[0]
+        initial_policy_rates = cls._convert_annual_rate_frame_to_period(
+            readers.policy_rates.get_policy_rates(country_name),
+            time_unit,
+            "Policy Rate",
         )
+        initial_quarter_key = cls._initial_policy_rate_quarter_key(year, quarter)
+        initial_central_bank_policy_rate = initial_policy_rates.loc[initial_quarter_key, "Policy Rate"].values[0]
 
         bank_data["Interest Rates on Firm Deposits"] = initial_central_bank_policy_rate
         bank_data["Interest Rates on Household Deposits"] = initial_central_bank_policy_rate
@@ -257,6 +265,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
         scale: int,
         quarter: int,
         inflation_data: pd.DataFrame,
+        time_unit: int,
         exchange_rate_from_eur: float = 1.0,
         proxy_eu_country: Optional[Country] = None,
     ) -> "DefaultSyntheticBanks":
@@ -281,6 +290,8 @@ class DefaultSyntheticBanks(SyntheticBanks):
             scale (int): Scaling factor for bank numbers
             quarter (int): Reference quarter for preprocessing
             inflation_data (pd.DataFrame): Historical inflation data
+            time_unit (int): Simulation period length in months. Historical quoted
+                annual rates are converted to per-period units using this value.
             exchange_rate_from_eur (float, optional): Exchange rate for conversion. Defaults to 1.0.
             proxy_eu_country (Optional[Country], optional): EU country for proxy data. Defaults to None.
 
@@ -331,11 +342,15 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_ect,
             hh_mortgage_passthrough,
             hh_mortgage_rate,
-        ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year)
+        ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit)
 
-        initial_central_bank_policy_rate = (
-            readers.policy_rates.get_policy_rates(country_name).loc[f"{year}-Q{quarter}", "Policy Rate"].values[0]
+        initial_policy_rates = cls._convert_annual_rate_frame_to_period(
+            readers.policy_rates.get_policy_rates(country_name),
+            time_unit,
+            "Policy Rate",
         )
+        initial_quarter_key = cls._initial_policy_rate_quarter_key(year, quarter)
+        initial_central_bank_policy_rate = initial_policy_rates.loc[initial_quarter_key, "Policy Rate"].values[0]
 
         bank_data["Interest Rates on Firm Deposits"] = initial_central_bank_policy_rate
         bank_data["Interest Rates on Household Deposits"] = initial_central_bank_policy_rate
@@ -358,7 +373,46 @@ class DefaultSyntheticBanks(SyntheticBanks):
         )
 
     @classmethod
-    def initialise_rates(cls, country_name, inflation_data, proxy_eu_country, quarter, readers, year):
+    @staticmethod
+    def _periods_per_year(time_unit: int) -> int:
+        """Return the number of model periods in one calendar year."""
+        if time_unit <= 0 or 12 % time_unit != 0:
+            raise ValueError("Bank-rate preprocessing requires `time_unit` to be a positive divisor of 12.")
+        return 12 // time_unit
+
+    @classmethod
+    def _convert_annual_rate_to_period(cls, annual_rate: float, time_unit: int) -> float:
+        """Convert an annual quoted rate to the model's per-period convention."""
+        return annual_rate / cls._periods_per_year(time_unit)
+
+    @classmethod
+    def _convert_annual_rate_series_to_period(cls, annual_rates: Optional[pd.Series], time_unit: int) -> Optional[pd.Series]:
+        """Convert a quoted annual rate series to per-period units."""
+        if annual_rates is None:
+            return None
+        return annual_rates.astype(float) / cls._periods_per_year(time_unit)
+
+    @classmethod
+    def _convert_annual_rate_frame_to_period(
+        cls,
+        annual_rates: pd.DataFrame,
+        time_unit: int,
+        column: str,
+    ) -> pd.DataFrame:
+        """Convert a quoted annual-rate column in a DataFrame to per-period units."""
+        period_rates = annual_rates.copy()
+        period_rates[column] = period_rates[column].astype(float) / cls._periods_per_year(time_unit)
+        return period_rates
+
+    @staticmethod
+    def _initial_policy_rate_quarter_key(year: int, quarter: int) -> str:
+        """Return the pre-start quarter key used for initial policy-rate anchoring."""
+        start_period = pd.Period(year=year, quarter=quarter, freq="Q")
+        initial_period = start_period - 1
+        return f"{initial_period.year}-Q{initial_period.quarter}"
+
+    @classmethod
+    def initialise_rates(cls, country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit):
         """Preprocess and estimate initial interest rate parameters.
 
         This method:
@@ -379,6 +433,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
             quarter (int): Reference quarter
             readers (DataReaders): Data source readers
             year (int): Reference year
+            time_unit (int): Simulation period length in months
 
         Returns:
             tuple: Nine estimated parameters:
@@ -398,10 +453,20 @@ class DefaultSyntheticBanks(SyntheticBanks):
             if proxy_eu_country is None:
                 raise ValueError("Proxy EU country is required for non-EU countries.")
             data_country = proxy_eu_country
-        firm_rate = readers.ecb_reader.get_firm_rates(data_country)
-        household_consumption_rate = readers.ecb_reader.get_household_consumption_rates(data_country)
-        household_mortgage_rates = readers.ecb_reader.get_household_mortgage_rates(data_country)
-        policy_rates = readers.policy_rates.get_policy_rates(data_country)
+        firm_rate = cls._convert_annual_rate_series_to_period(readers.ecb_reader.get_firm_rates(data_country), time_unit)
+        household_consumption_rate = cls._convert_annual_rate_series_to_period(
+            readers.ecb_reader.get_household_consumption_rates(data_country),
+            time_unit,
+        )
+        household_mortgage_rates = cls._convert_annual_rate_series_to_period(
+            readers.ecb_reader.get_household_mortgage_rates(data_country),
+            time_unit,
+        )
+        policy_rates = cls._convert_annual_rate_frame_to_period(
+            readers.policy_rates.get_policy_rates(data_country),
+            time_unit,
+            "Policy Rate",
+        )
         npl_rates = readers.world_bank.get_npl_ratios(data_country)
         if any(
             [

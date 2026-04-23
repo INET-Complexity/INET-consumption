@@ -270,6 +270,7 @@ class SyntheticCountry:
             banks_data_configuration=country_configuration.banks_configuration,
             quarter=quarter,
             inflation_data=exogenous_country_data.inflation,
+            time_unit=time_unit,
         )
 
         synthetic_goods_market = SyntheticGoodsMarket.from_readers(
@@ -461,6 +462,7 @@ class SyntheticCountry:
             banks_data_configuration=country_configuration.banks_configuration,
             quarter=quarter,
             inflation_data=proxy_inflation_data,
+            time_unit=time_unit,
             proxy_eu_country=proxy_country,
         )
 

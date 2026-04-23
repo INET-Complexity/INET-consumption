@@ -226,8 +226,7 @@ class SmoothTaylorRule(PolicyRate):
             * (
                 central_bank_states["r_star"]
                 + central_bank_states["targeted_inflation_rate"]
-                + central_bank_states["phi_pi"]
-                * (annual_inflation - central_bank_states["targeted_inflation_rate"])
+                + central_bank_states["phi_pi"] * (annual_inflation - central_bank_states["targeted_inflation_rate"])
                 + central_bank_states["phi_q"] * current_output_gap
             )
             + shock

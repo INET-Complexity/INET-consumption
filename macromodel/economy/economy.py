@@ -734,9 +734,7 @@ class Economy:
         alpha = 2.0 / (periods_per_year + 1.0)
         current_real_gross_output = self.ts.current("total_output")[0] / np.maximum(self.ts.current("ppi")[0], 1e-12)
         previous_potential_output = self.ts.current("potential_output")[0]
-        current_potential_output = (
-            alpha * current_real_gross_output + (1.0 - alpha) * previous_potential_output
-        )
+        current_potential_output = alpha * current_real_gross_output + (1.0 - alpha) * previous_potential_output
         safe_real_output = np.maximum(current_real_gross_output, 1e-12)
         safe_potential_output = np.maximum(current_potential_output, 1e-12)
 

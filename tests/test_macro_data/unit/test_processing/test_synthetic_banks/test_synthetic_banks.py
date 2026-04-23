@@ -61,7 +61,9 @@ class TestSyntheticBanks:
         }
 
         assert set(banks.bank_data.columns) == columns
-        annual_policy_rate = readers.policy_rates.get_policy_rates(Country("FRA")).loc["2013-Q4", "Policy Rate"].values[0]
+        annual_policy_rate = (
+            readers.policy_rates.get_policy_rates(Country("FRA")).loc["2013-Q4", "Policy Rate"].values[0]
+        )
         assert banks.bank_data["Interest Rates on Firm Deposits"].values[0] == annual_policy_rate / 4.0
         assert banks.bank_data["Interest Rates on Household Deposits"].values[0] == annual_policy_rate / 4.0
         # Check if we have all the necessary fields

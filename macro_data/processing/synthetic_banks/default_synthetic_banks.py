@@ -386,7 +386,9 @@ class DefaultSyntheticBanks(SyntheticBanks):
         return annual_rate / cls._periods_per_year(time_unit)
 
     @classmethod
-    def _convert_annual_rate_series_to_period(cls, annual_rates: Optional[pd.Series], time_unit: int) -> Optional[pd.Series]:
+    def _convert_annual_rate_series_to_period(
+        cls, annual_rates: Optional[pd.Series], time_unit: int
+    ) -> Optional[pd.Series]:
         """Convert a quoted annual rate series to per-period units."""
         if annual_rates is None:
             return None
@@ -453,7 +455,9 @@ class DefaultSyntheticBanks(SyntheticBanks):
             if proxy_eu_country is None:
                 raise ValueError("Proxy EU country is required for non-EU countries.")
             data_country = proxy_eu_country
-        firm_rate = cls._convert_annual_rate_series_to_period(readers.ecb_reader.get_firm_rates(data_country), time_unit)
+        firm_rate = cls._convert_annual_rate_series_to_period(
+            readers.ecb_reader.get_firm_rates(data_country), time_unit
+        )
         household_consumption_rate = cls._convert_annual_rate_series_to_period(
             readers.ecb_reader.get_household_consumption_rates(data_country),
             time_unit,

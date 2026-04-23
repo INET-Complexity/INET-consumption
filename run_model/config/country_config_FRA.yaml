@@ -370,7 +370,7 @@ FRA:
   central_bank:
     functions:
       policy_rate:
-        name: PolednaPolicyRate
+        name: SmoothTaylorRule
         path_name: policy_rate
         parameters: {}
 

@@ -26,7 +26,14 @@ class TestSyntheticCentralBanks:
         )
 
         # Check if we have all the necessary fields
-        for central_bank_field in ["policy_rate", "smooth_policy_rate", "smooth_rho", "smooth_r_star", "phi_pi", "phi_q"]:
+        for central_bank_field in [
+            "policy_rate",
+            "smooth_policy_rate",
+            "smooth_rho",
+            "smooth_r_star",
+            "phi_pi",
+            "phi_q",
+        ]:
             assert central_bank_field in central_banks.central_bank_data.columns
 
         annual_policy_rate = readers.policy_rates.get_policy_rates("FRA").loc["2013-Q4", "Policy Rate"].values[0]

@@ -266,8 +266,7 @@ def build_collapse_core_view(
 ) -> pd.DataFrame:
     """Load the main economy and fiscal series used to inspect collapse dynamics."""
     dataset_map = {
-        name: dataset_path.replace("/FRA/", f"/{country_code}/")
-        for name, dataset_path in DEFAULT_CORE_DATASETS.items()
+        name: dataset_path.replace("/FRA/", f"/{country_code}/") for name, dataset_path in DEFAULT_CORE_DATASETS.items()
     }
     return load_named_series_window(h5_path, dataset_map, start=start, end=end + 1)
 
@@ -281,8 +280,7 @@ def build_firm_collapse_panel(
 ) -> pd.DataFrame:
     """Load firm-level metrics around the collapse window for side-by-side comparison."""
     dataset_map = {
-        name: dataset_path.replace("/FRA/", f"/{country_code}/")
-        for name, dataset_path in DEFAULT_FIRM_DATASETS.items()
+        name: dataset_path.replace("/FRA/", f"/{country_code}/") for name, dataset_path in DEFAULT_FIRM_DATASETS.items()
     }
     return load_entity_panel(h5_path, dataset_map, start=start, end=end + 1, top_n=top_n)
 

@@ -102,7 +102,9 @@ def fit_social_benefits_arx_diagnostics(
         exogenous_data=country_exogenous_data,
     )
     national_accounts_growth = readers.get_national_accounts_growth(country_name)
-    gdp_growth = national_accounts_growth["GDP"] if "GDP" in national_accounts_growth.columns else pd.Series(dtype=float)
+    gdp_growth = (
+        national_accounts_growth["GDP"] if "GDP" in national_accounts_growth.columns else pd.Series(dtype=float)
+    )
 
     diagnostics: dict[str, dict[str, object]] = {}
 
@@ -139,9 +141,7 @@ def fit_social_benefits_arx_diagnostics(
             other_benefits_regression_data[["Lagged Inflation", "Unemployment Change", "GDP Growth"]],
             has_constant="add",
         )
-        other_benefits_endog = other_benefits_regression_data["Delta Log Benefits"].rename(
-            "Delta Log Other Benefits"
-        )
+        other_benefits_endog = other_benefits_regression_data["Delta Log Benefits"].rename("Delta Log Other Benefits")
         other_benefits_results = sm.OLS(other_benefits_endog, other_benefits_exog).fit()
         diagnostics["other_benefits"] = {
             "results": other_benefits_results,
@@ -191,10 +191,7 @@ def build_social_benefits_reader_df(
     national_accounts_growth = readers.get_national_accounts_growth(country_name)
 
     gdp = pd.Series(
-        {
-            ts: readers.eurostat.get_quarterly_gdp(country_name, ts.year, ts.quarter)
-            for ts in df.index
-        },
+        {ts: readers.eurostat.get_quarterly_gdp(country_name, ts.year, ts.quarter) for ts in df.index},
         name="GDP",
     )
     df["GDP"] = gdp
@@ -229,7 +226,12 @@ def build_social_benefits_reader_df(
 
     participation_rate = readers.world_bank.get_participation_rate(country_name).copy().sort_index()
     participation_rate.index = pd.to_datetime(participation_rate.index)
-    df = pd.merge_asof(df, participation_rate.rename(columns={"Participation Rate": "Participation Rate"}), left_index=True, right_index=True)
+    df = pd.merge_asof(
+        df,
+        participation_rate.rename(columns={"Participation Rate": "Participation Rate"}),
+        left_index=True,
+        right_index=True,
+    )
     if "Participation Rate" in df.columns:
         df["Participation Rate Change"] = df["Participation Rate"].diff()
 

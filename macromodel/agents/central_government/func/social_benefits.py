@@ -226,7 +226,9 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
     """
 
     @staticmethod
-    def _build_prediction_features(historic_ppi_inflation: np.ndarray, current_unemployment_rate: float) -> pd.DataFrame:
+    def _build_prediction_features(
+        historic_ppi_inflation: np.ndarray, current_unemployment_rate: float
+    ) -> pd.DataFrame:
         return pd.DataFrame(
             [[historic_ppi_inflation[-1], current_unemployment_rate]],
             columns=["Real CPI Inflation", "Unemployment Rate"],
@@ -253,9 +255,7 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         """
         if model is None:
             return prev_unemployment_benefits
-        pred = model.predict(
-            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
-        )[0]
+        pred = model.predict(self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate))[0]
         return pred
 
     def compute_regular_transfer_to_households(
@@ -279,7 +279,5 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         """
         if model is None:
             return prev_regular_transfer_to_households
-        pred = model.predict(
-            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
-        )[0]
+        pred = model.predict(self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate))[0]
         return pred

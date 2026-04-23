@@ -1367,10 +1367,7 @@ class Country:
             [self.households.ts.current("income_social_transfers").sum()]
         )
         self.central_government.ts.interest_payments_on_debt.append(
-            [
-                self.central_bank.ts.current("policy_rate")[0]
-                * self.central_government.ts.current("debt")[0]
-            ]
+            [self.central_bank.ts.current("policy_rate")[0] * self.central_government.ts.current("debt")[0]]
         )
         self.central_government.ts.deficit.append(
             self.central_government.compute_deficit(

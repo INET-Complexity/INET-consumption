@@ -373,6 +373,9 @@ def plot_sensitivity_summary(
 def build_macro_output_df(model, country_code):
     """Build a macro output dataframe with all derived output columns.
 
+    Observation frequency follows the model timestep. Macro interest-rate
+    columns are returned as annualized values.
+
     Args:
         cfg: Notebook/runtime config kept for call-site compatibility.
         model: Simulation instance.
@@ -388,8 +391,39 @@ def build_macro_output_df(model, country_code):
 
     out = pd.DataFrame(index=shallow.index)
 
+    def frequency_label(month_increment):
+        labels = {
+            1: "monthly",
+            3: "quarterly",
+            6: "semiannual",
+            12: "annual",
+        }
+        return labels.get(month_increment, f"every {month_increment} months")
+
+    def timeseries_dict_to_frame(ts_dict):
+        target_len = len(out.index)
+        if not ts_dict:
+            return pd.DataFrame(index=out.index)
+
+        series_dict = {}
+        for key, values in ts_dict.items():
+            values = list(values)
+            if target_len > 1 and len(values) == 1:
+                # Skip static metadata fields that are not recorded each timestep.
+                continue
+            series_dict[key] = pd.Series(values)
+
+        if not series_dict:
+            return pd.DataFrame(index=out.index)
+
+        frame = pd.DataFrame(series_dict).reindex(range(target_len))
+        frame.index = out.index
+        return frame.map(unpack_cell)
+
     def first_available(*candidates):
         for candidate in candidates:
+            if candidate in out.columns:
+                return out[candidate]
             if candidate in shallow.columns:
                 return shallow[candidate]
             if candidate in gdp_components.columns:
@@ -405,6 +439,15 @@ def build_macro_output_df(model, country_code):
             out[name] = series
         return series
 
+    def assign_annualized(name, *candidates):
+        if name in out.columns:
+            return out[name]
+
+        series = first_available(*candidates)
+        if series is not None:
+            out[name] = periods_per_year * series
+        return series
+
     # Start with direct aliases from model output.
     direct_columns = {
         "gdp": ("GDP_Expenditure", "GDP_Output", "GDP_Income"),
@@ -414,9 +457,27 @@ def build_macro_output_df(model, country_code):
         "imports": ("Imports", "-Imports"),
         "gfcf": ("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF"),
         "cpi": ("CPI",),
+        "cpi yoy inflation": ("CPI YoY Inflation", "cpi_yoy_inflation"),
         "ppi": ("PPI",),
+        "output gap": ("Output Gap", "output_gap"),
         "unemployment rate": ("Unemployment Rate",),
         "central bank policy rate": ("Central Bank Policy Rate",),
+        "short-term firm borrowing rate": (
+            "Average Interest Rates on Short Term Firm Loans",
+            "average_interest_rates_on_short_term_firm_loans",
+        ),
+        "long-term firm borrowing rate": (
+            "Average Interest Rates on Long Term Firm Loans",
+            "average_interest_rates_on_long_term_firm_loans",
+        ),
+        "household consumption borrowing rate": (
+            "Average Interest Rates on Household Consumption Loans",
+            "average_interest_rates_on_household_consumption_loans",
+        ),
+        "mortgage borrowing rate": (
+            "Average Interest Rates on Mortgages",
+            "average_interest_rates_on_mortgages",
+        ),
         "consumption expansion loan debt": ("Consumption Expansion Loan Debt",),
         "mortgage debt": ("Mortgage Debt",),
         "wages": ("Wages", "+Wages"),
@@ -428,6 +489,21 @@ def build_macro_output_df(model, country_code):
     def build_column(name):
         if name in out.columns:
             return out[name]
+        if name == "central bank policy rate":
+            policy_rate = assign_annualized(name, *direct_columns[name])
+            if policy_rate is not None:
+                return out[name]
+            return None
+        if name in {
+            "short-term firm borrowing rate",
+            "long-term firm borrowing rate",
+            "household consumption borrowing rate",
+            "mortgage borrowing rate",
+        }:
+            borrowing_rate = assign_annualized(name, *direct_columns[name])
+            if borrowing_rate is not None:
+                return out[name]
+            return None
         if name in direct_columns:
             return assign(name, *direct_columns[name])
         if name == "unemployment benefits":
@@ -587,19 +663,30 @@ def build_macro_output_df(model, country_code):
     # Analyse government revenues and spending
     gov_ts_dict = model.countries[country_code].central_government.ts.__dict__["dicts"]
     cb_ts_dict = model.countries[country_code].central_bank.ts.__dict__["dicts"]
-    df_cb_ts = pd.DataFrame({k: [x for x in v] for k, v in cb_ts_dict.items()})
-    df_cb_ts = df_cb_ts.map(unpack_cell)
-    df_gov_ts = pd.DataFrame({k: [x for x in v] for k, v in gov_ts_dict.items()})
-    df_gov_ts = df_gov_ts.map(unpack_cell)
+    df_cb_ts = timeseries_dict_to_frame(cb_ts_dict)
+    bank_ts_dict = model.countries[country_code].banks.ts.__dict__["dicts"]
+    df_bank_ts = timeseries_dict_to_frame(bank_ts_dict)
+    df_gov_ts = timeseries_dict_to_frame(gov_ts_dict)
     df_gov_ts["government expenditure"] = df_gov_ts["revenue"] + df_gov_ts["deficit"]
     for column in df_gov_ts.columns:
         out[column.lower()] = df_gov_ts[column]
     for column in df_cb_ts.columns:
         if column.lower() not in out.columns:
             out[column.lower()] = df_cb_ts[column]
-    estimated_growth = model.countries[country_code].economy.ts.__dict__["dicts"].get("estimated_growth")
-    if estimated_growth is not None and "estimated_growth" not in out.columns:
-        out["estimated_growth"] = pd.Series([unpack_cell(x) for x in estimated_growth], index=out.index)
+    for bank_column in [
+        "average_interest_rates_on_short_term_firm_loans",
+        "average_interest_rates_on_long_term_firm_loans",
+        "average_interest_rates_on_household_consumption_loans",
+        "average_interest_rates_on_mortgages",
+    ]:
+        bank_series = df_bank_ts.get(bank_column)
+        if bank_series is not None and bank_column not in out.columns:
+            out[bank_column] = bank_series
+    economy_ts_dict = model.countries[country_code].economy.ts.__dict__["dicts"]
+    for economy_column in ["estimated_growth", "cpi_yoy_inflation", "output_gap"]:
+        economy_series = economy_ts_dict.get(economy_column)
+        if economy_series is not None and economy_column not in out.columns:
+            out[economy_column] = pd.Series([unpack_cell(x) for x in economy_series], index=out.index)
 
     all_columns = [
         "gdp",
@@ -618,9 +705,15 @@ def build_macro_output_df(model, country_code):
         "investment to gdp",
         "net exports to gdp",
         "cpi",
+        "cpi yoy inflation",
         "ppi",
+        "output gap",
         "unemployment rate",
         "central bank policy rate",
+        "short-term firm borrowing rate",
+        "long-term firm borrowing rate",
+        "household consumption borrowing rate",
+        "mortgage borrowing rate",
         "consumption expansion loan debt",
         "mortgage debt",
         "unemployment benefits",
@@ -656,5 +749,11 @@ def build_macro_output_df(model, country_code):
         ],
         errors="ignore",
     )
+
+    out.attrs["time_unit_months"] = model.timestep.increment
+    out.attrs["observation_frequency"] = frequency_label(model.timestep.increment)
+    out.attrs["periods_per_year"] = periods_per_year
+    out.attrs["interest_rate_observation_frequency"] = out.attrs["observation_frequency"]
+    out.attrs["interest_rate_units"] = "Macro interest-rate columns are annualized."
 
     return out

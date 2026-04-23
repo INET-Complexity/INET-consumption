@@ -106,7 +106,7 @@ class DataWrapper:
     emission_factors: dict[str, float]
     emissions_energy_factors: Optional[EmissionsEnergyFactors] = None
     aggregation_structure: Optional[dict[Country, list[Country | Region]]] = None
-    time_unit: int = 4.0
+    time_unit: int = 3
 
     @property
     def all_country_names(self) -> list[str]:
@@ -294,6 +294,7 @@ class DataWrapper:
                 country=country,
                 year=year,
                 quarter=quarter,
+                time_unit=configuration.time_unit,
                 country_configuration=configuration.country_configs[country],
                 industries=industries,
                 readers=readers,
@@ -319,6 +320,7 @@ class DataWrapper:
                     country=country,
                     proxy_country=configuration.country_configs[country].eu_proxy_country,
                     year=year,
+                    time_unit=configuration.time_unit,
                     country_configuration=configuration.country_configs[country],
                     industries=industries,
                     readers=readers,

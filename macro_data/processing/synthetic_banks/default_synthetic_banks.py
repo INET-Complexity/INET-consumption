@@ -98,6 +98,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
         hh_mortgage_passthrough: float,
         hh_mortgage_ect: float,
         hh_mortgage_rate: float,
+        firm_short_spread: float,
+        firm_long_spread: float,
+        household_consumption_spread: float,
+        mortgage_spread: float,
         proxy_country: Optional[Country] = None,
     ):
         """Initialize the banking system data container.
@@ -117,6 +121,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_passthrough (float): Estimated mortgage rate parameter
             hh_mortgage_ect (float): Estimated mortgage ECT parameter
             hh_mortgage_rate (float): Initial mortgage rate
+            firm_short_spread (float): Mean pre-start short-term firm loan spread
+            firm_long_spread (float): Mean pre-start long-term firm loan spread
+            household_consumption_spread (float): Mean pre-start household consumption spread
+            mortgage_spread (float): Mean pre-start mortgage spread
             proxy_country (Optional[Country]): Country to use as proxy when missing data
         """
         super().__init__(
@@ -134,6 +142,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_passthrough=hh_mortgage_passthrough,
             hh_mortgage_ect=hh_mortgage_ect,
             hh_mortgage_rate=hh_mortgage_rate,
+            firm_short_spread=firm_short_spread,
+            firm_long_spread=firm_long_spread,
+            household_consumption_spread=household_consumption_spread,
+            mortgage_spread=mortgage_spread,
         )
 
     @classmethod
@@ -224,6 +236,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_ect,
             hh_mortgage_passthrough,
             hh_mortgage_rate,
+            firm_short_spread,
+            firm_long_spread,
+            household_consumption_spread,
+            mortgage_spread,
         ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit)
 
         initial_policy_rates = cls._convert_annual_rate_frame_to_period(
@@ -251,6 +267,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_passthrough=hh_mortgage_passthrough,
             hh_mortgage_ect=hh_mortgage_ect,
             hh_mortgage_rate=hh_mortgage_rate,
+            firm_short_spread=firm_short_spread,
+            firm_long_spread=firm_long_spread,
+            household_consumption_spread=household_consumption_spread,
+            mortgage_spread=mortgage_spread,
             quarter=quarter,
             proxy_country=proxy_eu_country,
         )
@@ -342,6 +362,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_ect,
             hh_mortgage_passthrough,
             hh_mortgage_rate,
+            firm_short_spread,
+            firm_long_spread,
+            household_consumption_spread,
+            mortgage_spread,
         ) = cls.initialise_rates(country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit)
 
         initial_policy_rates = cls._convert_annual_rate_frame_to_period(
@@ -369,6 +393,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             hh_mortgage_passthrough=hh_mortgage_passthrough,
             hh_mortgage_ect=hh_mortgage_ect,
             hh_mortgage_rate=hh_mortgage_rate,
+            firm_short_spread=firm_short_spread,
+            firm_long_spread=firm_long_spread,
+            household_consumption_spread=household_consumption_spread,
+            mortgage_spread=mortgage_spread,
             quarter=quarter,
         )
 
@@ -413,6 +441,33 @@ class DefaultSyntheticBanks(SyntheticBanks):
         initial_period = start_period - 1
         return f"{initial_period.year}-Q{initial_period.quarter}"
 
+    @staticmethod
+    def _pre_start_mask(index: pd.Index, year: int, quarter: int) -> pd.Series:
+        """Return the mask for quarterly observations strictly before the start quarter."""
+        return index < pd.Timestamp(f"{year}Q{quarter}")
+
+    @classmethod
+    def _mean_pre_start_spread(
+        cls,
+        product_rates: Optional[pd.Series],
+        policy_rates: pd.DataFrame,
+        year: int,
+        quarter: int,
+    ) -> float:
+        """Compute the mean quarterly pre-start spread between a product rate and policy."""
+        if product_rates is None:
+            return 0.0
+
+        df = pd.DataFrame({"product_rate": product_rates}).sort_index()
+        df = pd.merge_asof(df, policy_rates[["Policy Rate"]].sort_index(), left_index=True, right_index=True)
+        df["Policy Rate"] = df["Policy Rate"].ffill()
+        df = df.loc[cls._pre_start_mask(df.index, year, quarter)].dropna(subset=["product_rate", "Policy Rate"])
+
+        if df.empty:
+            return 0.0
+
+        return float((df["product_rate"] - df["Policy Rate"]).mean())
+
     @classmethod
     def initialise_rates(cls, country_name, inflation_data, proxy_eu_country, quarter, readers, year, time_unit):
         """Preprocess and estimate initial interest rate parameters.
@@ -438,7 +493,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
             time_unit (int): Simulation period length in months
 
         Returns:
-            tuple: Nine estimated parameters:
+            tuple: Thirteen estimated parameters:
                 - firm_ect: Estimated error correction for firm rates
                 - firm_passthrough: Estimated adjustment for firm rates
                 - firm_rate: Initial firm rate
@@ -448,6 +503,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
                 - hh_mortgage_ect: Estimated mortgage ECT
                 - hh_mortgage_passthrough: Estimated mortgage adjustment
                 - hh_mortgage_rate: Initial mortgage rate
+                - firm_short_spread: Mean pre-start short-term firm spread
+                - firm_long_spread: Mean pre-start long-term firm spread
+                - household_consumption_spread: Mean pre-start household consumption spread
+                - mortgage_spread: Mean pre-start mortgage spread
         """
         if country_name.is_eu_country:
             data_country = country_name
@@ -471,6 +530,11 @@ class DefaultSyntheticBanks(SyntheticBanks):
             time_unit,
             "Policy Rate",
         )
+        firm_spread = cls._mean_pre_start_spread(firm_rate, policy_rates, year, quarter)
+        household_consumption_spread = cls._mean_pre_start_spread(
+            household_consumption_rate, policy_rates, year, quarter
+        )
+        mortgage_spread = cls._mean_pre_start_spread(household_mortgage_rates, policy_rates, year, quarter)
         npl_rates = readers.world_bank.get_npl_ratios(data_country)
         if any(
             [
@@ -516,6 +580,10 @@ class DefaultSyntheticBanks(SyntheticBanks):
             household_mortgages_ect,
             hh_mortgage_passthrough,
             household_mortgages_rate,
+            firm_spread,
+            firm_spread,
+            household_consumption_spread,
+            mortgage_spread,
         )
 
     def set_bank_equity(self, bank_equity: float) -> None:

@@ -62,8 +62,42 @@ from macro_data.readers.emissions.emissions_reader import (
     EmissionsData,
     EmissionsEnergyFactors,
 )
-from macro_data.readers.exogenous_data import ExogenousCountryData
+from macro_data.readers.exogenous_data import ExogenousCountryData, convert_growth_rates_to_model_period
 from macro_data.readers.io_tables.icio_reader import ICIOReader
+
+
+def _quarter_start_date(year: int, quarter: int) -> pd.Timestamp:
+    return pd.Timestamp(year, 3 * (quarter - 1) + 1, 1)
+
+
+def _period_start_for_date(index: pd.Index, date: pd.Timestamp) -> pd.Timestamp:
+    index = pd.DatetimeIndex(index).sort_values()
+    if date in index:
+        return date
+
+    prior_dates = index[index <= date]
+    if len(prior_dates) > 0:
+        return prior_dates[-1]
+
+    later_dates = index[index > date]
+    if len(later_dates) > 0:
+        return later_dates[0]
+
+    raise ValueError("Cannot select a period from an empty calibration index.")
+
+
+def _period_values_at_date(data: pd.DataFrame, date: pd.Timestamp) -> pd.Series:
+    if date in data.index:
+        return data.loc[date]
+
+    return (
+        data.reindex(data.index.union(pd.DatetimeIndex([date])))
+        .sort_index()
+        .interpolate(method="time")
+        .ffill()
+        .bfill()
+        .loc[date]
+    )
 
 
 @dataclass
@@ -181,6 +215,7 @@ class DataWrapper:
 
         year = configuration.year
         quarter = configuration.quarter
+        yearly_factor = 12 / configuration.time_unit
 
         scale_dict = {country: configuration.country_configs[country].scale for country in country_names}
 
@@ -211,6 +246,9 @@ class DataWrapper:
             use_disagg_can_2014_reader=configuration.can_disaggregation,
             use_provincial_can_reader=use_provincial_can_reader,
             regions_dict=regions_dict,
+            allow_missing_emissions=allow_missing_emissions,
+            yearly_factor=yearly_factor,
+            simulation_quarter=quarter,
         )
 
         if regions_dict:
@@ -241,6 +279,7 @@ class DataWrapper:
             readers=readers,
             country_names=country_names,
             single_firm_per_industry=single_firm_dict,
+            yearly_factor=yearly_factor,
         )
 
         year_range = 1 if single_hfcs_survey else 10
@@ -255,6 +294,7 @@ class DataWrapper:
                 quarter=quarter,
                 industry_vectors=industry_data[country]["industry_vectors"],
                 proxy_country=proxy_country_dict.get(country, None),
+                time_unit=configuration.time_unit,
             )
             for country in country_names
         }
@@ -269,6 +309,7 @@ class DataWrapper:
                 inflation = readers.imf_reader.get_inflation(proxy_country)
                 if inflation is None:
                     inflation = readers.world_bank.get_inflation(proxy_country)
+                inflation = convert_growth_rates_to_model_period(inflation, configuration.time_unit)
                 proxy_inflation[country] = inflation
             else:
                 proxy_inflation[country] = None
@@ -423,7 +464,8 @@ class DataWrapper:
         year = self.configuration.year
         quarter = self.configuration.quarter
         calibration_index = self.calibration_data.index
-        calibration_before_index = calibration_index[calibration_index < f"{year}-Q{quarter}"]
+        start_date = _period_start_for_date(calibration_index, _quarter_start_date(year, quarter))
+        calibration_before_index = calibration_index[calibration_index < start_date]
         return self.calibration_data.loc[calibration_before_index]
 
     @property
@@ -438,7 +480,8 @@ class DataWrapper:
         year = self.configuration.year
         quarter = self.configuration.quarter
         calibration_index = self.calibration_data.index
-        calibration_during_index = calibration_index[calibration_index == f"{year}-Q{quarter}"]
+        start_date = _period_start_for_date(calibration_index, _quarter_start_date(year, quarter))
+        calibration_during_index = calibration_index[calibration_index == start_date]
         return self.calibration_data.loc[calibration_during_index]
 
 
@@ -472,8 +515,9 @@ def add_row_to_calibration(
     all_exports = calibration_data.xs("Exports (Value)", axis=1, level=1)
     all_imports = calibration_data.xs("Imports (Value)", axis=1, level=1)
 
-    scaled_exports = all_exports / all_exports.loc[f"{year}-Q{quarter}"].iloc[0]
-    scaled_imports = all_imports / all_imports.loc[f"{year}-Q{quarter}"].iloc[0]
+    base_date = _quarter_start_date(year, quarter)
+    scaled_exports = all_exports / _period_values_at_date(all_exports, base_date)
+    scaled_imports = all_imports / _period_values_at_date(all_imports, base_date)
 
     total_country_exports = sum(
         [country_scaled_exports(country, industry_data, scaled_exports) for country in countries]

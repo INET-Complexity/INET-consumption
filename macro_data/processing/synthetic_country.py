@@ -217,7 +217,14 @@ class SyntheticCountry:
             This method should only be used for EU member countries. For non-EU
             countries, use proxied_synthetic_country instead.
         """
-        central_government = DefaultSyntheticCGovernment.from_readers(readers, country, year, year_range=year_range)
+        yearly_factor = 12 / time_unit
+        central_government = DefaultSyntheticCGovernment.from_readers(
+            readers,
+            country,
+            year,
+            year_range=year_range,
+            yearly_factor=yearly_factor,
+        )
 
         total_unemployment_benefits = central_government.central_gov_data["Total Unemployment Benefits"].values[0]
 
@@ -253,6 +260,7 @@ class SyntheticCountry:
             total_unemployment_benefits=total_unemployment_benefits,
             country_name_short=country.to_two_letter_code(),
             exogenous_data=exogenous_country_data,
+            yearly_factor=yearly_factor,
         )
 
         firms = DefaultSyntheticFirms.from_readers(
@@ -405,7 +413,14 @@ class SyntheticCountry:
         Returns:
             SyntheticCountry: Initialized synthetic country instance
         """
-        central_government = DefaultSyntheticCGovernment.from_readers(readers, country, year, year_range=year_range)
+        yearly_factor = 12 / time_unit
+        central_government = DefaultSyntheticCGovernment.from_readers(
+            readers,
+            country,
+            year,
+            year_range=year_range,
+            yearly_factor=yearly_factor,
+        )
 
         total_unemployment_benefits = central_government.central_gov_data["Total Unemployment Benefits"].values[0]
 
@@ -450,6 +465,7 @@ class SyntheticCountry:
             proxied_country=country,
             quarter=quarter,
             exogenous_data=exogenous_country_data,
+            yearly_factor=yearly_factor,
         )
 
         firms = DefaultSyntheticFirms.from_readers(

@@ -150,6 +150,17 @@ class DataPaths:
     #     return paths
 
 
+def _time_unit_from_yearly_factor(yearly_factor: float) -> int:
+    if yearly_factor <= 0:
+        raise ValueError("`yearly_factor` must be positive.")
+
+    time_unit = 12 / yearly_factor
+    rounded_time_unit = round(time_unit)
+    if not np.isclose(time_unit, rounded_time_unit):
+        raise ValueError("`yearly_factor` must imply an integer simulation time unit.")
+    return int(rounded_time_unit)
+
+
 @dataclass
 class DataReaders:
     """Centralized management of all data readers for the model.
@@ -213,6 +224,8 @@ class DataReaders:
         use_provincial_can_reader: bool = False,
         regions_dict: dict[Country, list[Region]] = None,
         allow_missing_emissions: bool = False,
+        yearly_factor: float = 4.0,
+        simulation_quarter: int = 1,
     ):
         if regions_dict:
             all_regions = [region for regions in regions_dict.values() for region in regions]
@@ -256,6 +269,7 @@ class DataReaders:
                 investment_fractions=get_investment_year(year),
                 proxy_country_dict=proxy_country_dict,
                 aggregation_type="Aggregate" if aggregate_industries else "All",
+                yearly_factor=yearly_factor,
             )
             for year in all_years
         }
@@ -397,6 +411,7 @@ class DataReaders:
             sea_reader=wiod_sea,
             country_names=country_names,
             regions_dict=regions_dict,
+            yearly_factor=yearly_factor,
         )
 
         add_investment_matrix_to_icio(
@@ -404,6 +419,7 @@ class DataReaders:
             sea_reader=wiod_sea,
             country_names=country_names,
             regions_dict=regions_dict,
+            yearly_factor=yearly_factor,
         )
 
         match_iot_with_sea(
@@ -411,6 +427,7 @@ class DataReaders:
             sea_reader=wiod_sea,
             country_names=country_names,
             regions_dict=regions_dict,
+            yearly_factor=yearly_factor,
         )
 
         oecd_econ = OECDEconData(
@@ -431,17 +448,23 @@ class DataReaders:
         ecb_reader = ECBReader(path=datapaths.ecb_path)
 
         all_countries = list(set(country_names).union(set(proxy_country_dict.values())))
+        time_unit = _time_unit_from_yearly_factor(yearly_factor)
 
         compustat_firms = CompustatFirmsReader.from_raw_data(
             year=simulation_year,
-            quarter=1,
+            quarter=simulation_quarter,
             countries=all_countries,
             raw_annual_path=datapaths.compustat_firms_annual_path,
             raw_quarterly_path=datapaths.compustat_firms_quarterly_path,
+            time_unit=time_unit,
         )
 
         compustat_banks = CompustatBanksReader.from_raw_data(
-            year=simulation_year, quarter=1, raw_quarterly_path=datapaths.compustat_banks_path, countries=all_countries
+            year=simulation_year,
+            quarter=simulation_quarter,
+            raw_quarterly_path=datapaths.compustat_banks_path,
+            countries=all_countries,
+            time_unit=time_unit,
         )
 
         if prune_date:
@@ -545,7 +568,12 @@ class DataReaders:
             return None
 
     def get_benefits_inflation_data(
-        self, country_name: Country, year_min: int, year_max: int, exogenous_data: dict[str, Any]
+        self,
+        country_name: Country,
+        year_min: int,
+        year_max: int,
+        exogenous_data: dict[str, Any],
+        yearly_factor: float = 4.0,
     ) -> pd.DataFrame:
         """Calculate benefits and inflation data for a country.
 
@@ -565,12 +593,12 @@ class DataReaders:
         years = range(year_min, year_max)
         unemp = [
             self.oecd_econ.unemployment_benefits_gdp_pct(country_name, year)
-            * self.world_bank.get_current_scaled_gdp(country_name, year)
+            * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
             for year in years
         ]
         other = [
             self.oecd_econ.all_benefits_gdp_pct(country_name, year)
-            * self.world_bank.get_current_scaled_gdp(country_name, year)
+            * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
             - unemp[i]
             for i, year in enumerate(years)
         ]
@@ -596,7 +624,7 @@ class DataReaders:
         data = pd.merge_asof(data, unemployment_rate, left_index=True, right_index=True)
         return data
 
-    def get_total_benefits_lcu(self, country_name: Country, year: int) -> float:
+    def get_total_benefits_lcu(self, country_name: Country, year: int, yearly_factor: float = 4.0) -> float:
         """Calculate total benefits in local currency units.
 
         This method computes the total benefits (including unemployment and other benefits)
@@ -609,11 +637,13 @@ class DataReaders:
         Returns:
             float: Total benefits in local currency units
         """
-        return self.oecd_econ.all_benefits_gdp_pct(country_name, year) * self.world_bank.get_current_scaled_gdp(
+        return self.oecd_econ.all_benefits_gdp_pct(
             country_name, year
-        )
+        ) * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
 
-    def get_total_unemployment_benefits_lcu(self, country_name: Country, year: int) -> float:
+    def get_total_unemployment_benefits_lcu(
+        self, country_name: Country, year: int, yearly_factor: float = 4.0
+    ) -> float:
         """Calculate total unemployment benefits in local currency units.
 
         This method computes the total unemployment benefits for a country
@@ -628,7 +658,7 @@ class DataReaders:
         """
         return self.oecd_econ.unemployment_benefits_gdp_pct(
             country_name, year
-        ) * self.world_bank.get_current_scaled_gdp(country_name, year)
+        ) * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
 
     def get_govt_debt_lcu(self, country: Country, year: int) -> float:
         """Calculate government debt in local currency units.

@@ -348,6 +348,7 @@ class Country:
             country_name=country_name,
             initial_year=initial_year,
             t_max=t_max,
+            time_unit=time_unit,
         )
 
         economy = Economy.from_agents(

@@ -161,7 +161,9 @@ class TestBanksMarkUpInterestRates:
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_long_term_firm_loans"), 0.035)
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_household_consumption_loans"), 0.04)
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_mortgages"), 0.025)
-        np.testing.assert_allclose(test_banks.ts.current("interest_rate_on_firm_deposits"), np.full(deposit_template.shape, 0.02))
+        np.testing.assert_allclose(
+            test_banks.ts.current("interest_rate_on_firm_deposits"), np.full(deposit_template.shape, 0.02)
+        )
         np.testing.assert_allclose(
             test_banks.ts.current("interest_rate_on_household_deposits"),
             np.full(deposit_template.shape, 0.02),

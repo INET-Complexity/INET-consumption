@@ -475,9 +475,7 @@ class MarkUpInterestRatesSetter(InterestRatesSetter):
         self.firm_short_spread = firm_short_spread if firm_short_spread is not None else firm_spread
         self.firm_long_spread = firm_long_spread if firm_long_spread is not None else firm_spread
         self.hh_consumption_spread = (
-            hh_consumption_spread
-            if hh_consumption_spread is not None
-            else household_consumption_spread
+            hh_consumption_spread if hh_consumption_spread is not None else household_consumption_spread
         )
         self.mortgage_spread = mortgage_spread
         if self.mortgage_spread is None:

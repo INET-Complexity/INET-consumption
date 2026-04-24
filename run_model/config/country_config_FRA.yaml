@@ -382,9 +382,15 @@ FRA:
         parameters:
           solvency_ratio: 0.1  # 0.05
       interest_rates:
-        name: DefaultInterestRatesSetter
+        name: MarkUpInterestRatesSetter
         path_name: interest_rates
         parameters: {}
+        # Optional runtime overrides. Leave empty to use calibrated mean spreads.
+        # parameters:
+        #   firm_short_spread: 0.0
+        #   firm_long_spread: 0.0
+        #   household_consumption_spread: 0.0
+        #   mortgage_spread: 0.0
       profit_estimator:
         name: DefaultBankProfitsSetter
         path_name: profit_estimator

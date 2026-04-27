@@ -129,6 +129,21 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
     - Industry-level detail
     """
 
+    def __init__(
+        self,
+        consistency: float,
+        default_growth: Optional[float] = None,
+        sectoral_weights: str = "previous_desired",
+    ):
+        super().__init__(consistency=consistency, default_growth=default_growth)
+        if sectoral_weights not in {"previous_desired", "initial"}:
+            raise ValueError(
+                "AutoregressiveGovernmentConsumptionSetter sectoral_weights "
+                "must be 'previous_desired' or 'initial'."
+            )
+        self.sectoral_weights = sectoral_weights
+        self.initial_government_consumption_weights = None
+
     def compute_target_consumption(
         self,
         previous_desired_government_consumption: np.ndarray,
@@ -210,7 +225,14 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             )
 
         # Weighted by prices
-        consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
+        if self.sectoral_weights == "initial":
+            if self.initial_government_consumption_weights is None:
+                self.initial_government_consumption_weights = _normalise_government_consumption_weights(
+                    previous_desired_government_consumption
+                )
+            consumption_weights = self.initial_government_consumption_weights
+        else:
+            consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
         return np.maximum(
             0.0,
             (1 + expected_inflation) * current_good_prices / initial_good_prices * consumption * consumption_weights,

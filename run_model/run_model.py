@@ -28,6 +28,14 @@ logging.getLogger().setLevel(logging.ERROR)
 
 DEFAULT_SEED = 15
 DEFAULT_T_MAX = 50
+DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "AutoregressiveGovernmentConsumptionSetter"
+DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "previous_desired"
+GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
+    "AutoregressiveGovernmentConsumptionSetter",
+    "ConstantGrowthGovernmentConsumptionSetter",
+    "ExogenousGovernmentConsumptionSetter",
+)
+GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial")
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -37,7 +45,25 @@ def _resolve_run_model_path(path: str | Path) -> Path:
     return RUN_MODEL_DIR / resolved
 
 
-def main(seed: int | None = DEFAULT_SEED, t_max: int | None = DEFAULT_T_MAX) -> dict[str, object]:
+def _parse_optional_bool(value: str | None) -> bool:
+    if value is None:
+        return True
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "t", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "f", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected true or false, got {value!r}.")
+
+
+def main(
+    seed: int | None = DEFAULT_SEED,
+    t_max: int | None = DEFAULT_T_MAX,
+    government_consumption_setter: str = DEFAULT_GOVERNMENT_CONSUMPTION_SETTER,
+    assume_zero_noise: bool | None = None,
+    government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
+    government_consumption_consistency: float | None = None,
+) -> dict[str, object]:
     # Optional overrides (None means use Config/default env values)
     country_override = None
     raw_data_path_override = None
@@ -103,8 +129,18 @@ def main(seed: int | None = DEFAULT_SEED, t_max: int | None = DEFAULT_T_MAX) -> 
     country_cfg.firms.functions.productivity_growth.name = "SimpleTFPGrowth"  # "NoOpTFPGrowth"
     country_cfg.labour_market.functions.clearing.name = "PolednaLabourMarketClearer"
     country_cfg.central_bank.functions.policy_rate.name = "SmoothTaylorRule"
-    country_cfg.government_entities.functions.consumption.name = "AutoregressiveGovernmentConsumptionSetter"
+    country_cfg.government_entities.functions.consumption.name = government_consumption_setter
+    if government_consumption_consistency is not None:
+        country_cfg.government_entities.functions.consumption.parameters[
+            "consistency"
+        ] = government_consumption_consistency
+    if government_sectoral_weights != DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS:
+        country_cfg.government_entities.functions.consumption.parameters[
+            "sectoral_weights"
+        ] = government_sectoral_weights
     country_cfg.central_government.functions.social_benefits.name = "ConstantSocialBenefitsSetter"
+    if assume_zero_noise is not None:
+        country_cfg.assume_zero_noise = assume_zero_noise
 
     print("Configuration summary")
     print(
@@ -112,7 +148,15 @@ def main(seed: int | None = DEFAULT_SEED, t_max: int | None = DEFAULT_T_MAX) -> 
             "productivity_growth": country_cfg.firms.functions.productivity_growth.name,
             "labour_market_clearer": country_cfg.labour_market.functions.clearing.name,
             "policy_rate_rule": country_cfg.central_bank.functions.policy_rate.name,
+            "government_consumption_setter": country_cfg.government_entities.functions.consumption.name,
+            "government_sectoral_weights": country_cfg.government_entities.functions.consumption.parameters.get(
+                "sectoral_weights", DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS
+            ),
+            "government_consumption_consistency": country_cfg.government_entities.functions.consumption.parameters.get(
+                "consistency"
+            ),
             "benefit_rule": country_cfg.central_government.functions.social_benefits.name,
+            "assume_zero_noise": country_cfg.assume_zero_noise,
         }
     )
 
@@ -152,9 +196,49 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--t-max", type=int, default=DEFAULT_T_MAX, help=f"Simulation horizon. Default: {DEFAULT_T_MAX}."
     )
+    parser.add_argument(
+        "--government-consumption-setter",
+        choices=GOVERNMENT_CONSUMPTION_SETTER_CHOICES,
+        default=DEFAULT_GOVERNMENT_CONSUMPTION_SETTER,
+        help=(
+            "Government-consumption setter to use. "
+            f"Default: {DEFAULT_GOVERNMENT_CONSUMPTION_SETTER}."
+        ),
+    )
+    parser.add_argument(
+        "--assume-zero-noise",
+        nargs="?",
+        const=True,
+        default=None,
+        type=_parse_optional_bool,
+        help="Override the country configuration to suppress stochastic noise.",
+    )
+    parser.add_argument(
+        "--government-sectoral-weights",
+        choices=GOVERNMENT_SECTORAL_WEIGHTS_CHOICES,
+        default=DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
+        help=(
+            "Sectoral weights for autoregressive government consumption. "
+            f"Default: {DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS}."
+        ),
+    )
+    parser.add_argument(
+        "--government-consumption-consistency",
+        choices=(0.0, 1.0),
+        default=None,
+        type=float,
+        help="Override AR government-consumption consistency. Default: use country configuration.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    main(seed=args.seed, t_max=args.t_max)
+    main(
+        seed=args.seed,
+        t_max=args.t_max,
+        government_consumption_setter=args.government_consumption_setter,
+        assume_zero_noise=args.assume_zero_noise,
+        government_sectoral_weights=args.government_sectoral_weights,
+        government_consumption_consistency=args.government_consumption_consistency,
+    )

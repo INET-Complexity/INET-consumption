@@ -26,11 +26,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # Set page config
-st.set_page_config(
-    page_title="Macromodel Dashboard - H5 output",
-    page_icon="🌍",
-    layout="wide"
-)
+st.set_page_config(page_title="Macromodel Dashboard - H5 output", page_icon="🌍", layout="wide")
 
 # Title
 st.title("Macromodel Dashboard - H5 output")
@@ -46,32 +42,37 @@ if not h5_files:
 # File selection
 selected_file = st.sidebar.selectbox("Select H5 File", h5_files)
 
+
 # Function to load H5 data
 def load_h5_data(file_path):
-    with h5py.File(file_path, 'r') as f:
+    with h5py.File(file_path, "r") as f:
         # Get all datasets
         datasets = {}
+
         def collect_datasets(name, obj):
             if isinstance(obj, h5py.Dataset):
                 datasets[name] = obj[:]
+
         f.visititems(collect_datasets)
     return datasets
 
+
 # Function to parse dataset names into components
 def parse_dataset_name(name):
-    parts = name.split('/')
+    parts = name.split("/")
     if len(parts) >= 3:
         country = parts[0]
         agent_market = parts[1]
-        variable = '/'.join(parts[2:])
+        variable = "/".join(parts[2:])
         return country, agent_market, variable
     return None, None, name
+
 
 # Function to get available options based on selections
 def get_available_options(data, selected_country=None, selected_agent_market=None):
     available_agent_markets = set()
     available_variables = set()
-    
+
     for name in data.keys():
         country, agent_market, variable = parse_dataset_name(name)
         if country and (selected_country is None or country == selected_country):
@@ -80,8 +81,9 @@ def get_available_options(data, selected_country=None, selected_agent_market=Non
                 if selected_agent_market is None or agent_market == selected_agent_market:
                     if variable:
                         available_variables.add(variable)
-    
+
     return sorted(list(available_agent_markets)), sorted(list(available_variables))
+
 
 # Function to create fan chart
 def create_fan_chart(df, title):
@@ -89,116 +91,115 @@ def create_fan_chart(df, title):
     mean = df.mean()
     q1 = df.quantile(0.25)  # First quartile
     q3 = df.quantile(0.75)  # Third quartile
-    d1 = df.quantile(0.1)   # First decile
-    d9 = df.quantile(0.9)   # Ninth decile
-    
+    d1 = df.quantile(0.1)  # First decile
+    d9 = df.quantile(0.9)  # Ninth decile
+
     # Create time points
     time_points = np.arange(len(df))
-    
+
     # Create the fan chart
     fig = go.Figure()
-    
+
     # Add the mean line
-    fig.add_trace(go.Scatter(
-        x=time_points,
-        y=mean,
-        name='Mean',
-        line=dict(color='black', width=2)
-    ))
-    
+    fig.add_trace(go.Scatter(x=time_points, y=mean, name="Mean", line=dict(color="black", width=2)))
+
     # Add deciles (from outer to inner)
-    fig.add_trace(go.Scatter(
-        x=time_points,
-        y=d9,
-        fill=None,
-        mode='lines',
-        line_color='rgba(0,100,80,0.2)',
-        name='90th Percentile',
-        showlegend=False
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=time_points,
-        y=d1,
-        fill='tonexty',
-        mode='lines',
-        line_color='rgba(0,100,80,0.2)',
-        name='10th-90th Percentile'
-    ))
-    
+    fig.add_trace(
+        go.Scatter(
+            x=time_points,
+            y=d9,
+            fill=None,
+            mode="lines",
+            line_color="rgba(0,100,80,0.2)",
+            name="90th Percentile",
+            showlegend=False,
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=time_points,
+            y=d1,
+            fill="tonexty",
+            mode="lines",
+            line_color="rgba(0,100,80,0.2)",
+            name="10th-90th Percentile",
+        )
+    )
+
     # Add quartiles (from outer to inner)
-    fig.add_trace(go.Scatter(
-        x=time_points,
-        y=q3,
-        fill=None,
-        mode='lines',
-        line_color='rgba(0,100,80,0.4)',
-        name='75th Percentile',
-        showlegend=False
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=time_points,
-        y=q1,
-        fill='tonexty',
-        mode='lines',
-        line_color='rgba(0,100,80,0.4)',
-        name='25th-75th Percentile'
-    ))
-    
+    fig.add_trace(
+        go.Scatter(
+            x=time_points,
+            y=q3,
+            fill=None,
+            mode="lines",
+            line_color="rgba(0,100,80,0.4)",
+            name="75th Percentile",
+            showlegend=False,
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=time_points,
+            y=q1,
+            fill="tonexty",
+            mode="lines",
+            line_color="rgba(0,100,80,0.4)",
+            name="25th-75th Percentile",
+        )
+    )
+
     # Update layout
     fig.update_layout(
         title=title,
-        xaxis_title='Time',
-        yaxis_title='Value',
+        xaxis_title="Time",
+        yaxis_title="Value",
         showlegend=True,
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
     )
-    
+
     return fig
+
 
 # Load data
 try:
     data = load_h5_data(selected_file)
-    
+
     # Sidebar for dataset selection
     st.sidebar.header("Variable Selection")
-    
+
     # Get initial lists of all components
     countries = sorted(list(set(parse_dataset_name(name)[0] for name in data.keys() if parse_dataset_name(name)[0])))
-    
+
     # Create vertically stacked dropdowns in the sidebar
     selected_country = st.sidebar.selectbox("Country", countries)
-    
+
     # Get available agent/markets based on selected country
     available_agent_markets, _ = get_available_options(data, selected_country)
-    
+
     selected_agent_market = st.sidebar.selectbox("Agent/Market", available_agent_markets)
-    
+
     # Get available variables based on selected country and agent/market
     _, available_variables = get_available_options(data, selected_country, selected_agent_market)
-    
+
     selected_variable = st.sidebar.selectbox("Variable", available_variables)
-    
+
     # Construct the full dataset name
     selected_dataset = f"{selected_country}/{selected_agent_market}/{selected_variable}"
-    
+
     # Main content
     st.header(f"Variable: {selected_dataset}")
-    
+
     # Convert selected dataset to DataFrame if possible
     try:
         df = pd.DataFrame(data[selected_dataset])
         df_t = df.T
-        
+
         # Display data shape
         st.write(f"Shape: {data[selected_dataset].shape}")
-        
+
         # Create visualizations based on data shape
         if len(data[selected_dataset].shape) == 2 and data[selected_dataset].shape[1] > 1000:
             # If second dimension is large, show fan chart
@@ -215,7 +216,7 @@ try:
                 st.write(df_t.describe())
             fig = px.line(df, title=f"Time Series of {selected_dataset}")
             st.plotly_chart(fig, use_container_width=True)
-            
+
     except Exception as e:
         st.error(f"Could not convert dataset to DataFrame: {str(e)}")
         st.write("Raw data shape:", data[selected_dataset].shape)

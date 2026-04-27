@@ -149,7 +149,9 @@ def main(seed: int | None = DEFAULT_SEED, t_max: int | None = DEFAULT_T_MAX) -> 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the macro model through the single-simulation step.")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help=f"Simulation seed. Default: {DEFAULT_SEED}.")
-    parser.add_argument("--t-max", type=int, default=DEFAULT_T_MAX, help=f"Simulation horizon. Default: {DEFAULT_T_MAX}.")
+    parser.add_argument(
+        "--t-max", type=int, default=DEFAULT_T_MAX, help=f"Simulation horizon. Default: {DEFAULT_T_MAX}."
+    )
     return parser.parse_args()
 
 

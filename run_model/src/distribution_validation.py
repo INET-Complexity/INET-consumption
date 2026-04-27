@@ -123,9 +123,13 @@ def build_multi_histogram_figure(
     fig = go.Figure()
     for idx, (name, values) in enumerate(cleaned.items()):
         lower_name = name.lower()
-        color = MODEL_COLOR if lower_name.startswith("model") else HFCS_COLOR if lower_name.startswith("hfcs") else OTHER_COLORS[
-            idx % len(OTHER_COLORS)
-        ]
+        color = (
+            MODEL_COLOR
+            if lower_name.startswith("model")
+            else HFCS_COLOR
+            if lower_name.startswith("hfcs")
+            else OTHER_COLORS[idx % len(OTHER_COLORS)]
+        )
         fig.add_trace(
             go.Histogram(
                 x=values,
@@ -306,9 +310,13 @@ def _lorenz_curve(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def _comparison_line(name: str, idx: int) -> dict[str, Any]:
     is_model = _is_model_series(name)
     lower_name = name.lower()
-    color = MODEL_COLOR if lower_name.startswith("model") else HFCS_COLOR if lower_name.startswith("hfcs") else OTHER_COLORS[
-        idx % len(OTHER_COLORS)
-    ]
+    color = (
+        MODEL_COLOR
+        if lower_name.startswith("model")
+        else HFCS_COLOR
+        if lower_name.startswith("hfcs")
+        else OTHER_COLORS[idx % len(OTHER_COLORS)]
+    )
     return {
         "color": color,
         "dash": "solid" if is_model else "dot",

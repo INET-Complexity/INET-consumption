@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import islice
+from pathlib import Path
 from typing import Iterable, Optional
 
 import pandas as pd
@@ -57,6 +58,7 @@ def _run_single_seed(
     t_max: int,
     country_code: str,
     simulation_configuration: Optional[SimulationConfiguration] = None,
+    save_h5_dir: str | Path | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Run one seeded simulation and extract macro output time series."""
     if simulation_configuration is None:
@@ -77,6 +79,11 @@ def _run_single_seed(
     )
     model.run()
 
+    if save_h5_dir is not None:
+        seed_dir = Path(save_h5_dir) / f"seed-{int(seed)}"
+        seed_dir.mkdir(parents=True, exist_ok=True)
+        model.save(save_dir=seed_dir, file_name="multi_country_simulation.h5")
+
     output_df = build_macro_output_df(model, country_code=country_code).copy()
     output_df.index.name = output_df.index.name or "time"
 
@@ -91,6 +98,7 @@ def _run_seed_batch(
     t_max: int,
     country_code: str,
     simulation_configuration: Optional[SimulationConfiguration] = None,
+    save_h5_dir: str | Path | None = None,
 ) -> list[tuple[int, pd.DataFrame]]:
     """Run a batch of seeds sequentially inside one worker process."""
     return [
@@ -101,6 +109,7 @@ def _run_seed_batch(
             t_max=t_max,
             country_code=country_code,
             simulation_configuration=simulation_configuration,
+            save_h5_dir=save_h5_dir,
         )
         for seed in seeds
     ]
@@ -118,6 +127,7 @@ def run_seeded_monte_carlo(
     backend: str = "loky",
     verbose: int = 0,
     batch_size: int = 1,
+    save_h5_dir: str | Path | None = None,
 ) -> MonteCarloResult:
     """Run the model in parallel over a predefined list of random seeds.
 
@@ -146,6 +156,10 @@ def run_seeded_monte_carlo(
         Number of seeds handled sequentially by each joblib worker. Values
         greater than 1 reduce process-spawning and serialization overhead for
         large Monte Carlo runs.
+    save_h5_dir:
+        Optional directory for per-seed HDF5 outputs. When omitted, the existing
+        Monte Carlo behavior is unchanged and only the combined dataframe is
+        returned.
 
     Returns
     -------
@@ -173,6 +187,7 @@ def run_seeded_monte_carlo(
             t_max=t_max,
             country_code=country_code,
             simulation_configuration=simulation_configuration,
+            save_h5_dir=save_h5_dir,
         )
         for seed_batch in seed_batches
     )

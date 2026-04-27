@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class Consumption(BaseModel):
     name: Literal[
         "AutoregressiveGovernmentConsumptionSetter",
+        "AutoregressiveGrowthGovernmentConsumptionSetter",
         "ConstantGrowthGovernmentConsumptionSetter",
         "ExogenousGovernmentConsumptionSetter",
     ] = "AutoregressiveGovernmentConsumptionSetter"

@@ -323,6 +323,107 @@ def summarize_collapse_diagnostics(
     }
 
 
+def _first_below(values: np.ndarray, threshold: float) -> float:
+    hits = np.where(np.isfinite(values) & (values < threshold))[0]
+    return float(hits[0]) if len(hits) else np.nan
+
+
+def _first_zero(values: np.ndarray) -> float:
+    hits = np.where(values == 0.0)[0]
+    return float(hits[0]) if len(hits) else np.nan
+
+
+def _first_relative_change(values: np.ndarray, threshold: float, direction: str) -> float:
+    previous = np.asarray(values[:-1], dtype=float)
+    current = np.asarray(values[1:], dtype=float)
+    relative_change = _safe_divide(current - previous, previous)
+    if direction == "drop":
+        hits = np.where(np.isfinite(relative_change) & (relative_change < -threshold))[0]
+    elif direction == "jump":
+        hits = np.where(np.isfinite(relative_change) & (relative_change > threshold))[0]
+    else:
+        raise ValueError(f"Unsupported direction: {direction}")
+    return float(hits[0] + 1) if len(hits) else np.nan
+
+
+def _safe_divide(numerator: np.ndarray, denominator: np.ndarray, fill: float = np.nan) -> np.ndarray:
+    return np.divide(
+        numerator,
+        denominator,
+        out=np.full(np.broadcast_shapes(numerator.shape, denominator.shape), fill, dtype=float),
+        where=denominator != 0.0,
+    )
+
+
+def _sector_value(values: np.ndarray, time: int, sector: int) -> float:
+    if time >= values.shape[0] or sector >= values.shape[1]:
+        return np.nan
+    return float(values[time, sector])
+
+
+def summarize_government_bridge_run(
+    h5_path: PathLike,
+    country_code: str = "FRA",
+    sector: int = 15,
+) -> dict[str, float]:
+    """Summarize desired-vs-realised government bridge diagnostics for one HDF5 run."""
+    path = _ensure_path(h5_path)
+    with h5py.File(path, "r") as handle:
+        base = f"/{country_code}"
+        gdp = np.asarray(handle[f"{base}/economy/gdp_output"], dtype=float).squeeze()
+        government_fce = np.asarray(handle[f"{base}/economy/total_government_fce"], dtype=float).squeeze()
+        desired = np.asarray(handle[f"{base}/government_entities/desired_consumption_in_lcu"], dtype=float)
+        realised = np.asarray(handle[f"{base}/government_entities/consumption_in_lcu"], dtype=float)
+        profits = np.asarray(handle[f"{base}/firms/profits"], dtype=float).sum(axis=1)
+        unemployment = np.asarray(handle[f"{base}/economy/unemployment_rate"], dtype=float).squeeze()
+        vacancy = np.asarray(handle[f"{base}/economy/vacancy_rate"], dtype=float).squeeze()
+        debt = np.asarray(handle[f"{base}/central_government/debt"], dtype=float).squeeze()
+        prices = np.asarray(handle[f"{base}/economy/good_prices"], dtype=float)
+        production = np.asarray(handle[f"{base}/firms/production"], dtype=float)
+        inventory = np.asarray(handle[f"{base}/firms/inventory"], dtype=float)
+
+    desired_total = desired.sum(axis=1)
+    realised_total = realised.sum(axis=1)
+    realised_desired_ratio = _safe_divide(realised_total, desired_total)
+    desired_share = _safe_divide(desired, desired_total[:, None])
+    government_real_demand = _safe_divide(desired, prices, fill=0.0)
+    supply_cover = _safe_divide(production + inventory, government_real_demand)
+    debt_gdp = _safe_divide(debt, 4.0 * gdp)
+    desired_window = desired_total[1:]
+    desired_cv = float(np.nanstd(desired_window) / np.nanmean(desired_window)) if np.nanmean(desired_window) else np.nan
+
+    return {
+        "desired_government_consumption_t0": float(desired_total[0]) if len(desired_total) > 0 else np.nan,
+        "desired_government_consumption_t20": float(desired_total[20]) if len(desired_total) > 20 else np.nan,
+        "desired_government_consumption_t21": float(desired_total[21]) if len(desired_total) > 21 else np.nan,
+        "desired_government_consumption_t22": float(desired_total[22]) if len(desired_total) > 22 else np.nan,
+        "desired_government_consumption_t50": float(desired_total[50]) if len(desired_total) > 50 else np.nan,
+        "gdp_t50_change": float(100.0 * (gdp[-1] / gdp[0] - 1.0)),
+        "government_fce_min": float(np.nanmin(government_fce)),
+        "government_fce_first_below_1m": _first_below(government_fce, 1_000_000.0),
+        "government_fce_first_zero": _first_zero(government_fce),
+        "desired_government_consumption_first_below_1bn": _first_below(desired_total, 1_000_000_000.0),
+        "desired_government_consumption_first_zero": _first_zero(desired_total),
+        "desired_government_consumption_first_drop_gt_50pct": _first_relative_change(
+            desired_total, 0.5, "drop"
+        ),
+        "desired_government_consumption_first_jump_gt_50pct": _first_relative_change(
+            desired_total, 0.5, "jump"
+        ),
+        "desired_government_consumption_cv_t1_t50": desired_cv,
+        "realised_desired_first_below_0_9": _first_below(realised_desired_ratio, 0.9),
+        "realised_desired_first_below_0_5": _first_below(realised_desired_ratio, 0.5),
+        "sector15_desired_share_t20": _sector_value(desired_share, 20, sector),
+        "sector15_desired_share_t21": _sector_value(desired_share, 21, sector),
+        "sector15_supply_cover_t20": _sector_value(supply_cover, 20, sector),
+        "sector15_supply_cover_t21": _sector_value(supply_cover, 21, sector),
+        "firm_profits_t50": float(profits[-1]),
+        "unemployment_t50": float(unemployment[-1]),
+        "vacancy_t50": float(vacancy[-1]),
+        "debt_gdp_t50": float(debt_gdp[-1]),
+    }
+
+
 def compare_unemployment_to_exogenous(
     h5_path: PathLike,
     country_code: str = "FRA",

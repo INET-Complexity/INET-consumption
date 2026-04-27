@@ -57,6 +57,7 @@ class GovernmentConsumptionSetter(ABC):
         self,
         consistency: float,
         default_growth: Optional[float] = None,
+        sectoral_weights: str = "previous_desired",
     ):
         """Initialize consumption setter.
 
@@ -68,10 +69,25 @@ class GovernmentConsumptionSetter(ABC):
                 when historical data is unavailable
         """
         assert consistency == 1.0 or consistency == 0.0
+        if sectoral_weights not in {"previous_desired", "initial"}:
+            raise ValueError(
+                f"{self.__class__.__name__} sectoral_weights must be 'previous_desired' or 'initial'."
+            )
         self.consistency = consistency
         self.default_growth = default_growth
+        self.sectoral_weights = sectoral_weights
+        self.initial_government_consumption_weights = None
         self.fixed_total_government_consumption = None
         self.buffer = 20
+
+    def _consumption_weights(self, previous_desired_government_consumption: np.ndarray) -> np.ndarray:
+        if self.sectoral_weights == "initial":
+            if self.initial_government_consumption_weights is None:
+                self.initial_government_consumption_weights = _normalise_government_consumption_weights(
+                    previous_desired_government_consumption
+                )
+            return self.initial_government_consumption_weights
+        return _normalise_government_consumption_weights(previous_desired_government_consumption)
 
     @abstractmethod
     def compute_target_consumption(
@@ -135,14 +151,11 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         default_growth: Optional[float] = None,
         sectoral_weights: str = "previous_desired",
     ):
-        super().__init__(consistency=consistency, default_growth=default_growth)
-        if sectoral_weights not in {"previous_desired", "initial"}:
-            raise ValueError(
-                "AutoregressiveGovernmentConsumptionSetter sectoral_weights "
-                "must be 'previous_desired' or 'initial'."
-            )
-        self.sectoral_weights = sectoral_weights
-        self.initial_government_consumption_weights = None
+        super().__init__(
+            consistency=consistency,
+            default_growth=default_growth,
+            sectoral_weights=sectoral_weights,
+        )
 
     def compute_target_consumption(
         self,
@@ -225,14 +238,7 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             )
 
         # Weighted by prices
-        if self.sectoral_weights == "initial":
-            if self.initial_government_consumption_weights is None:
-                self.initial_government_consumption_weights = _normalise_government_consumption_weights(
-                    previous_desired_government_consumption
-                )
-            consumption_weights = self.initial_government_consumption_weights
-        else:
-            consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
+        consumption_weights = self._consumption_weights(previous_desired_government_consumption)
         return np.maximum(
             0.0,
             (1 + expected_inflation) * current_good_prices / initial_good_prices * consumption * consumption_weights,
@@ -316,6 +322,18 @@ class ConstantGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         else:
             growth_factor = 1 + self.default_growth
 
+        if self.sectoral_weights == "initial":
+            consumption = previous_desired_government_consumption.sum() * growth_factor
+            consumption_weights = self._consumption_weights(previous_desired_government_consumption)
+            return np.maximum(
+                0.0,
+                (1 + expected_inflation)
+                * current_good_prices
+                / initial_good_prices
+                * consumption
+                * consumption_weights,
+            )
+
         return np.maximum(
             0.0,
             (1 + expected_inflation)
@@ -393,7 +411,10 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
 
         # Fitting based on target consumption
         if self.consistency == 1.0:
-            if self.fixed_total_government_consumption is None:
+            if (
+                self.fixed_total_government_consumption is None
+                or len(self.fixed_total_government_consumption) < current_time
+            ):
                 historic_total_consumption_growth = (
                     historic_total_consumption[1:] / historic_total_consumption[:-1] - 1.0
                 )
@@ -401,7 +422,7 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
                     np.exp(
                         ManualAutoregForecaster().forecast(
                             data=historic_total_consumption_growth,
-                            t=20,
+                            t=max(current_time + self.buffer, current_time),
                             assume_zero_noise=assume_zero_noise,
                         )
                     )
@@ -424,7 +445,7 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
             )
 
         # Weighted by prices
-        consumption_weights = _normalise_government_consumption_weights(previous_desired_government_consumption)
+        consumption_weights = self._consumption_weights(previous_desired_government_consumption)
         return np.maximum(
             0.0,
             (1 + expected_inflation) * current_good_prices / initial_good_prices * consumption * consumption_weights,

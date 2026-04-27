@@ -32,6 +32,7 @@ DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "AutoregressiveGovernmentConsumptionSett
 DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "previous_desired"
 GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
+    "AutoregressiveGrowthGovernmentConsumptionSetter",
     "ConstantGrowthGovernmentConsumptionSetter",
     "ExogenousGovernmentConsumptionSetter",
 )

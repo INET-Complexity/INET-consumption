@@ -41,6 +41,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LinearRegression
 
 from macro_data.configuration import DataConfiguration
 from macro_data.configuration.countries import Country
@@ -100,6 +101,44 @@ def _period_values_at_date(data: pd.DataFrame, date: pd.Timestamp) -> pd.Series:
     )
 
 
+def _repair_linear_regression_compatibility(root: object) -> None:
+    """Repair sklearn models loaded from older pickles."""
+    try:
+        default_linear_regression = LinearRegression()
+        linear_regression_supports_tol = "tol" in default_linear_regression.get_params(deep=False)
+    except (AttributeError, TypeError):
+        default_linear_regression = None
+        linear_regression_supports_tol = False
+
+    seen: set[int] = set()
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+
+        if isinstance(current, LinearRegression):
+            if linear_regression_supports_tol and "tol" not in current.__dict__:
+                current.tol = default_linear_regression.tol
+            continue
+
+        if isinstance(current, dict):
+            stack.extend(current.values())
+            continue
+
+        if isinstance(current, (list, tuple, set)):
+            stack.extend(current)
+            continue
+
+        if isinstance(current, (pd.DataFrame, pd.Series, np.ndarray)):
+            continue
+
+        if hasattr(current, "__dict__"):
+            stack.extend(vars(current).values())
+
+
 @dataclass
 class DataWrapper:
     """
@@ -141,6 +180,13 @@ class DataWrapper:
     emissions_energy_factors: Optional[EmissionsEnergyFactors] = None
     aggregation_structure: Optional[dict[Country, list[Country | Region]]] = None
     time_unit: int = 3
+
+    def __post_init__(self) -> None:
+        _repair_linear_regression_compatibility(self)
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        _repair_linear_regression_compatibility(self)
 
     @property
     def all_country_names(self) -> list[str]:

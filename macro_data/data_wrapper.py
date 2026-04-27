@@ -169,6 +169,7 @@ class DataWrapper:
         raw_data_path: Path | str,
         single_hfcs_survey: bool = True,
         single_icio_survey: bool = True,
+        allow_missing_emissions: bool = False,
     ) -> "DataWrapper":
         """
         Create a DataWrapper instance from a configuration.

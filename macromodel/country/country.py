@@ -247,9 +247,7 @@ class Country:
         scale = synthetic_country.scale
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
-        add_emissions = all([industry in industries for industry in emission_industries]) and (
-            synthetic_country.emission_factors is not None
-        )
+        add_emissions = all([industry in industries for industry in emission_industries])
 
         if add_emissions:
             emitting_indices = np.array([list(industries).index(industry) for industry in emission_industries])

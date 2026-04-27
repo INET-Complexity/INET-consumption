@@ -378,6 +378,7 @@ def compile_national_accounts_data(
         / get_growth("PPI Inflation")
         * (
             industry_vectors["Output in LCU"].sum()
+            - industry_vectors["Taxes Less Subsidies in LCU"].sum()
             - industry_vectors["Intermediate Inputs Use in LCU"].sum()
             + initial_taxes_on_products
         ),

@@ -1365,8 +1365,20 @@ class Country:
         self.central_government.ts.total_household_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
         )
+        self.central_government.ts.debt_interest_rate.append(
+            [
+                self.central_government.functions["debt_interest"].compute_interest_rate(
+                    current_policy_rate=self.central_bank.ts.current("policy_rate")[0],
+                    previous_debt_interest_rate=self.central_government.ts.current("debt_interest_rate")[0],
+                    time_unit=self.economy.time_unit,
+                )
+            ]
+        )
         self.central_government.ts.interest_payments_on_debt.append(
-            [self.central_bank.ts.current("policy_rate")[0] * self.central_government.ts.current("debt")[0]]
+            [
+                self.central_government.ts.current("debt_interest_rate")[0]
+                * self.central_government.ts.current("debt")[0]
+            ]
         )
         self.central_government.ts.deficit.append(
             self.central_government.compute_deficit(
@@ -1375,7 +1387,7 @@ class Country:
                 current_government_nominal_amount_spent=self.government_entities.ts.current(
                     "nominal_amount_spent_in_lcu"
                 ),
-                government_interest_rates=self.central_bank.ts.current("policy_rate")[0],
+                interest_payments_on_debt=self.central_government.ts.current("interest_payments_on_debt")[0],
             )
         )
         self.central_government.ts.debt.append(self.central_government.compute_debt())

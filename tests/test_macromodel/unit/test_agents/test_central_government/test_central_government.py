@@ -1,6 +1,12 @@
 import numpy as np
 
+from macromodel.agents.central_government.func.debt_interest import (
+    CurrentPolicyRateDebtInterest,
+    SmoothedPolicyRateDebtInterest,
+)
 from macromodel.agents.individuals.individual_properties import ActivityStatus
+from macromodel.configurations import CentralGovernmentConfiguration
+from macromodel.util.function_mapping import functions_from_model
 
 
 class TestCentralGovernment:
@@ -27,6 +33,7 @@ class TestCentralGovernment:
             "total_unemployment_benefits",
             "total_household_social_transfers",
             "interest_payments_on_debt",
+            "debt_interest_rate",
         ]:
             assert ts_key in test_central_government.ts.get_keys()
 
@@ -60,3 +67,60 @@ class TestCentralGovernment:
     #     # assert test_central_government.compute_revenue(household_rent_paid_to_government=100.0) == pytest.approx(
     #     #     226.37, abs=1e-1
     #     # )
+
+    def test__current_policy_rate_debt_interest_preserves_legacy_rule(self):
+        rule = CurrentPolicyRateDebtInterest()
+        assert (
+            rule.compute_interest_rate(
+                current_policy_rate=0.03,
+                previous_debt_interest_rate=0.01,
+                time_unit=3,
+            )
+            == 0.03
+        )
+
+    def test__smoothed_policy_rate_debt_interest_smooths_policy_rate(self):
+        rule = SmoothedPolicyRateDebtInterest(smoothing=0.9)
+        assert (
+            rule.compute_interest_rate(
+                current_policy_rate=0.05,
+                previous_debt_interest_rate=0.02,
+                time_unit=3,
+            )
+            == 0.023
+        )
+
+    def test__smoothed_policy_rate_debt_interest_uses_maturity_and_time_unit(self):
+        rule = SmoothedPolicyRateDebtInterest(average_maturity_years=10.0)
+        assert np.isclose(
+            rule.compute_interest_rate(
+                current_policy_rate=0.05,
+                previous_debt_interest_rate=0.01,
+                time_unit=3,
+            ),
+            0.011,
+        )
+
+    def test__smoothed_policy_rate_debt_interest_initializes_from_policy_rate(self):
+        rule = SmoothedPolicyRateDebtInterest(average_maturity_years=10.0)
+        assert (
+            rule.compute_interest_rate(
+                current_policy_rate=0.05,
+                previous_debt_interest_rate=np.nan,
+                time_unit=3,
+            )
+            == 0.05
+        )
+
+    def test__debt_interest_rule_is_loaded_from_central_government_config(self):
+        config = CentralGovernmentConfiguration()
+        config.functions.debt_interest.name = "SmoothedPolicyRateDebtInterest"
+        config.functions.debt_interest.parameters = {"average_maturity_years": 10.0}
+
+        functions = functions_from_model(
+            model=config.functions,
+            loc="macromodel.agents.central_government",
+        )
+
+        assert isinstance(functions["debt_interest"], SmoothedPolicyRateDebtInterest)
+        assert functions["debt_interest"].average_maturity_years == 10.0

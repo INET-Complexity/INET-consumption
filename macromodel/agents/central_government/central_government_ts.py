@@ -51,6 +51,7 @@ def create_central_government_timeseries(
         total_unemployment_benefits=[data["Total Unemployment Benefits"].values[0]],
         total_household_social_transfers=[data["Other Social Benefits"].values[0]],
         interest_payments_on_debt=[0.0],
+        debt_interest_rate=[np.nan],
         #
         taxes_production=[data["Taxes on Production"].values[0]],
         taxes_vat=[data["VAT"].values[0]],

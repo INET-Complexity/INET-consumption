@@ -61,10 +61,10 @@ def _prepare_social_benefits_arx_regression_data(
     regression_window: int = 48,
     log_floor: float = 1e-8,
 ) -> pd.DataFrame:
-    data = benefits_inflation_data[[target_column, "Real CPI Inflation", "Unemployment Rate"]].copy()
+    data = benefits_inflation_data[[target_column, "Data CPI Inflation", "Unemployment Rate"]].copy()
     data["Log Benefits"] = np.log(data[target_column].clip(lower=log_floor))
     data["Delta Log Benefits"] = data["Log Benefits"].diff()
-    data["Lagged Inflation"] = data["Real CPI Inflation"].shift(1)
+    data["Lagged Inflation"] = data["Data CPI Inflation"].shift(1)
     data["Unemployment Change"] = data["Unemployment Rate"].diff()
     gdp_growth_frame = pd.DataFrame({"GDP Growth": gdp_growth}).sort_index()
     data = pd.merge_asof(data.sort_index(), gdp_growth_frame, left_index=True, right_index=True)

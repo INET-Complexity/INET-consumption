@@ -231,7 +231,7 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
     ) -> pd.DataFrame:
         return pd.DataFrame(
             [[historic_ppi_inflation[-1], current_unemployment_rate]],
-            columns=["Real CPI Inflation", "Unemployment Rate"],
+            columns=["Data CPI Inflation", "Unemployment Rate"],
         )
 
     def compute_unemployment_benefits(

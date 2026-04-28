@@ -607,7 +607,7 @@ class DataReaders:
 
         benefits_data = benefits_data.resample("QE").interpolate("linear")
         benefits_data.index = pd.DatetimeIndex([pd.Timestamp(d.year, d.month, 1) for d in benefits_data.index])
-        log_inflation = exogenous_data["log_inflation"]["Real CPI Inflation"].copy()
+        log_inflation = exogenous_data["log_inflation"]["Data CPI Inflation"].copy()
         log_inflation.index = pd.to_datetime(log_inflation.index, format="%Y-%m")
         data = pd.merge_asof(benefits_data, log_inflation, left_index=True, right_index=True)
         unemployment_rate = exogenous_data["unemployment_rate"]["Unemployment Rate"].copy()

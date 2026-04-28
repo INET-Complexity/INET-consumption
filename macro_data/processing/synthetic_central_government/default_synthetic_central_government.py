@@ -142,7 +142,7 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
             other_benefits_model = build_other_benefits_model(
                 benefits_inflation_data, regression_window=regression_window
             )
-            last_observation = benefits_inflation_data[["Real CPI Inflation", "Unemployment Rate"]].iloc[[-1]]
+            last_observation = benefits_inflation_data[["Data CPI Inflation", "Unemployment Rate"]].iloc[[-1]]
 
             if unemployment_benefits_model:
                 current_unemployment_benefits = (
@@ -221,7 +221,7 @@ def build_unemployment_model(benefits_inflation_data: pd.DataFrame, regression_w
     if selection.shape[0] > 0:
         model = LinearRegression()
         model.fit(
-            selection[["Real CPI Inflation", "Unemployment Rate"]],
+            selection[["Data CPI Inflation", "Unemployment Rate"]],
             selection["Unemployment benefits growth ratio"],
         )
         return model
@@ -251,7 +251,7 @@ def build_other_benefits_model(benefits_inflation_data: pd.DataFrame, regression
     if selection.shape[0] > 0:
         model = LinearRegression()
         model.fit(
-            selection[["Real CPI Inflation", "Unemployment Rate"]],
+            selection[["Data CPI Inflation", "Unemployment Rate"]],
             selection["Other benefits growth ratio"],
         )
         return model

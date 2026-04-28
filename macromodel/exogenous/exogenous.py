@@ -256,9 +256,9 @@ class Exogenous:
 
     # def compile_historic_data(self) -> pd.DataFrame:
     #     # Stuff
-    #     cpi_before = self.log_inflation_before[["Real CPI Inflation"]]
+    #     cpi_before = self.log_inflation_before[["Data CPI Inflation"]]
     #     cpi_before.index = pd.MultiIndex.from_product([cpi_before.index, [0]], names=["Date", "Industry"])
-    #     ppi_before = self.log_inflation_before[["Real PPI Inflation"]]
+    #     ppi_before = self.log_inflation_before[["Data PPI Inflation"]]
     #     ppi_before.index = pd.MultiIndex.from_product([ppi_before.index, [0]], names=["Date", "Industry"])
     #     sec_growth_before = pd.DataFrame(self.sectoral_growth_before.stack())
     #     sec_growth_before.index.names = ["Date", "Industry"]

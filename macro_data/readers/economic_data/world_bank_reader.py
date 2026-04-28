@@ -393,7 +393,7 @@ class WorldBankReader:
         inflation_data = np.log(inflation_data).diff()
 
         # rename
-        inflation_data.columns = ["Real CPI Inflation", "Real PPI Inflation"]
+        inflation_data.columns = ["Data CPI Inflation", "Data PPI Inflation"]
         return inflation_data
 
     def get_unemployment_rate(self, country: str) -> pd.DataFrame:

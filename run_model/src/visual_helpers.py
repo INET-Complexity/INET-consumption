@@ -413,6 +413,90 @@ def summarize_ppi_comparison(ppi_comparison_df):
     return ppi_comparison_df[columns].describe().T
 
 
+def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_unit=None):
+    """Build a dataframe comparing model, fixed Laspeyres, and chained Laspeyres CPI.
+
+    Supply either a live ``model`` plus ``country_code`` or an ``h5_path`` plus
+    ``country_code``. The model CPI YoY comparison uses the recorded
+    ``cpi_yoy_inflation`` series.
+    """
+    if country_code is None:
+        raise ValueError("country_code is required.")
+    if (model is None) == (h5_path is None):
+        raise ValueError("Provide exactly one of model or h5_path.")
+
+    if model is not None:
+        economy_ts = model.countries[country_code].economy.ts.__dict__["dicts"]
+        if time_unit is None:
+            time_unit = model.timestep.increment
+        data = {
+            "model_cpi": _timeseries_1d(economy_ts["cpi"]),
+            "fixed_cpi": _timeseries_1d(economy_ts["cpi_fixed"]),
+            "chained_cpi": _timeseries_1d(economy_ts["cpi_chained"]),
+            "model_pop": _timeseries_1d(economy_ts["cpi_inflation"]),
+            "fixed_pop": _timeseries_1d(economy_ts["cpi_fixed_pop_change"]),
+            "chained_pop": _timeseries_1d(economy_ts["cpi_chained_pop_change"]),
+            "model_yoy": _timeseries_1d(economy_ts["cpi_yoy_inflation"]),
+            "fixed_yoy": _timeseries_1d(economy_ts["cpi_fixed_yoy_change"]),
+            "chained_yoy": _timeseries_1d(economy_ts["cpi_chained_yoy_change"]),
+        }
+    else:
+        import h5py
+
+        base = f"{country_code}/economy"
+        with h5py.File(h5_path, "r") as h5_file:
+            data = {
+                "model_cpi": _read_h5_1d(h5_file, f"{base}/cpi"),
+                "fixed_cpi": _read_h5_1d(h5_file, f"{base}/cpi_fixed"),
+                "chained_cpi": _read_h5_1d(h5_file, f"{base}/cpi_chained"),
+                "model_pop": _read_h5_1d(h5_file, f"{base}/cpi_inflation"),
+                "fixed_pop": _read_h5_1d(h5_file, f"{base}/cpi_fixed_pop_change"),
+                "chained_pop": _read_h5_1d(h5_file, f"{base}/cpi_chained_pop_change"),
+                "model_yoy": _read_h5_1d(h5_file, f"{base}/cpi_yoy_inflation"),
+                "fixed_yoy": _read_h5_1d(h5_file, f"{base}/cpi_fixed_yoy_change"),
+                "chained_yoy": _read_h5_1d(h5_file, f"{base}/cpi_chained_yoy_change"),
+            }
+        if time_unit is None:
+            time_unit = 3
+
+    if time_unit <= 0 or 12 % time_unit != 0:
+        raise ValueError("time_unit must be a positive divisor of 12.")
+
+    target_len = min(len(values) for values in data.values())
+    out = pd.DataFrame({key: values[:target_len] for key, values in data.items()})
+    out.index.name = "t"
+
+    periods_per_year = 12 // time_unit
+    out["fixed_minus_model"] = out["fixed_cpi"] - out["model_cpi"]
+    out["chained_minus_model"] = out["chained_cpi"] - out["model_cpi"]
+    out["chained_minus_fixed"] = out["chained_cpi"] - out["fixed_cpi"]
+    out["fixed_pop_minus_model_pop"] = out["fixed_pop"] - out["model_pop"]
+    out["chained_pop_minus_model_pop"] = out["chained_pop"] - out["model_pop"]
+
+    out.attrs["time_unit_months"] = time_unit
+    out.attrs["periods_per_year"] = periods_per_year
+    return out
+
+
+def summarize_cpi_comparison(cpi_comparison_df):
+    """Return descriptive statistics for CPI level and change comparisons."""
+    columns = [
+        "model_cpi",
+        "fixed_cpi",
+        "chained_cpi",
+        "model_pop",
+        "fixed_pop",
+        "chained_pop",
+        "model_yoy",
+        "fixed_yoy",
+        "chained_yoy",
+        "fixed_minus_model",
+        "chained_minus_model",
+        "chained_minus_fixed",
+    ]
+    return cpi_comparison_df[columns].describe().T
+
+
 def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, width=1000, show=True):
     """Plot model PPI against fixed and chained Laspeyres PPI."""
     fig = make_subplots(
@@ -439,6 +523,53 @@ def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, w
             go.Scatter(
                 x=ppi_comparison_df.index,
                 y=ppi_comparison_df[column],
+                mode="lines",
+                name=name,
+            ),
+            row=row,
+            col=1,
+        )
+
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=2, col=1)
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=3, col=1)
+    fig.update_yaxes(title_text="index", row=1, col=1)
+    fig.update_yaxes(title_text="rate", row=2, col=1)
+    fig.update_yaxes(title_text="rate", row=3, col=1)
+    fig.update_xaxes(title_text="t", row=3, col=1)
+    fig.update_layout(height=height, width=width, title_text=title, template="plotly_white")
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
+def plot_cpi_comparison(cpi_comparison_df, title="CPI comparison", height=850, width=1000, show=True):
+    """Plot model CPI against fixed and chained Laspeyres CPI."""
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=["CPI levels", "Period-on-period changes", "Year-on-year changes"],
+        vertical_spacing=0.08,
+    )
+
+    trace_groups = [
+        ("model_cpi", "model_cpi", 1),
+        ("fixed_cpi", "fixed_cpi", 1),
+        ("chained_cpi", "chained_cpi", 1),
+        ("model_pop", "model_pop", 2),
+        ("fixed_pop", "fixed_pop", 2),
+        ("chained_pop", "chained_pop", 2),
+        ("model_yoy", "model_yoy", 3),
+        ("fixed_yoy", "fixed_yoy", 3),
+        ("chained_yoy", "chained_yoy", 3),
+    ]
+    for column, name, row in trace_groups:
+        fig.add_trace(
+            go.Scatter(
+                x=cpi_comparison_df.index,
+                y=cpi_comparison_df[column],
                 mode="lines",
                 name=name,
             ),
@@ -1142,6 +1273,12 @@ def build_macro_output_df(model, country_code):
         "estimated_growth",
         "cpi_yoy_inflation",
         "output_gap",
+        "cpi_fixed",
+        "cpi_fixed_pop_change",
+        "cpi_fixed_yoy_change",
+        "cpi_chained",
+        "cpi_chained_pop_change",
+        "cpi_chained_yoy_change",
         "ppi_fixed",
         "ppi_fixed_pop_change",
         "ppi_fixed_yoy_change",
@@ -1171,6 +1308,12 @@ def build_macro_output_df(model, country_code):
         "net exports to gdp",
         "cpi",
         "cpi yoy inflation",
+        "cpi_fixed",
+        "cpi_fixed_pop_change",
+        "cpi_fixed_yoy_change",
+        "cpi_chained",
+        "cpi_chained_pop_change",
+        "cpi_chained_yoy_change",
         "ppi",
         "ppi yoy change",
         "ppi_fixed",

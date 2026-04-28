@@ -56,6 +56,8 @@ def create_economy_timeseries(
     initial_sectoral_firm_sales: np.ndarray,
     initial_sectoral_firm_prices: np.ndarray,
     initial_ppi_weights: np.ndarray,
+    initial_cpi_weights: np.ndarray,
+    initial_sectoral_household_consumption: np.ndarray,
     initial_sectoral_firm_used_ii: np.ndarray,
     initial_total_taxes_on_products: float,
     initial_total_taxes_on_production: float,
@@ -110,6 +112,8 @@ def create_economy_timeseries(
         initial_sectoral_firm_sales (np.ndarray): Sales by sector
         initial_sectoral_firm_prices (np.ndarray): Initial prices by sector
         initial_ppi_weights (np.ndarray): Initial producer-sales weights by sector
+        initial_cpi_weights (np.ndarray): Initial household-consumption weights by sector
+        initial_sectoral_household_consumption (np.ndarray): Household consumption by sector
         initial_sectoral_firm_used_ii (np.ndarray): Intermediate inputs
         initial_total_taxes_on_products (float): Product tax revenue
         initial_total_taxes_on_production (float): Production tax revenue
@@ -161,6 +165,18 @@ def create_economy_timeseries(
         ppi_chain_base_prices=initial_sectoral_firm_prices,
         ppi_chain_link_level=[1.0],
         sectoral_producer_sales=initial_sectoral_firm_sales,
+        cpi_fixed=[1.0],
+        cpi_fixed_pop_change=[initial_cpi_inflation],
+        cpi_fixed_yoy_change=[initial_cpi_inflation],
+        cpi_chained=[1.0],
+        cpi_chained_pop_change=[initial_cpi_inflation],
+        cpi_chained_yoy_change=[initial_cpi_inflation],
+        cpi_fixed_weights=initial_cpi_weights,
+        cpi_chain_weights=initial_cpi_weights,
+        cpi_fixed_base_prices=initial_sectoral_firm_prices,
+        cpi_chain_base_prices=initial_sectoral_firm_prices,
+        cpi_chain_link_level=[1.0],
+        sectoral_household_consumption=initial_sectoral_household_consumption,
         #
         cpi_inflation=[initial_cpi_inflation],
         cpi_yoy_inflation=[initial_cpi_yoy_inflation],

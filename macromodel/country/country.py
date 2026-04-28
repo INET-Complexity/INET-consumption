@@ -361,6 +361,7 @@ class Country:
             industry_vectors=synthetic_country.industry_data["industry_vectors"],
             exogenous=exogenous,
             time_unit=time_unit,
+            initial_sectoral_household_consumption=initial_consumption_by_industry.values.flatten(),
         )
 
         labour_market = LabourMarket.from_agents(
@@ -1051,6 +1052,7 @@ class Country:
             government_nominal_amount_spent=self.government_entities.ts.current("nominal_amount_spent_in_lcu"),
             firms_real_amount_bought_as_capital_goods=self.firms.ts.current("real_amount_bought_as_capital_goods"),
             sectoral_producer_sales=sectoral_sales,
+            sectoral_household_consumption=self.households.ts.current("industry_consumption"),
         )
         self.economy.compute_inflation()
         self.economy.compute_cpi_yoy_inflation(

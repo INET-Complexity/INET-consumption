@@ -150,6 +150,7 @@ class Economy:
         exogenous: Exogenous,
         industry_vectors: pd.DataFrame,
         time_unit: int,
+        initial_sectoral_household_consumption: np.ndarray | None = None,
     ):
         """Create an Economy instance from agent-level data and configurations.
 
@@ -175,6 +176,8 @@ class Economy:
             exogenous (Exogenous): External economic conditions
             industry_vectors (pd.DataFrame): Industry-level initial conditions
             time_unit (int): Simulation period length in months
+            initial_sectoral_household_consumption (np.ndarray | None): Initial household
+                consumption by industry for CPI diagnostics
 
         Returns:
             Economy: Newly constructed Economy instance with initialized metrics
@@ -191,6 +194,9 @@ class Economy:
             fallback=firms.ts.current("price")[0],
         )
         initial_ppi_weights = cls._normalise_index_weights(initial_sectoral_firm_sales)
+        if initial_sectoral_household_consumption is None:
+            initial_sectoral_household_consumption = industry_vectors["Household Consumption in LCU"].values.flatten()
+        initial_cpi_weights = cls._normalise_index_weights(initial_sectoral_household_consumption)
         initial_sectoral_firm_used_ii = np.bincount(
             firms.states["Industry"],
             weights=firms.ts.current("used_intermediate_inputs_costs"),
@@ -281,6 +287,8 @@ class Economy:
             initial_sectoral_firm_sales=initial_sectoral_firm_sales,
             initial_sectoral_firm_prices=initial_sectoral_firm_prices,
             initial_ppi_weights=initial_ppi_weights,
+            initial_cpi_weights=initial_cpi_weights,
+            initial_sectoral_household_consumption=initial_sectoral_household_consumption,
             initial_sectoral_firm_used_ii=initial_sectoral_firm_used_ii,
             initial_total_taxes_on_products=initial_total_taxes_on_products,
             initial_total_taxes_on_production=initial_total_taxes_on_production,
@@ -410,6 +418,21 @@ class Economy:
         self.ts.ppi_chain_link_level.append([self.ts.current("ppi_chained")[0]])
         self.ts.ppi_chain_base_prices.append(self.ts.prev("good_prices"))
         self.ts.ppi_chain_weights.append(self._normalise_index_weights(prior_year_sales))
+
+    def _maybe_update_cpi_chain_base(self) -> None:
+        periods_per_year = self._periods_per_year(self.time_unit)
+        elapsed_periods = len(self.ts.historic("cpi_chained")) - 1
+        if elapsed_periods == 0 or elapsed_periods % periods_per_year != 0:
+            self.ts.cpi_chain_link_level.append(self.ts.current("cpi_chain_link_level"))
+            self.ts.cpi_chain_base_prices.append(self.ts.current("cpi_chain_base_prices"))
+            self.ts.cpi_chain_weights.append(self.ts.current("cpi_chain_weights"))
+            return
+
+        household_consumption_history = np.array(self.ts.historic("sectoral_household_consumption"), dtype=float)
+        prior_year_consumption = household_consumption_history[-periods_per_year - 1 : -1].sum(axis=0)
+        self.ts.cpi_chain_link_level.append([self.ts.current("cpi_chained")[0]])
+        self.ts.cpi_chain_base_prices.append(self.ts.prev("good_prices"))
+        self.ts.cpi_chain_weights.append(self._normalise_index_weights(prior_year_consumption))
 
     def reset(self, configuration: EconomyConfiguration) -> None:
         """Reset the economy's state and update function configurations.
@@ -622,6 +645,7 @@ class Economy:
         government_nominal_amount_spent: np.ndarray,
         firms_real_amount_bought_as_capital_goods: np.ndarray,
         sectoral_producer_sales: np.ndarray,
+        sectoral_household_consumption: np.ndarray | None = None,
     ) -> None:
         """Compute and update various price indices for the economy.
 
@@ -644,6 +668,7 @@ class Economy:
             government_nominal_amount_spent (np.ndarray): Money spent by government
             firms_real_amount_bought_as_capital_goods (np.ndarray): Capital goods quantities
             sectoral_producer_sales (np.ndarray): Producer sales by sector
+            sectoral_household_consumption (np.ndarray | None): Household consumption by sector
         """
         # Current good prices
         current_goods_prices = np.zeros(self.n_industries)
@@ -659,6 +684,9 @@ class Economy:
             )
         self.ts.good_prices.append(current_goods_prices)
         self.ts.sectoral_producer_sales.append(sectoral_producer_sales)
+        if sectoral_household_consumption is None:
+            sectoral_household_consumption = household_nominal_amount_spent.sum(axis=0)
+        self.ts.sectoral_household_consumption.append(sectoral_household_consumption)
 
         # PPI
         self.ts.ppi.append(
@@ -733,6 +761,24 @@ class Economy:
             [self.ts.current("ppi_chain_link_level")[0] * np.dot(self.ts.current("ppi_chain_weights"), chain_relatives)]
         )
 
+        cpi_fixed_relatives = self._price_relatives(
+            current_prices=self.ts.current("good_prices"),
+            base_prices=self.ts.current("cpi_fixed_base_prices"),
+        )
+        self.ts.cpi_fixed.append([np.dot(self.ts.current("cpi_fixed_weights"), cpi_fixed_relatives)])
+
+        self._maybe_update_cpi_chain_base()
+        cpi_chain_relatives = self._price_relatives(
+            current_prices=self.ts.current("good_prices"),
+            base_prices=self.ts.current("cpi_chain_base_prices"),
+        )
+        self.ts.cpi_chained.append(
+            [
+                self.ts.current("cpi_chain_link_level")[0]
+                * np.dot(self.ts.current("cpi_chain_weights"), cpi_chain_relatives)
+            ]
+        )
+
     def compute_inflation(self) -> None:
         """Calculate and record various inflation measures.
 
@@ -757,6 +803,10 @@ class Economy:
         self.ts.ppi_fixed_yoy_change.append([self._compute_index_yoy_change("ppi_fixed")])
         self.ts.ppi_chained_pop_change.append([self._compute_index_pop_change("ppi_chained")])
         self.ts.ppi_chained_yoy_change.append([self._compute_index_yoy_change("ppi_chained")])
+        self.ts.cpi_fixed_pop_change.append([self._compute_index_pop_change("cpi_fixed")])
+        self.ts.cpi_fixed_yoy_change.append([self._compute_index_yoy_change("cpi_fixed")])
+        self.ts.cpi_chained_pop_change.append([self._compute_index_pop_change("cpi_chained")])
+        self.ts.cpi_chained_yoy_change.append([self._compute_index_yoy_change("cpi_chained")])
 
         # Price inflation by industry
         inflation_by_industry = np.zeros(self.n_industries)

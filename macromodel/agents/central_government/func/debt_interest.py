@@ -6,6 +6,9 @@ import numpy as np
 class CurrentPolicyRateDebtInterest:
     """Price the full public-debt stock at the current policy rate."""
 
+    def __init__(self, **_: object):
+        pass
+
     @staticmethod
     def compute_interest_rate(
         current_policy_rate: float,

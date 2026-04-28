@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SocialBenefits(BaseModel):
@@ -10,19 +10,19 @@ class SocialBenefits(BaseModel):
         "GrowthSocialBenefitsSetter",
     ] = ("GrowthSocialBenefitsSetter")
     path_name: str = "social_benefits"
-    parameters: dict = {}
+    parameters: dict = Field(default_factory=dict)
 
 
 class SocialHousing(BaseModel):
     name: Literal["DefaultSocialHousing"] = "DefaultSocialHousing"
     path_name: str = "social_housing"
-    parameters: dict = {"rent_as_fraction_of_unemployment_rate": 0.25}
+    parameters: dict = Field(default_factory=lambda: {"rent_as_fraction_of_unemployment_rate": 0.25})
 
 
 class DebtInterest(BaseModel):
     name: Literal["CurrentPolicyRateDebtInterest", "SmoothedPolicyRateDebtInterest"] = "CurrentPolicyRateDebtInterest"
     path_name: str = "debt_interest"
-    parameters: dict = {}
+    parameters: dict = Field(default_factory=dict)
 
 
 class CentralGovernmentFunctions(BaseModel):

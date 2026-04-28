@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Consumption(BaseModel):
@@ -8,10 +8,16 @@ class Consumption(BaseModel):
         "AutoregressiveGovernmentConsumptionSetter",
         "AutoregressiveGrowthGovernmentConsumptionSetter",
         "ConstantGrowthGovernmentConsumptionSetter",
+        "ExpectedGrowthGovernmentConsumptionSetter",
         "ExogenousGovernmentConsumptionSetter",
     ] = "AutoregressiveGovernmentConsumptionSetter"
     path_name: str = "consumption"
-    parameters: dict = {"consistency": 1.0}
+    parameters: dict = Field(
+        default_factory=lambda: {
+            "consistency": 1.0,
+            "sectoral_weights": "previous_desired",
+        }
+    )
 
 
 class GovernmentFunctions(BaseModel):

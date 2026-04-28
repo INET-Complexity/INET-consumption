@@ -43,6 +43,7 @@ GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",
     "ConstantGrowthGovernmentConsumptionSetter",
+    "ExpectedGrowthGovernmentConsumptionSetter",
     "ExogenousGovernmentConsumptionSetter",
 )
 GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial", "initial_price_normalized", "initial_fixed")
@@ -100,6 +101,12 @@ GOVERNMENT_CONSISTENCY_INITIAL_WEIGHTS_ARMS = (
     GovernmentBridgeArm(
         "argrowth_consistency1_initial_fixed",
         "AutoregressiveGrowthGovernmentConsumptionSetter",
+        1.0,
+        "initial_fixed",
+    ),
+    GovernmentBridgeArm(
+        "expectedgrowth_initial_fixed",
+        "ExpectedGrowthGovernmentConsumptionSetter",
         1.0,
         "initial_fixed",
     ),

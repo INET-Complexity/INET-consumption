@@ -354,6 +354,7 @@ FRA:
         path_name: consumption
         parameters:
           consistency: 1.0
+          sectoral_weights: previous_desired
 
   central_government:
     functions:

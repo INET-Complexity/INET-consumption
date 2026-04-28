@@ -24,6 +24,13 @@ from macromodel.forecaster.forecaster import (
     ManualAutoregForecaster,
 )
 
+GOVERNMENT_SECTORAL_WEIGHTS = (
+    "previous_desired",
+    "initial",
+    "initial_price_normalized",
+    "initial_fixed",
+)
+
 
 def _normalise_government_consumption_weights(previous_desired_government_consumption: np.ndarray) -> np.ndarray:
     """Return stable industry weights for government consumption targets."""
@@ -67,9 +74,11 @@ class GovernmentConsumptionSetter(ABC):
                 adjustments (0.0)
             default_growth (float, optional): Default growth rate to use
                 when historical data is unavailable
+            sectoral_weights (str): Industry allocation mode. This can be
+                supplied from model configuration next to ``consistency``.
         """
         assert consistency == 1.0 or consistency == 0.0
-        if sectoral_weights not in {"previous_desired", "initial", "initial_price_normalized", "initial_fixed"}:
+        if sectoral_weights not in GOVERNMENT_SECTORAL_WEIGHTS:
             raise ValueError(
                 f"{self.__class__.__name__} sectoral_weights must be 'previous_desired', "
                 "'initial', 'initial_price_normalized', or 'initial_fixed'."
@@ -93,20 +102,24 @@ class GovernmentConsumptionSetter(ABC):
     def _allocate_consumption(
         self,
         *,
-        consumption: float,
+        real_total_consumption: float,
         previous_desired_government_consumption: np.ndarray,
         initial_good_prices: np.ndarray,
         current_good_prices: np.ndarray,
         expected_inflation: float,
     ) -> np.ndarray:
+        """Allocate real aggregate consumption into nominal sectoral targets."""
         consumption_weights = self._consumption_weights(previous_desired_government_consumption)
         price_ratio = current_good_prices / initial_good_prices
         if self.sectoral_weights == "initial_fixed":
-            return np.maximum(0.0, (1 + expected_inflation) * consumption * consumption_weights)
+            return np.maximum(0.0, (1 + expected_inflation) * real_total_consumption * consumption_weights)
         if self.sectoral_weights == "initial_price_normalized":
             price_adjusted_weights = _normalise_government_consumption_weights(price_ratio * consumption_weights)
-            return np.maximum(0.0, (1 + expected_inflation) * consumption * price_adjusted_weights)
-        return np.maximum(0.0, (1 + expected_inflation) * price_ratio * consumption * consumption_weights)
+            return np.maximum(0.0, (1 + expected_inflation) * real_total_consumption * price_adjusted_weights)
+        return np.maximum(
+            0.0,
+            (1 + expected_inflation) * price_ratio * real_total_consumption * consumption_weights,
+        )
 
     @abstractmethod
     def compute_target_consumption(
@@ -244,11 +257,11 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
                         t=max(current_time + self.buffer, current_time),
                         assume_zero_noise=assume_zero_noise,
                     )
-            consumption = self.fixed_total_government_consumption[current_time - 1]
+            real_total_consumption = self.fixed_total_government_consumption[current_time - 1]
 
         # Fitting based on historic consumption
         else:
-            consumption = np.exp(
+            real_total_consumption = np.exp(
                 ManualAutoregForecaster().forecast(
                     data=np.log(historic_total_consumption),
                     t=1,
@@ -257,7 +270,7 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             )
 
         return self._allocate_consumption(
-            consumption=consumption,
+            real_total_consumption=real_total_consumption,
             previous_desired_government_consumption=previous_desired_government_consumption,
             initial_good_prices=initial_good_prices,
             current_good_prices=current_good_prices,
@@ -343,9 +356,9 @@ class ConstantGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             growth_factor = 1 + self.default_growth
 
         if self.sectoral_weights in {"initial", "initial_price_normalized", "initial_fixed"}:
-            consumption = previous_desired_government_consumption.sum() * growth_factor
+            real_total_consumption = previous_desired_government_consumption.sum() * growth_factor
             return self._allocate_consumption(
-                consumption=consumption,
+                real_total_consumption=real_total_consumption,
                 previous_desired_government_consumption=previous_desired_government_consumption,
                 initial_good_prices=initial_good_prices,
                 current_good_prices=current_good_prices,
@@ -359,6 +372,47 @@ class ConstantGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             / initial_good_prices
             * growth_factor
             * previous_desired_government_consumption,
+        )
+
+
+class ExpectedGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
+    """Expected-output-growth consumption target determination.
+
+    This rule updates government consumption using the model's expected output
+    growth and expected inflation instead of a government-specific exogenous
+    trend. Sectoral allocation follows ``sectoral_weights``.
+    """
+
+    def compute_target_consumption(
+        self,
+        previous_desired_government_consumption: np.ndarray,
+        model: Optional[Any],
+        historic_total_consumption: Optional[np.ndarray],
+        initial_good_prices: np.ndarray,
+        current_good_prices: np.ndarray,
+        expected_growth: float,
+        expected_inflation: float,
+        current_time: int,
+        exogenous_total_consumption: Optional[np.ndarray],
+        forecasting_window: int,
+        assume_zero_noise: bool = False,
+    ) -> np.ndarray:
+        """Calculate consumption targets using expected output growth.
+
+        The aggregate real government consumption target is:
+
+            G_t = (1 + expected_growth) * sum_i G_{i,t-1}
+
+        ``_allocate_consumption`` then applies expected inflation and the
+        configured sectoral allocation mode.
+        """
+        real_total_consumption = previous_desired_government_consumption.sum() * (1 + expected_growth)
+        return self._allocate_consumption(
+            real_total_consumption=real_total_consumption,
+            previous_desired_government_consumption=previous_desired_government_consumption,
+            initial_good_prices=initial_good_prices,
+            current_good_prices=current_good_prices,
+            expected_inflation=expected_inflation,
         )
 
 
@@ -450,11 +504,11 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
                     np.cumprod(1 + self.fixed_total_government_consumption) * historic_total_consumption[-1]
                 )
 
-            consumption = self.fixed_total_government_consumption[current_time - 1]
+            real_total_consumption = self.fixed_total_government_consumption[current_time - 1]
 
         # Fitting based on historic consumption
         else:
-            consumption = np.exp(
+            real_total_consumption = np.exp(
                 ManualAutoregForecaster().forecast(
                     data=np.log(historic_total_consumption),
                     t=1,
@@ -463,7 +517,7 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
             )
 
         return self._allocate_consumption(
-            consumption=consumption,
+            real_total_consumption=real_total_consumption,
             previous_desired_government_consumption=previous_desired_government_consumption,
             initial_good_prices=initial_good_prices,
             current_good_prices=current_good_prices,
@@ -549,7 +603,7 @@ class ExogenousGovernmentConsumptionSetter(GovernmentConsumptionSetter):
                 f"current_time={current_time}, value={exogenous_total_consumption[current_time]}"
             )
         return self._allocate_consumption(
-            consumption=exogenous_total_consumption[current_time],
+            real_total_consumption=exogenous_total_consumption[current_time],
             previous_desired_government_consumption=previous_desired_government_consumption,
             initial_good_prices=initial_good_prices,
             current_good_prices=current_good_prices,

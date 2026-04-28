@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pprint import pprint
 import random
 import sys
 import warnings
@@ -34,6 +35,7 @@ GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",
     "ConstantGrowthGovernmentConsumptionSetter",
+    "ExpectedGrowthGovernmentConsumptionSetter",
     "ExogenousGovernmentConsumptionSetter",
 )
 GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial", "initial_price_normalized", "initial_fixed")
@@ -144,21 +146,22 @@ def main(
         country_cfg.assume_zero_noise = assume_zero_noise
 
     print("Configuration summary")
-    print(
+    pprint(
         {
             "productivity_growth": country_cfg.firms.functions.productivity_growth.name,
             "labour_market_clearer": country_cfg.labour_market.functions.clearing.name,
             "policy_rate_rule": country_cfg.central_bank.functions.policy_rate.name,
-            "government_consumption_setter": country_cfg.government_entities.functions.consumption.name,
-            "government_sectoral_weights": country_cfg.government_entities.functions.consumption.parameters.get(
-                "sectoral_weights", DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS
-            ),
-            "government_consumption_consistency": country_cfg.government_entities.functions.consumption.parameters.get(
-                "consistency"
-            ),
-            "benefit_rule": country_cfg.central_government.functions.social_benefits.name,
+            "benefit_rule": {
+                "name": country_cfg.central_government.functions.social_benefits.name,
+                "parameters": country_cfg.central_government.functions.social_benefits.parameters,
+            },
+            "government_consumption": {
+                "name": country_cfg.government_entities.functions.consumption.name,
+                "parameters": country_cfg.government_entities.functions.consumption.parameters,
+            },
             "assume_zero_noise": country_cfg.assume_zero_noise,
-        }
+        },
+        sort_dicts=False,
     )
 
     # Run single Simulation

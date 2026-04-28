@@ -2,6 +2,27 @@ import numpy as np
 import pytest
 
 
+def _record_price_period(economy, prices, sectoral_sales):
+    n_industries = economy.n_industries
+    prices = np.asarray(prices, dtype=float)
+    sectoral_sales = np.asarray(sectoral_sales, dtype=float)
+    firm_real_amount_bought = np.ones((1, n_industries))
+    firm_nominal_amount_spent = prices.reshape(1, n_industries)
+    empty_purchases = np.zeros((1, n_industries))
+
+    economy.compute_price_indicators(
+        firm_real_amount_bought=firm_real_amount_bought,
+        firm_nominal_amount_spent=firm_nominal_amount_spent,
+        household_real_amount_bought=empty_purchases,
+        household_nominal_amount_spent=empty_purchases,
+        government_real_amount_bought=empty_purchases,
+        government_nominal_amount_spent=empty_purchases,
+        firms_real_amount_bought_as_capital_goods=empty_purchases,
+        sectoral_producer_sales=sectoral_sales,
+    )
+    economy.compute_inflation()
+
+
 class TestEconomy:
     def test__economy_states(self, test_economy):
         assert test_economy is not None
@@ -22,8 +43,106 @@ class TestEconomy:
             "cpi_yoy_inflation",
             "potential_output",
             "output_gap",
+            "ppi_fixed",
+            "ppi_fixed_pop_change",
+            "ppi_fixed_yoy_change",
+            "ppi_chained",
+            "ppi_chained_pop_change",
+            "ppi_chained_yoy_change",
+            "ppi_fixed_weights",
+            "ppi_chain_weights",
+            "ppi_fixed_base_prices",
+            "ppi_chain_base_prices",
+            "ppi_chain_link_level",
+            "sectoral_producer_sales",
         ]:
             assert ts_key in test_economy.ts.get_keys()
+
+    def test__initial_ppi_fixed_weights_are_normalized(self, test_economy):
+        weights = test_economy.ts.current("ppi_fixed_weights")
+
+        assert weights.shape == (test_economy.n_industries,)
+        assert weights.sum() == pytest.approx(1.0)
+        assert np.all(weights >= 0.0)
+
+    def test__compute_laspeyres_ppi_fixed(self, test_economy):
+        weights = np.zeros(test_economy.n_industries)
+        weights[:3] = [0.2, 0.3, 0.5]
+        base_prices = np.ones(test_economy.n_industries)
+        prices = np.ones(test_economy.n_industries)
+        prices[:3] = [2.0, 1.0, 3.0]
+        previous_legacy_ppi = test_economy.ts.current("ppi")[0]
+        previous_legacy_cpi = test_economy.ts.current("cpi")[0]
+
+        test_economy.ts.dicts["ppi_fixed_weights"] = [weights]
+        test_economy.ts.dicts["ppi_chain_weights"] = [weights]
+        test_economy.ts.dicts["ppi_fixed_base_prices"] = [base_prices]
+        test_economy.ts.dicts["ppi_chain_base_prices"] = [base_prices]
+
+        _record_price_period(test_economy, prices=prices, sectoral_sales=np.ones(test_economy.n_industries))
+
+        legacy_price_scalar = test_economy.ts.initial("initial_price")[0][0]
+        expected_legacy_price_index = prices.mean() / legacy_price_scalar
+        assert test_economy.ts.current("ppi_fixed")[0] == pytest.approx(2.2)
+        assert test_economy.ts.current("ppi_fixed_pop_change")[0] == pytest.approx(1.2)
+        assert test_economy.ts.current("ppi")[0] == pytest.approx(expected_legacy_price_index)
+        assert test_economy.ts.current("ppi_inflation")[0] == pytest.approx(
+            expected_legacy_price_index / previous_legacy_ppi - 1.0
+        )
+        assert test_economy.ts.current("cpi")[0] == pytest.approx(expected_legacy_price_index)
+        assert test_economy.ts.current("cpi_inflation")[0] == pytest.approx(
+            expected_legacy_price_index / previous_legacy_cpi - 1.0
+        )
+
+    def test__price_relatives_use_neutral_value_for_invalid_prices(self, test_economy):
+        relatives = test_economy._price_relatives(
+            current_prices=np.array([2.0, np.nan, 4.0, 5.0]),
+            base_prices=np.array([1.0, 2.0, 0.0, np.nan]),
+        )
+
+        np.testing.assert_allclose(relatives, np.array([2.0, 1.0, 1.0, 1.0]))
+
+    def test__compute_ppi_fixed_yoy_change_uses_quarterly_time_unit(self, test_economy):
+        test_economy.time_unit = 3
+        test_economy.ts.dicts["ppi_fixed"] = [[1.0], [1.1], [1.2], [1.3], [1.4]]
+
+        assert test_economy._compute_index_yoy_change("ppi_fixed") == pytest.approx(0.4)
+
+    def test__compute_ppi_fixed_yoy_change_uses_monthly_time_unit(self, test_economy):
+        test_economy.time_unit = 1
+        test_economy.ts.dicts["ppi_fixed"] = [[1.0]] + [[1.0 + 0.01 * i] for i in range(1, 13)]
+
+        assert test_economy._compute_index_yoy_change("ppi_fixed") == pytest.approx(0.12)
+
+    def test__ppi_chained_weights_update_after_full_model_year(self, test_economy):
+        test_economy.time_unit = 3
+        n_industries = test_economy.n_industries
+        initial_weights = np.zeros(n_industries)
+        initial_weights[:2] = [0.5, 0.5]
+        base_prices = np.ones(n_industries)
+        prices = np.ones(n_industries)
+
+        test_economy.ts.dicts["ppi_fixed_weights"] = [initial_weights]
+        test_economy.ts.dicts["ppi_chain_weights"] = [initial_weights]
+        test_economy.ts.dicts["ppi_fixed_base_prices"] = [base_prices]
+        test_economy.ts.dicts["ppi_chain_base_prices"] = [base_prices]
+        test_economy.ts.dicts["ppi_chain_link_level"] = [[1.0]]
+        test_economy.ts.dicts["sectoral_producer_sales"] = [np.zeros(n_industries)]
+
+        prior_year_sales = np.zeros(n_industries)
+        prior_year_sales[:2] = [1.0, 3.0]
+        for _ in range(4):
+            _record_price_period(test_economy, prices=prices, sectoral_sales=prior_year_sales)
+
+        np.testing.assert_allclose(test_economy.ts.current("ppi_chain_weights"), initial_weights)
+
+        _record_price_period(test_economy, prices=prices, sectoral_sales=np.ones(n_industries))
+
+        expected_weights = np.zeros(n_industries)
+        expected_weights[:2] = [0.25, 0.75]
+        np.testing.assert_allclose(test_economy.ts.current("ppi_chain_weights"), expected_weights)
+        assert test_economy.ts.current("ppi_chain_link_level")[0] == pytest.approx(test_economy.ts.prev("ppi_chained")[0])
+        assert test_economy.ts.current("ppi_chained")[0] == pytest.approx(test_economy.ts.prev("ppi_chained")[0])
 
     def test__compute_cpi_yoy_inflation(self, test_economy):
         test_economy.ts.dicts["cpi_inflation"] = [[0.01], [0.02], [0.03], [0.04]]

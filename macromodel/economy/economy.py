@@ -184,6 +184,13 @@ class Economy:
         initial_sectoral_firm_sales = np.bincount(
             firms.states["Industry"], weights=firms.ts.current("total_sales"), minlength=firms.n_industries
         )
+        initial_sectoral_firm_prices = cls._sectoral_average(
+            values=firms.ts.current("price"),
+            sectors=firms.states["Industry"],
+            n_sectors=firms.n_industries,
+            fallback=firms.ts.current("price")[0],
+        )
+        initial_ppi_weights = cls._normalise_index_weights(initial_sectoral_firm_sales)
         initial_sectoral_firm_used_ii = np.bincount(
             firms.states["Industry"],
             weights=firms.ts.current("used_intermediate_inputs_costs"),
@@ -272,6 +279,8 @@ class Economy:
             initial_firm_prices=initial_firm_prices,  # .mean(),
             initial_firm_total_sales=initial_total_output,
             initial_sectoral_firm_sales=initial_sectoral_firm_sales,
+            initial_sectoral_firm_prices=initial_sectoral_firm_prices,
+            initial_ppi_weights=initial_ppi_weights,
             initial_sectoral_firm_used_ii=initial_sectoral_firm_used_ii,
             initial_total_taxes_on_products=initial_total_taxes_on_products,
             initial_total_taxes_on_production=initial_total_taxes_on_production,
@@ -336,6 +345,71 @@ class Economy:
         if clean_inflation.size < periods_per_year:
             return clean_inflation[-1]
         return float(np.prod(1.0 + clean_inflation[-periods_per_year:]) - 1.0)
+
+    @staticmethod
+    def _normalise_index_weights(values: np.ndarray) -> np.ndarray:
+        """Return positive finite index weights, falling back to equal weights."""
+        weights = np.asarray(values, dtype=float)
+        weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
+        weights_sum = weights.sum()
+        if weights_sum <= 0.0:
+            return np.full(weights.shape, 1.0 / len(weights))
+        return weights / weights_sum
+
+    @staticmethod
+    def _sectoral_average(values: np.ndarray, sectors: np.ndarray, n_sectors: int, fallback: float) -> np.ndarray:
+        """Average firm-level values into sector-level values."""
+        sector_totals = np.bincount(sectors, weights=values, minlength=n_sectors)
+        sector_counts = np.bincount(sectors, minlength=n_sectors)
+        return np.divide(
+            sector_totals,
+            sector_counts,
+            out=np.full(n_sectors, fallback, dtype=float),
+            where=sector_counts > 0,
+        )
+
+    @staticmethod
+    def _price_relatives(current_prices: np.ndarray, base_prices: np.ndarray) -> np.ndarray:
+        """Safely compute price relatives against an index base period."""
+        current_prices = np.asarray(current_prices, dtype=float)
+        base_prices = np.asarray(base_prices, dtype=float)
+        return np.divide(
+            current_prices,
+            base_prices,
+            out=np.ones_like(current_prices, dtype=float),
+            where=np.isfinite(current_prices) & np.isfinite(base_prices) & (base_prices != 0.0),
+        )
+
+    def _compute_index_pop_change(self, series_name: str) -> float:
+        previous = self.ts.prev(series_name)[0]
+        if previous == 0.0 or not np.isfinite(previous):
+            return 0.0
+        return self.ts.current(series_name)[0] / previous - 1.0
+
+    def _compute_index_yoy_change(self, series_name: str) -> float:
+        periods_per_year = self._periods_per_year(self.time_unit)
+        values = np.array(self.ts.historic(series_name), dtype=float).flatten()
+        if values.size <= periods_per_year:
+            return self._compute_index_pop_change(series_name)
+        lagged = values[-periods_per_year - 1]
+        if lagged == 0.0 or not np.isfinite(lagged):
+            return 0.0
+        return values[-1] / lagged - 1.0
+
+    def _maybe_update_ppi_chain_base(self) -> None:
+        periods_per_year = self._periods_per_year(self.time_unit)
+        elapsed_periods = len(self.ts.historic("ppi_chained")) - 1
+        if elapsed_periods == 0 or elapsed_periods % periods_per_year != 0:
+            self.ts.ppi_chain_link_level.append(self.ts.current("ppi_chain_link_level"))
+            self.ts.ppi_chain_base_prices.append(self.ts.current("ppi_chain_base_prices"))
+            self.ts.ppi_chain_weights.append(self.ts.current("ppi_chain_weights"))
+            return
+
+        sectoral_sales_history = np.array(self.ts.historic("sectoral_producer_sales"), dtype=float)
+        prior_year_sales = sectoral_sales_history[-periods_per_year - 1 : -1].sum(axis=0)
+        self.ts.ppi_chain_link_level.append([self.ts.current("ppi_chained")[0]])
+        self.ts.ppi_chain_base_prices.append(self.ts.prev("good_prices"))
+        self.ts.ppi_chain_weights.append(self._normalise_index_weights(prior_year_sales))
 
     def reset(self, configuration: EconomyConfiguration) -> None:
         """Reset the economy's state and update function configurations.
@@ -547,6 +621,7 @@ class Economy:
         government_real_amount_bought: np.ndarray,
         government_nominal_amount_spent: np.ndarray,
         firms_real_amount_bought_as_capital_goods: np.ndarray,
+        sectoral_producer_sales: np.ndarray,
     ) -> None:
         """Compute and update various price indices for the economy.
 
@@ -568,6 +643,7 @@ class Economy:
             government_real_amount_bought (np.ndarray): Physical quantities bought by government
             government_nominal_amount_spent (np.ndarray): Money spent by government
             firms_real_amount_bought_as_capital_goods (np.ndarray): Capital goods quantities
+            sectoral_producer_sales (np.ndarray): Producer sales by sector
         """
         # Current good prices
         current_goods_prices = np.zeros(self.n_industries)
@@ -582,6 +658,7 @@ class Economy:
                 industry=g,
             )
         self.ts.good_prices.append(current_goods_prices)
+        self.ts.sectoral_producer_sales.append(sectoral_producer_sales)
 
         # PPI
         self.ts.ppi.append(
@@ -641,6 +718,21 @@ class Economy:
                 [np.dot(self.ts.current("good_prices"), firm_inv_weights_norm) / self.ts.initial("initial_price")[0][0]]
             )
 
+        fixed_relatives = self._price_relatives(
+            current_prices=self.ts.current("good_prices"),
+            base_prices=self.ts.current("ppi_fixed_base_prices"),
+        )
+        self.ts.ppi_fixed.append([np.dot(self.ts.current("ppi_fixed_weights"), fixed_relatives)])
+
+        self._maybe_update_ppi_chain_base()
+        chain_relatives = self._price_relatives(
+            current_prices=self.ts.current("good_prices"),
+            base_prices=self.ts.current("ppi_chain_base_prices"),
+        )
+        self.ts.ppi_chained.append(
+            [self.ts.current("ppi_chain_link_level")[0] * np.dot(self.ts.current("ppi_chain_weights"), chain_relatives)]
+        )
+
     def compute_inflation(self) -> None:
         """Calculate and record various inflation measures.
 
@@ -660,6 +752,11 @@ class Economy:
 
         # CFPI inflation
         self.ts.cfpi_inflation.append([self.ts.current("cfpi")[0] / self.ts.prev("cfpi")[0] - 1.0])
+
+        self.ts.ppi_fixed_pop_change.append([self._compute_index_pop_change("ppi_fixed")])
+        self.ts.ppi_fixed_yoy_change.append([self._compute_index_yoy_change("ppi_fixed")])
+        self.ts.ppi_chained_pop_change.append([self._compute_index_pop_change("ppi_chained")])
+        self.ts.ppi_chained_yoy_change.append([self._compute_index_yoy_change("ppi_chained")])
 
         # Price inflation by industry
         inflation_by_industry = np.zeros(self.n_industries)

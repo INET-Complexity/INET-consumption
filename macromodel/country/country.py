@@ -1026,6 +1026,20 @@ class Country:
         # Firms distribute bought goods
         self.firms.distribute_bought_goods()
 
+        current_taxes_paid_on_production = (
+            self.central_government.states["Taxes Less Subsidies Rates"][self.firms.states["Industry"]]
+            * self.firms.ts.current("production")
+            * self.firms.ts.current("price")
+        )
+        current_firm_total_sales = self.firms.ts.current("price") * self.firms.ts.current(
+            "production"
+        ) - current_taxes_paid_on_production
+        sectoral_sales = np.bincount(
+            self.firms.states["Industry"],
+            weights=current_firm_total_sales,
+            minlength=self.economy.n_industries,
+        )
+
         # A1. ECONOMIC INDICATORS
         # Update core economic indicators and market metrics
         self.economy.compute_price_indicators(
@@ -1036,6 +1050,7 @@ class Country:
             government_real_amount_bought=self.government_entities.ts.current("real_amount_bought"),
             government_nominal_amount_spent=self.government_entities.ts.current("nominal_amount_spent_in_lcu"),
             firms_real_amount_bought_as_capital_goods=self.firms.ts.current("real_amount_bought_as_capital_goods"),
+            sectoral_producer_sales=sectoral_sales,
         )
         self.economy.compute_inflation()
         self.economy.compute_cpi_yoy_inflation(
@@ -1395,11 +1410,7 @@ class Country:
         # Compute GDP
         self.economy.compute_gdp(
             total_output=(self.firms.ts.current("price") * self.firms.ts.current("production")).sum(),
-            sectoral_sales=np.bincount(
-                self.firms.states["Industry"],
-                weights=self.firms.ts.current("total_sales"),
-                minlength=self.economy.n_industries,
-            ),
+            sectoral_sales=sectoral_sales,
             sectoral_intermediate_consumption=np.bincount(
                 self.firms.states["Industry"],
                 weights=self.firms.ts.current("used_intermediate_inputs_costs"),

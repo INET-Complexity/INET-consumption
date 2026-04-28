@@ -28,9 +28,14 @@ import streamlit as st
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_MODEL_PATH = REPO_ROOT / "run_model"
-if str(RUN_MODEL_PATH) not in sys.path:
-    sys.path.insert(0, str(RUN_MODEL_PATH))
+for path in (REPO_ROOT, RUN_MODEL_PATH):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
+from config import Config
+from macro_data import DataWrapper
+from macro_data.readers.economic_data.exchange_rates import ExchangeRatesReader
+from src import distribution_validation as dv
 from src.visual_helpers import SECTOR_CODE_TO_NAME, plot_sectoral_prices_over_time
 
 # Set page config
@@ -195,6 +200,175 @@ def build_sectoral_price_inputs(data, country):
     return prices[:n_periods, :n_sectors], weights, sector_codes
 
 
+def country_entry(mapping, country_iso3):
+    if country_iso3 in mapping:
+        return mapping[country_iso3]
+    for key, value in mapping.items():
+        key_value = getattr(key, "value", key)
+        if key_value == country_iso3:
+            return value
+    raise KeyError(f"Country {country_iso3!r} not found. Available keys: {list(mapping.keys())}")
+
+
+def timestep_for_period(start_year, start_quarter, year, quarter, time_unit):
+    periods_per_year = int(round(12 / time_unit)) if time_unit else 4
+    return (year - start_year) * periods_per_year + (quarter - start_quarter)
+
+
+def timestep_indices_for_year(start_year, start_quarter, year, time_unit, n_steps):
+    periods_per_year = int(round(12 / time_unit)) if time_unit else 4
+    indices = [
+        timestep_for_period(start_year, start_quarter, year, period + 1, time_unit)
+        for period in range(periods_per_year)
+    ]
+    if any(index < 0 or index >= n_steps for index in indices):
+        raise ValueError(f"Model output does not contain a full year for {year}.")
+    return indices
+
+
+def clean_values(values, *, positive=False):
+    array = np.asarray(values, dtype=float).ravel()
+    array = array[np.isfinite(array)]
+    return array[array > 0] if positive else array
+
+
+def model_annual_household_values(values, year, start_year, start_quarter, time_unit, *, scale=1.0):
+    values = np.asarray(values, dtype=float)
+    indices = timestep_indices_for_year(start_year, start_quarter, year, time_unit, values.shape[0])
+    return clean_values(values[indices].sum(axis=0) * scale)
+
+
+def complete_model_years(start_year, start_quarter, time_unit, n_steps):
+    periods_per_year = int(round(12 / time_unit)) if time_unit else 4
+    last_possible_year = start_year + int(np.ceil((start_quarter - 1 + n_steps) / periods_per_year))
+    years = []
+    for year in range(start_year, last_possible_year + 1):
+        try:
+            timestep_indices_for_year(start_year, start_quarter, year, time_unit, n_steps)
+        except ValueError:
+            continue
+        years.append(year)
+    return years
+
+
+@st.cache_data(show_spinner=False)
+def load_distribution_context(data_pkl_path, raw_data_path, country_iso3, country_iso2, hfcs_years):
+    data = DataWrapper.init_from_pickle(data_pkl_path)
+    synthetic_country = country_entry(data.synthetic_countries, country_iso3)
+    population = synthetic_country.population
+
+    model_scale = float(getattr(population, "scale", getattr(synthetic_country, "scale", 1.0)))
+    start_year = int(getattr(data.configuration, "year", getattr(population, "year", 2014)))
+    start_quarter = int(getattr(data.configuration, "quarter", 1) or 1)
+    time_unit = int(getattr(data.configuration, "time_unit", getattr(data, "time_unit", 3)) or 3)
+
+    exchange_rates = ExchangeRatesReader.from_csv(Path(raw_data_path) / "exchange_rates" / "exchange_rates.csv")
+    hfcs_wave_frames = dv.load_hfcs_wave_dataframes(
+        Path(raw_data_path) / "hfcs",
+        country_iso2,
+        hfcs_years,
+        eur_to_lcu_by_year={year: exchange_rates.from_eur_to_lcu(country_iso3, year) for year in hfcs_years},
+    )
+
+    pooled_hfcs_frame = pd.concat(hfcs_wave_frames.values(), ignore_index=True)
+    return {
+        "model_scale": model_scale,
+        "unit_scale": 1.0 / model_scale,
+        "start_year": start_year,
+        "start_quarter": start_quarter,
+        "time_unit": time_unit,
+        "hfcs_wave_frames": hfcs_wave_frames,
+        "pooled_hfcs_frame": pooled_hfcs_frame,
+    }
+
+
+def build_end_simulation_distribution_charts(
+    *,
+    income,
+    wealth,
+    context,
+    trim_percentile,
+    n_bins,
+):
+    unit_scale = context["unit_scale"]
+    start_year = context["start_year"]
+    start_quarter = context["start_quarter"]
+    time_unit = context["time_unit"]
+    pooled_hfcs_frame = context["pooled_hfcs_frame"]
+    hfcs_years = sorted(context["hfcs_wave_frames"])
+    comparison_year_label = f"{min(hfcs_years)}-{max(hfcs_years)}"
+
+    years = complete_model_years(start_year, start_quarter, time_unit, income.shape[0])
+    if not years:
+        raise ValueError("Model output does not contain one complete calendar year for annual income comparison.")
+
+    end_income_year = max(years)
+    end_step_idx = income.shape[0] - 1
+    end_sim_series = {
+        "Income": {
+            f"Model final year {end_income_year}": model_annual_household_values(
+                income,
+                end_income_year,
+                start_year,
+                start_quarter,
+                time_unit,
+                scale=unit_scale,
+            ),
+            f"HFCS pooled {comparison_year_label}": clean_values(pooled_hfcs_frame["Income"]),
+        },
+        "Wealth": {
+            f"Model final step {end_step_idx}": dv.prepare_model_values(
+                wealth,
+                timestep=end_step_idx,
+                scale=unit_scale,
+                drop_nonpositive=True,
+            ),
+            f"HFCS pooled {comparison_year_label}": clean_values(pooled_hfcs_frame["Wealth"], positive=True),
+        },
+    }
+
+    figures = {}
+    summary_rows = []
+    for label, series_by_name in end_sim_series.items():
+        positive_only = label == "Wealth"
+        display_label = "Annual Income" if label == "Income" else label
+        trimmed_series, upper_limit = dv.trim_series_to_common_percentile(
+            series_by_name,
+            percentile=trim_percentile,
+            lower_bound=0.0 if positive_only else None,
+        )
+        title_suffix = f"(pooled HFCS {comparison_year_label}; common p{trim_percentile:g} cutoff: {upper_limit:,.0f})"
+        figures[label] = {
+            "histogram": dv.build_multi_histogram_figure(
+                trimmed_series,
+                title=f"End-of-simulation {display_label}: model vs pooled HFCS histogram {title_suffix}",
+                xaxis_title=f"{display_label}",
+                nbinsx=n_bins,
+            ),
+            "cdf": dv.build_multi_cdf_figure(
+                trimmed_series,
+                title=f"End-of-simulation {display_label}: model vs pooled HFCS CDF {title_suffix}",
+                xaxis_title=f"{display_label}",
+            ),
+        }
+
+        for source, values in series_by_name.items():
+            cleaned = clean_values(values, positive=positive_only)
+            summary_rows.append(
+                {
+                    "metric": display_label,
+                    "source": source,
+                    "observations": len(cleaned),
+                    "mean": float(np.mean(cleaned)),
+                    "median": float(np.median(cleaned)),
+                    "p90": float(np.percentile(cleaned, 90)),
+                    "p99": float(np.percentile(cleaned, 99)),
+                }
+            )
+
+    return figures, pd.DataFrame(summary_rows), end_income_year, end_step_idx
+
+
 # Function to create fan chart
 def create_fan_chart(df, title):
     # Calculate statistics
@@ -299,7 +473,9 @@ try:
     # Construct the full dataset name
     selected_dataset = f"{selected_country}/{selected_agent_market}/{selected_variable}"
 
-    variable_tab, sectoral_prices_tab = st.tabs(["Variable Explorer", "Sectoral Prices"])
+    variable_tab, sectoral_prices_tab, hfcs_tab = st.tabs(
+        ["Variable Explorer", "Sectoral Prices", "End Simulation HFCS"]
+    )
 
     with variable_tab:
         st.header(f"Variable: {selected_dataset}")
@@ -370,6 +546,75 @@ try:
             st.warning(f"Sectoral price inputs are not available in this H5 file: {e}")
         except Exception as e:
             st.error(f"Could not build sectoral price figures: {str(e)}")
+
+    with hfcs_tab:
+        st.header(f"End-of-Simulation Household Distributions: {selected_country}")
+        st.caption("Compares final model household income and wealth distributions with pooled HFCS waves.")
+
+        cfg = Config().from_env()
+        default_data_pkl_path = selected_file.parent / "data.pkl"
+        if not default_data_pkl_path.exists():
+            default_data_pkl_path = cfg.output_path / "data.pkl"
+        default_raw_data_path = cfg.raw_data_path
+        default_country_iso2 = getattr(cfg, "country_iso2", selected_country[:2])
+
+        with st.expander("HFCS input settings", expanded=False):
+            data_pkl_path = Path(
+                st.text_input("Processed data pickle", value=str(default_data_pkl_path))
+            ).expanduser()
+            raw_data_path = Path(st.text_input("Raw data path", value=str(default_raw_data_path))).expanduser()
+            country_iso2 = st.text_input("HFCS country ISO2", value=default_country_iso2).upper()
+            hfcs_years_text = st.text_input("HFCS years", value="2014, 2017, 2021")
+            trim_percentile = st.number_input(
+                "Common trim percentile",
+                min_value=50.0,
+                max_value=100.0,
+                value=99.0,
+                step=0.5,
+            )
+            n_bins = st.number_input("Histogram bins", min_value=10, max_value=300, value=80, step=10)
+
+        try:
+            hfcs_years = [int(year.strip()) for year in hfcs_years_text.split(",") if year.strip()]
+            if not hfcs_years:
+                raise ValueError("Enter at least one HFCS year.")
+
+            income_path = f"{selected_country}/households/income"
+            wealth_path = f"{selected_country}/households/wealth"
+            if income_path not in data or wealth_path not in data:
+                raise KeyError(f"{income_path} and/or {wealth_path}")
+
+            context = load_distribution_context(
+                data_pkl_path=data_pkl_path,
+                raw_data_path=raw_data_path,
+                country_iso3=selected_country,
+                country_iso2=country_iso2,
+                hfcs_years=hfcs_years,
+            )
+            figures, summary, end_income_year, end_step_idx = build_end_simulation_distribution_charts(
+                income=np.asarray(data[income_path], dtype=float),
+                wealth=np.asarray(data[wealth_path], dtype=float),
+                context=context,
+                trim_percentile=float(trim_percentile),
+                n_bins=int(n_bins),
+            )
+
+            st.write(
+                f"Model income uses final complete year {end_income_year}; "
+                f"wealth uses final simulation step {end_step_idx}."
+            )
+            st.dataframe(summary, hide_index=True, use_container_width=True)
+
+            for label in ("Income", "Wealth"):
+                st.subheader("Annual Income" if label == "Income" else "Wealth")
+                st.plotly_chart(figures[label]["histogram"], use_container_width=True)
+                st.plotly_chart(figures[label]["cdf"], use_container_width=True)
+        except FileNotFoundError as e:
+            st.warning(f"HFCS input file not found: {e}")
+        except KeyError as e:
+            st.warning(f"Required model or HFCS data is not available: {e}")
+        except Exception as e:
+            st.error(f"Could not build HFCS comparison charts: {str(e)}")
 
 except Exception as e:
     st.error(f"Error loading H5 file: {str(e)}")

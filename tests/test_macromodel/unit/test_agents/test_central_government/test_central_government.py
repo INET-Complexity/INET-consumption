@@ -79,6 +79,17 @@ class TestCentralGovernment:
             == 0.03
         )
 
+    def test__current_policy_rate_debt_interest_ignores_stale_parameters(self):
+        rule = CurrentPolicyRateDebtInterest(average_maturity_years=9.0)
+        assert (
+            rule.compute_interest_rate(
+                current_policy_rate=0.03,
+                previous_debt_interest_rate=0.01,
+                time_unit=3,
+            )
+            == 0.03
+        )
+
     def test__smoothed_policy_rate_debt_interest_smooths_policy_rate(self):
         rule = SmoothedPolicyRateDebtInterest(smoothing=0.9)
         assert (

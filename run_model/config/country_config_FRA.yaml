@@ -350,11 +350,11 @@ FRA:
   government_entities:
     functions:
       consumption:
-        name: AutoregressiveGovernmentConsumptionSetter
+        name: ExpectedGrowthGovernmentConsumptionSetter
         path_name: consumption
         parameters:
           consistency: 1.0
-          sectoral_weights: previous_desired
+          sectoral_weights: initial_fixed
 
   central_government:
     functions:
@@ -367,6 +367,12 @@ FRA:
         path_name: social_housing
         parameters:
           rent_as_fraction_of_unemployment_rate: 0.25
+      debt_interest:
+        name: SmoothedPolicyRateDebtInterest
+        path_name: debt_interest
+        parameters:
+          average_maturity_years: 9.0
+
 
   central_bank:
     functions:

@@ -12,6 +12,316 @@ def _categorical_colors(n_colors):
     return [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, n_colors)]
 
 
+SECTOR_CODE_TO_NAME = {
+    "A": "Agriculture, forestry and fishing",
+    "B": "Mining and quarrying",
+    "C": "Manufacturing",
+    "D": "Electricity, gas, steam and air conditioning supply",
+    "E": "Water supply; sewerage, waste management",
+    "F": "Construction",
+    "G": "Wholesale and retail trade",
+    "H": "Transportation and storage",
+    "I": "Accommodation and food service activities",
+    "J": "Information and communication",
+    "K": "Financial and insurance activities",
+    "L": "Real estate activities",
+    "M": "Professional, scientific and technical activities",
+    "N": "Administrative and support service activities",
+    "O": "Public administration and defence",
+    "P": "Education",
+    "Q": "Human health and social work activities",
+    "R": "Arts, entertainment, recreation and other services",
+    "R_S": "Arts, entertainment, recreation and other services",
+}
+
+
+def _print_sector_code_names(sector_codes):
+    rows = []
+    for sector_code in sector_codes:
+        sector_code = str(sector_code)
+        rows.append(f"{sector_code}: {SECTOR_CODE_TO_NAME.get(sector_code, sector_code)}")
+    print("Sector codes:")
+    print("\n".join(rows))
+
+
+def _sectoral_prices_from_model(model, country_code):
+    country = model.countries[country_code]
+    prices = np.asarray(country.economy.ts.historic("good_prices"), dtype=float)
+    sector_names = list(country.firms.industries)
+    if prices.ndim != 2:
+        raise ValueError("Sectoral prices must be a 2D time x sector array.")
+    if len(sector_names) != prices.shape[1]:
+        sector_names = [f"sector {idx}" for idx in range(prices.shape[1])]
+    return pd.DataFrame(prices, columns=sector_names)
+
+
+def _sectoral_prices_to_frame(sectoral_prices, model=None, country_code=None, sector_names=None):
+    if model is not None:
+        if country_code is None:
+            raise ValueError("country_code is required when model is provided.")
+        return _sectoral_prices_from_model(model, country_code)
+
+    if isinstance(sectoral_prices, pd.DataFrame):
+        return sectoral_prices.copy()
+
+    if sectoral_prices is None:
+        raise ValueError("Provide either model and country_code or sectoral_prices.")
+
+    prices = np.asarray(sectoral_prices, dtype=float)
+    if prices.ndim != 2:
+        raise ValueError("sectoral_prices must be a 2D time x sector array.")
+
+    if sector_names is None:
+        sector_names = [f"sector {idx}" for idx in range(prices.shape[1])]
+    if len(sector_names) != prices.shape[1]:
+        raise ValueError("sector_names length must match the number of price sectors.")
+    return pd.DataFrame(prices, columns=sector_names)
+
+
+def _sum_to_sector_panel(values):
+    values = np.asarray(values, dtype=float)
+    if values.ndim < 2:
+        raise ValueError("Sectoral transaction data must have time and sector dimensions.")
+    if values.ndim == 2:
+        return values
+    return values.sum(axis=tuple(range(1, values.ndim - 1)))
+
+
+def _sectoral_ppi_weights_from_model(model, country_code, index, columns):
+    country = model.countries[country_code]
+    transaction_panels = [
+        _sum_to_sector_panel(country.firms.ts.historic("real_amount_bought")),
+        _sum_to_sector_panel(country.households.ts.historic("real_amount_bought")),
+        _sum_to_sector_panel(country.government_entities.ts.historic("real_amount_bought")),
+    ]
+    real_quantities = sum(transaction_panels)
+    n_periods = min(len(index), real_quantities.shape[0])
+    n_sectors = min(len(columns), real_quantities.shape[1])
+
+    weights = np.full((len(index), len(columns)), np.nan)
+    quantities = real_quantities[:n_periods, :n_sectors]
+    total_quantities = quantities.sum(axis=1)
+    valid = total_quantities != 0.0
+    weights[:n_periods, :n_sectors][valid] = quantities[valid] / total_quantities[valid, None]
+    return pd.DataFrame(weights, index=index, columns=columns)
+
+
+def _sectoral_weights_to_frame(sector_weights, prices, model=None, country_code=None):
+    if model is not None:
+        return _sectoral_ppi_weights_from_model(
+            model=model,
+            country_code=country_code,
+            index=prices.index,
+            columns=prices.columns,
+        )
+
+    if sector_weights is None:
+        equal_weights = np.full(prices.shape, 1.0 / prices.shape[1])
+        return pd.DataFrame(equal_weights, index=prices.index, columns=prices.columns)
+
+    if isinstance(sector_weights, pd.DataFrame):
+        weights = sector_weights.reindex(index=prices.index, columns=prices.columns)
+    else:
+        weights = np.asarray(sector_weights, dtype=float)
+        if weights.ndim == 1:
+            if len(weights) != prices.shape[1]:
+                raise ValueError("1D sector_weights length must match the number of price sectors.")
+            weights = np.tile(weights, (len(prices.index), 1))
+        if weights.shape != prices.shape:
+            raise ValueError("sector_weights must match sectoral_prices shape, or be one weight per sector.")
+        weights = pd.DataFrame(weights, index=prices.index, columns=prices.columns)
+
+    weight_totals = weights.sum(axis=1).replace(0.0, np.nan)
+    return weights.divide(weight_totals, axis="index")
+
+
+def _build_sectoral_price_figure(
+    values,
+    kind,
+    title,
+    value_title,
+    color_scale,
+    line_width,
+    line_opacity,
+    height,
+    width,
+):
+    if kind == "heatmap":
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=values.T.values,
+                x=values.index,
+                y=values.columns,
+                colorscale=color_scale,
+                colorbar={"title": value_title},
+                hovertemplate="time=%{x}<br>sector=%{y}<br>" + value_title + "=%{z:.4g}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            height=height,
+            width=width,
+            title_text=title,
+            template="plotly_white",
+            xaxis_title="time",
+            yaxis_title="sector",
+        )
+        return fig
+
+    if kind == "lines":
+        colors = _categorical_colors(len(values.columns))
+        fig = go.Figure()
+        for color, column in zip(colors, values.columns):
+            fig.add_trace(
+                go.Scatter(
+                    x=values.index,
+                    y=values[column],
+                    mode="lines",
+                    name=str(column),
+                    line={"width": line_width, "color": color},
+                    opacity=line_opacity,
+                )
+            )
+        fig.update_layout(
+            height=height,
+            width=width,
+            title_text=title,
+            template="plotly_white",
+            xaxis_title="time",
+            yaxis_title=value_title,
+        )
+        return fig
+
+    raise ValueError("kind must be 'heatmap' or 'lines'.")
+
+
+def plot_sectoral_prices_over_time(
+    model=None,
+    country_code=None,
+    sectoral_prices=None,
+    sector_names=None,
+    sector_weights=None,
+    sectors=None,
+    normalize=True,
+    kind="heatmap",
+    title=None,
+    contribution_title=None,
+    color_scale="Viridis",
+    line_width=1.8,
+    line_opacity=0.85,
+    height=520,
+    width=900,
+    print_sector_names=True,
+    show=True,
+):
+    """Plot the evolution of sectoral goods prices over simulation time.
+
+    Parameters
+    ----------
+    model, country_code:
+        Optional simulation model and country code. When supplied, prices are
+        read from ``model.countries[country_code].economy.ts.good_prices`` and
+        sector labels from ``model.countries[country_code].firms.industries``.
+    sectoral_prices:
+        Optional dataframe or 2D array with shape ``time x sector``. Used when
+        plotting extracted price panels instead of a live model.
+    sector_weights:
+        Optional sector weights for extracted price panels. With a live model,
+        PPI-consistent weights are computed from real transaction quantities:
+        firms, households, and government real amounts bought by sector.
+    sectors:
+        Optional subset of sector labels or integer positions to plot.
+    normalize:
+        If True, plot each sector as an index relative to its initial price.
+    kind:
+        ``"heatmap"`` for a compact time-sector view, or ``"lines"`` for one
+        trajectory per sector.
+    print_sector_names:
+        If True, print the sector code-to-name mapping for plotted sectors.
+
+    Returns
+    -------
+    tuple[plotly.graph_objects.Figure, plotly.graph_objects.Figure] | None
+        Returns ``(price_fig, contribution_fig)`` when ``show=False``. Displays
+        both figures and returns ``None`` when ``show=True`` to avoid duplicate
+        notebook rendering.
+    """
+    prices = _sectoral_prices_to_frame(
+        sectoral_prices=sectoral_prices,
+        model=model,
+        country_code=country_code,
+        sector_names=sector_names,
+    )
+    weights = _sectoral_weights_to_frame(
+        sector_weights=sector_weights,
+        prices=prices,
+        model=model,
+        country_code=country_code,
+    )
+
+    if sectors is not None:
+        selected_columns = []
+        for sector in sectors:
+            if isinstance(sector, (int, np.integer)):
+                selected_columns.append(prices.columns[int(sector)])
+            else:
+                selected_columns.append(sector)
+        missing = [sector for sector in selected_columns if sector not in prices.columns]
+        if missing:
+            raise ValueError(f"Requested sectors are not present: {missing}")
+        prices = prices[selected_columns]
+        weights = weights[selected_columns]
+
+    if prices.empty:
+        raise ValueError("No sectoral price data to plot.")
+
+    if print_sector_names:
+        _print_sector_code_names(prices.columns)
+
+    price_title = "price index (initial=1)" if normalize else "price"
+    if normalize:
+        initial_prices = prices.iloc[0].replace(0.0, np.nan)
+        prices = prices.divide(initial_prices, axis="columns")
+
+    ppi_contributions = prices * weights
+    contribution_value_title = f"PPI contribution to {price_title}"
+
+    if title is None:
+        prefix = f"{country_code} " if country_code is not None else ""
+        title = f"{prefix}sectoral prices over time"
+    if contribution_title is None:
+        prefix = f"{country_code} " if country_code is not None else ""
+        contribution_title = f"{prefix}sectoral price contributions to PPI"
+
+    price_fig = _build_sectoral_price_figure(
+        values=prices,
+        kind=kind,
+        title=title,
+        value_title=price_title,
+        color_scale=color_scale,
+        line_width=line_width,
+        line_opacity=line_opacity,
+        height=height,
+        width=width,
+    )
+    contribution_fig = _build_sectoral_price_figure(
+        values=ppi_contributions,
+        kind=kind,
+        title=contribution_title,
+        value_title=contribution_value_title,
+        color_scale=color_scale,
+        line_width=line_width,
+        line_opacity=line_opacity,
+        height=height,
+        width=width,
+    )
+
+    if show:
+        price_fig.show()
+        contribution_fig.show()
+        return None
+    return price_fig, contribution_fig
+
+
 def plot_output(
     df,
     no_rows,

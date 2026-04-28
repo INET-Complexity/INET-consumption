@@ -40,7 +40,7 @@ class SocialBenefitsSetter(ABC):
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -56,7 +56,7 @@ class SocialBenefitsSetter(ABC):
 
         Args:
             prev_unemployment_benefits (float): Previous period's benefit level
-            historic_ppi_inflation (np.ndarray): Historical inflation rates
+            benefit_indexation_inflation (np.ndarray): Inflation rates used for benefit indexation
             current_estimated_growth (float): Expected economic growth rate
             current_unemployment_rate (float): Current unemployment rate
             model (Optional[Any]): Statistical model for benefit prediction
@@ -70,7 +70,7 @@ class SocialBenefitsSetter(ABC):
     def compute_regular_transfer_to_households(
         self,
         prev_regular_transfer_to_households: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -86,7 +86,7 @@ class SocialBenefitsSetter(ABC):
 
         Args:
             prev_regular_transfer_to_households (float): Previous transfer level
-            historic_ppi_inflation (np.ndarray): Historical inflation rates
+            benefit_indexation_inflation (np.ndarray): Inflation rates used for benefit indexation
             current_estimated_growth (float): Expected economic growth rate
             current_unemployment_rate (float): Current unemployment rate
             model (Optional[Any]): Statistical model for transfer prediction
@@ -114,7 +114,7 @@ class ConstantSocialBenefitsSetter(SocialBenefitsSetter):
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -134,7 +134,7 @@ class ConstantSocialBenefitsSetter(SocialBenefitsSetter):
     def compute_regular_transfer_to_households(
         self,
         prev_regular_transfer_to_households: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -170,7 +170,7 @@ class GrowthSocialBenefitsSetter(SocialBenefitsSetter):
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -191,7 +191,7 @@ class GrowthSocialBenefitsSetter(SocialBenefitsSetter):
     def compute_regular_transfer_to_households(
         self,
         prev_regular_transfer_to_households: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -227,17 +227,23 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
 
     @staticmethod
     def _build_prediction_features(
-        historic_ppi_inflation: np.ndarray, current_unemployment_rate: float
+        benefit_indexation_inflation: np.ndarray, current_unemployment_rate: float
     ) -> pd.DataFrame:
+        """Build benefit-model features.
+
+        ``Data CPI Inflation`` is the feature name used by the fitted benefit
+        models. Runtime callers should supply CPI-based benefit-indexation
+        inflation, not producer-price inflation.
+        """
         return pd.DataFrame(
-            [[historic_ppi_inflation[-1], current_unemployment_rate]],
+            [[benefit_indexation_inflation[-1], current_unemployment_rate]],
             columns=["Data CPI Inflation", "Unemployment Rate"],
         )
 
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -256,14 +262,14 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         if model is None:
             return prev_unemployment_benefits
         growth_ratio = model.predict(
-            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
+            self._build_prediction_features(benefit_indexation_inflation, current_unemployment_rate)
         )[0]
         return max(0.0, prev_unemployment_benefits * growth_ratio)
 
     def compute_regular_transfer_to_households(
         self,
         prev_regular_transfer_to_households: float,
-        historic_ppi_inflation: np.ndarray,
+        benefit_indexation_inflation: np.ndarray,
         current_estimated_growth: float,
         current_unemployment_rate: float,
         model: Optional[Any],
@@ -282,6 +288,6 @@ class DefaultSocialBenefitsSetter(SocialBenefitsSetter):
         if model is None:
             return prev_regular_transfer_to_households
         growth_ratio = model.predict(
-            self._build_prediction_features(historic_ppi_inflation, current_unemployment_rate)
+            self._build_prediction_features(benefit_indexation_inflation, current_unemployment_rate)
         )[0]
         return max(0.0, prev_regular_transfer_to_households * growth_ratio)

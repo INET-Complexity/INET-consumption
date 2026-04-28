@@ -163,9 +163,9 @@ class CentralGovernment(Agent):
 
     def update_benefits(
         self,
-        historic_ppi_inflation: list[np.ndarray],
-        exogenous_ppi_inflation: np.ndarray,
-        current_estimated_ppi_inflation: float,
+        historic_benefit_indexation_inflation: list[np.ndarray],
+        exogenous_benefit_indexation_inflation: np.ndarray,
+        current_estimated_benefit_indexation_inflation: float,
         current_unemployment_rate: float,
         current_estimated_growth: float,
     ) -> None:
@@ -178,17 +178,17 @@ class CentralGovernment(Agent):
         - Economic growth estimates
 
         Args:
-            historic_ppi_inflation (list[np.ndarray]): Past inflation rates
-            exogenous_ppi_inflation (np.ndarray): External inflation factors
-            current_estimated_ppi_inflation (float): Current inflation estimate
+            historic_benefit_indexation_inflation (list[np.ndarray]): Past CPI-based benefit indexation rates
+            exogenous_benefit_indexation_inflation (np.ndarray): External CPI-based indexation rates
+            current_estimated_benefit_indexation_inflation (float): Current CPI-based inflation estimate
             current_unemployment_rate (float): Current unemployment rate
             current_estimated_growth (float): Estimated economic growth
         """
-        all_ppi_inflation = np.concatenate(
+        benefit_indexation_inflation = np.concatenate(
             (
-                exogenous_ppi_inflation,
-                np.array(historic_ppi_inflation).flatten(),
-                [current_estimated_ppi_inflation],
+                exogenous_benefit_indexation_inflation,
+                np.array(historic_benefit_indexation_inflation).flatten(),
+                [current_estimated_benefit_indexation_inflation],
             )
         )
 
@@ -197,7 +197,7 @@ class CentralGovernment(Agent):
             [
                 self.functions["social_benefits"].compute_unemployment_benefits(
                     prev_unemployment_benefits=self.ts.current("unemployment_benefits_by_individual")[0],
-                    historic_ppi_inflation=all_ppi_inflation,
+                    benefit_indexation_inflation=benefit_indexation_inflation,
                     current_estimated_growth=current_estimated_growth,
                     current_unemployment_rate=current_unemployment_rate,
                     model=self.states["unemployment_benefits_model"],
@@ -210,7 +210,7 @@ class CentralGovernment(Agent):
             [
                 self.functions["social_benefits"].compute_regular_transfer_to_households(
                     prev_regular_transfer_to_households=self.ts.current("total_other_benefits")[0],
-                    historic_ppi_inflation=all_ppi_inflation,
+                    benefit_indexation_inflation=benefit_indexation_inflation,
                     current_estimated_growth=current_estimated_growth,
                     current_unemployment_rate=current_unemployment_rate,
                     model=self.states["other_benefits_model"],
@@ -398,6 +398,7 @@ class CentralGovernment(Agent):
         Returns:
             np.ndarray: Government deficit (positive = deficit)
         """
+        # Benefit stocks are stored in real units; fiscal expenditure is nominalised once here.
         total_unemployment_benefits = current_cpi * (
             np.sum(current_ind_activity == ActivityStatus.UNEMPLOYED)
             * self.ts.current("unemployment_benefits_by_individual")[0]

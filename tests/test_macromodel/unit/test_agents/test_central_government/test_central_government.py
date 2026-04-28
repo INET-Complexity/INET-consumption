@@ -4,9 +4,20 @@ from macromodel.agents.central_government.func.debt_interest import (
     CurrentPolicyRateDebtInterest,
     SmoothedPolicyRateDebtInterest,
 )
+from macromodel.agents.central_government.func.social_benefits import DefaultSocialBenefitsSetter
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations import CentralGovernmentConfiguration
 from macromodel.util.function_mapping import functions_from_model
+
+
+class RecordingBenefitModel:
+    def __init__(self, growth_ratio):
+        self.growth_ratio = growth_ratio
+        self.seen_features = []
+
+    def predict(self, features):
+        self.seen_features.append(features)
+        return np.array([self.growth_ratio])
 
 
 class TestCentralGovernment:
@@ -45,6 +56,58 @@ class TestCentralGovernment:
             ),
             np.array([0.0, benefits[0]]),
         )
+
+    def test__update_benefits_uses_cpi_based_benefit_indexation_inflation(self, test_central_government):
+        unemployment_model = RecordingBenefitModel(growth_ratio=1.1)
+        transfers_model = RecordingBenefitModel(growth_ratio=1.2)
+        test_central_government.functions["social_benefits"] = DefaultSocialBenefitsSetter()
+        test_central_government.states["unemployment_benefits_model"] = unemployment_model
+        test_central_government.states["other_benefits_model"] = transfers_model
+
+        prev_unemployment_benefits = test_central_government.ts.current("unemployment_benefits_by_individual")[0]
+        prev_other_benefits = test_central_government.ts.current("total_other_benefits")[0]
+
+        test_central_government.update_benefits(
+            historic_benefit_indexation_inflation=[np.array([0.10, 0.20])],
+            exogenous_benefit_indexation_inflation=np.array([0.01, 0.02]),
+            current_estimated_benefit_indexation_inflation=0.03,
+            current_unemployment_rate=0.25,
+            current_estimated_growth=0.0,
+        )
+
+        assert np.isclose(
+            test_central_government.ts.current("unemployment_benefits_by_individual")[0],
+            1.1 * prev_unemployment_benefits,
+        )
+        assert np.isclose(test_central_government.ts.current("total_other_benefits")[0], 1.2 * prev_other_benefits)
+        assert unemployment_model.seen_features[-1]["Data CPI Inflation"].iloc[0] == 0.03
+        assert transfers_model.seen_features[-1]["Data CPI Inflation"].iloc[0] == 0.03
+
+    def test__compute_deficit_nominalises_real_benefit_stocks_once(self, test_central_government):
+        current_cpi = 2.0
+        current_ind_activity = np.array(
+            [
+                ActivityStatus.UNEMPLOYED,
+                ActivityStatus.UNEMPLOYED,
+                ActivityStatus.EMPLOYED,
+            ]
+        )
+        unemployment_benefit = test_central_government.ts.current("unemployment_benefits_by_individual")[0]
+        other_benefits = test_central_government.ts.current("total_other_benefits")[0]
+        current_government_spending = np.array([10.0, 20.0])
+        interest_payments = 5.0
+        revenue = test_central_government.ts.current("revenue")[0]
+
+        deficit = test_central_government.compute_deficit(
+            current_ind_activity=current_ind_activity,
+            current_cpi=current_cpi,
+            current_government_nominal_amount_spent=current_government_spending,
+            interest_payments_on_debt=interest_payments,
+        )
+
+        expected_benefits = current_cpi * (2 * unemployment_benefit + other_benefits)
+        expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
+        assert np.isclose(deficit[0], expected_deficit)
 
     # def test__compute_taxes_revenue_deficit_debt(self, test_central_government):
     #     test_central_government.compute_taxes(

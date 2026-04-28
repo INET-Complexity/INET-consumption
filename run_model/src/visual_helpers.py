@@ -2,7 +2,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-
 from src.helpers import unpack_cell
 
 
@@ -320,6 +319,145 @@ def plot_sectoral_prices_over_time(
         contribution_fig.show()
         return None
     return price_fig, contribution_fig
+
+
+def _read_h5_1d(h5_file, path):
+    values = np.asarray(h5_file[path], dtype=float)
+    return values.reshape(values.shape[0], -1)[:, 0]
+
+
+def _timeseries_1d(values):
+    return np.asarray([unpack_cell(value) for value in values], dtype=float)
+
+
+def build_ppi_comparison_df(model=None, country_code=None, h5_path=None, time_unit=None):
+    """Build a dataframe comparing model, fixed Laspeyres, and chained Laspeyres PPI.
+
+    Supply either a live ``model`` plus ``country_code`` or an ``h5_path`` plus
+    ``country_code``. The model PPI YoY comparison is computed from the PPI level
+    using ``12 // time_unit`` periods.
+    """
+    if country_code is None:
+        raise ValueError("country_code is required.")
+    if (model is None) == (h5_path is None):
+        raise ValueError("Provide exactly one of model or h5_path.")
+
+    if model is not None:
+        economy_ts = model.countries[country_code].economy.ts.__dict__["dicts"]
+        if time_unit is None:
+            time_unit = model.timestep.increment
+        data = {
+            "model_ppi": _timeseries_1d(economy_ts["ppi"]),
+            "fixed_ppi": _timeseries_1d(economy_ts["ppi_fixed"]),
+            "chained_ppi": _timeseries_1d(economy_ts["ppi_chained"]),
+            "model_pop": _timeseries_1d(economy_ts["ppi_inflation"]),
+            "fixed_pop": _timeseries_1d(economy_ts["ppi_fixed_pop_change"]),
+            "chained_pop": _timeseries_1d(economy_ts["ppi_chained_pop_change"]),
+            "fixed_yoy": _timeseries_1d(economy_ts["ppi_fixed_yoy_change"]),
+            "chained_yoy": _timeseries_1d(economy_ts["ppi_chained_yoy_change"]),
+        }
+    else:
+        import h5py
+
+        base = f"{country_code}/economy"
+        with h5py.File(h5_path, "r") as h5_file:
+            data = {
+                "model_ppi": _read_h5_1d(h5_file, f"{base}/ppi"),
+                "fixed_ppi": _read_h5_1d(h5_file, f"{base}/ppi_fixed"),
+                "chained_ppi": _read_h5_1d(h5_file, f"{base}/ppi_chained"),
+                "model_pop": _read_h5_1d(h5_file, f"{base}/ppi_inflation"),
+                "fixed_pop": _read_h5_1d(h5_file, f"{base}/ppi_fixed_pop_change"),
+                "chained_pop": _read_h5_1d(h5_file, f"{base}/ppi_chained_pop_change"),
+                "fixed_yoy": _read_h5_1d(h5_file, f"{base}/ppi_fixed_yoy_change"),
+                "chained_yoy": _read_h5_1d(h5_file, f"{base}/ppi_chained_yoy_change"),
+            }
+        if time_unit is None:
+            time_unit = 3
+
+    if time_unit <= 0 or 12 % time_unit != 0:
+        raise ValueError("time_unit must be a positive divisor of 12.")
+
+    target_len = min(len(values) for values in data.values())
+    out = pd.DataFrame({key: values[:target_len] for key, values in data.items()})
+    out.index.name = "t"
+
+    periods_per_year = 12 // time_unit
+    out["model_yoy"] = out["model_ppi"] / out["model_ppi"].shift(periods_per_year) - 1.0
+    out["fixed_minus_model"] = out["fixed_ppi"] - out["model_ppi"]
+    out["chained_minus_model"] = out["chained_ppi"] - out["model_ppi"]
+    out["chained_minus_fixed"] = out["chained_ppi"] - out["fixed_ppi"]
+    out["fixed_pop_minus_model_pop"] = out["fixed_pop"] - out["model_pop"]
+    out["chained_pop_minus_model_pop"] = out["chained_pop"] - out["model_pop"]
+
+    out.attrs["time_unit_months"] = time_unit
+    out.attrs["periods_per_year"] = periods_per_year
+    return out
+
+
+def summarize_ppi_comparison(ppi_comparison_df):
+    """Return descriptive statistics for PPI level and change comparisons."""
+    columns = [
+        "model_ppi",
+        "fixed_ppi",
+        "chained_ppi",
+        "model_pop",
+        "fixed_pop",
+        "chained_pop",
+        "model_yoy",
+        "fixed_yoy",
+        "chained_yoy",
+        "fixed_minus_model",
+        "chained_minus_model",
+        "chained_minus_fixed",
+    ]
+    return ppi_comparison_df[columns].describe().T
+
+
+def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, width=1000, show=True):
+    """Plot model PPI against fixed and chained Laspeyres PPI."""
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=["PPI levels", "Period-on-period changes", "Year-on-year changes"],
+        vertical_spacing=0.08,
+    )
+
+    trace_groups = [
+        ("model_ppi", "model_ppi", 1),
+        ("fixed_ppi", "fixed_ppi", 1),
+        ("chained_ppi", "chained_ppi", 1),
+        ("model_pop", "model_pop", 2),
+        ("fixed_pop", "fixed_pop", 2),
+        ("chained_pop", "chained_pop", 2),
+        ("model_yoy", "model_yoy", 3),
+        ("fixed_yoy", "fixed_yoy", 3),
+        ("chained_yoy", "chained_yoy", 3),
+    ]
+    for column, name, row in trace_groups:
+        fig.add_trace(
+            go.Scatter(
+                x=ppi_comparison_df.index,
+                y=ppi_comparison_df[column],
+                mode="lines",
+                name=name,
+            ),
+            row=row,
+            col=1,
+        )
+
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=2, col=1)
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=3, col=1)
+    fig.update_yaxes(title_text="index", row=1, col=1)
+    fig.update_yaxes(title_text="rate", row=2, col=1)
+    fig.update_yaxes(title_text="rate", row=3, col=1)
+    fig.update_xaxes(title_text="t", row=3, col=1)
+    fig.update_layout(height=height, width=width, title_text=title, template="plotly_white")
+
+    if show:
+        fig.show()
+        return None
+    return fig
 
 
 def plot_output(
@@ -698,6 +836,7 @@ def build_macro_output_df(model, country_code):
     shallow = model.shallow_df_dict()[country_code].copy()
     gdp_components = model.get_country_gdp_components_df(country_code).copy()
     periods_per_year = 12 / model.timestep.increment
+    yoy_periods = int(12 // model.timestep.increment)
 
     out = pd.DataFrame(index=shallow.index)
 
@@ -844,6 +983,12 @@ def build_macro_output_df(model, country_code):
             ppi = build_column("ppi")
             if gdp is not None and ppi is not None:
                 out[name] = gdp / ppi
+                return out[name]
+            return None
+        if name == "ppi yoy change":
+            ppi = build_column("ppi")
+            if ppi is not None:
+                out[name] = ppi / ppi.shift(yoy_periods) - 1.0
                 return out[name]
             return None
         if name == "expected gdp growth":
@@ -993,7 +1138,17 @@ def build_macro_output_df(model, country_code):
         if bank_series is not None and bank_column not in out.columns:
             out[bank_column] = bank_series
     economy_ts_dict = model.countries[country_code].economy.ts.__dict__["dicts"]
-    for economy_column in ["estimated_growth", "cpi_yoy_inflation", "output_gap"]:
+    for economy_column in [
+        "estimated_growth",
+        "cpi_yoy_inflation",
+        "output_gap",
+        "ppi_fixed",
+        "ppi_fixed_pop_change",
+        "ppi_fixed_yoy_change",
+        "ppi_chained",
+        "ppi_chained_pop_change",
+        "ppi_chained_yoy_change",
+    ]:
         economy_series = economy_ts_dict.get(economy_column)
         if economy_series is not None and economy_column not in out.columns:
             out[economy_column] = pd.Series([unpack_cell(x) for x in economy_series], index=out.index)
@@ -1017,6 +1172,13 @@ def build_macro_output_df(model, country_code):
         "cpi",
         "cpi yoy inflation",
         "ppi",
+        "ppi yoy change",
+        "ppi_fixed",
+        "ppi_fixed_pop_change",
+        "ppi_fixed_yoy_change",
+        "ppi_chained",
+        "ppi_chained_pop_change",
+        "ppi_chained_yoy_change",
         "output gap",
         "unemployment rate",
         "central bank policy rate",

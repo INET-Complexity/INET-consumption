@@ -562,9 +562,9 @@ class Country:
 
         # The central government updates unemployment benefits paid to individuals and social transfers to households
         self.central_government.update_benefits(
-            historic_ppi_inflation=self.economy.ts.historic("ppi_inflation"),
-            exogenous_ppi_inflation=self.exogenous.inflation_before["PPI Inflation"].values,
-            current_estimated_ppi_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            historic_benefit_indexation_inflation=self.economy.ts.historic("cpi_inflation"),
+            exogenous_benefit_indexation_inflation=self.exogenous.inflation_before["CPI Inflation"].values,
+            current_estimated_benefit_indexation_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
             current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
             current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
         )

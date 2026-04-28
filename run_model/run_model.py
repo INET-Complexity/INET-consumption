@@ -36,7 +36,7 @@ GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "ConstantGrowthGovernmentConsumptionSetter",
     "ExogenousGovernmentConsumptionSetter",
 )
-GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial")
+GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial", "initial_price_normalized", "initial_fixed")
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:

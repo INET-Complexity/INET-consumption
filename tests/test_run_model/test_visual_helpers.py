@@ -5,13 +5,19 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 from pandas.errors import PerformanceWarning
 
 RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
-from src.visual_helpers import build_macro_output_df, plot_cpi_comparison, plot_ppi_comparison  # noqa: E402
+from src.visual_helpers import (  # noqa: E402
+    build_cpi_comparison_df,
+    build_macro_output_df,
+    plot_cpi_comparison,
+    plot_ppi_comparison,
+)
 
 
 def _ts(dicts):
@@ -49,6 +55,9 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "household_insolvency_rate": [0.01, 0.011, 0.012],
         "total_growth": [0.0, 0.02, 0.03],
         "estimated_growth": [0.01, 0.02, 0.03],
+        "cpi_transaction": [1.0, 1.01, 1.02],
+        "cpi_transaction_pop_change": [0.0, 0.01, 0.01],
+        "cpi_transaction_yoy_change": [0.0, 0.02, 0.03],
         "sectoral_growth": [np.array([0.01, 0.02]), np.array([0.03, 0.04]), np.array([0.05, 0.06])],
         "real_gross_output": [90.0, 95.0, 100.0],
         "potential_output": [92.0, 96.0, 101.0],
@@ -117,6 +126,9 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "household_insolvency_rate",
         "total_growth",
         "estimated_growth",
+        "cpi_transaction",
+        "cpi_transaction_pop_change",
+        "cpi_transaction_yoy_change",
         "sectoral_growth",
         "sectoral_growth_agriculture",
         "sectoral_growth_services",
@@ -152,13 +164,67 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output.columns.intersection(clutter_columns).empty
 
 
+def test_build_cpi_comparison_df_uses_explicit_cpi_series_names():
+    economy_ts = {
+        "cpi_transaction": [[1.0], [1.10], [1.21]],
+        "cpi_fixed_basket": [[1.0], [1.08], [1.17]],
+        "cpi_chained_basket": [[1.0], [1.09], [1.19]],
+        "cpi_transaction_pop_change": [[0.0], [0.10], [0.10]],
+        "cpi_fixed_basket_pop_change": [[0.0], [0.08], [0.0833]],
+        "cpi_chained_basket_pop_change": [[0.0], [0.09], [0.0917]],
+        "cpi_transaction_yoy_change": [[0.0], [0.10], [0.21]],
+        "cpi_fixed_basket_yoy_change": [[0.0], [0.08], [0.17]],
+        "cpi_chained_basket_yoy_change": [[0.0], [0.09], [0.19]],
+    }
+    model = SimpleNamespace(
+        timestep=SimpleNamespace(increment=3),
+        countries={"FRA": SimpleNamespace(economy=SimpleNamespace(ts=_ts(economy_ts)))},
+    )
+
+    output = build_cpi_comparison_df(model=model, country_code="FRA")
+
+    expected_columns = [
+        "cpi_transaction",
+        "cpi_fixed_basket",
+        "cpi_chained_basket",
+        "cpi_transaction_pop_change",
+        "cpi_fixed_basket_pop_change",
+        "cpi_chained_basket_pop_change",
+        "cpi_transaction_yoy_change",
+        "cpi_fixed_basket_yoy_change",
+        "cpi_chained_basket_yoy_change",
+        "cpi_fixed_basket_minus_transaction",
+        "cpi_chained_basket_minus_transaction",
+        "cpi_chained_basket_minus_fixed_basket",
+        "cpi_fixed_basket_pop_change_minus_transaction",
+        "cpi_chained_basket_pop_change_minus_transaction",
+    ]
+    assert output.columns.tolist() == expected_columns
+    assert output["cpi_fixed_basket_minus_transaction"].iloc[1] == pytest.approx(-0.02)
+    assert output["cpi_chained_basket_pop_change_minus_transaction"].iloc[2] == pytest.approx(-0.0083)
+
+
 def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():
     index = pd.RangeIndex(3, name="t")
     cpi_df = pd.DataFrame(
         {
-            "model_cpi": [1.0, 1.1, 1.2],
-            "fixed_cpi": [1.0, 1.08, 1.15],
-            "chained_cpi": [1.0, 1.09, 1.18],
+            "cpi_transaction": [1.0, 1.1, 1.2],
+            "cpi_fixed_basket": [1.0, 1.08, 1.15],
+            "cpi_chained_basket": [1.0, 1.09, 1.18],
+            "cpi_transaction_pop_change": [0.0, 0.1, 0.09],
+            "cpi_fixed_basket_pop_change": [0.0, 0.08, 0.07],
+            "cpi_chained_basket_pop_change": [0.0, 0.09, 0.08],
+            "cpi_transaction_yoy_change": [0.0, 0.1, 0.2],
+            "cpi_fixed_basket_yoy_change": [0.0, 0.08, 0.15],
+            "cpi_chained_basket_yoy_change": [0.0, 0.09, 0.18],
+        },
+        index=index,
+    )
+    ppi_df = pd.DataFrame(
+        {
+            "model_ppi": [1.0, 1.1, 1.2],
+            "fixed_ppi": [1.0, 1.08, 1.15],
+            "chained_ppi": [1.0, 1.09, 1.18],
             "model_pop": [0.0, 0.1, 0.09],
             "fixed_pop": [0.0, 0.08, 0.07],
             "chained_pop": [0.0, 0.09, 0.08],
@@ -168,25 +234,18 @@ def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():
         },
         index=index,
     )
-    ppi_df = cpi_df.rename(
-        columns={
-            "model_cpi": "model_ppi",
-            "fixed_cpi": "fixed_ppi",
-            "chained_cpi": "chained_ppi",
-        }
-    )
 
     cpi_fig = plot_cpi_comparison(cpi_df, show=False)
     ppi_fig = plot_ppi_comparison(ppi_df, show=False)
 
     assert [trace.name for trace in cpi_fig.data] == [
-        "Level: model CPI",
+        "Level: transaction CPI",
         "Level: fixed-basket CPI",
         "Level: chained-basket CPI",
-        "PoP: model CPI",
+        "PoP: transaction CPI",
         "PoP: fixed-basket CPI",
         "PoP: chained-basket CPI",
-        "YoY: model CPI",
+        "YoY: transaction CPI",
         "YoY: fixed-basket CPI",
         "YoY: chained-basket CPI",
     ]

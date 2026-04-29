@@ -56,6 +56,12 @@ The CPI source can be `transaction_cpi`, `fixed_basket_cpi`, or
 price levels, period inflation, and annual inflation. The default is
 `fixed_basket_cpi`.
 
+Economy CPI time-series names include the source explicitly:
+`cpi_transaction`, `cpi_fixed_basket`, `cpi_chained_basket`,
+`cpi_transaction_pop_change`, `cpi_fixed_basket_pop_change`,
+`cpi_chained_basket_pop_change`, `cpi_transaction_yoy_change`,
+`cpi_fixed_basket_yoy_change`, and `cpi_chained_basket_yoy_change`.
+
 ### Sentiment
 
 ::: macromodel.economy.func.sentiment.SentimentSetter

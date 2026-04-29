@@ -485,7 +485,7 @@ def build_macro_output_df(model, country_code):
         "exports": ("Exports", "+Exports"),
         "imports": ("Imports", "-Imports"),
         "gfcf": ("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF"),
-        "cpi": ("CPI",),
+        "cpi_transaction": ("CPI Transaction", "CPI"),
         "ppi": ("PPI",),
         "consumption_expansion_loan_debt": ("Consumption Expansion Loan Debt",),
         "mortgage_debt": ("Mortgage Debt",),
@@ -619,7 +619,9 @@ def build_macro_output_df(model, country_code):
         "household_insolvency_rate",
         "total_growth",
         "estimated_growth",
-        "cpi_yoy_inflation",
+        "cpi_transaction",
+        "cpi_transaction_pop_change",
+        "cpi_transaction_yoy_change",
         "real_gross_output",
         "potential_output",
         "output_gap",
@@ -631,12 +633,12 @@ def build_macro_output_df(model, country_code):
         "total_real_rent_rec",
         "npl_firm_loans",
         "npl_hh_cons_loans",
-        "cpi_fixed",
-        "cpi_fixed_pop_change",
-        "cpi_fixed_yoy_change",
-        "cpi_chained",
-        "cpi_chained_pop_change",
-        "cpi_chained_yoy_change",
+        "cpi_fixed_basket",
+        "cpi_fixed_basket_pop_change",
+        "cpi_fixed_basket_yoy_change",
+        "cpi_chained_basket",
+        "cpi_chained_basket_pop_change",
+        "cpi_chained_basket_yoy_change",
         "ppi_fixed",
         "ppi_fixed_pop_change",
         "ppi_fixed_yoy_change",
@@ -682,7 +684,7 @@ def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_un
 
     Supply either a live ``model`` plus ``country_code`` or an ``h5_path`` plus
     ``country_code``. The model CPI YoY comparison uses the recorded
-    ``cpi_yoy_inflation`` series.
+    ``cpi_transaction_yoy_change`` series.
     """
     if country_code is None:
         raise ValueError("country_code is required.")
@@ -694,15 +696,15 @@ def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_un
         if time_unit is None:
             time_unit = model.timestep.increment
         data = {
-            "model_cpi": _timeseries_1d(economy_ts["cpi"]),
-            "fixed_cpi": _timeseries_1d(economy_ts["cpi_fixed"]),
-            "chained_cpi": _timeseries_1d(economy_ts["cpi_chained"]),
-            "model_pop": _timeseries_1d(economy_ts["cpi_inflation"]),
-            "fixed_pop": _timeseries_1d(economy_ts["cpi_fixed_pop_change"]),
-            "chained_pop": _timeseries_1d(economy_ts["cpi_chained_pop_change"]),
-            "model_yoy": _timeseries_1d(economy_ts["cpi_yoy_inflation"]),
-            "fixed_yoy": _timeseries_1d(economy_ts["cpi_fixed_yoy_change"]),
-            "chained_yoy": _timeseries_1d(economy_ts["cpi_chained_yoy_change"]),
+            "cpi_transaction": _timeseries_1d(economy_ts["cpi_transaction"]),
+            "cpi_fixed_basket": _timeseries_1d(economy_ts["cpi_fixed_basket"]),
+            "cpi_chained_basket": _timeseries_1d(economy_ts["cpi_chained_basket"]),
+            "cpi_transaction_pop_change": _timeseries_1d(economy_ts["cpi_transaction_pop_change"]),
+            "cpi_fixed_basket_pop_change": _timeseries_1d(economy_ts["cpi_fixed_basket_pop_change"]),
+            "cpi_chained_basket_pop_change": _timeseries_1d(economy_ts["cpi_chained_basket_pop_change"]),
+            "cpi_transaction_yoy_change": _timeseries_1d(economy_ts["cpi_transaction_yoy_change"]),
+            "cpi_fixed_basket_yoy_change": _timeseries_1d(economy_ts["cpi_fixed_basket_yoy_change"]),
+            "cpi_chained_basket_yoy_change": _timeseries_1d(economy_ts["cpi_chained_basket_yoy_change"]),
         }
     else:
         import h5py
@@ -710,15 +712,15 @@ def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_un
         base = f"{country_code}/economy"
         with h5py.File(h5_path, "r") as h5_file:
             data = {
-                "model_cpi": _read_h5_1d(h5_file, f"{base}/cpi"),
-                "fixed_cpi": _read_h5_1d(h5_file, f"{base}/cpi_fixed"),
-                "chained_cpi": _read_h5_1d(h5_file, f"{base}/cpi_chained"),
-                "model_pop": _read_h5_1d(h5_file, f"{base}/cpi_inflation"),
-                "fixed_pop": _read_h5_1d(h5_file, f"{base}/cpi_fixed_pop_change"),
-                "chained_pop": _read_h5_1d(h5_file, f"{base}/cpi_chained_pop_change"),
-                "model_yoy": _read_h5_1d(h5_file, f"{base}/cpi_yoy_inflation"),
-                "fixed_yoy": _read_h5_1d(h5_file, f"{base}/cpi_fixed_yoy_change"),
-                "chained_yoy": _read_h5_1d(h5_file, f"{base}/cpi_chained_yoy_change"),
+                "cpi_transaction": _read_h5_1d(h5_file, f"{base}/cpi_transaction"),
+                "cpi_fixed_basket": _read_h5_1d(h5_file, f"{base}/cpi_fixed_basket"),
+                "cpi_chained_basket": _read_h5_1d(h5_file, f"{base}/cpi_chained_basket"),
+                "cpi_transaction_pop_change": _read_h5_1d(h5_file, f"{base}/cpi_transaction_pop_change"),
+                "cpi_fixed_basket_pop_change": _read_h5_1d(h5_file, f"{base}/cpi_fixed_basket_pop_change"),
+                "cpi_chained_basket_pop_change": _read_h5_1d(h5_file, f"{base}/cpi_chained_basket_pop_change"),
+                "cpi_transaction_yoy_change": _read_h5_1d(h5_file, f"{base}/cpi_transaction_yoy_change"),
+                "cpi_fixed_basket_yoy_change": _read_h5_1d(h5_file, f"{base}/cpi_fixed_basket_yoy_change"),
+                "cpi_chained_basket_yoy_change": _read_h5_1d(h5_file, f"{base}/cpi_chained_basket_yoy_change"),
             }
         if time_unit is None:
             time_unit = 3
@@ -731,11 +733,15 @@ def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_un
     out.index.name = "t"
 
     periods_per_year = 12 // time_unit
-    out["fixed_minus_model"] = out["fixed_cpi"] - out["model_cpi"]
-    out["chained_minus_model"] = out["chained_cpi"] - out["model_cpi"]
-    out["chained_minus_fixed"] = out["chained_cpi"] - out["fixed_cpi"]
-    out["fixed_pop_minus_model_pop"] = out["fixed_pop"] - out["model_pop"]
-    out["chained_pop_minus_model_pop"] = out["chained_pop"] - out["model_pop"]
+    out["cpi_fixed_basket_minus_transaction"] = out["cpi_fixed_basket"] - out["cpi_transaction"]
+    out["cpi_chained_basket_minus_transaction"] = out["cpi_chained_basket"] - out["cpi_transaction"]
+    out["cpi_chained_basket_minus_fixed_basket"] = out["cpi_chained_basket"] - out["cpi_fixed_basket"]
+    out["cpi_fixed_basket_pop_change_minus_transaction"] = (
+        out["cpi_fixed_basket_pop_change"] - out["cpi_transaction_pop_change"]
+    )
+    out["cpi_chained_basket_pop_change_minus_transaction"] = (
+        out["cpi_chained_basket_pop_change"] - out["cpi_transaction_pop_change"]
+    )
 
     out.attrs["time_unit_months"] = time_unit
     out.attrs["periods_per_year"] = periods_per_year
@@ -745,18 +751,18 @@ def build_cpi_comparison_df(model=None, country_code=None, h5_path=None, time_un
 def summarize_cpi_comparison(cpi_comparison_df):
     """Return descriptive statistics for CPI level and change comparisons."""
     columns = [
-        "model_cpi",
-        "fixed_cpi",
-        "chained_cpi",
-        "model_pop",
-        "fixed_pop",
-        "chained_pop",
-        "model_yoy",
-        "fixed_yoy",
-        "chained_yoy",
-        "fixed_minus_model",
-        "chained_minus_model",
-        "chained_minus_fixed",
+        "cpi_transaction",
+        "cpi_fixed_basket",
+        "cpi_chained_basket",
+        "cpi_transaction_pop_change",
+        "cpi_fixed_basket_pop_change",
+        "cpi_chained_basket_pop_change",
+        "cpi_transaction_yoy_change",
+        "cpi_fixed_basket_yoy_change",
+        "cpi_chained_basket_yoy_change",
+        "cpi_fixed_basket_minus_transaction",
+        "cpi_chained_basket_minus_transaction",
+        "cpi_chained_basket_minus_fixed_basket",
     ]
     return cpi_comparison_df[columns].describe().T
 
@@ -830,15 +836,15 @@ def plot_cpi_comparison(cpi_comparison_df, title="CPI comparison", height=850, w
     )
 
     trace_groups = [
-        ("model_cpi", "Level: model CPI", "model", 1),
-        ("fixed_cpi", "Level: fixed-basket CPI", "fixed", 1),
-        ("chained_cpi", "Level: chained-basket CPI", "chained", 1),
-        ("model_pop", "PoP: model CPI", "model", 2),
-        ("fixed_pop", "PoP: fixed-basket CPI", "fixed", 2),
-        ("chained_pop", "PoP: chained-basket CPI", "chained", 2),
-        ("model_yoy", "YoY: model CPI", "model", 3),
-        ("fixed_yoy", "YoY: fixed-basket CPI", "fixed", 3),
-        ("chained_yoy", "YoY: chained-basket CPI", "chained", 3),
+        ("cpi_transaction", "Level: transaction CPI", "model", 1),
+        ("cpi_fixed_basket", "Level: fixed-basket CPI", "fixed", 1),
+        ("cpi_chained_basket", "Level: chained-basket CPI", "chained", 1),
+        ("cpi_transaction_pop_change", "PoP: transaction CPI", "model", 2),
+        ("cpi_fixed_basket_pop_change", "PoP: fixed-basket CPI", "fixed", 2),
+        ("cpi_chained_basket_pop_change", "PoP: chained-basket CPI", "chained", 2),
+        ("cpi_transaction_yoy_change", "YoY: transaction CPI", "model", 3),
+        ("cpi_fixed_basket_yoy_change", "YoY: fixed-basket CPI", "fixed", 3),
+        ("cpi_chained_basket_yoy_change", "YoY: chained-basket CPI", "chained", 3),
     ]
     for column, name, color_key, row in trace_groups:
         fig.add_trace(

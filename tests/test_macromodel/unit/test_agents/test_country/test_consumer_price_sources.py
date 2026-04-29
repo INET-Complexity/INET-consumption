@@ -8,7 +8,7 @@ class _StopAfterCapture(Exception):
 
 def test__prepare_housing_market_clearing_uses_configured_period_inflation_for_rent(test_country, monkeypatch):
     test_country.economy.consumer_price_index_source = "fixed_basket_cpi"
-    test_country.economy.ts.dicts["cpi_fixed_pop_change"] = [[0.11], [0.12]]
+    test_country.economy.ts.dicts["cpi_fixed_basket_pop_change"] = [[0.11], [0.12]]
     captured = {}
     test_country.housing_market.states = {"properties": test_country.housing_market.states}
 
@@ -27,7 +27,7 @@ def test__prepare_housing_market_clearing_uses_configured_period_inflation_for_r
 
 def test__update_planning_metrics_uses_configured_period_inflation_for_benefits(test_country, monkeypatch):
     test_country.economy.consumer_price_index_source = "chained_basket_cpi"
-    test_country.economy.ts.dicts["cpi_chained_pop_change"] = [[0.21], [0.22]]
+    test_country.economy.ts.dicts["cpi_chained_basket_pop_change"] = [[0.21], [0.22]]
     test_country.economy.ts.dicts["estimated_cpi_inflation"] = [[0.03]]
     captured = {}
 
@@ -46,7 +46,7 @@ def test__update_planning_metrics_uses_configured_period_inflation_for_benefits(
 
 def test__update_planning_metrics_uses_configured_annual_inflation_for_central_bank(test_country, monkeypatch):
     test_country.economy.consumer_price_index_source = "fixed_basket_cpi"
-    test_country.economy.ts.dicts["cpi_fixed_yoy_change"] = [[0.07]]
+    test_country.economy.ts.dicts["cpi_fixed_basket_yoy_change"] = [[0.07]]
     captured = {}
 
     monkeypatch.setattr(test_country.central_government, "update_benefits", lambda **kwargs: None)
@@ -72,8 +72,8 @@ def test__update_planning_metrics_uses_configured_level_and_expected_inflation_f
     test_country, monkeypatch
 ):
     test_country.economy.consumer_price_index_source = "fixed_basket_cpi"
-    test_country.economy.ts.dicts["cpi_fixed"] = [[1.0], [1.23]]
-    test_country.economy.ts.dicts["cpi_fixed_pop_change"] = [[0.04]]
+    test_country.economy.ts.dicts["cpi_fixed_basket"] = [[1.0], [1.23]]
+    test_country.economy.ts.dicts["cpi_fixed_basket_pop_change"] = [[0.04]]
     test_country.economy.ts.dicts["estimated_cpi_inflation"] = [[0.05]]
     captured = {}
 

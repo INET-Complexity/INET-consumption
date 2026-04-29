@@ -8,7 +8,6 @@ import h5py
 import numpy as np
 import pandas as pd
 
-
 PathLike = str | Path
 
 
@@ -32,7 +31,7 @@ DEFAULT_CORE_DATASETS = {
     "gfcf": "/FRA/economy/total_gross_fixed_capital_formation",
     "exports": "/FRA/economy/total_exports",
     "imports": "/FRA/economy/total_imports",
-    "cpi": "/FRA/economy/cpi",
+    "cpi_transaction": "/FRA/economy/cpi_transaction",
     "ppi": "/FRA/economy/ppi",
     "estimated_cpi_inflation": "/FRA/economy/estimated_cpi_inflation",
     "estimated_ppi_inflation": "/FRA/economy/estimated_ppi_inflation",

@@ -110,19 +110,19 @@ class Economy:
     """
 
     _CONSUMER_PRICE_LEVEL_SERIES = {
-        "transaction_cpi": "cpi",
-        "fixed_basket_cpi": "cpi_fixed",
-        "chained_basket_cpi": "cpi_chained",
+        "transaction_cpi": "cpi_transaction",
+        "fixed_basket_cpi": "cpi_fixed_basket",
+        "chained_basket_cpi": "cpi_chained_basket",
     }
     _CONSUMER_PERIOD_INFLATION_SERIES = {
-        "transaction_cpi": "cpi_inflation",
-        "fixed_basket_cpi": "cpi_fixed_pop_change",
-        "chained_basket_cpi": "cpi_chained_pop_change",
+        "transaction_cpi": "cpi_transaction_pop_change",
+        "fixed_basket_cpi": "cpi_fixed_basket_pop_change",
+        "chained_basket_cpi": "cpi_chained_basket_pop_change",
     }
     _CONSUMER_ANNUAL_INFLATION_SERIES = {
-        "transaction_cpi": "cpi_yoy_inflation",
-        "fixed_basket_cpi": "cpi_fixed_yoy_change",
-        "chained_basket_cpi": "cpi_chained_yoy_change",
+        "transaction_cpi": "cpi_transaction_yoy_change",
+        "fixed_basket_cpi": "cpi_fixed_basket_yoy_change",
+        "chained_basket_cpi": "cpi_chained_basket_yoy_change",
     }
 
     def __init__(
@@ -470,20 +470,20 @@ class Economy:
         self.ts.ppi_chain_base_prices.append(self.ts.prev("good_prices"))
         self.ts.ppi_chain_weights.append(self._normalise_index_weights(prior_year_sales))
 
-    def _maybe_update_cpi_chain_base(self) -> None:
+    def _maybe_update_cpi_chained_basket_base(self) -> None:
         periods_per_year = self._periods_per_year(self.time_unit)
-        elapsed_periods = len(self.ts.historic("cpi_chained")) - 1
+        elapsed_periods = len(self.ts.historic("cpi_chained_basket")) - 1
         if elapsed_periods == 0 or elapsed_periods % periods_per_year != 0:
-            self.ts.cpi_chain_link_level.append(self.ts.current("cpi_chain_link_level"))
-            self.ts.cpi_chain_base_prices.append(self.ts.current("cpi_chain_base_prices"))
-            self.ts.cpi_chain_weights.append(self.ts.current("cpi_chain_weights"))
+            self.ts.cpi_chained_basket_link_level.append(self.ts.current("cpi_chained_basket_link_level"))
+            self.ts.cpi_chained_basket_base_prices.append(self.ts.current("cpi_chained_basket_base_prices"))
+            self.ts.cpi_chained_basket_weights.append(self.ts.current("cpi_chained_basket_weights"))
             return
 
         household_consumption_history = np.array(self.ts.historic("sectoral_household_consumption"), dtype=float)
         prior_year_consumption = household_consumption_history[-periods_per_year - 1 : -1].sum(axis=0)
-        self.ts.cpi_chain_link_level.append([self.ts.current("cpi_chained")[0]])
-        self.ts.cpi_chain_base_prices.append(self.ts.prev("good_prices"))
-        self.ts.cpi_chain_weights.append(self._normalise_index_weights(prior_year_consumption))
+        self.ts.cpi_chained_basket_link_level.append([self.ts.current("cpi_chained_basket")[0]])
+        self.ts.cpi_chained_basket_base_prices.append(self.ts.prev("good_prices"))
+        self.ts.cpi_chained_basket_weights.append(self._normalise_index_weights(prior_year_consumption))
 
     def reset(self, configuration: EconomyConfiguration) -> None:
         """Reset the economy's state and update function configurations.
@@ -759,7 +759,7 @@ class Economy:
         # CPI
         consumption_by_industry_norm = household_nominal_amount_spent.sum(axis=0)
         if consumption_by_industry_norm.sum() == 0:
-            self.ts.cpi.append(
+            self.ts.cpi_transaction.append(
                 [
                     np.dot(
                         self.ts.current("good_prices"),
@@ -770,7 +770,7 @@ class Economy:
             )
         else:
             consumption_by_industry_norm /= consumption_by_industry_norm.sum()
-            self.ts.cpi.append(
+            self.ts.cpi_transaction.append(
                 [
                     np.dot(
                         self.ts.current("good_prices"),
@@ -815,19 +815,19 @@ class Economy:
 
         cpi_fixed_relatives = self._price_relatives(
             current_prices=self.ts.current("good_prices"),
-            base_prices=self.ts.current("cpi_fixed_base_prices"),
+            base_prices=self.ts.current("cpi_fixed_basket_base_prices"),
         )
-        self.ts.cpi_fixed.append([np.dot(self.ts.current("cpi_fixed_weights"), cpi_fixed_relatives)])
+        self.ts.cpi_fixed_basket.append([np.dot(self.ts.current("cpi_fixed_basket_weights"), cpi_fixed_relatives)])
 
-        self._maybe_update_cpi_chain_base()
+        self._maybe_update_cpi_chained_basket_base()
         cpi_chain_relatives = self._price_relatives(
             current_prices=self.ts.current("good_prices"),
-            base_prices=self.ts.current("cpi_chain_base_prices"),
+            base_prices=self.ts.current("cpi_chained_basket_base_prices"),
         )
-        self.ts.cpi_chained.append(
+        self.ts.cpi_chained_basket.append(
             [
-                self.ts.current("cpi_chain_link_level")[0]
-                * np.dot(self.ts.current("cpi_chain_weights"), cpi_chain_relatives)
+                self.ts.current("cpi_chained_basket_link_level")[0]
+                * np.dot(self.ts.current("cpi_chained_basket_weights"), cpi_chain_relatives)
             ]
         )
 
@@ -843,7 +843,9 @@ class Economy:
         All rates are calculated as percentage changes from previous period.
         """
         # CPI inflation
-        self.ts.cpi_inflation.append([self.ts.current("cpi")[0] / self.ts.prev("cpi")[0] - 1.0])
+        self.ts.cpi_transaction_pop_change.append(
+            [self.ts.current("cpi_transaction")[0] / self.ts.prev("cpi_transaction")[0] - 1.0]
+        )
 
         # PPI inflation
         self.ts.ppi_inflation.append([self.ts.current("ppi")[0] / self.ts.prev("ppi")[0] - 1.0])
@@ -855,10 +857,10 @@ class Economy:
         self.ts.ppi_fixed_yoy_change.append([self._compute_index_yoy_change("ppi_fixed")])
         self.ts.ppi_chained_pop_change.append([self._compute_index_pop_change("ppi_chained")])
         self.ts.ppi_chained_yoy_change.append([self._compute_index_yoy_change("ppi_chained")])
-        self.ts.cpi_fixed_pop_change.append([self._compute_index_pop_change("cpi_fixed")])
-        self.ts.cpi_fixed_yoy_change.append([self._compute_index_yoy_change("cpi_fixed")])
-        self.ts.cpi_chained_pop_change.append([self._compute_index_pop_change("cpi_chained")])
-        self.ts.cpi_chained_yoy_change.append([self._compute_index_yoy_change("cpi_chained")])
+        self.ts.cpi_fixed_basket_pop_change.append([self._compute_index_pop_change("cpi_fixed_basket")])
+        self.ts.cpi_fixed_basket_yoy_change.append([self._compute_index_yoy_change("cpi_fixed_basket")])
+        self.ts.cpi_chained_basket_pop_change.append([self._compute_index_pop_change("cpi_chained_basket")])
+        self.ts.cpi_chained_basket_yoy_change.append([self._compute_index_yoy_change("cpi_chained_basket")])
 
         # Price inflation by industry
         inflation_by_industry = np.zeros(self.n_industries)
@@ -878,10 +880,12 @@ class Economy:
         combined_history = np.concatenate(
             (
                 exogenous_cpi_inflation_before,
-                np.array(self.ts.historic("cpi_inflation")).flatten(),
+                np.array(self.ts.historic("cpi_transaction_pop_change")).flatten(),
             )
         )
-        self.ts.cpi_yoy_inflation.append([self._compute_yoy_from_period_inflation(combined_history, periods_per_year)])
+        self.ts.cpi_transaction_yoy_change.append(
+            [self._compute_yoy_from_period_inflation(combined_history, periods_per_year)]
+        )
 
     def compute_growth(
         self,
@@ -1595,7 +1599,7 @@ class Economy:
         Returns:
             float: CPI inflation rate
         """
-        return self.ts.get_aggregate("cpi")
+        return self.ts.get_aggregate("cpi_transaction")
 
     def total_ppi_inflation(self):
         """Get aggregate PPI inflation time series.

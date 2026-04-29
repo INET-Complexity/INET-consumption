@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 from macro_data import DataWrapper
 
@@ -19,7 +18,8 @@ STANDARD_COLUMN_ALIASES = {
     "gdp": "Gross Output",
     "GDP_Output": "Gross Output",
     "GDP_Expenditure": "Gross Output",
-    "cpi": "CPI",
+    "cpi_transaction": "CPI",
+    "CPI Transaction": "CPI",
     "unemployment rate": "Unemployment Rate",
     "Unemployment Rate (Value)": "Unemployment Rate",
 }
@@ -97,7 +97,7 @@ def standardize_result_columns(run_data):
     if "Gross Output" not in out.columns:
         raise KeyError("Run data must include Gross Output, gdp, GDP_Output, or GDP_Expenditure.")
     if "CPI" not in out.columns:
-        raise KeyError("Run data must include CPI or cpi.")
+        raise KeyError("Run data must include CPI or cpi_transaction.")
     if "Unemployment Rate" not in out.columns:
         out["Unemployment Rate"] = np.nan
     return out

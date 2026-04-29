@@ -63,4 +63,6 @@ def create_individuals_timeseries(data: pd.DataFrame, scale: int) -> TimeSeries:
         #
         labour_inputs=data["Labour Inputs"].values,
         reservation_wages=data["Employee Income"].values + data["Income from Unemployment Benefits"].values,
+        offered_wage_of_accepted_job=data["Employee Income"].values * 0.0,
+        started_new_job=data["Employee Income"].values * 0.0,
     )

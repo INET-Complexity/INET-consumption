@@ -480,6 +480,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         individual_reservation_wages: np.ndarray,
         current_individual_wages: np.ndarray,  # noqa
         average_industry_productivity: np.ndarray,
+        current_individual_started_new_job: np.ndarray | None = None,
     ) -> tuple[np.ndarray, int]:
         """Match unemployed workers with firms needing labour.
 
@@ -550,6 +551,8 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
                     firm_industry=firm_industries[firm_id],
                     ind_chosen=ind_chosen,  # noqa
                 )
+                if current_individual_started_new_job is not None:
+                    current_individual_started_new_job[ind_chosen] = True
 
                 # Update missing productivity
                 missing_productivity[firm_id] -= (
@@ -649,6 +652,98 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             ind = np.random.choice(np.where(unemployed_ind)[0])
 
         return ind
+
+
+class ReservationWageBindingDefaultLabourMarketClearer(DefaultLabourMarketClearer):
+    """Default clearer variant where accepted offers bind realised wages for new hires."""
+
+    def clear(
+        self,
+        firms: Firms,
+        households: Households,
+        individuals: Individuals,
+    ) -> tuple[np.ndarray, int, int, int, int]:
+        if self.compare_with_normalised_inputs:
+            prev_labour_inputs = firms.ts.current("normalised_labour_inputs")
+            desired_labour_inputs = firms.ts.current("desired_labour_inputs")
+        else:
+            prev_labour_inputs = firms.ts.current("labour_inputs")
+            desired_labour_inputs = firms.ts.current("desired_labour_inputs")
+
+        current_individuals_activity = individuals.states["Activity Status"]
+        current_individuals_industry = individuals.states["Employment Industry"]
+        prev_individuals_productivity = individuals.ts.current("labour_inputs")
+        individuals_corresponding_firm = individuals.states["Corresponding Firm ID"]
+        firm_employments = firms.states["Employments"]
+        current_individual_wages = individuals.ts.current("employee_income")
+        current_household_wealth = households.ts.current("wealth")
+        individuals_corresponding_household = individuals.states["Corresponding Household ID"]
+        firm_industries = firms.states["Industry"]
+        offered_wage_function = firms.states["offered_wage_function"]
+        individual_reservation_wages = individuals.ts.current("reservation_wages")
+
+        individuals.states["Started New Job"] = np.full(len(current_individuals_activity), False)
+        individuals.states["Offered Wage of Accepted Job"] = np.zeros(len(current_individuals_activity))
+
+        firing_costs_random_firing, num_newly_randomly_fired = random_firing(
+            number_of_firms=prev_labour_inputs.shape[0],
+            current_individuals_activity=current_individuals_activity,
+            individuals_corresponding_firm=individuals_corresponding_firm,
+            firm_employments=firm_employments,
+            current_individual_wages=current_individual_wages,
+            random_firing_probability=self.random_firing_probability,
+            firing_cost_fraction=self.firing_cost_fraction,
+        )
+
+        if self.individuals_quitting:
+            num_newly_randomly_quit = random_quitting(
+                current_individuals_activity=current_individuals_activity,
+                individuals_corresponding_firm=individuals_corresponding_firm,
+                firm_employments=firm_employments,
+                current_individual_wages=current_individual_wages,
+                current_household_wealth=current_household_wealth,
+                individuals_corresponding_household=individuals_corresponding_household,
+                individuals_quitting_temperature=self.individuals_quitting_temperature,
+            )
+        else:
+            num_newly_randomly_quit = 0
+
+        firing_costs_regular, num_newly_fired = self.firing(
+            firm_employments=firm_employments,
+            current_individuals_activity=current_individuals_activity,
+            individuals_corresponding_firm=individuals_corresponding_firm,
+            prev_individuals_productivity=prev_individuals_productivity,
+            desired_labour_inputs=desired_labour_inputs,
+            prev_labour_inputs=prev_labour_inputs,
+            current_individual_wages=current_individual_wages,
+            firm_industries=firm_industries,
+            average_industry_productivity=firms.states["Labour Productivity by Industry"],
+        )
+
+        hiring_costs_regular, num_newly_joining = self.hiring(
+            firm_employments=firm_employments,
+            firm_industries=firm_industries,
+            current_individuals_activity=current_individuals_activity,
+            current_individuals_industry=current_individuals_industry,
+            individuals_corresponding_firm=individuals_corresponding_firm,
+            prev_individuals_productivity=prev_individuals_productivity,
+            desired_labour_inputs=desired_labour_inputs,
+            prev_labour_inputs=prev_labour_inputs,
+            offered_wage_function=offered_wage_function,
+            offered_wage=individuals.states["Offered Wage of Accepted Job"],
+            individual_reservation_wages=individual_reservation_wages,
+            current_individual_wages=current_individual_wages,
+            average_industry_productivity=firms.states["Labour Productivity by Industry"],
+            current_individual_started_new_job=individuals.states["Started New Job"],
+        )
+
+        return (
+            firing_costs_random_firing + firing_costs_regular + hiring_costs_regular,
+            num_newly_joining,
+            num_newly_randomly_fired,
+            num_newly_randomly_quit,
+            num_newly_fired,
+        )
 
 
 @njit

@@ -314,7 +314,10 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             * initial_wage_per_capita
         )
         scaled_real_wages_by_individual[emp_ind] = scaled_real_wages[corresponding_firm[emp_ind]]
-        return scaled_real_wages_by_individual / tax
+        realised_wages = scaled_real_wages_by_individual / tax
+        new_job_ind = np.logical_and(emp_ind, current_individual_stating_new_job)
+        realised_wages[new_job_ind] = current_individual_offered_wage[new_job_ind]
+        return realised_wages
 
     def get_offered_wage_given_labour_inputs_function(
         self,
@@ -372,14 +375,26 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         else:
             tfp_factor = np.ones_like(current_wage_tightness_markup)
 
+        fallback_wages = (
+            (1 + current_wage_tightness_markup)
+            * tfp_factor
+            * current_labour_productivity_factor
+            * initial_wage_per_capita
+        )
+        historic_average_wages = np.divide(
+            total_real_wages,
+            total_labour_inputs,
+            out=fallback_wages.copy(),
+            where=total_labour_inputs > 0,
+        )
         new_individual_wages = (
             (1 + current_wage_tightness_markup)
             * tfp_factor  # Link wages to technological productivity
             * current_labour_productivity_factor
             / prev_labour_productivity_factor
-            * total_real_wages
-            / total_labour_inputs
+            * historic_average_wages
         )
+        new_individual_wages = np.where(np.isfinite(new_individual_wages), new_individual_wages, fallback_wages)
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
             """Calculate wage offer for given firm and labor inputs.

@@ -40,7 +40,11 @@ GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "ExogenousGovernmentConsumptionSetter",
 )
 GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial", "initial_price_normalized", "initial_fixed")
-LABOUR_MARKET_CLEARER_CHOICES = ("PolednaLabourMarketClearer", "DefaultLabourMarketClearer")
+LABOUR_MARKET_CLEARER_CHOICES = (
+    "PolednaLabourMarketClearer",
+    "DefaultLabourMarketClearer",
+    "ReservationWageBindingDefaultLabourMarketClearer",
+)
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:

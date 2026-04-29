@@ -529,6 +529,10 @@ class Country:
             individuals=self.individuals,
         )
         self.firms.ts.labour_costs.append(labour_costs)
+        self.individuals.ts.offered_wage_of_accepted_job.append(
+            self.individuals.states["Offered Wage of Accepted Job"].copy()
+        )
+        self.individuals.ts.started_new_job.append(self.individuals.states["Started New Job"].astype(float).copy())
 
     def update_planning_metrics(self) -> None:
         """Update forward-looking economic indicators.

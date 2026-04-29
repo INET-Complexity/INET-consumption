@@ -14,8 +14,12 @@ if str(RUN_MODEL_PATH) not in sys.path:
 
 from src.visual_helpers import (  # noqa: E402
     build_cpi_comparison_df,
+    build_cumulative_insolvent_firms_by_sector_df,
+    build_employment_by_sector_df,
     build_macro_output_df,
     plot_cpi_comparison,
+    plot_cumulative_insolvent_firms_by_sector,
+    plot_employment_by_sector,
     plot_ppi_comparison,
 )
 
@@ -208,6 +212,56 @@ def test_build_cpi_comparison_df_uses_explicit_cpi_series_names():
     assert output.columns.tolist() == expected_columns
     assert output["cpi_fixed_basket_minus_transaction"].iloc[1] == pytest.approx(-0.02)
     assert output["cpi_chained_basket_pop_change_minus_transaction"].iloc[2] == pytest.approx(-0.0083)
+
+
+def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():
+    df = pd.DataFrame(
+        {
+            "num_insolvent_firms_by_sector": [[1, 2], [3, 4], [5, 6]],
+            "num_insolvent_firms_by_sector_A": [1, 3, 5],
+            "num_insolvent_firms_by_sector_C": [2, 4, 6],
+            "firm_insolvency_rate": [0.1, 0.2, 0.3],
+        },
+        index=pd.RangeIndex(3, name="t"),
+    )
+
+    cumulative = build_cumulative_insolvent_firms_by_sector_df(df)
+    fig = plot_cumulative_insolvent_firms_by_sector(df, show=False)
+
+    assert cumulative.columns.tolist() == ["A", "C"]
+    assert cumulative["A"].tolist() == [1, 4, 9]
+    assert cumulative["C"].tolist() == [2, 6, 12]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert fig.layout.yaxis.title.text == "cumulative insolvent firms"
+
+
+def test_employment_by_sector_plot_uses_labour_market_series_and_sector_labels():
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                labour_market=SimpleNamespace(
+                    ts=SimpleNamespace(num_employed_individuals_by_sector=[[10, 20], [11, 22], [12, 24]])
+                ),
+                firms=SimpleNamespace(industries=["A", "C"]),
+            )
+        }
+    )
+
+    employment = build_employment_by_sector_df(model, "FRA")
+    fig = plot_employment_by_sector(model, "FRA", show=False)
+
+    assert employment.columns.tolist() == ["A", "C"]
+    assert employment["A"].tolist() == [10.0, 11.0, 12.0]
+    assert employment["C"].tolist() == [20.0, 22.0, 24.0]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert [trace.mode for trace in fig.data] == ["lines+markers", "lines+markers"]
+    assert fig.layout.yaxis.title.text == "Number of Employed Individuals"
 
 
 def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():

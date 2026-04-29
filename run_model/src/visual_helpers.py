@@ -663,6 +663,114 @@ def build_macro_output_df(model, country_code):
     return out
 
 
+def build_cumulative_insolvent_firms_by_sector_df(df, base_column="num_insolvent_firms_by_sector"):
+    """Return cumulative insolvent-firm counts for every expanded sector column."""
+    sector_prefix = f"{base_column}_"
+    sector_columns = [column for column in df.columns if column.startswith(sector_prefix)]
+    if not sector_columns:
+        raise ValueError(f"No sector columns found with prefix {sector_prefix!r}.")
+
+    cumulative = df[sector_columns].apply(pd.to_numeric, errors="coerce").fillna(0.0).cumsum()
+    cumulative = cumulative.rename(columns={column: column.removeprefix(sector_prefix) for column in sector_columns})
+    cumulative.index = df.index
+    return cumulative
+
+
+def plot_cumulative_insolvent_firms_by_sector(
+    df,
+    title="Cumulative insolvent firms by sector",
+    height=650,
+    width=1000,
+    show=True,
+):
+    """Plot cumulative insolvent-firm counts for each economic sector."""
+    cumulative = build_cumulative_insolvent_firms_by_sector_df(df)
+    colors = _categorical_colors(len(cumulative.columns))
+
+    fig = go.Figure()
+    for idx, sector_code in enumerate(cumulative.columns):
+        sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+        fig.add_trace(
+            go.Scatter(
+                x=cumulative.index,
+                y=cumulative[sector_code],
+                mode="lines",
+                name=f"{sector_code}: {sector_label}",
+                line={"color": colors[idx], "width": 2},
+            )
+        )
+
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        xaxis_title="t",
+        yaxis_title="cumulative insolvent firms",
+    )
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
+def build_employment_by_sector_df(model, country_code):
+    """Return employed-individual counts by sector from a model country."""
+    country = model.countries[country_code]
+    values = np.asarray(country.labour_market.ts.num_employed_individuals_by_sector, dtype=float)
+    if values.ndim != 2:
+        raise ValueError("num_employed_individuals_by_sector must be a 2D time x sector series.")
+
+    sectors = [str(sector) for sector in getattr(country.firms, "industries", [])]
+    if len(sectors) != values.shape[1]:
+        sectors = [str(idx) for idx in range(values.shape[1])]
+
+    return pd.DataFrame(values, columns=sectors)
+
+
+def plot_employment_by_sector(
+    model,
+    country_code,
+    title="Number of employed individuals by sector",
+    height=650,
+    width=1000,
+    show=True,
+):
+    """Plot employed-individual counts for each economic sector."""
+    employment = build_employment_by_sector_df(model, country_code)
+    colors = _categorical_colors(len(employment.columns))
+
+    fig = go.Figure()
+    for idx, sector_code in enumerate(employment.columns):
+        sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+        fig.add_trace(
+            go.Scatter(
+                x=employment.index,
+                y=employment[sector_code],
+                mode="lines+markers",
+                name=f"{sector_code}: {sector_label}",
+                line={"color": colors[idx], "width": 2},
+                marker={"size": 6},
+            )
+        )
+
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        xaxis_title="Time Period",
+        yaxis_title="Number of Employed Individuals",
+        legend_title_text="Sector",
+    )
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
 def summarize_ppi_comparison(ppi_comparison_df):
     """Return descriptive statistics for PPI level and change comparisons."""
     columns = [

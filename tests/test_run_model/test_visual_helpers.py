@@ -11,7 +11,7 @@ RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
-from src.visual_helpers import build_macro_output_df  # noqa: E402
+from src.visual_helpers import build_macro_output_df, plot_cpi_comparison, plot_ppi_comparison  # noqa: E402
 
 
 def _ts(dicts):
@@ -117,6 +117,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "household_insolvency_rate",
         "total_growth",
         "estimated_growth",
+        "sectoral_growth",
         "sectoral_growth_agriculture",
         "sectoral_growth_services",
         "real_gross_output",
@@ -128,13 +129,16 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "total_real_rent_paid",
         "total_imp_rent_paid",
         "total_real_rent_rec",
+        "num_insolvent_firms_by_sector",
         "num_insolvent_firms_by_sector_agriculture",
         "num_insolvent_firms_by_sector_services",
         "npl_firm_loans",
         "npl_hh_cons_loans",
     }
     assert expected_columns.issubset(output.columns)
+    assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
+    assert output["num_insolvent_firms_by_sector"].tolist() == [[1, 2], [3, 4], [5, 6]]
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
 
     clutter_columns = {
@@ -146,3 +150,56 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "average_interest_rates_on_short_term_firm_loans",
     }
     assert output.columns.intersection(clutter_columns).empty
+
+
+def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():
+    index = pd.RangeIndex(3, name="t")
+    cpi_df = pd.DataFrame(
+        {
+            "model_cpi": [1.0, 1.1, 1.2],
+            "fixed_cpi": [1.0, 1.08, 1.15],
+            "chained_cpi": [1.0, 1.09, 1.18],
+            "model_pop": [0.0, 0.1, 0.09],
+            "fixed_pop": [0.0, 0.08, 0.07],
+            "chained_pop": [0.0, 0.09, 0.08],
+            "model_yoy": [0.0, 0.1, 0.2],
+            "fixed_yoy": [0.0, 0.08, 0.15],
+            "chained_yoy": [0.0, 0.09, 0.18],
+        },
+        index=index,
+    )
+    ppi_df = cpi_df.rename(
+        columns={
+            "model_cpi": "model_ppi",
+            "fixed_cpi": "fixed_ppi",
+            "chained_cpi": "chained_ppi",
+        }
+    )
+
+    cpi_fig = plot_cpi_comparison(cpi_df, show=False)
+    ppi_fig = plot_ppi_comparison(ppi_df, show=False)
+
+    assert [trace.name for trace in cpi_fig.data] == [
+        "Level: model CPI",
+        "Level: fixed-basket CPI",
+        "Level: chained-basket CPI",
+        "PoP: model CPI",
+        "PoP: fixed-basket CPI",
+        "PoP: chained-basket CPI",
+        "YoY: model CPI",
+        "YoY: fixed-basket CPI",
+        "YoY: chained-basket CPI",
+    ]
+    assert [trace.name for trace in ppi_fig.data] == [
+        "Level: model PPI",
+        "Level: fixed-basket PPI",
+        "Level: chained-basket PPI",
+        "PoP: model PPI",
+        "PoP: fixed-basket PPI",
+        "PoP: chained-basket PPI",
+        "YoY: model PPI",
+        "YoY: fixed-basket PPI",
+        "YoY: chained-basket PPI",
+    ]
+    assert [trace.line.color for trace in cpi_fig.data[:3]] == ["#1f77b4", "#2ca02c", "#d62728"]
+    assert [trace.line.color for trace in ppi_fig.data[:3]] == ["#1f77b4", "#2ca02c", "#d62728"]

@@ -604,7 +604,6 @@ def build_macro_output_df(model, country_code):
         expanded = pd.DataFrame(series.tolist(), index=out_index, columns=[f"{name}_{label}" for label in labels])
         for column in expanded.columns:
             output_columns[column] = expanded[column]
-        output_columns.pop(name, None)
 
     for economy_column in [
         "unemployment_rate",
@@ -764,6 +763,11 @@ def summarize_cpi_comparison(cpi_comparison_df):
 
 def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, width=1000, show=True):
     """Plot model PPI against fixed and chained Laspeyres PPI."""
+    colors = {
+        "model": "#1f77b4",
+        "fixed": "#2ca02c",
+        "chained": "#d62728",
+    }
     fig = make_subplots(
         rows=3,
         cols=1,
@@ -773,23 +777,24 @@ def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, w
     )
 
     trace_groups = [
-        ("model_ppi", "model_ppi", 1),
-        ("fixed_ppi", "fixed_ppi", 1),
-        ("chained_ppi", "chained_ppi", 1),
-        ("model_pop", "model_pop", 2),
-        ("fixed_pop", "fixed_pop", 2),
-        ("chained_pop", "chained_pop", 2),
-        ("model_yoy", "model_yoy", 3),
-        ("fixed_yoy", "fixed_yoy", 3),
-        ("chained_yoy", "chained_yoy", 3),
+        ("model_ppi", "Level: model PPI", "model", 1),
+        ("fixed_ppi", "Level: fixed-basket PPI", "fixed", 1),
+        ("chained_ppi", "Level: chained-basket PPI", "chained", 1),
+        ("model_pop", "PoP: model PPI", "model", 2),
+        ("fixed_pop", "PoP: fixed-basket PPI", "fixed", 2),
+        ("chained_pop", "PoP: chained-basket PPI", "chained", 2),
+        ("model_yoy", "YoY: model PPI", "model", 3),
+        ("fixed_yoy", "YoY: fixed-basket PPI", "fixed", 3),
+        ("chained_yoy", "YoY: chained-basket PPI", "chained", 3),
     ]
-    for column, name, row in trace_groups:
+    for column, name, color_key, row in trace_groups:
         fig.add_trace(
             go.Scatter(
                 x=ppi_comparison_df.index,
                 y=ppi_comparison_df[column],
                 mode="lines",
                 name=name,
+                line={"color": colors[color_key], "width": 2},
             ),
             row=row,
             col=1,
@@ -811,6 +816,11 @@ def plot_ppi_comparison(ppi_comparison_df, title="PPI comparison", height=850, w
 
 def plot_cpi_comparison(cpi_comparison_df, title="CPI comparison", height=850, width=1000, show=True):
     """Plot model CPI against fixed and chained Laspeyres CPI."""
+    colors = {
+        "model": "#1f77b4",
+        "fixed": "#2ca02c",
+        "chained": "#d62728",
+    }
     fig = make_subplots(
         rows=3,
         cols=1,
@@ -820,23 +830,24 @@ def plot_cpi_comparison(cpi_comparison_df, title="CPI comparison", height=850, w
     )
 
     trace_groups = [
-        ("model_cpi", "model_cpi", 1),
-        ("fixed_cpi", "fixed_cpi", 1),
-        ("chained_cpi", "chained_cpi", 1),
-        ("model_pop", "model_pop", 2),
-        ("fixed_pop", "fixed_pop", 2),
-        ("chained_pop", "chained_pop", 2),
-        ("model_yoy", "model_yoy", 3),
-        ("fixed_yoy", "fixed_yoy", 3),
-        ("chained_yoy", "chained_yoy", 3),
+        ("model_cpi", "Level: model CPI", "model", 1),
+        ("fixed_cpi", "Level: fixed-basket CPI", "fixed", 1),
+        ("chained_cpi", "Level: chained-basket CPI", "chained", 1),
+        ("model_pop", "PoP: model CPI", "model", 2),
+        ("fixed_pop", "PoP: fixed-basket CPI", "fixed", 2),
+        ("chained_pop", "PoP: chained-basket CPI", "chained", 2),
+        ("model_yoy", "YoY: model CPI", "model", 3),
+        ("fixed_yoy", "YoY: fixed-basket CPI", "fixed", 3),
+        ("chained_yoy", "YoY: chained-basket CPI", "chained", 3),
     ]
-    for column, name, row in trace_groups:
+    for column, name, color_key, row in trace_groups:
         fig.add_trace(
             go.Scatter(
                 x=cpi_comparison_df.index,
                 y=cpi_comparison_df[column],
                 mode="lines",
                 name=name,
+                line={"color": colors[color_key], "width": 2},
             ),
             row=row,
             col=1,

@@ -394,6 +394,271 @@ def build_ppi_comparison_df(model=None, country_code=None, h5_path=None, time_un
     return out
 
 
+def build_macro_output_df(model, country_code):
+    """Build a macro output dataframe with explicit canonical output columns.
+
+    Observation frequency follows the model timestep. Macro interest-rate
+    columns are returned as annualized values.
+    """
+    shallow = model.shallow_df_dict()[country_code].copy()
+    gdp_components = model.get_country_gdp_components_df(country_code).copy()
+    periods_per_year = 12 / model.timestep.increment
+    yoy_periods = int(12 // model.timestep.increment)
+
+    out_index = shallow.index
+    output_columns = {}
+
+    def frequency_label(month_increment):
+        labels = {
+            1: "monthly",
+            3: "quarterly",
+            6: "semiannual",
+            12: "annual",
+        }
+        return labels.get(month_increment, f"every {month_increment} months")
+
+    def as_output_series(values):
+        series = pd.Series(list(values)).reindex(range(len(out_index)))
+        series.index = out_index
+        return series.map(unpack_cell)
+
+    def timeseries_dict_to_frame(ts_dict):
+        if not ts_dict:
+            return pd.DataFrame(index=out_index)
+
+        series_dict = {}
+        for key, values in ts_dict.items():
+            values = list(values)
+            if len(out_index) > 1 and len(values) == 1:
+                continue
+            series_dict[key] = as_output_series(values)
+
+        if not series_dict:
+            return pd.DataFrame(index=out_index)
+
+        return pd.DataFrame(series_dict, index=out_index)
+
+    def first_available(*candidates):
+        for candidate in candidates:
+            if candidate in output_columns:
+                return output_columns[candidate]
+            if candidate in shallow.columns:
+                return shallow[candidate]
+            if candidate in gdp_components.columns:
+                return gdp_components[candidate]
+        return None
+
+    def add_column(name, series):
+        if series is None:
+            return None
+        if name not in output_columns:
+            output_columns[name] = pd.Series(series, index=out_index)
+        return output_columns[name]
+
+    def get_column(name):
+        return output_columns.get(name)
+
+    def add_source_column(name, *candidates):
+        return add_column(name, first_available(*candidates))
+
+    def add_annualized_source_column(name, *candidates):
+        series = first_available(*candidates)
+        if series is not None:
+            return add_column(name, periods_per_year * series)
+        return None
+
+    def add_ratio(name, numerator, denominator):
+        if numerator is not None and denominator is not None:
+            return add_column(name, numerator / denominator)
+        return None
+
+    country = model.countries[country_code]
+    df_gov_ts = timeseries_dict_to_frame(country.central_government.ts.__dict__["dicts"])
+    df_cb_ts = timeseries_dict_to_frame(country.central_bank.ts.__dict__["dicts"])
+    df_bank_ts = timeseries_dict_to_frame(country.banks.ts.__dict__["dicts"])
+    economy_ts_dict = country.economy.ts.__dict__["dicts"]
+
+    source_columns = {
+        "gdp": ("GDP_Expenditure", "GDP_Output", "GDP_Income"),
+        "household_consumption": ("Household Consumption", "+Household_Consumption"),
+        "government_consumption": ("Government Consumption", "+Government_Consumption"),
+        "exports": ("Exports", "+Exports"),
+        "imports": ("Imports", "-Imports"),
+        "gfcf": ("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF"),
+        "cpi": ("CPI",),
+        "ppi": ("PPI",),
+        "consumption_expansion_loan_debt": ("Consumption Expansion Loan Debt",),
+        "mortgage_debt": ("Mortgage Debt",),
+        "wages": ("Wages", "+Wages"),
+        "profits": ("Profits", "+Operating_Surplus"),
+        "taxes_paid_on_production": ("Taxes Paid on Production", "-Taxes_on_Production"),
+        "taxes_on_products": ("Taxes on Products", "+Taxes_on_Products", "+Central_Government_Product_Taxes"),
+    }
+    for name, candidates in source_columns.items():
+        add_source_column(name, *candidates)
+
+    gdp = get_column("gdp")
+    household_consumption = get_column("household_consumption")
+    government_consumption = get_column("government_consumption")
+    total_consumption = None
+    if household_consumption is not None and government_consumption is not None:
+        total_consumption = add_column("total_consumption", household_consumption + government_consumption)
+
+    ppi = get_column("ppi")
+    if gdp is not None:
+        add_column("gdp_growth", gdp.pct_change())
+    if gdp is not None and ppi is not None:
+        add_column("real_gdp", gdp / ppi)
+    if ppi is not None:
+        add_column("ppi_yoy_change", ppi / ppi.shift(yoy_periods) - 1.0)
+
+    add_ratio("household_consumption_to_gdp", household_consumption, gdp)
+    add_ratio("government_consumption_to_gdp", government_consumption, gdp)
+    add_ratio("total_consumption_to_gdp", total_consumption, gdp)
+    add_ratio("investment_to_gdp", get_column("gfcf"), gdp)
+    exports = get_column("exports")
+    imports = get_column("imports")
+    if exports is not None and imports is not None and gdp is not None:
+        add_column("net_exports_to_gdp", (exports - imports) / gdp)
+
+    if "revenue" in df_gov_ts.columns:
+        add_column("fiscal_revenue", df_gov_ts["revenue"])
+    if "revenue" in df_gov_ts.columns and "deficit" in df_gov_ts.columns:
+        add_column("fiscal_expenditure", df_gov_ts["revenue"] + df_gov_ts["deficit"])
+    for source_name, output_name in {
+        "deficit": "deficit",
+        "debt": "debt",
+        "interest_payments_on_debt": "interest_payments_on_debt",
+        "total_unemployment_benefits": "unemployment_benefits",
+        "total_household_social_transfers": "other_benefits",
+    }.items():
+        if source_name in df_gov_ts.columns:
+            add_column(output_name, df_gov_ts[source_name])
+
+    fiscal_expenditure = get_column("fiscal_expenditure")
+    add_ratio("fiscal_revenue_to_gdp", get_column("fiscal_revenue"), gdp)
+    add_ratio("fiscal_expenditure_to_gdp", fiscal_expenditure, gdp)
+    add_ratio("deficit_to_gdp", get_column("deficit"), gdp)
+    debt = get_column("debt")
+    if debt is not None and gdp is not None:
+        add_column("debt_to_gdp", debt / (periods_per_year * gdp))
+    add_ratio("unemployment_benefits_to_expenditure", get_column("unemployment_benefits"), fiscal_expenditure)
+    add_ratio("other_benefits_to_expenditure", get_column("other_benefits"), fiscal_expenditure)
+    add_ratio("government_consumption_to_expenditure", government_consumption, fiscal_expenditure)
+    add_ratio("interest_payments_on_debt_to_expenditure", get_column("interest_payments_on_debt"), fiscal_expenditure)
+
+    if "policy_rate" in df_cb_ts.columns:
+        add_column("central_bank_policy_rate", periods_per_year * df_cb_ts["policy_rate"])
+    else:
+        add_annualized_source_column("central_bank_policy_rate", "Central Bank Policy Rate")
+
+    for source_name, output_name, label_name in [
+        (
+            "average_interest_rates_on_short_term_firm_loans",
+            "short_term_firm_borrowing_rate",
+            "Average Interest Rates on Short Term Firm Loans",
+        ),
+        (
+            "average_interest_rates_on_long_term_firm_loans",
+            "long_term_firm_borrowing_rate",
+            "Average Interest Rates on Long Term Firm Loans",
+        ),
+        (
+            "average_interest_rates_on_household_consumption_loans",
+            "household_consumption_borrowing_rate",
+            "Average Interest Rates on Household Consumption Loans",
+        ),
+        (
+            "average_interest_rates_on_mortgages",
+            "mortgage_borrowing_rate",
+            "Average Interest Rates on Mortgages",
+        ),
+    ]:
+        if source_name in df_bank_ts.columns:
+            add_column(output_name, periods_per_year * df_bank_ts[source_name])
+        else:
+            add_annualized_source_column(output_name, label_name, source_name)
+
+    def add_economy_column(name):
+        values = economy_ts_dict.get(name)
+        if values is None:
+            return None
+        return add_column(name, as_output_series(values))
+
+    def sector_labels(width):
+        industries = list(getattr(country.firms, "industries", []))
+        if len(industries) == width:
+            return [str(industry) for industry in industries]
+        return [str(i) for i in range(width)]
+
+    def add_economy_vector_columns(name):
+        series = add_economy_column(name)
+        if series is None:
+            return
+
+        non_null = series.dropna()
+        if non_null.empty or not isinstance(non_null.iloc[0], list):
+            return
+
+        labels = sector_labels(len(non_null.iloc[0]))
+        expanded = pd.DataFrame(series.tolist(), index=out_index, columns=[f"{name}_{label}" for label in labels])
+        for column in expanded.columns:
+            output_columns[column] = expanded[column]
+        output_columns.pop(name, None)
+
+    for economy_column in [
+        "unemployment_rate",
+        "unemployment_rate_growth",
+        "participation_rate",
+        "participation_rate_growth",
+        "vacancy_rate",
+        "vacancy_rate_growth",
+        "job_reallocation_rate",
+        "job_reallocation_rate_growth",
+        "firm_insolvency_rate",
+        "bank_insolvency_rate",
+        "household_insolvency_rate",
+        "total_growth",
+        "estimated_growth",
+        "cpi_yoy_inflation",
+        "real_gross_output",
+        "potential_output",
+        "output_gap",
+        "hpi",
+        "hpi_inflation",
+        "estimated_hpi_inflation",
+        "total_real_rent_paid",
+        "total_imp_rent_paid",
+        "total_real_rent_rec",
+        "npl_firm_loans",
+        "npl_hh_cons_loans",
+        "cpi_fixed",
+        "cpi_fixed_pop_change",
+        "cpi_fixed_yoy_change",
+        "cpi_chained",
+        "cpi_chained_pop_change",
+        "cpi_chained_yoy_change",
+        "ppi_fixed",
+        "ppi_fixed_pop_change",
+        "ppi_fixed_yoy_change",
+        "ppi_chained",
+        "ppi_chained_pop_change",
+        "ppi_chained_yoy_change",
+    ]:
+        add_economy_column(economy_column)
+    for economy_column in ["sectoral_growth", "num_insolvent_firms_by_sector"]:
+        add_economy_vector_columns(economy_column)
+
+    out = pd.DataFrame(output_columns, index=out_index).copy()
+    out.attrs["time_unit_months"] = model.timestep.increment
+    out.attrs["observation_frequency"] = frequency_label(model.timestep.increment)
+    out.attrs["periods_per_year"] = periods_per_year
+    out.attrs["interest_rate_observation_frequency"] = out.attrs["observation_frequency"]
+    out.attrs["interest_rate_units"] = "Macro interest-rate columns are annualized."
+
+    return out
+
+
 def summarize_ppi_comparison(ppi_comparison_df):
     """Return descriptive statistics for PPI level and change comparisons."""
     columns = [
@@ -947,428 +1212,3 @@ def plot_sensitivity_summary(
         template="plotly_white",
     )
     fig.show()
-
-
-def build_macro_output_df(model, country_code):
-    """Build a macro output dataframe with all derived output columns.
-
-    Observation frequency follows the model timestep. Macro interest-rate
-    columns are returned as annualized values.
-
-    Args:
-        cfg: Notebook/runtime config kept for call-site compatibility.
-        model: Simulation instance.
-        plot_columns: Unused, kept for call-site compatibility.
-        country_code: ISO3 country code.
-
-    Returns:
-        pd.DataFrame containing all available macro output columns.
-    """
-    shallow = model.shallow_df_dict()[country_code].copy()
-    gdp_components = model.get_country_gdp_components_df(country_code).copy()
-    periods_per_year = 12 / model.timestep.increment
-    yoy_periods = int(12 // model.timestep.increment)
-
-    out = pd.DataFrame(index=shallow.index)
-
-    def frequency_label(month_increment):
-        labels = {
-            1: "monthly",
-            3: "quarterly",
-            6: "semiannual",
-            12: "annual",
-        }
-        return labels.get(month_increment, f"every {month_increment} months")
-
-    def timeseries_dict_to_frame(ts_dict):
-        target_len = len(out.index)
-        if not ts_dict:
-            return pd.DataFrame(index=out.index)
-
-        series_dict = {}
-        for key, values in ts_dict.items():
-            values = list(values)
-            if target_len > 1 and len(values) == 1:
-                # Skip static metadata fields that are not recorded each timestep.
-                continue
-            series_dict[key] = pd.Series(values)
-
-        if not series_dict:
-            return pd.DataFrame(index=out.index)
-
-        frame = pd.DataFrame(series_dict).reindex(range(target_len))
-        frame.index = out.index
-        return frame.map(unpack_cell)
-
-    def first_available(*candidates):
-        for candidate in candidates:
-            if candidate in out.columns:
-                return out[candidate]
-            if candidate in shallow.columns:
-                return shallow[candidate]
-            if candidate in gdp_components.columns:
-                return gdp_components[candidate]
-        return None
-
-    def assign(name, *candidates):
-        if name in out.columns:
-            return out[name]
-
-        series = first_available(*candidates)
-        if series is not None:
-            out[name] = series
-        return series
-
-    def assign_annualized(name, *candidates):
-        if name in out.columns:
-            return out[name]
-
-        series = first_available(*candidates)
-        if series is not None:
-            out[name] = periods_per_year * series
-        return series
-
-    # Start with direct aliases from model output.
-    direct_columns = {
-        "gdp": ("GDP_Expenditure", "GDP_Output", "GDP_Income"),
-        "household consumption": ("Household Consumption", "+Household_Consumption"),
-        "government consumption": ("Government Consumption", "+Government_Consumption"),
-        "exports": ("Exports", "+Exports"),
-        "imports": ("Imports", "-Imports"),
-        "gfcf": ("+Gross_Fixed_Capital_Formation", "Capital Bought", "GFCF"),
-        "cpi": ("CPI",),
-        "cpi yoy inflation": ("CPI YoY Inflation", "cpi_yoy_inflation"),
-        "ppi": ("PPI",),
-        "output gap": ("Output Gap", "output_gap"),
-        "unemployment rate": ("Unemployment Rate",),
-        "central bank policy rate": ("Central Bank Policy Rate",),
-        "short-term firm borrowing rate": (
-            "Average Interest Rates on Short Term Firm Loans",
-            "average_interest_rates_on_short_term_firm_loans",
-        ),
-        "long-term firm borrowing rate": (
-            "Average Interest Rates on Long Term Firm Loans",
-            "average_interest_rates_on_long_term_firm_loans",
-        ),
-        "household consumption borrowing rate": (
-            "Average Interest Rates on Household Consumption Loans",
-            "average_interest_rates_on_household_consumption_loans",
-        ),
-        "mortgage borrowing rate": (
-            "Average Interest Rates on Mortgages",
-            "average_interest_rates_on_mortgages",
-        ),
-        "consumption expansion loan debt": ("Consumption Expansion Loan Debt",),
-        "mortgage debt": ("Mortgage Debt",),
-        "wages": ("Wages", "+Wages"),
-        "profits": ("Profits", "+Operating_Surplus"),
-        "taxes paid on production": ("Taxes Paid on Production", "-Taxes_on_Production"),
-        "taxes on products": ("Taxes on Products", "+Taxes_on_Products", "+Central_Government_Product_Taxes"),
-    }
-
-    def build_column(name):
-        if name in out.columns:
-            return out[name]
-        if name == "central bank policy rate":
-            policy_rate = assign_annualized(name, *direct_columns[name])
-            if policy_rate is not None:
-                return out[name]
-            return None
-        if name in {
-            "short-term firm borrowing rate",
-            "long-term firm borrowing rate",
-            "household consumption borrowing rate",
-            "mortgage borrowing rate",
-        }:
-            borrowing_rate = assign_annualized(name, *direct_columns[name])
-            if borrowing_rate is not None:
-                return out[name]
-            return None
-        if name in direct_columns:
-            return assign(name, *direct_columns[name])
-        if name == "unemployment benefits":
-            if "total_unemployment_benefits" in out.columns:
-                out[name] = out["total_unemployment_benefits"]
-                return out[name]
-            return None
-        if name == "other benefits":
-            if "total_household_social_transfers" in out.columns:
-                out[name] = out["total_household_social_transfers"]
-                return out[name]
-            return None
-        if name == "total consumption":
-            hh_cons = build_column("household consumption")
-            gov_cons = build_column("government consumption")
-            if hh_cons is not None and gov_cons is not None:
-                out[name] = hh_cons + gov_cons
-                return out[name]
-            return None
-        if name == "gdp growth":
-            gdp = build_column("gdp")
-            if gdp is not None:
-                out[name] = gdp.pct_change()
-                return out[name]
-            return None
-        if name == "real gdp":
-            gdp = build_column("gdp")
-            ppi = build_column("ppi")
-            if gdp is not None and ppi is not None:
-                out[name] = gdp / ppi
-                return out[name]
-            return None
-        if name == "ppi yoy change":
-            ppi = build_column("ppi")
-            if ppi is not None:
-                out[name] = ppi / ppi.shift(yoy_periods) - 1.0
-                return out[name]
-            return None
-        if name == "expected gdp growth":
-            if "estimated_growth" in out.columns:
-                out[name] = out["estimated_growth"]
-                return out[name]
-            return None
-        if name == "household consumption to gdp":
-            hh_cons = build_column("household consumption")
-            gdp = build_column("gdp")
-            if hh_cons is not None and gdp is not None:
-                out[name] = hh_cons / gdp
-                return out[name]
-            return None
-        if name == "government consumption to gdp":
-            gov_cons = build_column("government consumption")
-            gdp = build_column("gdp")
-            if gov_cons is not None and gdp is not None:
-                out[name] = gov_cons / gdp
-                return out[name]
-            return None
-        if name == "total consumption to gdp":
-            total_cons = build_column("total consumption")
-            gdp = build_column("gdp")
-            if total_cons is not None and gdp is not None:
-                out[name] = total_cons / gdp
-                return out[name]
-            return None
-        if name == "investment to gdp":
-            gfcf = build_column("gfcf")
-            gdp = build_column("gdp")
-            if gfcf is not None and gdp is not None:
-                out[name] = gfcf / gdp
-                return out[name]
-            return None
-        if name == "net exports to gdp":
-            exports = build_column("exports")
-            imports = build_column("imports")
-            gdp = build_column("gdp")
-            if exports is not None and imports is not None and gdp is not None:
-                out[name] = (exports - imports) / gdp
-                return out[name]
-            return None
-        if name in {"fiscal revenue", "revenues", "revenue"}:
-            if "revenue" in df_gov_ts.columns:
-                out[name] = df_gov_ts["revenue"]
-                return out[name]
-            return None
-        if name in {"fiscal expenditure", "government expenditure", "spending"}:
-            if "government expenditure" in df_gov_ts.columns:
-                out[name] = df_gov_ts["government expenditure"]
-                return out[name]
-            return None
-        if name == "deficit":
-            if "deficit" in df_gov_ts.columns:
-                out[name] = df_gov_ts["deficit"]
-                return out[name]
-            return None
-        if name == "debt":
-            if "debt" in df_gov_ts.columns:
-                out[name] = df_gov_ts["debt"]
-                return out[name]
-            return None
-        if name == "interest payments on debt":
-            if "interest_payments_on_debt" in df_gov_ts.columns:
-                out[name] = df_gov_ts["interest_payments_on_debt"]
-                return out[name]
-            return None
-        if name in {"fiscal revenue to gdp", "revenues to gdp"}:
-            revenues = build_column("fiscal revenue")
-            gdp = build_column("gdp")
-            if revenues is not None and gdp is not None:
-                out[name] = revenues / gdp
-                return out[name]
-            return None
-        if name in {"fiscal expenditure to gdp", "government expenditure to gdp", "spending to gdp"}:
-            spending = build_column("fiscal expenditure")
-            gdp = build_column("gdp")
-            if spending is not None and gdp is not None:
-                out[name] = spending / gdp
-                return out[name]
-            return None
-        if name == "unemp_benefits_to_expenditure":
-            unemployment_benefits = build_column("unemployment benefits")
-            spending = build_column("fiscal expenditure")
-            if unemployment_benefits is not None and spending is not None:
-                out[name] = unemployment_benefits / spending
-                return out[name]
-            return None
-        if name == "other_benefits_to_expenditure":
-            other_benefits = build_column("other benefits")
-            spending = build_column("fiscal expenditure")
-            if other_benefits is not None and spending is not None:
-                out[name] = other_benefits / spending
-                return out[name]
-            return None
-        if name == "gov_consumption_to_expenditure":
-            government_consumption = build_column("government consumption")
-            spending = build_column("fiscal expenditure")
-            if government_consumption is not None and spending is not None:
-                out[name] = government_consumption / spending
-                return out[name]
-            return None
-        if name == "interest_payments_on_debt_to_expenditure":
-            interest_payments = build_column("interest payments on debt")
-            spending = build_column("fiscal expenditure")
-            if interest_payments is not None and spending is not None:
-                out[name] = interest_payments / spending
-                return out[name]
-            return None
-        if name == "deficit to gdp":
-            deficit = build_column("deficit")
-            gdp = build_column("gdp")
-            if deficit is not None and gdp is not None:
-                out[name] = deficit / gdp
-                return out[name]
-            return None
-        if name == "debt to gdp":
-            debt = build_column("debt")
-            gdp = build_column("gdp")
-            if debt is not None and gdp is not None:
-                out[name] = debt / (periods_per_year * gdp)
-                return out[name]
-            return None
-        return assign(name, name)
-
-    # Analyse government revenues and spending
-    gov_ts_dict = model.countries[country_code].central_government.ts.__dict__["dicts"]
-    cb_ts_dict = model.countries[country_code].central_bank.ts.__dict__["dicts"]
-    df_cb_ts = timeseries_dict_to_frame(cb_ts_dict)
-    bank_ts_dict = model.countries[country_code].banks.ts.__dict__["dicts"]
-    df_bank_ts = timeseries_dict_to_frame(bank_ts_dict)
-    df_gov_ts = timeseries_dict_to_frame(gov_ts_dict)
-    df_gov_ts["government expenditure"] = df_gov_ts["revenue"] + df_gov_ts["deficit"]
-    for column in df_gov_ts.columns:
-        out[column.lower()] = df_gov_ts[column]
-    for column in df_cb_ts.columns:
-        if column.lower() not in out.columns:
-            out[column.lower()] = df_cb_ts[column]
-    for bank_column in [
-        "average_interest_rates_on_short_term_firm_loans",
-        "average_interest_rates_on_long_term_firm_loans",
-        "average_interest_rates_on_household_consumption_loans",
-        "average_interest_rates_on_mortgages",
-    ]:
-        bank_series = df_bank_ts.get(bank_column)
-        if bank_series is not None and bank_column not in out.columns:
-            out[bank_column] = bank_series
-    economy_ts_dict = model.countries[country_code].economy.ts.__dict__["dicts"]
-    for economy_column in [
-        "estimated_growth",
-        "cpi_yoy_inflation",
-        "output_gap",
-        "cpi_fixed",
-        "cpi_fixed_pop_change",
-        "cpi_fixed_yoy_change",
-        "cpi_chained",
-        "cpi_chained_pop_change",
-        "cpi_chained_yoy_change",
-        "ppi_fixed",
-        "ppi_fixed_pop_change",
-        "ppi_fixed_yoy_change",
-        "ppi_chained",
-        "ppi_chained_pop_change",
-        "ppi_chained_yoy_change",
-    ]:
-        economy_series = economy_ts_dict.get(economy_column)
-        if economy_series is not None and economy_column not in out.columns:
-            out[economy_column] = pd.Series([unpack_cell(x) for x in economy_series], index=out.index)
-
-    all_columns = [
-        "gdp",
-        "real gdp",
-        "gdp growth",
-        "expected gdp growth",
-        "household consumption",
-        "government consumption",
-        "total consumption",
-        "household consumption to gdp",
-        "government consumption to gdp",
-        "total consumption to gdp",
-        "exports",
-        "imports",
-        "gfcf",
-        "investment to gdp",
-        "net exports to gdp",
-        "cpi",
-        "cpi yoy inflation",
-        "cpi_fixed",
-        "cpi_fixed_pop_change",
-        "cpi_fixed_yoy_change",
-        "cpi_chained",
-        "cpi_chained_pop_change",
-        "cpi_chained_yoy_change",
-        "ppi",
-        "ppi yoy change",
-        "ppi_fixed",
-        "ppi_fixed_pop_change",
-        "ppi_fixed_yoy_change",
-        "ppi_chained",
-        "ppi_chained_pop_change",
-        "ppi_chained_yoy_change",
-        "output gap",
-        "unemployment rate",
-        "central bank policy rate",
-        "short-term firm borrowing rate",
-        "long-term firm borrowing rate",
-        "household consumption borrowing rate",
-        "mortgage borrowing rate",
-        "consumption expansion loan debt",
-        "mortgage debt",
-        "unemployment benefits",
-        "other benefits",
-        "wages",
-        "profits",
-        "taxes paid on production",
-        "taxes on products",
-        "fiscal revenue",
-        "fiscal expenditure",
-        "unemp_benefits_to_expenditure",
-        "other_benefits_to_expenditure",
-        "gov_consumption_to_expenditure",
-        "interest_payments_on_debt_to_expenditure",
-        "deficit",
-        "debt",
-        "interest payments on debt",
-        "fiscal revenue to gdp",
-        "fiscal expenditure to gdp",
-        "deficit to gdp",
-        "debt to gdp",
-    ]
-    for column in all_columns:
-        build_column(column)
-
-    out = out.drop(
-        columns=[
-            "real unemployment benefits",
-            "nominal unemployment benefits",
-            "real other benefits",
-            "total_other_benefits",
-            "unemployment_benefits_by_individual",
-        ],
-        errors="ignore",
-    )
-
-    out.attrs["time_unit_months"] = model.timestep.increment
-    out.attrs["observation_frequency"] = frequency_label(model.timestep.increment)
-    out.attrs["periods_per_year"] = periods_per_year
-    out.attrs["interest_rate_observation_frequency"] = out.attrs["observation_frequency"]
-    out.attrs["interest_rate_units"] = "Macro interest-rate columns are annualized."
-
-    return out

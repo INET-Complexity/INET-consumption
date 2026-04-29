@@ -33,6 +33,29 @@ This section documents the Economy entity in the macromodel package, which manag
 
 ## Functions
 
+## Consumer Price Index Configuration
+
+`EconomyConfiguration` separates the consumer-facing CPI concept from the
+inflation forecasting rule:
+
+```yaml
+economy:
+  consumer_price_index:
+    source: fixed_basket_cpi
+  functions:
+    inflation_forecaster:
+      name: InflationManualForecastingAutoReg
+      path_name: inflation
+      parameters:
+        lags: 1
+        value: 0.0
+```
+
+The CPI source can be `transaction_cpi`, `fixed_basket_cpi`, or
+`chained_basket_cpi`. The selected source is used consistently for consumer
+price levels, period inflation, and annual inflation. The default is
+`fixed_basket_cpi`.
+
 ### Sentiment
 
 ::: macromodel.economy.func.sentiment.SentimentSetter

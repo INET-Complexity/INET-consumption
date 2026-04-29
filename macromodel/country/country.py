@@ -203,6 +203,7 @@ class Country:
         self.running_multiple_countries = running_multiple_countries
 
         self.configuration = configuration
+        self.economy.configure_consumer_price_sources(configuration.economy)
 
         self.add_emissions = add_emissions
         self.emission_factors_lcu = emission_factors_lcu
@@ -563,9 +564,11 @@ class Country:
 
         # The central government updates unemployment benefits paid to individuals and social transfers to households
         self.central_government.update_benefits(
-            historic_benefit_indexation_inflation=self.economy.ts.historic("cpi_inflation"),
+            historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
             exogenous_benefit_indexation_inflation=self.exogenous.inflation_before["CPI Inflation"].values,
-            current_estimated_benefit_indexation_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
+            current_estimated_benefit_indexation_inflation=(
+                self.economy.current_expected_consumer_period_inflation()
+            ),
             current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
             current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
         )
@@ -586,7 +589,7 @@ class Country:
                 self.central_bank.compute_rate(
                     inflation=self.economy.ts.current("ppi_inflation")[0],
                     growth=self.economy.ts.current("total_growth")[0],
-                    cpi_yoy_inflation=self.economy.ts.current("cpi_yoy_inflation")[0],
+                    cpi_yoy_inflation=self.economy.current_consumer_annual_inflation(),
                     output_gap=self.economy.ts.current("output_gap")[0],
                     time_unit=self.economy.time_unit,
                 )
@@ -684,8 +687,8 @@ class Country:
             self.individuals.compute_expected_income(
                 expected_firm_profits=self.firms.ts.current("expected_profits"),
                 expected_bank_profits=self.banks.ts.current("expected_profits"),
-                cpi=self.economy.ts.current("cpi")[0],
-                expected_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
+                cpi=self.economy.current_consumer_price_level(),
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
                 income_taxes=self.central_government.states["Income Tax"],
                 tau_firm=self.central_government.states["Profit Tax"],
             )
@@ -701,8 +704,8 @@ class Country:
         self.households.ts.expected_income_social_transfers.append(
             self.households.compute_expected_social_transfer_income(
                 total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-                cpi=self.economy.ts.current("cpi")[0],
-                expected_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
+                cpi=self.economy.current_consumer_price_level(),
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             )
         )
         self.households.ts.income_rental.append(
@@ -726,9 +729,9 @@ class Country:
 
         self.households.ts.target_consumption.append(
             self.households.compute_target_consumption(
-                expected_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
-                current_cpi=self.economy.ts.current("cpi")[0],
-                initial_cpi=self.economy.ts.initial("cpi")[0],
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+                current_cpi=self.economy.current_consumer_price_level(),
+                initial_cpi=self.economy.initial_consumer_price_level(),
                 exogenous_total_consumption=self.exogenous.national_accounts_during[
                     "Real Household Consumption (Value)"
                 ].values.flatten(),
@@ -747,9 +750,9 @@ class Country:
         # Household target investment
         self.households.ts.target_investment.append(
             self.households.compute_target_investment(
-                expected_inflation=self.economy.ts.current("estimated_cpi_inflation")[0],
-                current_cpi=self.economy.ts.current("cpi")[0],
-                initial_cpi=self.economy.ts.initial("cpi")[0],
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+                current_cpi=self.economy.current_consumer_price_level(),
+                initial_cpi=self.economy.initial_consumer_price_level(),
                 exogenous_total_investment=self.exogenous.national_accounts_during[
                     "Real Household Investment (Value)"
                 ].values.flatten(),
@@ -780,7 +783,7 @@ class Country:
         # Set rent
         self.households.update_rent(
             housing_data=self.housing_market.states["properties"],
-            historic_inflation=self.economy.ts.historic("cpi_inflation"),
+            historic_inflation=self.economy.historic_consumer_period_inflation(),
             exogenous_inflation_before=self.exogenous.inflation_before["CPI Inflation"].values,
         )
 
@@ -1123,7 +1126,7 @@ class Country:
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
-            cpi=self.economy.ts.current("cpi")[0],
+            cpi=self.economy.current_consumer_price_level(),
         )
 
         # C3. EMISSIONS AND INVENTORY
@@ -1213,7 +1216,7 @@ class Country:
             self.individuals.compute_income(
                 firm_profits=self.firms.ts.current("profits"),
                 bank_profits=self.banks.ts.current("profits"),
-                cpi=self.economy.ts.current("cpi")[0],
+                cpi=self.economy.current_consumer_price_level(),
                 income_taxes=self.central_government.states["Income Tax"],
                 tau_firm=self.central_government.states["Profit Tax"],
             )
@@ -1239,7 +1242,7 @@ class Country:
         self.households.ts.income_social_transfers.append(
             self.households.compute_social_transfer_income(
                 total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-                cpi=self.economy.ts.current("cpi")[0],
+                cpi=self.economy.current_consumer_price_level(),
             )
         )
         self.households.ts.total_income_social_transfers.append(
@@ -1400,7 +1403,7 @@ class Country:
         self.central_government.ts.deficit.append(
             self.central_government.compute_deficit(
                 current_ind_activity=self.individuals.states["Activity Status"],
-                current_cpi=self.economy.ts.current("cpi")[0],
+                current_cpi=self.economy.current_consumer_price_level(),
                 current_government_nominal_amount_spent=self.government_entities.ts.current(
                     "nominal_amount_spent_in_lcu"
                 ),

@@ -22,7 +22,7 @@ class RegionalAggregator:
                 [countries[region].economy.ts.current("total_growth")[0] for region in regions]
             )
             cpi_yoy_inflation_rates = np.array(
-                [countries[region].economy.ts.current("cpi_yoy_inflation")[0] for region in regions]
+                [countries[region].economy.current_consumer_annual_inflation() for region in regions]
             )
             output_gaps = np.array([countries[region].economy.ts.current("output_gap")[0] for region in regions])
 

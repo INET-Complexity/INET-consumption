@@ -1,5 +1,18 @@
 import numpy as np
+import pandas as pd
 import pytest
+from pydantic import ValidationError
+
+from macromodel.configurations.economy_configuration import EconomyConfiguration
+
+
+class _CapturingInflationForecaster:
+    def __init__(self):
+        self.calls = []
+
+    def forecast_inflation(self, historic_inflation, exogenous_inflation, current_time, assume_zero_noise):
+        self.calls.append({"historic_inflation": historic_inflation.copy(), "current_time": current_time})
+        return np.array([np.log(1.02)])
 
 
 def _record_price_period(economy, prices, sectoral_sales, sectoral_household_consumption=None):
@@ -30,6 +43,31 @@ def _record_price_period(economy, prices, sectoral_sales, sectoral_household_con
 class TestEconomy:
     def test__economy_states(self, test_economy):
         assert test_economy is not None
+
+    def test__consumer_price_source_config_defaults_to_fixed_basket_cpi(self):
+        config = EconomyConfiguration()
+
+        assert config.consumer_price_index.source == "fixed_basket_cpi"
+
+    def test__consumer_price_source_config_rejects_invalid_source(self):
+        with pytest.raises(ValidationError):
+            EconomyConfiguration(consumer_price_index={"source": "legacy_cpi"})
+
+    def test__consumer_price_source_config_rejects_legacy_source_fields(self):
+        with pytest.raises(ValidationError):
+            EconomyConfiguration(consumer_period_inflation_source="fixed_basket_cpi")
+
+    def test__economy_functions_rejects_legacy_inflation_key(self):
+        with pytest.raises(ValidationError):
+            EconomyConfiguration(
+                functions={
+                    "inflation": {
+                        "name": "InflationManualForecastingAutoReg",
+                        "path_name": "inflation",
+                        "parameters": {"lags": 1, "value": 0.0},
+                    }
+                }
+            )
 
     def test__economy_ts(self, test_economy):
         for ts_key in [
@@ -80,6 +118,39 @@ class TestEconomy:
         assert weights.shape == (test_economy.n_industries,)
         assert weights.sum() == pytest.approx(1.0)
         assert np.all(weights >= 0.0)
+
+    def test__consumer_price_source_helpers_map_transaction_cpi(self, test_economy):
+        test_economy.consumer_price_index_source = "transaction_cpi"
+        test_economy.ts.dicts["cpi"] = [[1.0], [1.1]]
+        test_economy.ts.dicts["cpi_inflation"] = [[0.01], [0.02]]
+        test_economy.ts.dicts["cpi_yoy_inflation"] = [[0.03], [0.04]]
+
+        assert test_economy.current_consumer_price_level() == pytest.approx(1.1)
+        assert test_economy.initial_consumer_price_level() == pytest.approx(1.0)
+        assert test_economy.current_consumer_period_inflation() == pytest.approx(0.02)
+        assert test_economy.current_consumer_annual_inflation() == pytest.approx(0.04)
+
+    def test__consumer_price_source_helpers_map_fixed_basket_cpi(self, test_economy):
+        test_economy.consumer_price_index_source = "fixed_basket_cpi"
+        test_economy.ts.dicts["cpi_fixed"] = [[1.0], [1.2]]
+        test_economy.ts.dicts["cpi_fixed_pop_change"] = [[0.03], [0.04]]
+        test_economy.ts.dicts["cpi_fixed_yoy_change"] = [[0.05], [0.06]]
+
+        assert test_economy.current_consumer_price_level() == pytest.approx(1.2)
+        assert test_economy.initial_consumer_price_level() == pytest.approx(1.0)
+        assert test_economy.current_consumer_period_inflation() == pytest.approx(0.04)
+        assert test_economy.current_consumer_annual_inflation() == pytest.approx(0.06)
+
+    def test__consumer_price_source_helpers_map_chained_basket_cpi(self, test_economy):
+        test_economy.consumer_price_index_source = "chained_basket_cpi"
+        test_economy.ts.dicts["cpi_chained"] = [[1.0], [1.3]]
+        test_economy.ts.dicts["cpi_chained_pop_change"] = [[0.07], [0.08]]
+        test_economy.ts.dicts["cpi_chained_yoy_change"] = [[0.09], [0.10]]
+
+        assert test_economy.current_consumer_price_level() == pytest.approx(1.3)
+        assert test_economy.initial_consumer_price_level() == pytest.approx(1.0)
+        assert test_economy.current_consumer_period_inflation() == pytest.approx(0.08)
+        assert test_economy.current_consumer_annual_inflation() == pytest.approx(0.10)
 
     def test__initial_cpi_fixed_weights_are_normalized(self, test_economy):
         weights = test_economy.ts.current("cpi_fixed_weights")
@@ -254,6 +325,43 @@ class TestEconomy:
 
         expected = np.prod([1.01, 1.02, 1.03, 1.04]) - 1.0
         assert test_economy.ts.current("cpi_yoy_inflation")[0] == pytest.approx(expected)
+
+    def test__set_estimates_uses_configured_consumer_period_inflation_source(self, test_economy):
+        forecaster = _CapturingInflationForecaster()
+        test_economy.functions["inflation_forecaster"] = forecaster
+        test_economy.consumer_price_index_source = "fixed_basket_cpi"
+        test_economy.ts.dicts["cpi_fixed"] = [[1.0], [1.1], [1.2]]
+        test_economy.ts.dicts["cpi_fixed_pop_change"] = [[0.10], [0.20], [0.30]]
+        test_economy.ts.dicts["cpi_inflation"] = [[0.01], [0.02], [0.03]]
+        test_economy.ts.dicts["ppi_inflation"] = [[0.01], [0.02], [0.03]]
+        test_economy.ts.dicts["ppi"] = [[1.0], [1.1], [1.2]]
+
+        test_economy.set_estimates(
+            exogenous_growth=np.array([0.01, 0.01, 0.01]),
+            exogenous_inflation=pd.DataFrame(
+                {
+                    "CPI Inflation": [0.001, 0.002, 0.003],
+                    "PPI Inflation": [0.004, 0.005, 0.006],
+                }
+            ),
+            exogenous_hpi_growth=pd.DataFrame(
+                {
+                    "Real House Price Index Growth": [0.0, 0.0, 0.0],
+                    "Nominal House Price Index Growth": [0.0, 0.0, 0.0],
+                }
+            ),
+            forecasting_window=2,
+            exogenous_cpi_inflation_during=np.array([0.0, 0.0, 0.0]),
+            exogenous_ppi_inflation_during=np.array([0.0, 0.0, 0.0]),
+            exogenous_growth_during=np.array([0.0, 0.0, 0.0]),
+            assume_zero_noise=True,
+        )
+
+        cpi_forecast_call = forecaster.calls[0]
+        np.testing.assert_allclose(cpi_forecast_call["historic_inflation"][:2], np.array([0.002, 0.003]))
+        np.testing.assert_allclose(cpi_forecast_call["historic_inflation"][2:], np.array([0.10, 0.20, 0.30]))
+        assert cpi_forecast_call["current_time"] == 3
+        assert test_economy.ts.current("estimated_cpi_inflation")[0] == pytest.approx(0.02)
 
     def test__compute_output_gap(self, test_economy):
         test_economy.ts.dicts["ppi"] = [[1.0], [1.1]]

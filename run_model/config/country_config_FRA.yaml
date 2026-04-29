@@ -1,5 +1,7 @@
 FRA:
   economy:
+    consumer_price_index:
+      source: fixed_basket_cpi
     functions:
       growth:
         name: GrowthManualForecastingAutoReg
@@ -13,7 +15,7 @@ FRA:
         parameters:
           lags: 1
           value: 0.0
-      inflation:
+      inflation_forecaster:
         name: InflationManualForecastingAutoReg
         path_name: inflation
         parameters:
@@ -359,7 +361,7 @@ FRA:
   central_government:
     functions:
       social_benefits:
-        name: GrowthSocialBenefitsSetter
+        name: ConstantSocialBenefitsSetter
         path_name: social_benefits
         parameters: {}
       social_housing:

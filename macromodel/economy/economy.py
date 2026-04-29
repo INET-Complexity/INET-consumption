@@ -109,6 +109,22 @@ class Economy:
     proper accounting of economic flows and stocks across all sectors.
     """
 
+    _CONSUMER_PRICE_LEVEL_SERIES = {
+        "transaction_cpi": "cpi",
+        "fixed_basket_cpi": "cpi_fixed",
+        "chained_basket_cpi": "cpi_chained",
+    }
+    _CONSUMER_PERIOD_INFLATION_SERIES = {
+        "transaction_cpi": "cpi_inflation",
+        "fixed_basket_cpi": "cpi_fixed_pop_change",
+        "chained_basket_cpi": "cpi_chained_pop_change",
+    }
+    _CONSUMER_ANNUAL_INFLATION_SERIES = {
+        "transaction_cpi": "cpi_yoy_inflation",
+        "fixed_basket_cpi": "cpi_fixed_yoy_change",
+        "chained_basket_cpi": "cpi_chained_yoy_change",
+    }
+
     def __init__(
         self,
         country_name: str,
@@ -117,6 +133,7 @@ class Economy:
         functions: dict[str, Any],
         ts: TimeSeries,
         time_unit: int,
+        consumer_price_index_source: str = "fixed_basket_cpi",
     ):
         """Initialize an Economy instance.
 
@@ -127,6 +144,7 @@ class Economy:
             functions (dict[str, Any]): Economic function implementations
             ts (TimeSeries): Time series data for economic metrics
             time_unit (int): Simulation period length in months
+            consumer_price_index_source (str): CPI concept for consumer-facing price levels and inflation
         """
         self.country_name = country_name
         self.all_country_names = all_country_names
@@ -135,6 +153,37 @@ class Economy:
         self.n_industries = n_industries
         self.ts = ts
         self.time_unit = time_unit
+        self.consumer_price_index_source = consumer_price_index_source
+
+    def configure_consumer_price_sources(self, configuration: EconomyConfiguration) -> None:
+        self.consumer_price_index_source = configuration.consumer_price_index.source
+
+    def consumer_price_level_series_name(self) -> str:
+        return self._CONSUMER_PRICE_LEVEL_SERIES[self.consumer_price_index_source]
+
+    def consumer_period_inflation_series_name(self) -> str:
+        return self._CONSUMER_PERIOD_INFLATION_SERIES[self.consumer_price_index_source]
+
+    def consumer_annual_inflation_series_name(self) -> str:
+        return self._CONSUMER_ANNUAL_INFLATION_SERIES[self.consumer_price_index_source]
+
+    def current_consumer_price_level(self) -> float:
+        return self.ts.current(self.consumer_price_level_series_name())[0]
+
+    def initial_consumer_price_level(self) -> float:
+        return self.ts.initial(self.consumer_price_level_series_name())[0]
+
+    def historic_consumer_period_inflation(self):
+        return self.ts.historic(self.consumer_period_inflation_series_name())
+
+    def current_consumer_period_inflation(self) -> float:
+        return self.ts.current(self.consumer_period_inflation_series_name())[0]
+
+    def current_consumer_annual_inflation(self) -> float:
+        return self.ts.current(self.consumer_annual_inflation_series_name())[0]
+
+    def current_expected_consumer_period_inflation(self) -> float:
+        return self.ts.current("estimated_cpi_inflation")[0]
 
     @classmethod
     def from_agents(
@@ -321,6 +370,7 @@ class Economy:
         )
 
         functions = functions_from_model(economy_configuration.functions, loc="macromodel.economy")
+        functions["inflation_forecaster"] = functions.pop("inflation")
 
         n_industries = firms.n_industries
 
@@ -331,6 +381,7 @@ class Economy:
             functions,
             ts,
             time_unit,
+            consumer_price_index_source=economy_configuration.consumer_price_index.source,
         )
 
     @staticmethod
@@ -449,8 +500,9 @@ class Economy:
             model=configuration.functions,
             functions=self.functions,
             loc="macromodel.economy",
-            force_reset=["growth", "house_price_index", "inflation"],
+            force_reset=["growth", "house_price_index", "inflation_forecaster"],
         )
+        self.configure_consumer_price_sources(configuration)
 
     def set_estimates(
         self,
@@ -505,7 +557,7 @@ class Economy:
         historic_cpi_inflation = np.concatenate(
             (
                 exogenous_inflation["CPI Inflation"].values[-forecasting_window:],
-                np.array(self.ts.historic("cpi_inflation")).flatten(),
+                np.array(self.historic_consumer_period_inflation()).flatten(),
             )
         )
         if assume_zero_growth:
@@ -516,10 +568,10 @@ class Economy:
             else:
                 estimated_cpi_inflation = (
                     np.exp(
-                        self.functions["inflation"].forecast_inflation(
+                        self.functions["inflation_forecaster"].forecast_inflation(
                             historic_inflation=historic_cpi_inflation,
                             exogenous_inflation=exogenous_cpi_inflation_during,
-                            current_time=len(self.ts.historic("cpi")),
+                            current_time=len(self.ts.historic(self.consumer_price_level_series_name())),
                             assume_zero_noise=assume_zero_noise,
                         )[0]
                     )
@@ -547,7 +599,7 @@ class Economy:
             else:
                 estimated_ppi_inflation = (
                     np.exp(
-                        self.functions["inflation"].forecast_inflation(
+                        self.functions["inflation_forecaster"].forecast_inflation(
                             historic_inflation=historic_ppi_inflation,
                             exogenous_inflation=exogenous_ppi_inflation_during,
                             current_time=len(self.ts.historic("ppi")),

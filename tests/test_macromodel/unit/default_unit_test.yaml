@@ -147,6 +147,12 @@ FRA:
             value: 0.0
   economy:
     parameters: {}
+    consumer_price_index:
+      source:
+        desc: The consumer-facing CPI concept used for price levels and inflation rates.
+        options: transaction_cpi,fixed_basket_cpi,chained_basket_cpi
+        type: str
+        value: fixed_basket_cpi
     functions:
       growth:
         name:
@@ -173,7 +179,7 @@ FRA:
             options: ''
             type: int
             value: 1
-      inflation:
+      inflation_forecaster:
         name:
           desc: The function used for setting how inflation is centrally forecasted.
           options: InflationForecastingConstant,InflationForecastingOLS,InflationImplementedForecastingAutoReg,InflationManualForecastingAutoReg
@@ -1045,6 +1051,12 @@ goods_market:
 init:
   FRA:
     economy:
+      consumer_price_index:
+        source:
+          desc: The consumer-facing CPI concept used for price levels and inflation rates.
+          options: transaction_cpi,fixed_basket_cpi,chained_basket_cpi
+          type: str
+          value: fixed_basket_cpi
       functions: {}
       parameters: {}
     banks:

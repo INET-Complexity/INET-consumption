@@ -1,6 +1,8 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
+ConsumerPriceIndexSource = Literal["transaction_cpi", "fixed_basket_cpi", "chained_basket_cpi"]
 
 
 class Growth(BaseModel):
@@ -34,7 +36,7 @@ class HPI(BaseModel):
     path_name: str = "house_price_index"
 
 
-class Inflation(BaseModel):
+class InflationForecaster(BaseModel):
     """
     The function used for setting how inflation is centrally forecasted.
     """
@@ -47,6 +49,16 @@ class Inflation(BaseModel):
     ] = "InflationManualForecastingAutoReg"
     parameters: dict = {"value": 0.0, "lags": 1}
     path_name: str = "inflation"
+
+
+class ConsumerPriceIndex(BaseModel):
+    """
+    The consumer-facing CPI concept used for price levels and inflation rates.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: ConsumerPriceIndexSource = "fixed_basket_cpi"
 
 
 class Sentiment(BaseModel):
@@ -64,9 +76,11 @@ class EconomyFunctions(BaseModel):
     The functions used for the economy.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     growth: Growth = Growth()
     house_price_index: HPI = HPI()
-    inflation: Inflation = Inflation()
+    inflation_forecaster: InflationForecaster = InflationForecaster()
     # sentiment: Sentiment = Sentiment()
 
 
@@ -75,4 +89,7 @@ class EconomyConfiguration(BaseModel):
     The configuration settings for the economy.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     functions: EconomyFunctions = EconomyFunctions()
+    consumer_price_index: ConsumerPriceIndex = ConsumerPriceIndex()

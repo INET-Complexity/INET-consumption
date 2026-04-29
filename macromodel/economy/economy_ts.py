@@ -206,6 +206,9 @@ def create_economy_timeseries(
             ]
         ),
         participation_rate_growth=[np.nan],
+        labour_input_shortfall_rate=[np.nan],
+        labour_input_shortfall_rate_growth=[np.nan],
+        unfilled_jobs=[np.nan],
         vacancy_rate=[np.nan],
         vacancy_rate_growth=[np.nan],
         job_reallocation_rate=[np.nan],

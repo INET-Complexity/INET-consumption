@@ -1095,6 +1095,7 @@ class Economy:
         current_individual_activity_status: np.ndarray,
         current_firm_labour_inputs: np.ndarray,
         current_desired_firm_labour_inputs: np.ndarray,
+        current_firm_number_of_employees: np.ndarray,
         num_ind_employed_before_cleaning: int,
         num_ind_newly_joining: int,
         num_ind_newly_leaving: int,
@@ -1104,8 +1105,9 @@ class Economy:
         Computes and updates:
         1. Unemployment rate and its growth
         2. Labor force participation rate and its growth
-        3. Job vacancy rate and its growth
-        4. Job reallocation rate and its growth
+        3. Labour-input shortfall rate and its growth
+        4. Job vacancies, vacancy rate, and vacancy-rate growth
+        5. Job reallocation rate and its growth
 
         The method tracks both levels and dynamics of labor market
         conditions, handling special cases where denominators may be zero.
@@ -1114,6 +1116,7 @@ class Economy:
             current_individual_activity_status (np.ndarray): Current activity status
             current_firm_labour_inputs (np.ndarray): Actual labor employed
             current_desired_firm_labour_inputs (np.ndarray): Desired labor demand
+            current_firm_number_of_employees (np.ndarray): Employee count by firm
             num_ind_employed_before_cleaning (int): Prior employment count
             num_ind_newly_joining (int): New hires count
             num_ind_newly_leaving (int): Separations count
@@ -1156,16 +1159,59 @@ class Economy:
                 [self.ts.current("participation_rate")[0] / self.ts.prev("participation_rate")[0] - 1.0]
             )
 
-        # The vacancy rate
+        # Labour-input shortfall rate: the previous "vacancy_rate" definition.
+        raw_labour_input_shortfall = current_desired_firm_labour_inputs - current_firm_labour_inputs
+        labour_input_shortfall = np.where(
+            np.isclose(current_desired_firm_labour_inputs, current_firm_labour_inputs, rtol=1e-10, atol=1e-8),
+            0.0,
+            np.maximum(raw_labour_input_shortfall, 0.0),
+        )
         if current_desired_firm_labour_inputs.sum() == 0.0:
-            self.ts.vacancy_rate.append([0.0])
+            self.ts.labour_input_shortfall_rate.append([0.0])
         else:
-            self.ts.vacancy_rate.append(
+            self.ts.labour_input_shortfall_rate.append(
+                [labour_input_shortfall.sum() / current_desired_firm_labour_inputs.sum()]
+            )
+        if self.ts.prev("labour_input_shortfall_rate")[0] == 0.0:
+            self.ts.labour_input_shortfall_rate_growth.append([0.0])
+        else:
+            self.ts.labour_input_shortfall_rate_growth.append(
                 [
-                    (current_desired_firm_labour_inputs.sum() - current_firm_labour_inputs.sum())
-                    / current_desired_firm_labour_inputs.sum()
+                    self.ts.current("labour_input_shortfall_rate")[0]
+                    / self.ts.prev("labour_input_shortfall_rate")[0]
+                    - 1.0
                 ]
             )
+
+        # True vacancy rate: unfilled jobs as a share of jobs plus employed workers.
+        employed = np.sum(current_individual_activity_status == ActivityStatus.EMPLOYED)
+        average_labour_input_per_worker = np.divide(
+            current_firm_labour_inputs,
+            current_firm_number_of_employees,
+            out=np.zeros_like(current_firm_labour_inputs, dtype=float),
+            where=current_firm_number_of_employees != 0.0,
+        )
+        economy_average_labour_input_per_worker = (
+            current_firm_labour_inputs.sum() / employed if employed != 0.0 else 1.0
+        )
+        average_labour_input_per_worker = np.where(
+            average_labour_input_per_worker > 0.0,
+            average_labour_input_per_worker,
+            economy_average_labour_input_per_worker,
+        )
+        unfilled_jobs = np.ceil(
+            np.divide(
+                labour_input_shortfall,
+                average_labour_input_per_worker,
+                out=np.zeros_like(labour_input_shortfall, dtype=float),
+                where=average_labour_input_per_worker != 0.0,
+            )
+        ).sum()
+        self.ts.unfilled_jobs.append([unfilled_jobs])
+        if employed + unfilled_jobs == 0.0:
+            self.ts.vacancy_rate.append([0.0])
+        else:
+            self.ts.vacancy_rate.append([unfilled_jobs / (employed + unfilled_jobs)])
         if self.ts.prev("vacancy_rate")[0] == 0.0:
             self.ts.vacancy_rate_growth.append([0.0])
         else:

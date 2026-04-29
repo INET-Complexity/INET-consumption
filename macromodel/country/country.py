@@ -1074,6 +1074,7 @@ class Country:
             current_individual_activity_status=self.individuals.states["Activity Status"],
             current_firm_labour_inputs=self.firms.ts.current("labour_inputs"),
             current_desired_firm_labour_inputs=self.firms.ts.current("desired_labour_inputs"),
+            current_firm_number_of_employees=self.firms.ts.current("number_of_employees"),
             num_ind_employed_before_cleaning=self.labour_market.ts.current("num_employed_individuals_before_clearing")[
                 0
             ],

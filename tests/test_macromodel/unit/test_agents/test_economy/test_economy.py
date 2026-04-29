@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
+from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations.economy_configuration import EconomyConfiguration
 
 
@@ -77,6 +78,8 @@ class TestEconomy:
             "good_prices",
             "unemployment_rate",
             "participation_rate",
+            "labour_input_shortfall_rate",
+            "unfilled_jobs",
             "vacancy_rate",
             "firm_insolvency_rate",
             "bank_insolvency_rate",
@@ -128,6 +131,47 @@ class TestEconomy:
             "cpi_chain_link_level",
         ]:
             assert legacy_ts_key not in test_economy.ts.get_keys()
+
+    def test__labour_market_aggregates_separate_shortfall_from_vacancy_rate(self, test_economy):
+        test_economy.compute_labour_market_aggregates(
+            current_individual_activity_status=np.array(
+                [
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.UNEMPLOYED,
+                ]
+            ),
+            current_firm_labour_inputs=np.array([10.0, 0.0]),
+            current_desired_firm_labour_inputs=np.array([15.0, 5.0]),
+            current_firm_number_of_employees=np.array([2.0, 0.0]),
+            num_ind_employed_before_cleaning=2,
+            num_ind_newly_joining=0,
+            num_ind_newly_leaving=0,
+        )
+
+        assert test_economy.ts.current("labour_input_shortfall_rate")[0] == pytest.approx(0.5)
+        assert test_economy.ts.current("unfilled_jobs")[0] == pytest.approx(2.0)
+        assert test_economy.ts.current("vacancy_rate")[0] == pytest.approx(0.5)
+
+    def test__labour_market_aggregates_ignore_numerical_labour_shortfall_noise(self, test_economy):
+        test_economy.compute_labour_market_aggregates(
+            current_individual_activity_status=np.array(
+                [
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.EMPLOYED,
+                ]
+            ),
+            current_firm_labour_inputs=np.array([100.0]),
+            current_desired_firm_labour_inputs=np.array([100.0 + 1e-9]),
+            current_firm_number_of_employees=np.array([2.0]),
+            num_ind_employed_before_cleaning=2,
+            num_ind_newly_joining=0,
+            num_ind_newly_leaving=0,
+        )
+
+        assert test_economy.ts.current("labour_input_shortfall_rate")[0] == 0.0
+        assert test_economy.ts.current("unfilled_jobs")[0] == 0.0
+        assert test_economy.ts.current("vacancy_rate")[0] == 0.0
 
     def test__initial_ppi_fixed_weights_are_normalized(self, test_economy):
         weights = test_economy.ts.current("ppi_fixed_weights")

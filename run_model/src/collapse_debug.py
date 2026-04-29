@@ -36,6 +36,8 @@ DEFAULT_CORE_DATASETS = {
     "estimated_cpi_inflation": "/FRA/economy/estimated_cpi_inflation",
     "estimated_ppi_inflation": "/FRA/economy/estimated_ppi_inflation",
     "unemployment_rate": "/FRA/economy/unemployment_rate",
+    "labour_input_shortfall_rate": "/FRA/economy/labour_input_shortfall_rate",
+    "unfilled_jobs": "/FRA/economy/unfilled_jobs",
     "vacancy_rate": "/FRA/economy/vacancy_rate",
     "government_revenue": "/FRA/central_government/revenue",
     "government_deficit": "/FRA/central_government/deficit",
@@ -109,6 +111,18 @@ def _read_dataset_window(
     values = dataset[start_idx:end_idx]
     time_index = np.arange(start_idx, end_idx)
     return time_index, np.asarray(values)
+
+
+def _available_dataset_map(handle: h5py.File, dataset_map: Mapping[str, str]) -> dict[str, str]:
+    """Return only datasets present in an HDF5 handle."""
+    return {name: dataset_path for name, dataset_path in dataset_map.items() if dataset_path in handle}
+
+
+def _read_optional_1d(handle: h5py.File, dataset_path: str, fallback: np.ndarray) -> np.ndarray:
+    """Read a 1D dataset when present, otherwise return a fallback-shaped array."""
+    if dataset_path not in handle:
+        return np.full_like(fallback, np.nan, dtype=float)
+    return np.asarray(handle[dataset_path], dtype=float).squeeze()
 
 
 def load_series_window(
@@ -267,6 +281,8 @@ def build_collapse_core_view(
     dataset_map = {
         name: dataset_path.replace("/FRA/", f"/{country_code}/") for name, dataset_path in DEFAULT_CORE_DATASETS.items()
     }
+    with h5py.File(_ensure_path(h5_path), "r") as handle:
+        dataset_map = _available_dataset_map(handle, dataset_map)
     return load_named_series_window(h5_path, dataset_map, start=start, end=end + 1)
 
 
@@ -376,6 +392,14 @@ def summarize_government_bridge_run(
         profits = np.asarray(handle[f"{base}/firms/profits"], dtype=float).sum(axis=1)
         unemployment = np.asarray(handle[f"{base}/economy/unemployment_rate"], dtype=float).squeeze()
         vacancy = np.asarray(handle[f"{base}/economy/vacancy_rate"], dtype=float).squeeze()
+        labour_input_shortfall = _read_optional_1d(
+            handle,
+            f"{base}/economy/labour_input_shortfall_rate",
+            fallback=vacancy,
+        )
+        if np.isnan(labour_input_shortfall).all():
+            labour_input_shortfall = vacancy
+        unfilled_jobs = _read_optional_1d(handle, f"{base}/economy/unfilled_jobs", fallback=vacancy)
         debt = np.asarray(handle[f"{base}/central_government/debt"], dtype=float).squeeze()
         prices = np.asarray(handle[f"{base}/economy/good_prices"], dtype=float)
         production = np.asarray(handle[f"{base}/firms/production"], dtype=float)
@@ -414,6 +438,8 @@ def summarize_government_bridge_run(
         "sector15_supply_cover_t21": _sector_value(supply_cover, 21, sector),
         "firm_profits_t50": float(profits[-1]),
         "unemployment_t50": float(unemployment[-1]),
+        "labour_input_shortfall_t50": float(labour_input_shortfall[-1]),
+        "unfilled_jobs_t50": float(unfilled_jobs[-1]),
         "vacancy_t50": float(vacancy[-1]),
         "debt_gdp_t50": float(debt_gdp[-1]),
     }
@@ -428,12 +454,19 @@ def compare_unemployment_to_exogenous(
     """Compare endogenous unemployment to the stored exogenous path when available."""
     dataset_map = {
         "economy_unemployment_rate": f"/{country_code}/economy/unemployment_rate",
+        "economy_labour_input_shortfall_rate": f"/{country_code}/economy/labour_input_shortfall_rate",
+        "economy_unfilled_jobs": f"/{country_code}/economy/unfilled_jobs",
         "economy_vacancy_rate": f"/{country_code}/economy/vacancy_rate",
     }
-    df = load_named_series_window(h5_path, dataset_map, start=start, end=end)
 
     path = _ensure_path(h5_path)
     with h5py.File(path, "r") as handle:
+        df = load_named_series_window(
+            h5_path,
+            _available_dataset_map(handle, dataset_map),
+            start=start,
+            end=end,
+        )
         exog_ur_path = f"/{country_code}/exogenous/unemployment_rate"
         exog_vr_path = f"/{country_code}/exogenous/vacancy_rate"
         if exog_ur_path in handle:

@@ -639,11 +639,12 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
 
         # Find the most suited individual
         if self.optimised_hiring:
+            candidate_ids = np.where(unemployed_ind)[0]
             dist = np.abs(
-                average_industry_productivity[firm_industry] * prev_individuals_productivity[unemployed_ind]
+                average_industry_productivity[firm_industry] * prev_individuals_productivity[candidate_ids]
                 - firm_missing_productivity
             )
-            ind = unemployed_ind[np.argmin(dist)]
+            ind = candidate_ids[np.argmin(dist)]
         else:
             ind = np.random.choice(np.where(unemployed_ind)[0])
 
@@ -664,7 +665,8 @@ def sort_employees_by_productivity(
     Returns:
         np.ndarray: Sorted array of employee IDs
     """
-    return np.array(current_firm_employments)[np.argsort(prev_individuals_productivity[current_firm_employments])]
+    current_firm_employments = np.asarray(current_firm_employments, dtype=np.int64)
+    return current_firm_employments[np.argsort(prev_individuals_productivity[current_firm_employments])]
 
 
 def random_firing(

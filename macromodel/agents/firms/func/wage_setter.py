@@ -353,14 +353,16 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             Callable[[int, float | np.ndarray], float | np.ndarray]: Function that
                 calculates appropriate wage offers given firm ID and labor inputs
         """
+        employed = corresponding_firm >= 0
+        employed_corresponding_firm = corresponding_firm[employed]
         total_real_wages = np.bincount(
-            corresponding_firm,
-            weights=previous_employee_income,
+            employed_corresponding_firm,
+            weights=previous_employee_income[employed],
             minlength=current_target_production.shape[0],
         )
         total_labour_inputs = np.bincount(
-            corresponding_firm,
-            weights=current_individual_labour_inputs,
+            employed_corresponding_firm,
+            weights=current_individual_labour_inputs[employed],
             minlength=current_target_production.shape[0],
         )
 

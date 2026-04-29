@@ -495,7 +495,6 @@ class Country:
         self.firms.ts.wage_tightness_markup.append(self.firms.compute_wages_markup())
 
         # Firms determine the wages they're willing to pay new employees
-        """
         self.firms.states["offered_wage_function"] = self.firms.compute_offered_wage_function(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             current_individual_labour_inputs=self.individuals.ts.current("labour_inputs"),
@@ -507,7 +506,6 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
         )
-        """
 
         # Individuals set reservation wages
         self.individuals.ts.reservation_wages.append(

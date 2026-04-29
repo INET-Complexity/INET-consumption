@@ -90,9 +90,7 @@ def find_results_dir_candidates(country_code):
 
 
 def standardize_result_columns(run_data):
-    rename_map = {
-        source: target for source, target in STANDARD_COLUMN_ALIASES.items() if source in run_data.columns
-    }
+    rename_map = {source: target for source, target in STANDARD_COLUMN_ALIASES.items() if source in run_data.columns}
     out = run_data.rename(columns=rename_map).copy()
     if "Gross Output" not in out.columns:
         raise KeyError("Run data must include Gross Output, gdp, GDP_Output, or GDP_Expenditure.")
@@ -109,8 +107,7 @@ def load_historical_data(data_pkl_path, country_code):
     data_pkl_path = Path(data_pkl_path)
     if not data_pkl_path.exists():
         raise FileNotFoundError(
-            f"Could not find data pickle at {data_pkl_path}. "
-            "Select a valid data.pkl path in the dashboard sidebar."
+            f"Could not find data pickle at {data_pkl_path}. Select a valid data.pkl path in the dashboard sidebar."
         )
     data = DataWrapper.init_from_pickle(str(data_pkl_path))
     country_data = _get_synthetic_country(data, country_code)
@@ -947,7 +944,9 @@ def main():
             historical_data=full_hist_data,
             country_code=selected_country_code,
         )
-        treasury_forecast_df = load_treasury_forecast(historical_data=full_hist_data) if selected_country_code == "GBR" else None
+        treasury_forecast_df = (
+            load_treasury_forecast(historical_data=full_hist_data) if selected_country_code == "GBR" else None
+        )
         alt_forecast_df = None
         alt_label = None
         if alt_forecast == "VAR":

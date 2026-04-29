@@ -292,7 +292,9 @@ class TestEconomy:
         expected_weights = np.zeros(n_industries)
         expected_weights[:2] = [0.25, 0.75]
         np.testing.assert_allclose(test_economy.ts.current("ppi_chain_weights"), expected_weights)
-        assert test_economy.ts.current("ppi_chain_link_level")[0] == pytest.approx(test_economy.ts.prev("ppi_chained")[0])
+        assert test_economy.ts.current("ppi_chain_link_level")[0] == pytest.approx(
+            test_economy.ts.prev("ppi_chained")[0]
+        )
         assert test_economy.ts.current("ppi_chained")[0] == pytest.approx(test_economy.ts.prev("ppi_chained")[0])
 
     def test__cpi_chained_basket_weights_update_after_full_model_year(self, test_economy):
@@ -332,8 +334,12 @@ class TestEconomy:
         expected_weights = np.zeros(n_industries)
         expected_weights[:2] = [0.25, 0.75]
         np.testing.assert_allclose(test_economy.ts.current("cpi_chained_basket_weights"), expected_weights)
-        assert test_economy.ts.current("cpi_chained_basket_link_level")[0] == pytest.approx(test_economy.ts.prev("cpi_chained_basket")[0])
-        assert test_economy.ts.current("cpi_chained_basket")[0] == pytest.approx(test_economy.ts.prev("cpi_chained_basket")[0])
+        assert test_economy.ts.current("cpi_chained_basket_link_level")[0] == pytest.approx(
+            test_economy.ts.prev("cpi_chained_basket")[0]
+        )
+        assert test_economy.ts.current("cpi_chained_basket")[0] == pytest.approx(
+            test_economy.ts.prev("cpi_chained_basket")[0]
+        )
 
     def test__compute_cpi_yoy_inflation(self, test_economy):
         test_economy.ts.dicts["cpi_transaction_pop_change"] = [[0.01], [0.02], [0.03], [0.04]]

@@ -507,8 +507,6 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             - np.ndarray: Hiring costs by firm
             - int: Number of new hires
         """
-        if not self.allow_switching_industries:
-            raise NotImplementedError("haven't done this yet")
         hiring_costs = np.zeros_like(desired_labour_inputs)
         num_newly_joining = 0
         missing_productivity = desired_labour_inputs - prev_labour_inputs
@@ -537,6 +535,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
                     individual_reservation_wages=individual_reservation_wages,
                     offered_wage=offered_wage,
                     average_industry_productivity=average_industry_productivity,
+                    allow_switching_industries=self.allow_switching_industries,
                 )
                 if ind_chosen is None:
                     break
@@ -581,7 +580,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         self,
         unemployed_ind: np.ndarray,
         prev_individuals_productivity: np.ndarray,
-        current_individuals_industry: np.ndarray,  # noqa
+        current_individuals_industry: np.ndarray,
         firm_industry: int,
         firm_missing_productivity: float,
         firm_id: int,
@@ -589,6 +588,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         individual_reservation_wages: np.ndarray,
         offered_wage: np.ndarray,
         average_industry_productivity: np.ndarray,
+        allow_switching_industries: bool,
     ) -> int | None:
         """Find suitable unemployed worker for a position.
 
@@ -628,13 +628,11 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             )
 
         # If individuals can not switch industries
-        """
-        if not self.allow_switching_industries:
+        if not allow_switching_industries:
             unemployed_ind = np.logical_and(
                 unemployed_ind,
                 current_individuals_industry == firm_industry,
             )
-        """
 
         # Check if anyone would accept the offer
         if len(prev_individuals_productivity[unemployed_ind]) == 0:

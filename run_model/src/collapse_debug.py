@@ -403,12 +403,8 @@ def summarize_government_bridge_run(
         "government_fce_first_zero": _first_zero(government_fce),
         "desired_government_consumption_first_below_1bn": _first_below(desired_total, 1_000_000_000.0),
         "desired_government_consumption_first_zero": _first_zero(desired_total),
-        "desired_government_consumption_first_drop_gt_50pct": _first_relative_change(
-            desired_total, 0.5, "drop"
-        ),
-        "desired_government_consumption_first_jump_gt_50pct": _first_relative_change(
-            desired_total, 0.5, "jump"
-        ),
+        "desired_government_consumption_first_drop_gt_50pct": _first_relative_change(desired_total, 0.5, "drop"),
+        "desired_government_consumption_first_jump_gt_50pct": _first_relative_change(desired_total, 0.5, "jump"),
         "desired_government_consumption_cv_t1_t50": desired_cv,
         "realised_desired_first_below_0_9": _first_below(realised_desired_ratio, 0.9),
         "realised_desired_first_below_0_5": _first_below(realised_desired_ratio, 0.5),

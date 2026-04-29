@@ -568,9 +568,7 @@ class Country:
         self.central_government.update_benefits(
             historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
             exogenous_benefit_indexation_inflation=self.exogenous.inflation_before["CPI Inflation"].values,
-            current_estimated_benefit_indexation_inflation=(
-                self.economy.current_expected_consumer_period_inflation()
-            ),
+            current_estimated_benefit_indexation_inflation=(self.economy.current_expected_consumer_period_inflation()),
             current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
             current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
         )
@@ -1037,9 +1035,9 @@ class Country:
             * self.firms.ts.current("production")
             * self.firms.ts.current("price")
         )
-        current_firm_total_sales = self.firms.ts.current("price") * self.firms.ts.current(
-            "production"
-        ) - current_taxes_paid_on_production
+        current_firm_total_sales = (
+            self.firms.ts.current("price") * self.firms.ts.current("production") - current_taxes_paid_on_production
+        )
         sectoral_sales = np.bincount(
             self.firms.states["Industry"],
             weights=current_firm_total_sales,

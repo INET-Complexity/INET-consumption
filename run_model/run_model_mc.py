@@ -228,13 +228,13 @@ def main(
     country_cfg.central_bank.functions.policy_rate.name = "SmoothTaylorRule"
     country_cfg.government_entities.functions.consumption.name = government_consumption_setter
     if government_consumption_consistency is not None:
-        country_cfg.government_entities.functions.consumption.parameters[
-            "consistency"
-        ] = government_consumption_consistency
+        country_cfg.government_entities.functions.consumption.parameters["consistency"] = (
+            government_consumption_consistency
+        )
     if government_sectoral_weights != DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS:
-        country_cfg.government_entities.functions.consumption.parameters[
-            "sectoral_weights"
-        ] = government_sectoral_weights
+        country_cfg.government_entities.functions.consumption.parameters["sectoral_weights"] = (
+            government_sectoral_weights
+        )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
 
@@ -356,9 +356,7 @@ def _build_arm_aggregates(summary: pd.DataFrame) -> pd.DataFrame:
                 )
                 / runs,
                 "gdp_t50_change_below_minus_20pct_runs": int((group["gdp_t50_change"] < -20.0).sum()),
-                "gdp_t50_change_below_minus_20pct_share": float(
-                    (group["gdp_t50_change"] < -20.0).sum() / runs
-                ),
+                "gdp_t50_change_below_minus_20pct_share": float((group["gdp_t50_change"] < -20.0).sum() / runs),
                 "unemployment_t50_above_40pct_runs": int((group["unemployment_t50"] > 0.40).sum()),
                 "unemployment_t50_above_40pct_share": float((group["unemployment_t50"] > 0.40).sum() / runs),
                 "debt_gdp_t50_above_5_runs": int((group["debt_gdp_t50"] > 5.0).sum()),
@@ -491,10 +489,7 @@ def _parse_args() -> argparse.Namespace:
         "--government-consumption-setter",
         choices=GOVERNMENT_CONSUMPTION_SETTER_CHOICES,
         default=DEFAULT_GOVERNMENT_CONSUMPTION_SETTER,
-        help=(
-            "Government-consumption setter to use. "
-            f"Default: {DEFAULT_GOVERNMENT_CONSUMPTION_SETTER}."
-        ),
+        help=(f"Government-consumption setter to use. Default: {DEFAULT_GOVERNMENT_CONSUMPTION_SETTER}."),
     )
     parser.add_argument(
         "--assume-zero-noise",
@@ -547,10 +542,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--label",
         default=DEFAULT_GOVERNMENT_BRIDGE_LABEL,
-        help=(
-            "Experiment label for government MC outputs. Default: "
-            f"{DEFAULT_GOVERNMENT_BRIDGE_LABEL}."
-        ),
+        help=(f"Experiment label for government MC outputs. Default: {DEFAULT_GOVERNMENT_BRIDGE_LABEL}."),
     )
     parser.add_argument(
         "--bridge-arms",

@@ -559,9 +559,7 @@ try:
         default_country_iso2 = getattr(cfg, "country_iso2", selected_country[:2])
 
         with st.expander("HFCS input settings", expanded=False):
-            data_pkl_path = Path(
-                st.text_input("Processed data pickle", value=str(default_data_pkl_path))
-            ).expanduser()
+            data_pkl_path = Path(st.text_input("Processed data pickle", value=str(default_data_pkl_path))).expanduser()
             raw_data_path = Path(st.text_input("Raw data path", value=str(default_raw_data_path))).expanduser()
             country_iso2 = st.text_input("HFCS country ISO2", value=default_country_iso2).upper()
             hfcs_years_text = st.text_input("HFCS years", value="2014, 2017, 2021")

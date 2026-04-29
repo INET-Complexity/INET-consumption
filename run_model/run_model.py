@@ -141,13 +141,13 @@ def main(
     country_cfg.central_bank.functions.policy_rate.name = "SmoothTaylorRule"
     country_cfg.government_entities.functions.consumption.name = government_consumption_setter
     if government_consumption_consistency is not None:
-        country_cfg.government_entities.functions.consumption.parameters[
-            "consistency"
-        ] = government_consumption_consistency
+        country_cfg.government_entities.functions.consumption.parameters["consistency"] = (
+            government_consumption_consistency
+        )
     if government_sectoral_weights != DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS:
-        country_cfg.government_entities.functions.consumption.parameters[
-            "sectoral_weights"
-        ] = government_sectoral_weights
+        country_cfg.government_entities.functions.consumption.parameters["sectoral_weights"] = (
+            government_sectoral_weights
+        )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
 
@@ -214,10 +214,7 @@ def _parse_args() -> argparse.Namespace:
         "--government-consumption-setter",
         choices=GOVERNMENT_CONSUMPTION_SETTER_CHOICES,
         default=DEFAULT_GOVERNMENT_CONSUMPTION_SETTER,
-        help=(
-            "Government-consumption setter to use. "
-            f"Default: {DEFAULT_GOVERNMENT_CONSUMPTION_SETTER}."
-        ),
+        help=(f"Government-consumption setter to use. Default: {DEFAULT_GOVERNMENT_CONSUMPTION_SETTER}."),
     )
     parser.add_argument(
         "--labour-market-clearer",

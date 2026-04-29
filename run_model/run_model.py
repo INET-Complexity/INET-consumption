@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-from pprint import pprint
 import random
 import sys
 import warnings
 from pathlib import Path
+from pprint import pprint
 
 import yaml
 
@@ -29,8 +29,9 @@ logging.getLogger().setLevel(logging.ERROR)
 
 DEFAULT_SEED = 15
 DEFAULT_T_MAX = 50
-DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "AutoregressiveGovernmentConsumptionSetter"
-DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "previous_desired"
+DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "ExpectedGrowthGovernmentConsumptionSetter"
+DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "initial_fixed"
+DEFAULT_LABOUR_MARKET_CLEARER = "PolednaLabourMarketClearer"
 GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",
@@ -39,6 +40,7 @@ GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "ExogenousGovernmentConsumptionSetter",
 )
 GOVERNMENT_SECTORAL_WEIGHTS_CHOICES = ("previous_desired", "initial", "initial_price_normalized", "initial_fixed")
+LABOUR_MARKET_CLEARER_CHOICES = ("PolednaLabourMarketClearer", "DefaultLabourMarketClearer")
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -63,6 +65,7 @@ def main(
     seed: int | None = DEFAULT_SEED,
     t_max: int | None = DEFAULT_T_MAX,
     government_consumption_setter: str = DEFAULT_GOVERNMENT_CONSUMPTION_SETTER,
+    labour_market_clearer: str = DEFAULT_LABOUR_MARKET_CLEARER,
     assume_zero_noise: bool | None = None,
     government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
     government_consumption_consistency: float | None = None,
@@ -130,7 +133,7 @@ def main(
     # Modify loaded country config
     country_cfg = country_configurations[cfg.country_iso3]
     country_cfg.firms.functions.productivity_growth.name = "SimpleTFPGrowth"  # "NoOpTFPGrowth"
-    country_cfg.labour_market.functions.clearing.name = "PolednaLabourMarketClearer"
+    country_cfg.labour_market.functions.clearing.name = labour_market_clearer
     country_cfg.central_bank.functions.policy_rate.name = "SmoothTaylorRule"
     country_cfg.government_entities.functions.consumption.name = government_consumption_setter
     if government_consumption_consistency is not None:
@@ -141,7 +144,6 @@ def main(
         country_cfg.government_entities.functions.consumption.parameters[
             "sectoral_weights"
         ] = government_sectoral_weights
-    country_cfg.central_government.functions.social_benefits.name = "ConstantSocialBenefitsSetter"
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
 
@@ -154,6 +156,10 @@ def main(
             "benefit_rule": {
                 "name": country_cfg.central_government.functions.social_benefits.name,
                 "parameters": country_cfg.central_government.functions.social_benefits.parameters,
+            },
+            "debt_interest_rule": {
+                "name": country_cfg.central_government.functions.debt_interest.name,
+                "parameters": country_cfg.central_government.functions.debt_interest.parameters,
             },
             "government_consumption": {
                 "name": country_cfg.government_entities.functions.consumption.name,
@@ -210,6 +216,12 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--labour-market-clearer",
+        choices=LABOUR_MARKET_CLEARER_CHOICES,
+        default=DEFAULT_LABOUR_MARKET_CLEARER,
+        help=f"Labour-market clearer to use. Default: {DEFAULT_LABOUR_MARKET_CLEARER}.",
+    )
+    parser.add_argument(
         "--assume-zero-noise",
         nargs="?",
         const=True,
@@ -242,6 +254,7 @@ if __name__ == "__main__":
         seed=args.seed,
         t_max=args.t_max,
         government_consumption_setter=args.government_consumption_setter,
+        labour_market_clearer=args.labour_market_clearer,
         assume_zero_noise=args.assume_zero_noise,
         government_sectoral_weights=args.government_sectoral_weights,
         government_consumption_consistency=args.government_consumption_consistency,

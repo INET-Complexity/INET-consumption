@@ -1,14 +1,11 @@
-from __future__ import annotations
-
-import logging
 import argparse
+import logging
 import random
 import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -37,8 +34,8 @@ DEFAULT_GOVERNMENT_BRIDGE_LABEL = "2026-04-27-government-consumption-bridge-mc"
 DEFAULT_GOVERNMENT_CONSISTENCY_INITIAL_WEIGHTS_LABEL = (
     "2026-04-27-government-consumption-consistency-initial-weights-mc50"
 )
-DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "AutoregressiveGovernmentConsumptionSetter"
-DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "previous_desired"
+DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "ExpectedGrowthGovernmentConsumptionSetter"
+DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "initial_fixed"
 GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",
@@ -238,7 +235,6 @@ def main(
         country_cfg.government_entities.functions.consumption.parameters[
             "sectoral_weights"
         ] = government_sectoral_weights
-    country_cfg.central_government.functions.social_benefits.name = "ConstantSocialBenefitsSetter"
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
 
@@ -256,6 +252,10 @@ def main(
                 "consistency"
             ),
             "benefit_rule": country_cfg.central_government.functions.social_benefits.name,
+            "debt_interest_rule": {
+                "name": country_cfg.central_government.functions.debt_interest.name,
+                "parameters": country_cfg.central_government.functions.debt_interest.parameters,
+            },
             "assume_zero_noise": country_cfg.assume_zero_noise,
         }
     )

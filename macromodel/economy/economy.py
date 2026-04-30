@@ -1177,8 +1177,7 @@ class Economy:
         else:
             self.ts.labour_input_shortfall_rate_growth.append(
                 [
-                    self.ts.current("labour_input_shortfall_rate")[0]
-                    / self.ts.prev("labour_input_shortfall_rate")[0]
+                    self.ts.current("labour_input_shortfall_rate")[0] / self.ts.prev("labour_input_shortfall_rate")[0]
                     - 1.0
                 ]
             )

@@ -457,7 +457,7 @@ FRA:
           firing_cost_fraction: 0.0
           firing_speed: 1.0
           hiring_cost_fraction: 0.0
-          hiring_speed: 1.0
+          hiring_speed: 0.75
           individuals_quitting: false
           individuals_quitting_temperature: 1.0
           optimised_hiring: true

@@ -431,6 +431,14 @@ def test_reset_firm_params(datawrapper):
         simulation.iterate()
 
 
+def test_target_production_inventory_fraction_does_not_reset_initial_inventory(datawrapper):
+    country_sim_configuration = CountryConfiguration()
+    country_sim_configuration.firms.functions.target_production.parameters["existing_inventory_fraction"] = 0.75
+
+    assert country_sim_configuration.firms.reset_params["initial_inventory_to_input_fraction"] == 0.0
+    assert check_compatibility(datawrapper.configuration.country_configs["FRA"], country_sim_configuration)
+
+
 def test_alternative_labour(datawrapper):
     """Test the alternative labour."""
     country_sim_configuration = CountryConfiguration()

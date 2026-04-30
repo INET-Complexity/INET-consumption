@@ -378,6 +378,7 @@ class FirmsParameters(BaseModel):
     Attributes:
         capital_inputs_delay (list[int]): Delays in capital input availability by firm
         depreciation_rates (list[float]): Asset depreciation rates by firm
+        initial_inventory_to_input_fraction (float): Initial inventory generated as a fraction of production
         capital_inputs_utilisation_rate (float): Capacity utilization for capital
         intermediate_inputs_utilisation_rate (float): Capacity utilization for inputs
 
@@ -387,6 +388,7 @@ class FirmsParameters(BaseModel):
 
     capital_inputs_delay: list[int] = [0 for _ in range(18)]
     depreciation_rates: list[float] = [0.0 for _ in range(18)]
+    initial_inventory_to_input_fraction: float = Field(0.0, ge=0.0)
     capital_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     intermediate_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     tfp_base_growth_rate: float = Field(0.0025, ge=0.0, le=0.1, description="Base TFP growth rate (quarterly)")
@@ -450,6 +452,7 @@ class FirmsParameters(BaseModel):
             **{
                 "capital_inputs_delay": [0 for _ in range(n_industries)],
                 "depreciation_rates": [0.0 for _ in range(n_industries)],
+                "initial_inventory_to_input_fraction": 0.0,
                 "capital_inputs_utilisation_rate": 1.0,
                 "intermediate_inputs_utilisation_rate": 1.0,
                 "tfp_base_growth_rate": tfp_base_growth_rate,
@@ -538,11 +541,10 @@ class FirmsConfiguration(BaseModel):
 
     @property
     def reset_params(self):
-        inventory_frac = self.functions.target_production.parameters["existing_inventory_fraction"]
         values = {
             "capital_inputs_utilisation_rate": self.parameters.capital_inputs_utilisation_rate,
             "intermediate_inputs_utilisation_rate": self.parameters.intermediate_inputs_utilisation_rate,
-            "initial_inventory_to_input_fraction": inventory_frac,
+            "initial_inventory_to_input_fraction": self.parameters.initial_inventory_to_input_fraction,
         }
         return values
 

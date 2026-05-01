@@ -387,14 +387,26 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             out=fallback_wages.copy(),
             where=total_labour_inputs > 0,
         )
+        productivity_ratio = np.divide(
+            current_labour_productivity_factor,
+            prev_labour_productivity_factor,
+            out=np.ones_like(current_labour_productivity_factor),
+            where=prev_labour_productivity_factor > 0,
+        )
         new_individual_wages = (
             (1 + current_wage_tightness_markup)
             * tfp_factor  # Link wages to technological productivity
-            * current_labour_productivity_factor
-            / prev_labour_productivity_factor
+            * productivity_ratio
             * historic_average_wages
         )
-        new_individual_wages = np.where(np.isfinite(new_individual_wages), new_individual_wages, fallback_wages)
+        new_individual_wages = np.where(
+            np.logical_and(
+                prev_labour_productivity_factor > 0,
+                np.isfinite(new_individual_wages),
+            ),
+            new_individual_wages,
+            fallback_wages,
+        )
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
             """Calculate wage offer for given firm and labor inputs.

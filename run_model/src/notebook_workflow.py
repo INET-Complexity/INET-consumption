@@ -313,12 +313,8 @@ def run_benchmark(
     benchmark_overrides = overrides if overrides is not None else config.benchmark_overrides
     output_dir.mkdir(parents=True, exist_ok=True)
     data_pkl_path = output_dir / config.benchmark_data_cache_name
-    df_benchmark_path = output_dir / (
-        config.benchmark_df_cache_name or f"{cfg.country_iso3}_df_benchmark.pkl"
-    )
-    model_h5_path = output_dir / (
-        config.benchmark_model_file_name or f"{cfg.country_iso3}_benchmark.h5"
-    )
+    df_benchmark_path = output_dir / (config.benchmark_df_cache_name or f"{cfg.country_iso3}_df_benchmark.pkl")
+    model_h5_path = output_dir / (config.benchmark_model_file_name or f"{cfg.country_iso3}_benchmark.h5")
     benchmark_spec = {
         "country_iso3": cfg.country_iso3,
         "seed": cfg.seed,

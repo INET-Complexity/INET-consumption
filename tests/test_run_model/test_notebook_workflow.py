@@ -86,9 +86,7 @@ def test_prepare_data_uses_deterministic_cache_path(tmp_path, monkeypatch):
     data = SimpleNamespace(
         n_industries=2,
         synthetic_countries={
-            "ESP": SimpleNamespace(
-                exogenous_data=SimpleNamespace(national_accounts=national_accounts)
-            )
+            "ESP": SimpleNamespace(exogenous_data=SimpleNamespace(national_accounts=national_accounts))
         },
     )
 

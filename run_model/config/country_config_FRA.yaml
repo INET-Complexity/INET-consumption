@@ -171,7 +171,7 @@ FRA:
         path_name: desired_labour
         parameters:
           consider_capital_inputs: 1.0
-          consider_intermediate_inputs: false
+          consider_intermediate_inputs: true
       excess_demand:
         name: ConstrainedExcessDemandSetter
         path_name: excess_demand

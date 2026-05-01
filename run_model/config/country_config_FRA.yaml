@@ -191,19 +191,19 @@ FRA:
           consider_intermediate_inputs: true
           max_increase_in_work_effort: 1.5
           work_effort_increase_speed: 1.0
-      offered_wage_setter:
+      offered_wage_setter:  # DEPRECATED: determines wage offers used during labour-market matching. This should affect whether unemployed workers accept jobs and which firms can hire.
         name: DefaultOfferedWageSetter
         path_name: offered_wage_setter
         parameters:
-          labour_market_tightness_markup_scale: 0.5
+          labour_market_tightness_markup_scale: 0
           markup_time_span: 4
       prices:
         name: DefaultPriceSetter
         path_name: prices
         parameters:
           price_setting_noise_std: 0.05
-          price_setting_speed_cp: 0.0
-          price_setting_speed_dp: 0.0
+          price_setting_speed_cp: 0.025
+          price_setting_speed_dp: 0.025
           price_setting_speed_gf: 1.0
       production:
         name: PureLeontief
@@ -268,13 +268,13 @@ FRA:
         parameters:
           diminishing_returns_factor: 0.5
           investment_effectiveness: 0.15
-      wage_setter:
+      wage_setter:  # determines realized wages after matching. This should update incomes for existing workers and bind accepted offers for new hires.
         name: WorkEffortFirmWageSetter
         path_name: wage_setter
         parameters:
-          labour_market_tightness_markup_scale: 0.0
+          labour_market_tightness_markup_scale: 0.05
           markup_time_span: 4
-          max_increase_in_work_effort: 1.5
+          max_increase_in_work_effort: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:
       arbitrage_intensity: 2.0
       bundle_significance_threshold: 0.1

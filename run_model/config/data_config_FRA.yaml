@@ -36,9 +36,9 @@ country_configs:
       inflation_target: 0.02
 
     single_bank: false
-    single_firm_per_industry: true
+    single_firm_per_industry: false
     single_government_entity: false
-    scale: 10000
+    scale: 5000
     eu_proxy_country: null
     carbon_price: 0.0
 

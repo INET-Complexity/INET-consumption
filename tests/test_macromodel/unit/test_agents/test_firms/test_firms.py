@@ -124,3 +124,21 @@ class TestFirms:
         test_firms.ts.short_term_loan_debt.append(np.full(18, 3.0))
         test_firms.ts.long_term_loan_debt.append(np.full(18, 10.0))
         assert np.allclose(test_firms.compute_debt(), np.full(18, 13.0))
+
+    def test__compute_productivity_investment_uses_industry_good_prices(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        industry_prices = np.linspace(1.0, 2.0, n_industries)
+        firm_prices = np.linspace(1.0, 2.0, n_firms * 2)
+        production = np.ones(n_firms)
+
+        test_firms.ts.price.append(firm_prices)
+        test_firms.ts.production.append(production)
+        test_firms.base_capital_inputs_depreciation_matrix = np.eye(n_industries)
+        test_firms.update_total_newly_bought_costs(current_good_prices=industry_prices)
+        test_firms.ts.total_capital_inputs_bought_costs.append(np.full(n_firms, 10.0))
+
+        expected_replacement_cost = production * industry_prices[test_firms.states["Industry"]]
+        expected_productivity_investment = np.maximum(0.0, 10.0 - expected_replacement_cost)
+
+        assert np.allclose(test_firms.compute_productivity_investment(), expected_productivity_investment)

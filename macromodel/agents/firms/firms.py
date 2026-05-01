@@ -126,6 +126,7 @@ class Firms(Agent):
         self.depreciation_rates = depreciation_rates
 
         self.average_initial_price = average_initial_price
+        self.current_good_prices = np.asarray(average_initial_price, dtype=float)
 
         self.configuration = configuration
 
@@ -1377,6 +1378,7 @@ class Firms(Agent):
         Args:
             current_good_prices (np.ndarray): Current prices for valuation
         """
+        self.current_good_prices = np.asarray(current_good_prices, dtype=float)
         amount_ii = (self.ts.current("real_amount_bought_as_intermediate_inputs") * current_good_prices).sum(axis=1)
         amount_cap = (self.ts.current("real_amount_bought_as_capital_goods") * current_good_prices).sum(axis=1)
 
@@ -2035,17 +2037,15 @@ class Firms(Agent):
         Returns:
             np.ndarray: Net investment (productivity investment) for each firm
         """
-        # Calculate replacement needs: production × depreciation_matrix
-        # We need current good prices for monetary calculation
-        # Use previous period prices as current prices aren't available yet in the timestep
-        if len(self.ts.price) > 1:
-            current_good_prices = self.ts.prev("price")  # Previous period prices
-        else:
-            current_good_prices = self.ts.current("price")  # Initial prices for
-
+        current_good_prices = self.current_good_prices
         # Calculate replacement investment needed (in monetary terms)
         production = self.ts.current("production")
         depreciation_matrix = self.base_capital_inputs_depreciation_matrix[:, self.states["Industry"]].T
+        if current_good_prices.shape[0] != depreciation_matrix.shape[1]:
+            raise ValueError(
+                "current_good_prices length must match the capital-input industry dimension "
+                f"({current_good_prices.shape[0]} != {depreciation_matrix.shape[1]})."
+            )
 
         # For each firm, calculate total replacement cost across all capital types
         replacement_needs = production[:, None] * depreciation_matrix

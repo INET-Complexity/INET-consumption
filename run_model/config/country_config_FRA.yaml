@@ -451,7 +451,7 @@ FRA:
         name: DefaultLabourMarketClearer
         path_name: clearing
         parameters:
-          allow_switching_industries: false
+          allow_switching_industries: true
           compare_with_normalised_inputs: true
           consider_reservation_wages: true
           firing_cost_fraction: 0.0

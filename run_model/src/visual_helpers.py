@@ -1056,6 +1056,72 @@ def plot_output(
     fig.show()
 
 
+def plot_housing_market_aggregates(
+    model=None,
+    country_code=None,
+    housing_market_ts=None,
+    keys=None,
+    no_cols=3,
+    base_height=220,
+    base_width=380,
+    title=None,
+    line_color="#1f77b4",
+    show=True,
+):
+    """Plot scalar aggregate time series from a housing market time-series store."""
+    if housing_market_ts is None:
+        if model is None or country_code is None:
+            raise ValueError("Provide either housing_market_ts or both model and country_code.")
+        housing_market_ts = model.countries[country_code].housing_market.ts
+
+    keys = list(housing_market_ts.get_keys() if keys is None else keys)
+    series = {}
+    for key in keys:
+        values = np.asarray(housing_market_ts.get_aggregate(key)).squeeze()
+        if values.ndim > 1:
+            continue
+        series[key] = pd.Series(values)
+
+    if not series:
+        raise ValueError("No scalar housing market aggregate series found to plot.")
+
+    df = pd.DataFrame(series)
+    no_rows = int(np.ceil(len(df.columns) / no_cols))
+    figure_title = title or (
+        f"{country_code} housing market aggregate time series"
+        if country_code is not None
+        else "Housing market aggregate time series"
+    )
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=df.columns.to_list())
+
+    for idx, col_name in enumerate(df.columns):
+        row = (idx // no_cols) + 1
+        col = (idx % no_cols) + 1
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df[col_name],
+                mode="lines",
+                name=col_name,
+                showlegend=False,
+                line={"color": line_color},
+            ),
+            row=row,
+            col=col,
+        )
+
+    fig.update_layout(
+        height=base_height * no_rows,
+        width=base_width * no_cols,
+        title_text=figure_title,
+        template="plotly_white",
+    )
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
 def plot_mc(
     mc,
     cols,

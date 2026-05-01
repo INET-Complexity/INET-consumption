@@ -183,6 +183,40 @@ def summarize_country_config(country_cfg: CountryConfiguration) -> dict[str, Any
     }
 
 
+def _safe_len(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return len(value)
+    except TypeError:
+        return None
+
+
+def summarize_agent_counts(data: DataWrapper, country_code: str) -> dict[str, int | None]:
+    """Return synthetic agent counts used by the notebook scenario."""
+    synthetic_country = data.synthetic_countries[country_code]
+    population = getattr(synthetic_country, "population", None)
+    firms = getattr(synthetic_country, "firms", None)
+    banks = getattr(synthetic_country, "banks", None)
+    government_entities = getattr(synthetic_country, "government_entities", None)
+
+    return {
+        "industries": getattr(data, "n_industries", None),
+        "firms": _safe_len(getattr(firms, "firm_data", None)),
+        "households": _safe_len(getattr(population, "household_data", None)),
+        "individuals": _safe_len(getattr(population, "individual_data", None)),
+        "banks": getattr(banks, "number_of_banks", _safe_len(getattr(banks, "bank_data", None))),
+        "government_entities": getattr(
+            government_entities,
+            "number_of_entities",
+            _safe_len(getattr(government_entities, "gov_entity_data", None)),
+        ),
+        "central_bank": 1 if getattr(synthetic_country, "central_bank", None) is not None else None,
+        "central_government": 1 if getattr(synthetic_country, "central_government", None) is not None else None,
+        "rest_of_world": 1 if getattr(data, "synthetic_rest_of_the_world", None) is not None else None,
+    }
+
+
 def prepare_data(config: NotebookRunConfig) -> PreparedData:
     """Build or load notebook data and return the objects needed for simulation."""
     cfg, raw_data_path, output_dir, _ = _resolve_runtime_config(config)
@@ -239,8 +273,10 @@ def build_country_config(
     country_cfg = align_country_configuration_to_data(country_cfg, n_industries=data.n_industries)
     apply_country_config_overrides(country_cfg, overrides)
     country_configurations = {cfg.country_iso3: country_cfg}
+    summary = summarize_country_config(country_cfg)
+    summary["agent_counts"] = summarize_agent_counts(data, cfg.country_iso3)
     print("Configuration summary")
-    pprint(summarize_country_config(country_cfg), sort_dicts=False)
+    pprint(summary, sort_dicts=False)
     return country_configurations
 
 

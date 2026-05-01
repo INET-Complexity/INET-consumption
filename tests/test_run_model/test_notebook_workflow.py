@@ -118,7 +118,23 @@ def test_prepare_data_uses_deterministic_cache_path(tmp_path, monkeypatch):
 def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch):
     env_cfg = _fake_env_config(tmp_path)
     country_cfg = _summary_config()
-    data = SimpleNamespace(n_industries=4)
+    data = SimpleNamespace(
+        n_industries=4,
+        synthetic_countries={
+            "ESP": SimpleNamespace(
+                population=SimpleNamespace(
+                    household_data=[object(), object()],
+                    individual_data=[object(), object(), object()],
+                ),
+                firms=SimpleNamespace(firm_data=[object(), object(), object(), object()]),
+                banks=SimpleNamespace(number_of_banks=1),
+                government_entities=SimpleNamespace(number_of_entities=3),
+                central_bank=object(),
+                central_government=object(),
+            )
+        },
+        synthetic_rest_of_the_world=object(),
+    )
 
     monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
     monkeypatch.setattr(nw, "_load_country_config", lambda cfg: country_cfg)
@@ -142,6 +158,35 @@ def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch
     assert configs["ESP"].aligned is True
     assert configs["ESP"].labour_market.functions.clearing.name == "ReservationWageBindingDefaultLabourMarketClearer"
     assert configs["ESP"].firms.functions.wage_setter.parameters["labour_market_tightness_markup_scale"] == 0.5
+
+
+def test_summarize_agent_counts_reads_synthetic_country_counts():
+    data = SimpleNamespace(
+        n_industries=18,
+        synthetic_countries={
+            "ESP": SimpleNamespace(
+                population=SimpleNamespace(household_data=range(2), individual_data=range(5)),
+                firms=SimpleNamespace(firm_data=range(3)),
+                banks=SimpleNamespace(number_of_banks=1),
+                government_entities=SimpleNamespace(number_of_entities=7),
+                central_bank=object(),
+                central_government=object(),
+            )
+        },
+        synthetic_rest_of_the_world=object(),
+    )
+
+    assert nw.summarize_agent_counts(data, "ESP") == {
+        "industries": 18,
+        "firms": 3,
+        "households": 2,
+        "individuals": 5,
+        "banks": 1,
+        "government_entities": 7,
+        "central_bank": 1,
+        "central_government": 1,
+        "rest_of_world": 1,
+    }
 
 
 def test_benchmark_overrides_default_to_no_overrides():

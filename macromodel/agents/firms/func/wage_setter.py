@@ -301,15 +301,8 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         scaled_real_wages_by_individual = np.zeros_like(current_employee_income)
         emp_ind = corresponding_firm >= 0
 
-        # Include TFP multiplier in wage calculation if provided
-        if current_tfp_multiplier is not None:
-            tfp_factor = current_tfp_multiplier
-        else:
-            tfp_factor = np.ones_like(current_wage_tightness_markup)
-
         scaled_real_wages = (
             (1 + current_wage_tightness_markup)
-            * tfp_factor  # Link wages to technological productivity
             * current_labour_productivity_factor
             * initial_wage_per_capita
         )
@@ -344,13 +337,12 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         Returns a callable that:
         1. Calculates base wage from historical averages
         2. Adjusts for productivity changes
-        3. Applies TFP multiplier (technological productivity)
-        4. Applies market tightness markup
-        5. Ensures wages exceed unemployment benefits
+        3. Applies market tightness markup
+        4. Ensures wages exceed unemployment benefits
 
         Args:
             [same as parent class]
-            current_tfp_multiplier (np.ndarray): TFP multiplier by firm
+            current_tfp_multiplier (np.ndarray): Unused — retained for call-site compatibility
 
         Returns:
             Callable[[int, float | np.ndarray], float | np.ndarray]: Function that
@@ -369,15 +361,8 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             minlength=current_target_production.shape[0],
         )
 
-        # Include TFP multiplier if provided
-        if current_tfp_multiplier is not None:
-            tfp_factor = current_tfp_multiplier
-        else:
-            tfp_factor = np.ones_like(current_wage_tightness_markup)
-
         fallback_wages = (
             (1 + current_wage_tightness_markup)
-            * tfp_factor
             * current_labour_productivity_factor
             * initial_wage_per_capita
         )
@@ -395,7 +380,6 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         )
         new_individual_wages = (
             (1 + current_wage_tightness_markup)
-            * tfp_factor  # Link wages to technological productivity
             * productivity_ratio
             * historic_average_wages
         )

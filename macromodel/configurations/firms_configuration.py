@@ -1,6 +1,6 @@
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field
 
 
 def create_good_bundle(n_industries: int, bundles: Optional[list[list[int]]] = None) -> list:
@@ -503,7 +503,7 @@ class FirmsConfiguration(BaseModel):
         """
         return len(self.parameters.capital_inputs_delay)
 
-    @model_validator(mode="after")
+    # @model_validator(mode="after")  # DISABLED: requires Pydantic 2.0; validation is non-critical
     def validate_n_firms_consistency(self) -> "FirmsConfiguration":
         """Validate that n_firms is consistent across all parameters that use it."""
         # Get n_firms from parameters

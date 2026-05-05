@@ -2141,7 +2141,9 @@ class Firms(Agent):
         are finalized to record the actual productivity investment made.
         """
         # Calculate actual productivity investment (net above replacement)
-        executed_investment = self.compute_productivity_investment() + self.states["forced_productivity_investment"]
+        forced_productivity_investment = self.states["forced_productivity_investment"]
+        executed_planned_productivity_investment = self.compute_productivity_investment()
+        executed_investment = executed_planned_productivity_investment + forced_productivity_investment
         real_executed_investment = self.compute_real_productivity_investment(executed_investment)
         executed_tfp_investment = np.zeros_like(executed_investment)
         executed_technical_investment = np.zeros_like(self.ts.current("planned_technical_investment"))
@@ -2149,14 +2151,16 @@ class Firms(Agent):
             planned_productivity_investment = self.ts.current("planned_productivity_investment")
             planned_tfp_investment = self.ts.current("planned_tfp_investment")
             planned_technical_investment = self.ts.current("planned_technical_investment")
-            executed_planned_investment = np.minimum(executed_investment, planned_productivity_investment)
+            executed_planned_investment = np.minimum(
+                executed_planned_productivity_investment, planned_productivity_investment
+            )
             execution_ratio = np.divide(
                 executed_planned_investment,
                 planned_productivity_investment,
                 out=np.zeros_like(executed_investment),
                 where=planned_productivity_investment > 0,
             )
-            executed_tfp_investment = planned_tfp_investment * execution_ratio
+            executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
             executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
 
         # Store in time series
@@ -2181,7 +2185,11 @@ class Firms(Agent):
         """
         # Use executed productivity investment if available (from time series),
         # otherwise fall back to computing it
-        if len(self.ts.real_executed_productivity_investment) > 0:
+        if len(self.ts.executed_tfp_investment) > 0:
+            productivity_investment = self.compute_real_productivity_investment(
+                self.ts.current("executed_tfp_investment")
+            )
+        elif len(self.ts.real_executed_productivity_investment) > 0:
             productivity_investment = self.ts.current("real_executed_productivity_investment")
         elif len(self.ts.executed_productivity_investment) > 0:
             productivity_investment = self.compute_real_productivity_investment(
@@ -2237,6 +2245,12 @@ class Firms(Agent):
         # Use actual base technical coefficients (a_ij matrices)
         base_intermediate_coefficients = self.base_intermediate_inputs_productivity_matrix
         base_capital_coefficients = self.base_capital_inputs_productivity_matrix
+        input_prices = self.current_good_prices
+        if input_prices.shape[0] != technical_investment.shape[1]:
+            raise ValueError(
+                "input prices length must match technical-investment input dimension "
+                f"({input_prices.shape[0]} != {technical_investment.shape[1]})."
+            )
 
         # Update intermediate coefficient multipliers
         intermediate_growth = growth_func.compute_intermediate_multiplier_growth(
@@ -2248,7 +2262,7 @@ class Firms(Agent):
             firm_industries=self.states["Industry"],
             technical_investment=technical_investment,
             production=self.ts.current("production"),
-            prices=self.ts.current("price"),  # Use current firm prices as proxy for industry prices
+            prices=input_prices,
         )
 
         # Update capital coefficient multipliers
@@ -2261,7 +2275,7 @@ class Firms(Agent):
             firm_industries=self.states["Industry"],
             technical_investment=technical_investment,
             production=self.ts.current("production"),
-            prices=self.ts.current("price"),  # Use current firm prices as proxy for industry prices
+            prices=input_prices,
         )
 
         # Apply growth to multipliers

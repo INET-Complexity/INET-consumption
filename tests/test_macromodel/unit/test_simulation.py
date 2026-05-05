@@ -289,6 +289,12 @@ def test_productivity_subsidy_uses_execution_path(datawrapper):
     assert len(firms.ts.executed_productivity_investment) == initial_executed_len
     assert firms.states["forced_productivity_investment"].sum() == pytest.approx(1_000.0)
 
+    simulation.iterate()
+
+    assert firms.states["forced_productivity_investment"].sum() == pytest.approx(0.0)
+    assert firms.ts.current("executed_productivity_investment").sum() >= 1_000.0
+    assert firms.ts.current("executed_tfp_investment").sum() >= 1_000.0
+
 
 def test_check_compatibility(datawrapper):
     """Test the compatibility check."""
@@ -762,14 +768,26 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
         def __init__(self):
             self.intermediate_investment = None
             self.capital_investment = None
+            self.intermediate_prices = None
+            self.capital_prices = None
 
         def compute_intermediate_multiplier_growth(self, **kwargs):
             self.intermediate_investment = kwargs["technical_investment"].copy()
+            self.intermediate_prices = kwargs["prices"].copy()
             return np.zeros_like(kwargs["current_multipliers"])
 
         def compute_capital_multiplier_growth(self, **kwargs):
             self.capital_investment = kwargs["technical_investment"].copy()
+            self.capital_prices = kwargs["prices"].copy()
             return np.zeros_like(kwargs["current_multipliers"])
+
+    class TFPGrowthSpy:
+        def __init__(self):
+            self.productivity_investment = None
+
+        def compute_tfp_growth(self, **kwargs):
+            self.productivity_investment = kwargs["productivity_investment"].copy()
+            return np.zeros_like(kwargs["current_tfp"])
 
     configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
     configuration.seed = seed
@@ -787,8 +805,10 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
 
     simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
     firms = simulation.countries["FRA"].firms
-    spy = TechnicalGrowthSpy()
-    firms.functions["technical_coefficients_growth"] = spy
+    technical_spy = TechnicalGrowthSpy()
+    tfp_spy = TFPGrowthSpy()
+    firms.functions["technical_coefficients_growth"] = technical_spy
+    firms.functions["productivity_growth"] = tfp_spy
 
     simulation.iterate()
 
@@ -809,8 +829,11 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
     assert not np.allclose(executed, planned)
     assert np.allclose(executed, planned * ratio[:, np.newaxis])
     assert np.allclose(executed_tfp, planned_tfp * ratio)
-    assert np.allclose(spy.intermediate_investment, executed)
-    assert np.allclose(spy.capital_investment, executed)
+    assert np.allclose(tfp_spy.productivity_investment, 0.0)
+    assert np.allclose(technical_spy.intermediate_investment, executed)
+    assert np.allclose(technical_spy.capital_investment, executed)
+    assert technical_spy.intermediate_prices.shape == (executed.shape[1],)
+    assert technical_spy.capital_prices.shape == (executed.shape[1],)
 
 
 def test_prehooks(datawrapper):

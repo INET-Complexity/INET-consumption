@@ -62,6 +62,7 @@ class LabourProductivitySetter(ABC):
         current_limiting_capital_inputs: np.ndarray,
         labour_inputs_from_employees: np.ndarray,
         industry_labour_productivity_by_firm: np.ndarray,
+        current_tfp_multiplier: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate labor productivity adjustment factors for each firm.
 
@@ -82,6 +83,10 @@ class LabourProductivitySetter(ABC):
             labour_inputs_from_employees (np.ndarray): Current labor input levels
             industry_labour_productivity_by_firm (np.ndarray): Industry standard
                 productivity levels by firm
+            current_tfp_multiplier (np.ndarray): Per-firm TFP multiplier. When
+                provided, normal labour capacity is measured in TFP-adjusted
+                effective units so technology gains are not misread as extra
+                work effort.
 
         Returns:
             np.ndarray: Labor productivity adjustment factors by firm
@@ -111,6 +116,7 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
         current_limiting_capital_inputs: np.ndarray,
         labour_inputs_from_employees: np.ndarray,
         industry_labour_productivity_by_firm: np.ndarray,
+        current_tfp_multiplier: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate productivity factors based on work effort adjustments.
 
@@ -128,6 +134,8 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
             labour_inputs_from_employees (np.ndarray): Current labor inputs
             industry_labour_productivity_by_firm (np.ndarray): Industry
                 standard productivity levels
+            current_tfp_multiplier (np.ndarray): Per-firm TFP multiplier. If
+                omitted, defaults to 1.0 for backward compatibility.
 
         Returns:
             np.ndarray: Productivity adjustment factors, where 1.0 represents
@@ -135,7 +143,12 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
                 retained labour, and values above 1.0 represent increased work
                 effort.
         """
-        normal_labour_capacity = labour_inputs_from_employees * industry_labour_productivity_by_firm
+        tfp_multiplier = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_target_production, dtype=float)
+        )
+        normal_labour_capacity = labour_inputs_from_employees * industry_labour_productivity_by_firm * tfp_multiplier
         required_productivity_factor = np.divide(
             current_target_production,
             normal_labour_capacity,

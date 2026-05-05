@@ -765,6 +765,7 @@ class Firms(Agent):
                 current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
                 labour_inputs_from_employees=labour_inputs_from_employees,
                 industry_labour_productivity_by_firm=industry_labour_productivity_by_firm,
+                current_tfp_multiplier=self.states["tfp_multiplier"],
             )
         )
         self.ts.labour_productivity.append(

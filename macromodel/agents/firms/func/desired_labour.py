@@ -45,6 +45,7 @@ class DesiredLabourSetter(ABC):
         current_target_production: np.ndarray,
         current_limiting_intermediate_inputs: np.ndarray,
         current_limiting_capital_inputs: np.ndarray,
+        current_tfp_multiplier: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate desired labor inputs for each firm.
 
@@ -54,6 +55,9 @@ class DesiredLabourSetter(ABC):
                 from intermediate input availability
             current_limiting_capital_inputs (np.ndarray): Production constraints
                 from capital input availability
+            current_tfp_multiplier (np.ndarray): Per-firm TFP level. When provided,
+                desired labour is divided by TFP so that more productive firms hire
+                proportionally fewer workers for the same output target.
 
         Returns:
             np.ndarray: Desired labor inputs for each firm
@@ -79,21 +83,23 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
         current_target_production: np.ndarray,
         current_limiting_intermediate_inputs: np.ndarray,
         current_limiting_capital_inputs: np.ndarray,
+        current_tfp_multiplier: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate desired labor using the default adjustment strategy.
 
-        Adjusts target production downward based on input constraints:
-        1. First considers intermediate input limitations with configured weight
-        2. Then considers capital input limitations with configured weight
-        The final value represents feasible labor demand given input constraints.
+        Adjusts target production downward based on input constraints, then
+        divides by TFP so that higher productivity firms require fewer workers
+        to meet the same output target — consistent with the Leontief production
+        function where effective labour = A * raw_labour.
 
         Args:
             current_target_production (np.ndarray): Initial production targets
             current_limiting_intermediate_inputs (np.ndarray): Intermediate input constraints
             current_limiting_capital_inputs (np.ndarray): Capital input constraints
+            current_tfp_multiplier (np.ndarray): Per-firm TFP level (optional).
 
         Returns:
-            np.ndarray: Adjusted labor demand accounting for input complementarities
+            np.ndarray: Adjusted labor demand accounting for input complementarities and TFP
         """
         current_target_production = np.minimum(
             current_target_production,
@@ -105,4 +111,11 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
             current_target_production
             + self.consider_capital_inputs * (current_limiting_capital_inputs - current_target_production),
         )
+        if current_tfp_multiplier is not None:
+            return np.divide(
+                current_target_production,
+                current_tfp_multiplier,
+                out=current_target_production.copy(),
+                where=current_tfp_multiplier > 0,
+            )
         return current_target_production

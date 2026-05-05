@@ -301,8 +301,10 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         scaled_real_wages_by_individual = np.zeros_like(current_employee_income)
         emp_ind = corresponding_firm >= 0
 
+        tfp = current_tfp_multiplier if current_tfp_multiplier is not None else np.ones_like(current_labour_productivity_factor)
         scaled_real_wages = (
             (1 + current_wage_tightness_markup)
+            * tfp
             * current_labour_productivity_factor
             * initial_wage_per_capita
         )
@@ -342,7 +344,7 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
 
         Args:
             [same as parent class]
-            current_tfp_multiplier (np.ndarray): Unused — retained for call-site compatibility
+            current_tfp_multiplier (np.ndarray): Per-firm TFP level; scales fallback wages so new-hire offers reflect technology level
 
         Returns:
             Callable[[int, float | np.ndarray], float | np.ndarray]: Function that
@@ -361,8 +363,10 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             minlength=current_target_production.shape[0],
         )
 
+        tfp = current_tfp_multiplier if current_tfp_multiplier is not None else np.ones_like(current_labour_productivity_factor)
         fallback_wages = (
             (1 + current_wage_tightness_markup)
+            * tfp
             * current_labour_productivity_factor
             * initial_wage_per_capita
         )

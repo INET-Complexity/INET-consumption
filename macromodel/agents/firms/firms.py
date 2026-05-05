@@ -727,6 +727,7 @@ class Firms(Agent):
             current_target_production=self.ts.current("target_production"),
             current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            current_tfp_multiplier=self.states["tfp_multiplier"],
         )
 
     def compute_labour_inputs(self, corresponding_firm: np.ndarray, current_labour_inputs: np.ndarray) -> np.ndarray:

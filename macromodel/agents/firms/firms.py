@@ -2143,9 +2143,26 @@ class Firms(Agent):
         # Calculate actual productivity investment (net above replacement)
         executed_investment = self.compute_productivity_investment() + self.states["forced_productivity_investment"]
         real_executed_investment = self.compute_real_productivity_investment(executed_investment)
+        executed_tfp_investment = np.zeros_like(executed_investment)
+        executed_technical_investment = np.zeros_like(self.ts.current("planned_technical_investment"))
+        if len(self.ts.planned_productivity_investment) > 0:
+            planned_productivity_investment = self.ts.current("planned_productivity_investment")
+            planned_tfp_investment = self.ts.current("planned_tfp_investment")
+            planned_technical_investment = self.ts.current("planned_technical_investment")
+            executed_planned_investment = np.minimum(executed_investment, planned_productivity_investment)
+            execution_ratio = np.divide(
+                executed_planned_investment,
+                planned_productivity_investment,
+                out=np.zeros_like(executed_investment),
+                where=planned_productivity_investment > 0,
+            )
+            executed_tfp_investment = planned_tfp_investment * execution_ratio
+            executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
 
         # Store in time series
         self.ts.executed_productivity_investment.append(executed_investment)
+        self.ts.executed_tfp_investment.append(executed_tfp_investment)
+        self.ts.executed_technical_investment.append(executed_technical_investment)
         self.ts.real_executed_productivity_investment.append(real_executed_investment)
         self.states["forced_productivity_investment"] = np.zeros_like(self.states["forced_productivity_investment"])
 
@@ -2210,9 +2227,9 @@ class Firms(Agent):
 
         growth_func = self.functions["technical_coefficients_growth"]
 
-        # Get current technical investment (if any)
-        if hasattr(self.ts, "planned_technical_investment") and len(self.ts.planned_technical_investment) > 0:
-            technical_investment = self.ts.current("planned_technical_investment")
+        # Get executed technical investment, after goods-market purchases determine realised investment.
+        if hasattr(self.ts, "executed_technical_investment") and len(self.ts.executed_technical_investment) > 0:
+            technical_investment = self.ts.current("executed_technical_investment")
         else:
             # No technical investment yet
             return

@@ -382,6 +382,7 @@ class Firms(Agent):
 
         # Reset productivity multipliers to 1
         self.states["tfp_multiplier"] = np.ones_like(self.states["tfp_multiplier"])
+        self.ts["tfp_multiplier"] = self.states["tfp_multiplier"].copy()
         self.states["forced_productivity_investment"] = np.zeros_like(self.states["forced_productivity_investment"])
         self.states["intermediate_tech_multipliers"] = np.ones_like(self.states["intermediate_tech_multipliers"])
         self.states["capital_tech_multipliers"] = np.ones_like(self.states["capital_tech_multipliers"])
@@ -886,6 +887,7 @@ class Firms(Agent):
             employer_social_insurance_tax=employer_social_insurance_tax,
             unemployment_benefits_by_individual=unemployment_benefits_by_individual,
             current_tfp_multiplier=self.states["tfp_multiplier"],
+            prev_tfp_multiplier=self.ts.prev("tfp_multiplier"),
         )
 
     def set_employee_income(
@@ -2224,6 +2226,7 @@ class Firms(Agent):
         """
         tfp_growth = self.compute_tfp_growth()
         self.states["tfp_multiplier"] *= 1 + tfp_growth
+        self.ts.tfp_multiplier.append(self.states["tfp_multiplier"].copy())
 
     def update_technical_coefficients(self) -> None:
         """Update technical coefficient multipliers based on computed growth rates.

@@ -34,6 +34,7 @@ class FirmTimeSeries(TimeSeries):
     - labour_inputs: Effective labor input (productivity-adjusted)
     - labour_productivity: Output per unit of labor
     - labour_productivity_factor: Productivity adjustment factor
+    - tfp_multiplier: Firm-level total factor productivity multiplier
     - normalised_labour_inputs: Labor input normalized by industry
     - desired_labour_inputs: Target employment level
     - labour_costs: Total labor cost
@@ -289,6 +290,7 @@ class FirmTimeSeries(TimeSeries):
             labour_inputs=data["Labour Inputs"].values,
             labour_productivity=data["Labour Productivity"].values,
             labour_productivity_factor=np.ones(data.shape[0]),
+            tfp_multiplier=np.ones(data.shape[0]),
             normalised_labour_inputs=data["Labour Inputs"].values,
             desired_labour_inputs=data["Labour Inputs"].values,
             labour_costs=np.full(data.shape[0], np.nan),
@@ -496,6 +498,7 @@ def create_firms_timeseries(
         labour_inputs=data["Labour Inputs"].values,
         labour_productivity=data["Labour Productivity"].values,
         labour_productivity_factor=np.ones(data.shape[0]),
+        tfp_multiplier=np.ones(data.shape[0]),
         normalised_labour_inputs=data["Labour Inputs"].values,
         desired_labour_inputs=data["Labour Inputs"].values,
         labour_costs=np.full(data.shape[0], np.nan),

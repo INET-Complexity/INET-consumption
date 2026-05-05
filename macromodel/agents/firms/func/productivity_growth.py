@@ -34,7 +34,7 @@ class ProductivityGrowth(ABC):
             productivity_investment (np.ndarray): Investment in productivity improvements
             base_growth_rate (float): Exogenous TFP growth rate (e.g., 0.0025 for 0.25% quarterly)
             investment_elasticity (float): Returns to scale parameter for investment (typically 0.3-0.5)
-            **kwargs: Additional parameters for specific implementations
+            **kwargs: Additional parameters for specific implementations, including output_value
 
         Returns:
             np.ndarray: TFP growth rates for each firm
@@ -94,11 +94,31 @@ class NoOpTFPGrowth(ProductivityGrowth):
         return np.zeros_like(current_tfp)
 
 
+def _compute_investment_intensity(
+    productivity_investment: np.ndarray,
+    production: np.ndarray,
+    output_value: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute productivity-investment intensity on a value-consistent denominator.
+
+    ``production`` remains the physical activity gate. ``output_value`` is the
+    preferred denominator because productivity investment is an expenditure flow.
+    When no output value is provided, fall back to production for compatibility
+    with older tests and growth functions.
+    """
+    denominator = production if output_value is None else output_value
+    investment_intensity = np.zeros_like(denominator)
+    valid_firms = (production > 0) & (denominator > 0) & (productivity_investment > 0)
+    if np.any(valid_firms):
+        investment_intensity[valid_firms] = productivity_investment[valid_firms] / denominator[valid_firms]
+    return investment_intensity, valid_firms
+
+
 class SimpleTFPGrowth(ProductivityGrowth):
     """Simple deterministic TFP growth implementation.
 
     TFP grows at a constant base rate plus investment-driven improvements:
-    g_TFP = base_growth + φ * (Investment/Production)^α
+    g_TFP = base_growth + φ * (Investment/OutputValue)^α
     """
 
     def __init__(self, investment_effectiveness: float = 0.1, **kwargs):
@@ -127,6 +147,8 @@ class SimpleTFPGrowth(ProductivityGrowth):
             productivity_investment (np.ndarray): Investment in productivity improvements
             base_growth_rate (float): Exogenous TFP growth rate
             investment_elasticity (float): Returns to scale parameter (α)
+            **kwargs: Additional parameters including:
+                - output_value (np.ndarray): Value-consistent output base for investment intensity
 
         Returns:
             np.ndarray: TFP growth rates for each firm
@@ -134,27 +156,21 @@ class SimpleTFPGrowth(ProductivityGrowth):
         # Base growth applies to all firms
         tfp_growth = np.full_like(current_tfp, base_growth_rate)
 
-        # Add investment-driven growth where production > 0
-        positive_production = production > 0
-        if np.any(positive_production):
+        # Add investment-driven growth where production and output value are positive.
+        output_value = kwargs.get("output_value")
+        investment_intensity, valid_firms = _compute_investment_intensity(
+            productivity_investment=productivity_investment,
+            production=production,
+            output_value=output_value,
+        )
+        if np.any(valid_firms):
             # Use stored investment effectiveness parameter
             investment_effectiveness = self.investment_effectiveness
 
-            # Calculate investment intensity (Investment/Production)
-            # Only consider positive investments for productivity growth
-            investment_intensity = np.zeros_like(production)
-            positive_investment = productivity_investment > 0
-            valid_firms = positive_production & positive_investment
+            # Apply diminishing returns with elasticity parameter
+            investment_contribution = investment_effectiveness * np.power(investment_intensity, investment_elasticity)
 
-            if np.any(valid_firms):
-                investment_intensity[valid_firms] = productivity_investment[valid_firms] / production[valid_firms]
-
-                # Apply diminishing returns with elasticity parameter
-                investment_contribution = investment_effectiveness * np.power(
-                    investment_intensity, investment_elasticity
-                )
-
-                tfp_growth += investment_contribution
+            tfp_growth += investment_contribution
 
         return tfp_growth
 
@@ -163,7 +179,7 @@ class StochasticTFPGrowth(ProductivityGrowth):
     """TFP growth with stochastic shocks.
 
     Extends simple TFP growth with random productivity shocks:
-    g_TFP = base_growth + φ * (Investment/Production)^α + ε
+    g_TFP = base_growth + φ * (Investment/OutputValue)^α + ε
     where ε ~ N(0, σ²)
     """
 
@@ -198,6 +214,7 @@ class StochasticTFPGrowth(ProductivityGrowth):
             **kwargs: Additional parameters including:
                 - shock_std (float): Standard deviation of productivity shocks
                 - investment_effectiveness (float): Investment effectiveness parameter
+                - output_value (np.ndarray): Value-consistent output base for investment intensity
 
         Returns:
             np.ndarray: TFP growth rates for each firm
@@ -206,23 +223,18 @@ class StochasticTFPGrowth(ProductivityGrowth):
         tfp_growth = np.full_like(current_tfp, base_growth_rate)
 
         # Add investment-driven growth
-        positive_production = production > 0
-        if np.any(positive_production):
+        output_value = kwargs.get("output_value")
+        investment_intensity, valid_firms = _compute_investment_intensity(
+            productivity_investment=productivity_investment,
+            production=production,
+            output_value=output_value,
+        )
+        if np.any(valid_firms):
             investment_effectiveness = self.investment_effectiveness
 
-            # Only consider positive investments for productivity growth
-            investment_intensity = np.zeros_like(production)
-            positive_investment = productivity_investment > 0
-            valid_firms = positive_production & positive_investment
+            investment_contribution = investment_effectiveness * np.power(investment_intensity, investment_elasticity)
 
-            if np.any(valid_firms):
-                investment_intensity[valid_firms] = productivity_investment[valid_firms] / production[valid_firms]
-
-                investment_contribution = investment_effectiveness * np.power(
-                    investment_intensity, investment_elasticity
-                )
-
-                tfp_growth += investment_contribution
+            tfp_growth += investment_contribution
 
         # Add stochastic shocks
         shock_std = self.shock_std
@@ -280,6 +292,7 @@ class SectoralTFPGrowth(ProductivityGrowth):
                 - sector_ids (np.ndarray): Sector ID for each firm
                 - sector_base_growth (dict): Base growth rate by sector
                 - sector_effectiveness (dict): Investment effectiveness by sector
+                - output_value (np.ndarray): Value-consistent output base for investment intensity
 
         Returns:
             np.ndarray: TFP growth rates for each firm
@@ -302,30 +315,29 @@ class SectoralTFPGrowth(ProductivityGrowth):
             tfp_growth[:] = base_growth_rate
 
         # Add investment-driven growth
-        positive_production = production > 0
-        if np.any(positive_production):
-            # Only consider positive investments for productivity growth
-            investment_intensity = np.zeros_like(production)
-            positive_investment = productivity_investment > 0
-            valid_firms = positive_production & positive_investment
+        output_value = kwargs.get("output_value")
+        investment_intensity, valid_firms = _compute_investment_intensity(
+            productivity_investment=productivity_investment,
+            production=production,
+            output_value=output_value,
+        )
 
-            if np.any(valid_firms):
-                investment_intensity[valid_firms] = productivity_investment[valid_firms] / production[valid_firms]
+        if np.any(valid_firms):
 
-                # Apply sector-specific effectiveness if available
-                if sector_ids is not None:
-                    for sector in np.unique(sector_ids):
-                        sector_mask = (sector_ids == sector) & valid_firms
-                        if np.any(sector_mask):
-                            effectiveness = sector_effectiveness.get(sector, 0.1)
+            # Apply sector-specific effectiveness if available
+            if sector_ids is not None:
+                for sector in np.unique(sector_ids):
+                    sector_mask = (sector_ids == sector) & valid_firms
+                    if np.any(sector_mask):
+                        effectiveness = sector_effectiveness.get(sector, 0.1)
 
-                            sector_contribution = effectiveness * np.power(
-                                investment_intensity[sector_mask], investment_elasticity
-                            )
-                            tfp_growth[sector_mask] += sector_contribution
-                else:
-                    effectiveness = self.investment_effectiveness
-                    investment_contribution = effectiveness * np.power(investment_intensity, investment_elasticity)
-                    tfp_growth += investment_contribution
+                        sector_contribution = effectiveness * np.power(
+                            investment_intensity[sector_mask], investment_elasticity
+                        )
+                        tfp_growth[sector_mask] += sector_contribution
+            else:
+                effectiveness = self.investment_effectiveness
+                investment_contribution = effectiveness * np.power(investment_intensity, investment_elasticity)
+                tfp_growth += investment_contribution
 
         return tfp_growth

@@ -821,6 +821,10 @@ class Firms(Agent):
         """
         return self.ts.current("price") * self.ts.current("production") - self.ts.current("taxes_paid_on_production")
 
+    def compute_nominal_output_value(self) -> np.ndarray:
+        """Calculate nominal gross output value for each firm."""
+        return self.ts.current("price") * self.ts.current("production")
+
     def compute_wages_markup(self) -> np.ndarray:
         """Calculate wage markup based on labor market tightness.
 
@@ -2040,15 +2044,15 @@ class Firms(Agent):
 
         self.base_intermediate_inputs_productivity_matrix[input_index, producing_index] *= 1 + increase_pct
 
-    def compute_productivity_investment(self) -> np.ndarray:
-        """Calculate investment above depreciation replacement.
+    def compute_net_capital_investment_above_replacement(self) -> np.ndarray:
+        """Calculate ordinary capital investment above depreciation replacement.
 
         Separates total capital investment into:
         1. Replacement investment: covers depreciation to maintain capacity
-        2. Net investment: excess that can drive productivity improvements
+        2. Net investment: excess capital purchases above replacement
 
         Returns:
-            np.ndarray: Net investment (productivity investment) for each firm
+            np.ndarray: Net capital investment above replacement for each firm
         """
         current_good_prices = self.current_good_prices
         # Calculate replacement investment needed (in monetary terms)
@@ -2067,10 +2071,11 @@ class Firms(Agent):
         # Actual total investment
         total_investment = self.ts.current("total_capital_inputs_bought_costs")
 
-        # Net investment = productivity investment (cannot be negative)
-        productivity_investment = np.maximum(0, total_investment - total_replacement_cost)
+        # Net capital investment cannot be negative. This is an ordinary capital
+        # diagnostic, not planner-executed productivity investment.
+        net_capital_investment = np.maximum(0, total_investment - total_replacement_cost)
 
-        return productivity_investment
+        return net_capital_investment
 
     def compute_capital_bundle_deflator(self) -> np.ndarray:
         """Compute a firm-specific capital-goods price for real productivity investment."""
@@ -2143,31 +2148,34 @@ class Firms(Agent):
         This method should be called after production and investment decisions
         are finalized to record the actual productivity investment made.
         """
-        # Calculate actual productivity investment (net above replacement)
+        # Ordinary capital purchases above replacement are a separate diagnostic
+        # from productivity investment chosen by the planner.
         forced_productivity_investment = self.states["forced_productivity_investment"]
-        executed_planned_productivity_investment = self.compute_productivity_investment()
-        executed_investment = executed_planned_productivity_investment + forced_productivity_investment
-        real_executed_investment = self.compute_real_productivity_investment(executed_investment)
-        executed_tfp_investment = np.zeros_like(executed_investment)
+        net_capital_investment = self.compute_net_capital_investment_above_replacement()
+        executed_productivity_investment = forced_productivity_investment.copy()
+        executed_tfp_investment = forced_productivity_investment.copy()
         executed_technical_investment = np.zeros_like(self.ts.current("planned_technical_investment"))
         if len(self.ts.planned_productivity_investment) > 0:
             planned_productivity_investment = self.ts.current("planned_productivity_investment")
             planned_tfp_investment = self.ts.current("planned_tfp_investment")
             planned_technical_investment = self.ts.current("planned_technical_investment")
             executed_planned_investment = np.minimum(
-                executed_planned_productivity_investment, planned_productivity_investment
+                net_capital_investment, planned_productivity_investment
             )
             execution_ratio = np.divide(
                 executed_planned_investment,
                 planned_productivity_investment,
-                out=np.zeros_like(executed_investment),
+                out=np.zeros_like(net_capital_investment),
                 where=planned_productivity_investment > 0,
             )
+            executed_productivity_investment += executed_planned_investment
             executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
             executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
+        real_executed_investment = self.compute_real_productivity_investment(executed_productivity_investment)
 
         # Store in time series
-        self.ts.executed_productivity_investment.append(executed_investment)
+        self.ts.net_capital_investment_above_replacement.append(net_capital_investment)
+        self.ts.executed_productivity_investment.append(executed_productivity_investment)
         self.ts.executed_tfp_investment.append(executed_tfp_investment)
         self.ts.executed_technical_investment.append(executed_technical_investment)
         self.ts.real_executed_productivity_investment.append(real_executed_investment)
@@ -2186,21 +2194,15 @@ class Firms(Agent):
         Returns:
             np.ndarray: TFP growth rates for each firm
         """
-        # Use executed productivity investment if available (from time series),
-        # otherwise fall back to computing it
+        # Use nominal executed TFP investment over nominal output value. Both
+        # terms are value flows, matching the planner's nominal investment base.
         if len(self.ts.executed_tfp_investment) > 0:
-            productivity_investment = self.compute_real_productivity_investment(
-                self.ts.current("executed_tfp_investment")
-            )
-        elif len(self.ts.real_executed_productivity_investment) > 0:
-            productivity_investment = self.ts.current("real_executed_productivity_investment")
+            productivity_investment = self.ts.current("executed_tfp_investment")
         elif len(self.ts.executed_productivity_investment) > 0:
-            productivity_investment = self.compute_real_productivity_investment(
-                self.ts.current("executed_productivity_investment")
-            )
+            productivity_investment = self.ts.current("executed_productivity_investment")
         else:
             # Fallback for initial period or if execute_productivity_investment wasn't called
-            productivity_investment = self.compute_real_productivity_investment(self.compute_productivity_investment())
+            productivity_investment = np.zeros_like(self.states["tfp_multiplier"])
 
         # Get configuration parameters, using defaults if not specified
         base_growth = getattr(self.configuration.parameters, "tfp_base_growth_rate", 0.0025)  # 0.25% quarterly
@@ -2212,6 +2214,7 @@ class Firms(Agent):
                 current_tfp=self.states["tfp_multiplier"],
                 production=self.ts.current("production"),
                 productivity_investment=productivity_investment,
+                output_value=self.compute_nominal_output_value(),
                 base_growth_rate=base_growth,
                 investment_elasticity=elasticity,
             )

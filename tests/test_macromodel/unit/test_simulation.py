@@ -794,9 +794,21 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
 
     planned = firms.ts.current("planned_technical_investment")
     executed = firms.ts.current("executed_technical_investment")
+    planned_total = firms.ts.current("planned_productivity_investment")
+    planned_tfp = firms.ts.current("planned_tfp_investment")
+    executed_total = firms.ts.current("executed_productivity_investment")
+    executed_tfp = firms.ts.current("executed_tfp_investment")
+    ratio = np.divide(
+        np.minimum(executed_total, planned_total),
+        planned_total,
+        out=np.zeros_like(executed_total),
+        where=planned_total > 0,
+    )
     assert planned.sum() > 0
     assert executed.sum() > 0
     assert not np.allclose(executed, planned)
+    assert np.allclose(executed, planned * ratio[:, np.newaxis])
+    assert np.allclose(executed_tfp, planned_tfp * ratio)
     assert np.allclose(spy.intermediate_investment, executed)
     assert np.allclose(spy.capital_investment, executed)
 

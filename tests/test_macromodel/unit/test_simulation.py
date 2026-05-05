@@ -755,6 +755,52 @@ def test_technical_only_investment_allocation(datawrapper, seed=42):
     )
 
 
+def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
+    """Technical coefficient growth should consume realised, not merely planned, investment."""
+
+    class TechnicalGrowthSpy:
+        def __init__(self):
+            self.intermediate_investment = None
+            self.capital_investment = None
+
+        def compute_intermediate_multiplier_growth(self, **kwargs):
+            self.intermediate_investment = kwargs["technical_investment"].copy()
+            return np.zeros_like(kwargs["current_multipliers"])
+
+        def compute_capital_multiplier_growth(self, **kwargs):
+            self.capital_investment = kwargs["technical_investment"].copy()
+            return np.zeros_like(kwargs["current_multipliers"])
+
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    configuration.seed = seed
+
+    firms_config = configuration.country_configurations["FRA"].firms
+    firms_config.functions.productivity_investment_planner.name = "SimpleProductivityInvestmentPlanner"
+    firms_config.functions.productivity_investment_planner.parameters.update(
+        {
+            "tfp_investment_share": 0.0,
+            "max_investment_fraction": 0.2,
+            "technical_investment_effectiveness": 0.3,
+        }
+    )
+    firms_config.functions.productivity_growth.name = "NoOpTFPGrowth"
+
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    firms = simulation.countries["FRA"].firms
+    spy = TechnicalGrowthSpy()
+    firms.functions["technical_coefficients_growth"] = spy
+
+    simulation.iterate()
+
+    planned = firms.ts.current("planned_technical_investment")
+    executed = firms.ts.current("executed_technical_investment")
+    assert planned.sum() > 0
+    assert executed.sum() > 0
+    assert not np.allclose(executed, planned)
+    assert np.allclose(spy.intermediate_investment, executed)
+    assert np.allclose(spy.capital_investment, executed)
+
+
 def test_prehooks(datawrapper):
     """Test that pre-hooks execute correctly before each iteration."""
     # Track hook calls

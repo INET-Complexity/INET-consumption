@@ -122,6 +122,10 @@ class TestFirmWageSetter:
             employer_social_insurance_tax=0.0,
             unemployment_benefits_by_individual=0.0,
         )
-        f_tfp1 = setter.get_offered_wage_given_labour_inputs_function(**common_kwargs, current_tfp_multiplier=np.array([1.0]))
-        f_tfp2 = setter.get_offered_wage_given_labour_inputs_function(**common_kwargs, current_tfp_multiplier=np.array([2.0]))
+        f_tfp1 = setter.get_offered_wage_given_labour_inputs_function(
+            **common_kwargs, current_tfp_multiplier=np.array([1.0])
+        )
+        f_tfp2 = setter.get_offered_wage_given_labour_inputs_function(
+            **common_kwargs, current_tfp_multiplier=np.array([2.0])
+        )
         assert f_tfp2(0, 1.0) == 2.0 * f_tfp1(0, 1.0)

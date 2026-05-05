@@ -301,12 +301,13 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         scaled_real_wages_by_individual = np.zeros_like(current_employee_income)
         emp_ind = corresponding_firm >= 0
 
-        tfp = current_tfp_multiplier if current_tfp_multiplier is not None else np.ones_like(current_labour_productivity_factor)
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
         scaled_real_wages = (
-            (1 + current_wage_tightness_markup)
-            * tfp
-            * current_labour_productivity_factor
-            * initial_wage_per_capita
+            (1 + current_wage_tightness_markup) * tfp * current_labour_productivity_factor * initial_wage_per_capita
         )
         scaled_real_wages_by_individual[emp_ind] = scaled_real_wages[corresponding_firm[emp_ind]]
         realised_wages = scaled_real_wages_by_individual / tax
@@ -363,12 +364,13 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             minlength=current_target_production.shape[0],
         )
 
-        tfp = current_tfp_multiplier if current_tfp_multiplier is not None else np.ones_like(current_labour_productivity_factor)
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
         fallback_wages = (
-            (1 + current_wage_tightness_markup)
-            * tfp
-            * current_labour_productivity_factor
-            * initial_wage_per_capita
+            (1 + current_wage_tightness_markup) * tfp * current_labour_productivity_factor * initial_wage_per_capita
         )
         historic_average_wages = np.divide(
             total_real_wages,
@@ -382,11 +384,7 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             out=np.ones_like(current_labour_productivity_factor),
             where=prev_labour_productivity_factor > 0,
         )
-        new_individual_wages = (
-            (1 + current_wage_tightness_markup)
-            * productivity_ratio
-            * historic_average_wages
-        )
+        new_individual_wages = (1 + current_wage_tightness_markup) * productivity_ratio * historic_average_wages
         new_individual_wages = np.where(
             np.logical_and(
                 prev_labour_productivity_factor > 0,

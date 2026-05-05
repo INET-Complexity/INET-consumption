@@ -665,6 +665,12 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
 
     This implementation solves for the optimal investment level that
     maximizes expected returns subject to budget and hurdle rate constraints.
+
+    Warning:
+        This planner has not been brought into line with the repaired Simple
+        planner path. Do not enable it for production experiments until its
+        budget denominator, firm-price handling, and realised-growth units have
+        been reviewed and tested against the Simple planner semantics.
     """
 
     def __init__(

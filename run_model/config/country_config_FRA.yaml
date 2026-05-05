@@ -212,21 +212,24 @@ FRA:
       productivity_growth:
         name: SimpleTFPGrowth
         path_name: productivity_growth
-        parameters: {}
+        parameters:
+          investment_effectiveness: 0.005  # previous implicit default: 0.1
       productivity_investment_planner:
         name: SimpleProductivityInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
-          hurdle_rate: 0.15
-          investment_effectiveness: 0.1
-          investment_elasticity: 0.3
-          max_investment_fraction: 0.1
+          hurdle_rate: 0.30  # previous: 0.15
+          investment_effectiveness: 0.01  # previous: 0.1
+          investment_elasticity: 0.8  # previous: 0.3
+          investment_propensity: 0.02  # previous implicit default: 0.2
+          max_cash_fraction: 0.02  # previous implicit default: 0.1; model-level override was 0.3
+          max_investment_fraction: 0.01  # previous: 0.1; model-level override was 0.15
           n_firms: 18
           potential_weight: 0.3
           price_weight: 0.4
-          technical_diminishing_returns: 0.5
-          technical_investment_effectiveness: 0.15
-          tfp_investment_share: 0.4
+          technical_diminishing_returns: 1.5  # previous: 0.5
+          technical_investment_effectiveness: 0.01  # previous: 0.15
+          tfp_investment_share: 0.15  # previous: 0.4
           usage_weight: 0.3
       profit_estimator:
         name: DefaultFirmProfitsSetter
@@ -266,8 +269,8 @@ FRA:
         name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth
         parameters:
-          diminishing_returns_factor: 0.5
-          investment_effectiveness: 0.15
+          diminishing_returns_factor: 1.5  # previous: 0.5
+          investment_effectiveness: 0.01  # previous: 0.15
       wage_setter:  # determines realized wages after matching. This should update incomes for existing workers and bind accepted offers for new hires.
         name: WorkEffortFirmWageSetter
         path_name: wage_setter
@@ -319,15 +322,15 @@ FRA:
         - 0.0
       enable_bundle_arbitrage: false
       intermediate_inputs_utilisation_rate: 0.85 # 1.0
-      max_productivity_cash_fraction: 0.3
-      max_productivity_investment_fraction: 0.15
+      max_productivity_cash_fraction: 0.02  # previous: 0.3
+      max_productivity_investment_fraction: 0.01  # previous: 0.15
       potential_weight: 0.3
       price_weight: 0.4
-      technical_diminishing_returns: 0.5
-      technical_investment_effectiveness: 0.15
+      technical_diminishing_returns: 1.5  # previous: 0.5
+      technical_investment_effectiveness: 0.01  # previous: 0.15
       tfp_base_growth_rate: 0.0025
-      tfp_investment_elasticity: 0.3
-      tfp_investment_share: 0.4
+      tfp_investment_elasticity: 0.8  # previous: 0.3
+      tfp_investment_share: 0.15  # previous: 0.4
       usage_weight: 0.3
     substitution_bundles:
       - 0

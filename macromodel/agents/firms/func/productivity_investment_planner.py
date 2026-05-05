@@ -39,6 +39,7 @@ class ProductivityInvestmentPlanner(ABC):
         price_weight: float | list[float] = 0.4,
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
+        max_cash_fraction: float | list[float] = 0.1,
     ):
         """Initialize the productivity investment planner.
 
@@ -54,12 +55,14 @@ class ProductivityInvestmentPlanner(ABC):
             price_weight (float | list[float]): Weight for price-based input targeting
             usage_weight (float | list[float]): Weight for usage-based input targeting
             potential_weight (float | list[float]): Weight for improvement potential targeting
+            max_cash_fraction (float | list[float]): Max investment as fraction of available cash
         """
         self.n_firms = n_firms
 
         # Convert all parameters to numpy arrays with shape (n_firms,)
         self.hurdle_rate = self._to_array(hurdle_rate, n_firms)
         self.max_investment_fraction = self._to_array(max_investment_fraction, n_firms)
+        self.max_cash_fraction = self._to_array(max_cash_fraction, n_firms)
         self.investment_effectiveness = self._to_array(investment_effectiveness, n_firms)
         self.investment_elasticity = self._to_array(investment_elasticity, n_firms)
         # Technical coefficient parameters
@@ -100,6 +103,9 @@ class ProductivityInvestmentPlanner(ABC):
         input_usage: np.ndarray,
         current_tech_multipliers: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        current_nominal_production: np.ndarray | None = None,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment for each firm.
 
@@ -117,6 +123,9 @@ class ProductivityInvestmentPlanner(ABC):
             input_usage (np.ndarray): Input usage by firms [n_firms x n_industries]
             current_tech_multipliers (np.ndarray): Current technical multipliers [n_firms x n_industries]
             substitution_bundle_matrix (np.ndarray): Bundle matrix [n_industries x n_bundles]
+            current_nominal_production (np.ndarray | None): Firm nominal output, required by nominal planners
+            max_cash_fraction (float | np.ndarray | None): Optional cash cap override
+            max_investment_fraction (float | np.ndarray | None): Optional output cap override
 
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple containing:
@@ -151,14 +160,14 @@ class ProductivityInvestmentPlanner(ABC):
     def compute_hurdle_adjusted_value(
         self,
         productivity_investment: np.ndarray,
-        current_production: np.ndarray,
-        current_unit_costs: np.ndarray,
+        current_output_base: np.ndarray,
+        current_unit_costs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate hurdle-adjusted present value from productivity investment.
 
         Following investment_decision.md logic:
         - TFP growth factor: A_{t+1}/A_t = φ * (I/Y)^α
-        - Cost reduction per period: tfp_growth * unit_cost * Y
+        - Cost reduction per period: tfp_growth * nominal value base
         - Hurdle-adjusted present value: cost_reduction * (1+r_h)/r_h
 
         This gives the present value of perpetual cost savings, discounted at
@@ -166,17 +175,21 @@ class ProductivityInvestmentPlanner(ABC):
 
         Args:
             productivity_investment (np.ndarray): Investment amounts
-            current_production (np.ndarray): Current production levels
-            current_unit_costs (np.ndarray): Current unit costs of production
+            current_output_base (np.ndarray): Output base for investment intensity
+            current_unit_costs (np.ndarray | None): Optional unit costs. When provided,
+                the value base is unit costs times output base for backward compatibility.
 
         Returns:
             np.ndarray: Hurdle-adjusted present value of cost savings
         """
-        # Expected TFP growth factor (φ * (I/Y)^α)
-        tfp_growth = self.compute_expected_tfp_growth(productivity_investment, current_production)
+        tfp_growth = self.compute_expected_tfp_growth(productivity_investment, current_output_base)
 
-        # Cost reduction per period = tfp_growth * unit_cost * production
-        cost_reduction_per_period = tfp_growth * current_unit_costs * current_production
+        if current_unit_costs is None:
+            value_base = current_output_base
+        else:
+            value_base = current_unit_costs * current_output_base
+
+        cost_reduction_per_period = tfp_growth * value_base
 
         # Present value using hurdle rate as discount rate
         # PV = cost_reduction * (1 + r_h) / r_h
@@ -184,26 +197,44 @@ class ProductivityInvestmentPlanner(ABC):
 
         return cost_reduction_per_period * hurdle_discount_factor
 
+    def compute_nominal_hurdle_adjusted_value(
+        self,
+        productivity_investment: np.ndarray,
+        current_nominal_production: np.ndarray,
+        current_nominal_costs: np.ndarray,
+    ) -> np.ndarray:
+        """Calculate hurdle-adjusted value using nominal intensity and nominal costs."""
+        tfp_growth = self.compute_expected_tfp_growth(productivity_investment, current_nominal_production)
+        cost_reduction_per_period = tfp_growth * current_nominal_costs
+        hurdle_discount_factor = (1 + self.hurdle_rate) / self.hurdle_rate
+        return cost_reduction_per_period * hurdle_discount_factor
+
     def compute_investment_budget(
         self,
         available_cash: np.ndarray,
-        current_production: np.ndarray,
-        max_cash_fraction: float = 0.1,
+        current_output_base: np.ndarray,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate available budget for productivity investment.
 
-        Implements constraint: B_i(t) = min{κ*Cash_i(t), θ*Y_i(t)}
+        Implements constraint: B_i(t) = min{κ*Cash_i(t), θ*OutputBase_i(t)}
 
         Args:
             available_cash (np.ndarray): Available cash balances
-            current_production (np.ndarray): Current production levels
-            max_cash_fraction (float): Maximum fraction of cash to use (κ)
+            current_output_base (np.ndarray): Output base, nominal for nominal planners
+            max_cash_fraction (float | np.ndarray | None): Maximum fraction of cash to use (κ)
+            max_investment_fraction (float | np.ndarray | None): Maximum fraction of output base to use (θ)
 
         Returns:
             np.ndarray: Available investment budget for each firm
         """
-        cash_constraint = max_cash_fraction * np.maximum(0, available_cash)
-        output_constraint = self.max_investment_fraction * current_production
+        cash_fraction = self.max_cash_fraction if max_cash_fraction is None else max_cash_fraction
+        investment_fraction = (
+            self.max_investment_fraction if max_investment_fraction is None else max_investment_fraction
+        )
+        cash_constraint = cash_fraction * np.maximum(0, available_cash)
+        output_constraint = investment_fraction * current_output_base
         return np.minimum(cash_constraint, output_constraint)
 
     def compute_expected_prices(self, current_prices: np.ndarray, estimated_inflation: float) -> np.ndarray:
@@ -461,6 +492,9 @@ class NoProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         input_usage: np.ndarray,
         current_tech_multipliers: np.ndarray,
         substitution_bundle_matrix: Optional[np.ndarray],
+        current_nominal_production: np.ndarray | None = None,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return zero productivity investment for all firms.
 
@@ -509,6 +543,7 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         price_weight: float | list[float] = 0.4,
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
+        max_cash_fraction: float | list[float] = 0.1,
     ):
         """Initialize the simple productivity investment planner.
 
@@ -519,19 +554,21 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
             investment_effectiveness (float | list[float]): TFP growth effectiveness parameter
             investment_elasticity (float | list[float]): Diminishing returns parameter
             investment_propensity (float | list[float]): Fraction of budget to invest
+            max_cash_fraction (float | list[float]): Max investment as fraction of available cash
         """
         super().__init__(
-            n_firms,
-            hurdle_rate,
-            max_investment_fraction,
-            investment_effectiveness,
-            investment_elasticity,
-            tfp_investment_share,
-            technical_investment_effectiveness,
-            technical_diminishing_returns,
-            price_weight,
-            usage_weight,
-            potential_weight,
+            n_firms=n_firms,
+            hurdle_rate=hurdle_rate,
+            max_investment_fraction=max_investment_fraction,
+            investment_effectiveness=investment_effectiveness,
+            investment_elasticity=investment_elasticity,
+            tfp_investment_share=tfp_investment_share,
+            technical_investment_effectiveness=technical_investment_effectiveness,
+            technical_diminishing_returns=technical_diminishing_returns,
+            price_weight=price_weight,
+            usage_weight=usage_weight,
+            potential_weight=potential_weight,
+            max_cash_fraction=max_cash_fraction,
         )
         self.investment_propensity = self._to_array(investment_propensity, n_firms)
 
@@ -546,6 +583,9 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         input_usage: np.ndarray,
         current_tech_multipliers: np.ndarray,
         substitution_bundle_matrix: Optional[np.ndarray],
+        current_nominal_production: np.ndarray | None = None,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment using simple rules.
 
@@ -562,18 +602,36 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
             input_usage (np.ndarray): Used intermediate inputs [n_firms x n_industries]
             current_tech_multipliers (np.ndarray): Technical coefficient multipliers [n_firms x n_industries]
             substitution_bundle_matrix (np.ndarray | None): Substitution bundle matrix
+            current_nominal_production (np.ndarray | None): Firm nominal output for nominal planning
 
         Returns:
             tuple: (total_investment, tfp_investment, technical_investment_by_input)
         """
+        if current_nominal_production is None:
+            raise ValueError("current_nominal_production is required for SimpleProductivityInvestmentPlanner.")
+        if not np.all(np.isfinite(current_nominal_production)) or np.any(current_nominal_production < 0):
+            raise ValueError("current_nominal_production must contain finite non-negative values.")
+
         # Compute available budget
-        budget = self.compute_investment_budget(available_cash, current_production)
+        budget = self.compute_investment_budget(
+            available_cash,
+            current_nominal_production,
+            max_cash_fraction=max_cash_fraction,
+            max_investment_fraction=max_investment_fraction,
+        )
 
         # Candidate investment (fraction of budget)
         candidate_investment = self.investment_propensity * budget
 
         # Compute hurdle-adjusted present value of cost savings
-        hurdle_value = self.compute_hurdle_adjusted_value(candidate_investment, current_production, current_unit_costs)
+        current_nominal_costs = current_unit_costs * current_production
+        if not np.all(np.isfinite(current_nominal_costs)) or np.any(current_nominal_costs < 0):
+            raise ValueError("current nominal production costs must contain finite non-negative values.")
+        hurdle_value = self.compute_nominal_hurdle_adjusted_value(
+            candidate_investment,
+            current_nominal_production,
+            current_nominal_costs,
+        )
 
         # Investment is profitable if hurdle-adjusted value exceeds investment cost
         profitable = hurdle_value > candidate_investment
@@ -624,6 +682,7 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         price_weight: float | list[float] = 0.4,
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
+        max_cash_fraction: float | list[float] = 0.1,
     ):
         """Initialize the optimal productivity investment planner.
 
@@ -636,17 +695,18 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
             search_steps (int): Number of steps in optimization search
         """
         super().__init__(
-            n_firms,
-            hurdle_rate,
-            max_investment_fraction,
-            investment_effectiveness,
-            investment_elasticity,
-            tfp_investment_share,
-            technical_investment_effectiveness,
-            technical_diminishing_returns,
-            price_weight,
-            usage_weight,
-            potential_weight,
+            n_firms=n_firms,
+            hurdle_rate=hurdle_rate,
+            max_investment_fraction=max_investment_fraction,
+            investment_effectiveness=investment_effectiveness,
+            investment_elasticity=investment_elasticity,
+            tfp_investment_share=tfp_investment_share,
+            technical_investment_effectiveness=technical_investment_effectiveness,
+            technical_diminishing_returns=technical_diminishing_returns,
+            price_weight=price_weight,
+            usage_weight=usage_weight,
+            potential_weight=potential_weight,
+            max_cash_fraction=max_cash_fraction,
         )
         self.search_steps = search_steps
 
@@ -661,6 +721,9 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         input_usage: np.ndarray,
         current_tech_multipliers: np.ndarray,
         substitution_bundle_matrix: Optional[np.ndarray],
+        current_nominal_production: np.ndarray | None = None,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment by optimizing expected returns.
 

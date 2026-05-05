@@ -231,6 +231,7 @@ class FirmTimeSeries(TimeSeries):
             target_capital_inputs=used_capital_inputs,
             planned_productivity_investment=np.zeros(data.shape[0]),
             executed_productivity_investment=np.zeros(data.shape[0]),
+            real_executed_productivity_investment=np.zeros(data.shape[0]),
             planned_tfp_investment=np.zeros(data.shape[0]),
             executed_tfp_investment=np.zeros(data.shape[0]),
             planned_technical_investment=np.zeros((data.shape[0], n_industries)),

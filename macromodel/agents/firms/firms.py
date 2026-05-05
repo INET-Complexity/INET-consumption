@@ -269,6 +269,7 @@ class Firms(Agent):
 
         # Initialize TFP multiplier to 1.0 (no TFP effect initially)
         states["tfp_multiplier"] = np.ones(data.shape[0])
+        states["forced_productivity_investment"] = np.zeros(data.shape[0])
 
         # Initialize technical coefficient multipliers and cumulative improvements
         n_firms = data.shape[0]
@@ -381,6 +382,7 @@ class Firms(Agent):
 
         # Reset productivity multipliers to 1
         self.states["tfp_multiplier"] = np.ones_like(self.states["tfp_multiplier"])
+        self.states["forced_productivity_investment"] = np.zeros_like(self.states["forced_productivity_investment"])
         self.states["intermediate_tech_multipliers"] = np.ones_like(self.states["intermediate_tech_multipliers"])
         self.states["capital_tech_multipliers"] = np.ones_like(self.states["capital_tech_multipliers"])
 
@@ -591,6 +593,9 @@ class Firms(Agent):
             input_usage=self.ts.current("used_intermediate_inputs"),
             current_tech_multipliers=self.states["intermediate_tech_multipliers"],
             substitution_bundle_matrix=self.substitution_bundles,
+            current_nominal_production=self.ts.current("price") * self.ts.current("production"),
+            max_cash_fraction=self.configuration.parameters.max_productivity_cash_fraction,
+            max_investment_fraction=self.configuration.parameters.max_productivity_investment_fraction,
         )
 
         return total_investment, tfp_investment, technical_investment
@@ -2064,6 +2069,71 @@ class Firms(Agent):
 
         return productivity_investment
 
+    def compute_capital_bundle_deflator(self) -> np.ndarray:
+        """Compute a firm-specific capital-goods price for real productivity investment."""
+        current_good_prices = self.current_good_prices
+        production = self.ts.current("production")
+        depreciation_matrix = self.base_capital_inputs_depreciation_matrix[:, self.states["Industry"]].T
+        if current_good_prices.shape[0] != depreciation_matrix.shape[1]:
+            raise ValueError(
+                "current_good_prices length must match the capital-input industry dimension "
+                f"({current_good_prices.shape[0]} != {depreciation_matrix.shape[1]})."
+            )
+
+        replacement_needs = production[:, None] * depreciation_matrix
+        replacement_totals = replacement_needs.sum(axis=1, keepdims=True)
+        weights = np.divide(
+            replacement_needs,
+            replacement_totals,
+            out=np.zeros_like(replacement_needs),
+            where=replacement_totals > 0,
+        )
+
+        if len(self.ts.real_amount_bought_as_capital_goods) > 0:
+            bought_capital = np.nan_to_num(self.ts.current("real_amount_bought_as_capital_goods"), nan=0.0)
+            purchase_totals = bought_capital.sum(axis=1, keepdims=True)
+            use_purchase_bundle = (replacement_totals[:, 0] <= 0) & (purchase_totals[:, 0] > 0)
+            purchase_weights = np.divide(
+                bought_capital,
+                purchase_totals,
+                out=np.zeros_like(bought_capital),
+                where=purchase_totals > 0,
+            )
+            weights[use_purchase_bundle] = purchase_weights[use_purchase_bundle]
+
+        weight_totals = weights.sum(axis=1, keepdims=True)
+        use_baseline_bundle = weight_totals[:, 0] <= 0
+        if np.any(use_baseline_bundle):
+            baseline_capital_needs = self.base_capital_inputs_productivity_matrix[:, self.states["Industry"]].T
+            baseline_totals = baseline_capital_needs.sum(axis=1, keepdims=True)
+            baseline_weights = np.divide(
+                baseline_capital_needs,
+                baseline_totals,
+                out=np.zeros_like(baseline_capital_needs),
+                where=baseline_totals > 0,
+            )
+            weights[use_baseline_bundle] = baseline_weights[use_baseline_bundle]
+
+        return (weights * current_good_prices[None, :]).sum(axis=1)
+
+    def compute_real_productivity_investment(self, nominal_productivity_investment: np.ndarray) -> np.ndarray:
+        """Deflate nominal productivity investment into capital-bundle volume units."""
+        nominal_productivity_investment = np.asarray(nominal_productivity_investment, dtype=float)
+        capital_bundle_deflator = self.compute_capital_bundle_deflator()
+        real_investment = np.zeros_like(nominal_productivity_investment)
+        positive_investment = nominal_productivity_investment > 0
+        valid_deflator = capital_bundle_deflator > 0
+
+        missing_deflator = positive_investment & ~valid_deflator
+        if np.any(missing_deflator):
+            missing = np.where(missing_deflator)[0].tolist()
+            raise ValueError(f"Cannot deflate positive productivity investment for firms {missing}.")
+
+        real_investment[positive_investment] = (
+            nominal_productivity_investment[positive_investment] / capital_bundle_deflator[positive_investment]
+        )
+        return real_investment
+
     def execute_productivity_investment(self) -> None:
         """Execute planned productivity investment and store the realized amounts.
 
@@ -2071,10 +2141,13 @@ class Firms(Agent):
         are finalized to record the actual productivity investment made.
         """
         # Calculate actual productivity investment (net above replacement)
-        executed_investment = self.compute_productivity_investment()
+        executed_investment = self.compute_productivity_investment() + self.states["forced_productivity_investment"]
+        real_executed_investment = self.compute_real_productivity_investment(executed_investment)
 
         # Store in time series
         self.ts.executed_productivity_investment.append(executed_investment)
+        self.ts.real_executed_productivity_investment.append(real_executed_investment)
+        self.states["forced_productivity_investment"] = np.zeros_like(self.states["forced_productivity_investment"])
 
     def compute_tfp_growth(self) -> np.ndarray:
         """Calculate TFP growth rates for all firms.
@@ -2091,11 +2164,15 @@ class Firms(Agent):
         """
         # Use executed productivity investment if available (from time series),
         # otherwise fall back to computing it
-        if len(self.ts.executed_productivity_investment) > 0:
-            productivity_investment = self.ts.current("executed_productivity_investment")
+        if len(self.ts.real_executed_productivity_investment) > 0:
+            productivity_investment = self.ts.current("real_executed_productivity_investment")
+        elif len(self.ts.executed_productivity_investment) > 0:
+            productivity_investment = self.compute_real_productivity_investment(
+                self.ts.current("executed_productivity_investment")
+            )
         else:
             # Fallback for initial period or if execute_productivity_investment wasn't called
-            productivity_investment = self.compute_productivity_investment()
+            productivity_investment = self.compute_real_productivity_investment(self.compute_productivity_investment())
 
         # Get configuration parameters, using defaults if not specified
         base_growth = getattr(self.configuration.parameters, "tfp_base_growth_rate", 0.0025)  # 0.25% quarterly

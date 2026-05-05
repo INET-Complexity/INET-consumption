@@ -106,35 +106,27 @@ def create_productivity_subsidy_hook(
         # Deposits are stored in the time series, modify the current value
         current_deposits = firms.ts.current("deposits").copy()
         current_deposits[target_firm_mask] += subsidy_per_firm
-        firms.ts.time_series["deposits"][-1] = current_deposits
+        firms.ts.override_current("deposits", current_deposits)
 
-        # Force subsidy into executed productivity investment time series
-        # This ensures it will be used by compute_tfp_growth() when update_tfp() is called
-        # during update_planning_metrics() later in this iteration
-
-        # Create investment array for this timestep
+        # Force subsidy into the same execution path as normal productivity investment.
         forced_investment = np.zeros(len(current_deposits))
         forced_investment[target_firm_mask] = subsidy_per_firm
-
-        # Append to executed productivity investment time series
-        # This will be picked up by compute_tfp_growth() -> update_tfp() chain
-        firms.ts.executed_productivity_investment.append(forced_investment)
+        firms.states["forced_productivity_investment"] += forced_investment
 
         logging.info(
             f"Productivity subsidy applied: {subsidy_amount:,.2f} to {n_target_firms} firm(s) "
             f"in industry '{industry_code}' of country '{country_code}' at {year}-{month}"
         )
 
-        # Record subsidy in government time series as spending
+        # Record subsidy in government time series as spending when the configuration exposes it.
         gov = country.central_government
-        current_spending = gov.ts.current("spending")
-        if isinstance(current_spending, (list, np.ndarray)):
-            new_spending = current_spending[0] + subsidy_amount
-        else:
-            new_spending = current_spending + subsidy_amount
-
-        # Update the current spending value
-        gov.ts.time_series["spending"][-1] = new_spending
+        if "spending" in gov.ts.get_keys():
+            current_spending = gov.ts.current("spending")
+            if isinstance(current_spending, (list, np.ndarray)):
+                new_spending = current_spending[0] + subsidy_amount
+            else:
+                new_spending = current_spending + subsidy_amount
+            gov.ts.override_current("spending", new_spending)
 
         # Mark as applied
         applied[0] = True

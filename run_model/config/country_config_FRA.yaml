@@ -214,7 +214,7 @@ FRA:
         path_name: productivity_growth
         parameters: {}
       productivity_investment_planner:
-        name: NoProductivityInvestmentPlanner
+        name: SimpleProductivityInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
           hurdle_rate: 0.15

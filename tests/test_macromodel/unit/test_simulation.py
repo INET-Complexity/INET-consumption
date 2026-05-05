@@ -8,6 +8,7 @@ import pytest
 from macro_data.configuration.countries import Country as CountryName
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation, check_compatibility
+from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
 
 
 @pytest.mark.parametrize("seed", [0, 100, 150, 200, 145])
@@ -237,6 +238,56 @@ def test_tfp_growth_with_investment(datawrapper):
         assert total_investment > 0, (
             f"There should be positive productivity investment, first 5 elements: {total_investment[:5]}"
         )
+
+
+def test_tfp_growth_applies_after_current_period_production(datawrapper):
+    """TFP growth computed in one period should only affect later production."""
+    config_no_growth = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    config_no_growth.seed = 0
+    config_no_growth.country_configurations["FRA"].firms.parameters.tfp_base_growth_rate = 0.0
+    config_no_growth.country_configurations["FRA"].firms.parameters.tfp_investment_elasticity = 0.0
+
+    config_with_growth = deepcopy(config_no_growth)
+    config_with_growth.country_configurations["FRA"].firms.parameters.tfp_base_growth_rate = 0.25
+    config_with_growth.country_configurations["FRA"].firms.parameters.tfp_investment_elasticity = 0.0
+    config_with_growth.country_configurations["FRA"].firms.functions.productivity_growth.name = "SimpleTFPGrowth"
+    config_with_growth.country_configurations["FRA"].firms.functions.productivity_growth.parameters = {
+        "investment_effectiveness": 0.0,
+    }
+
+    sim_no_growth = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=config_no_growth)
+    sim_with_growth = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=config_with_growth)
+
+    sim_no_growth.iterate()
+    sim_with_growth.iterate()
+
+    firms_no_growth = sim_no_growth.countries["FRA"].firms
+    firms_with_growth = sim_with_growth.countries["FRA"].firms
+
+    np.testing.assert_allclose(firms_with_growth.ts.current("production"), firms_no_growth.ts.current("production"))
+    assert np.mean(firms_with_growth.states["tfp_multiplier"]) > np.mean(firms_no_growth.states["tfp_multiplier"])
+
+
+def test_productivity_subsidy_uses_execution_path(datawrapper):
+    """Subsidies should stage nominal investment instead of appending executed investment directly."""
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    configuration.seed = 0
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    firms = simulation.countries["FRA"].firms
+    industry_code = firms.industries[firms.states["Industry"][0]]
+    initial_executed_len = len(firms.ts.executed_productivity_investment)
+
+    hook = create_productivity_subsidy_hook(
+        country_code="FRA",
+        industry_code=industry_code,
+        target_year=2020,
+        target_month=1,
+        subsidy_amount=1_000.0,
+    )
+    hook(simulation, 2020, 1)
+
+    assert len(firms.ts.executed_productivity_investment) == initial_executed_len
+    assert firms.states["forced_productivity_investment"].sum() == pytest.approx(1_000.0)
 
 
 def test_check_compatibility(datawrapper):

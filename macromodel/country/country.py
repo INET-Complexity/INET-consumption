@@ -637,12 +637,6 @@ class Country:
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
 
-        # Update TFP before production (only if TFP growth is configured)
-        if not self.assume_zero_growth:
-            self.firms.update_tfp()
-            # Update technical coefficient multipliers
-            self.firms.update_technical_coefficients()
-
         # Firm production
         if self.assume_zero_growth:
             self.firms.ts.production.append(self.firms.ts.initial("production"))
@@ -1111,6 +1105,9 @@ class Country:
 
         # Execute and record productivity investment after capital purchases are known
         self.firms.execute_productivity_investment()
+        if not self.assume_zero_growth:
+            self.firms.update_tfp()
+            self.firms.update_technical_coefficients()
 
         self.firms.ts.demand.append(self.firms.compute_demand())
 

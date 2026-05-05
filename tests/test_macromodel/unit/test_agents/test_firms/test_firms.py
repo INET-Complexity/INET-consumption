@@ -10,6 +10,7 @@ class TestFirms:
             "Employments",
             "is_insolvent",
             "Excess Demand",
+            "forced_productivity_investment",
         ]:
             assert state in test_firms.states.keys()
 
@@ -63,6 +64,7 @@ class TestFirms:
             "labour_inputs",
             "desired_labour_inputs",
             "labour_costs",
+            "real_executed_productivity_investment",
             # "real_amount_bought_as_capital_inputs",
         ]:
             assert ts_key in test_firms.ts.get_keys()
@@ -142,3 +144,36 @@ class TestFirms:
         expected_productivity_investment = np.maximum(0.0, 10.0 - expected_replacement_cost)
 
         assert np.allclose(test_firms.compute_productivity_investment(), expected_productivity_investment)
+
+    def test__real_productivity_investment_uses_capital_bundle_deflator(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        industry_prices = np.linspace(1.0, 2.0, n_industries)
+        nominal_investment = np.full(n_firms, 10.0)
+
+        test_firms.current_good_prices = industry_prices
+        test_firms.ts.production.append(np.ones(n_firms))
+        test_firms.base_capital_inputs_depreciation_matrix = np.eye(n_industries)
+
+        expected_deflator = industry_prices[test_firms.states["Industry"]]
+        assert np.allclose(test_firms.compute_capital_bundle_deflator(), expected_deflator)
+        assert np.allclose(
+            test_firms.compute_real_productivity_investment(nominal_investment),
+            nominal_investment / expected_deflator,
+        )
+
+    def test__real_productivity_investment_falls_when_capital_prices_rise(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        nominal_investment = np.full(n_firms, 10.0)
+
+        test_firms.ts.production.append(np.ones(n_firms))
+        test_firms.base_capital_inputs_depreciation_matrix = np.eye(n_industries)
+
+        test_firms.current_good_prices = np.ones(n_industries)
+        real_at_base_prices = test_firms.compute_real_productivity_investment(nominal_investment)
+
+        test_firms.current_good_prices = np.full(n_industries, 2.0)
+        real_at_high_prices = test_firms.compute_real_productivity_investment(nominal_investment)
+
+        assert np.allclose(real_at_high_prices, real_at_base_prices / 2.0)

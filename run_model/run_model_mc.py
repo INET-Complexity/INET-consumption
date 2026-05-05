@@ -219,7 +219,12 @@ def main(
         country_config_dict = yaml.safe_load(f)
     country_cfg = CountryConfiguration(**country_config_dict[cfg.country_iso3])
 
-    country_cfg = align_country_configuration_to_data(country_cfg, n_industries=data.n_industries)
+    synthetic_country = data.synthetic_countries[cfg.country_iso3]
+    country_cfg = align_country_configuration_to_data(
+        country_cfg,
+        n_industries=data.n_industries,
+        n_firms=len(synthetic_country.firms.firm_data),
+    )
     country_configurations = {cfg.country_iso3: country_cfg}
 
     country_cfg = country_configurations[cfg.country_iso3]

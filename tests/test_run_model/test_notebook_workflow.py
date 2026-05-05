@@ -9,6 +9,7 @@ if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
 from src import notebook_workflow as nw  # noqa: E402
+from src.helpers import align_country_configuration_to_data  # noqa: E402
 
 
 def _fake_env_config(tmp_path, country_iso3="ESP"):
@@ -31,14 +32,18 @@ def _fake_env_config(tmp_path, country_iso3="ESP"):
 def _summary_config():
     return SimpleNamespace(
         firms=SimpleNamespace(
+            parameters=SimpleNamespace(capital_inputs_delay=[0] * 18, depreciation_rates=[0.0] * 18),
             functions=SimpleNamespace(
                 productivity_growth=SimpleNamespace(name="SimpleTFPGrowth"),
+                productivity_investment_planner=SimpleNamespace(parameters={"n_firms": 18}),
                 wage_setter=SimpleNamespace(
                     name="WorkEffortFirmWageSetter",
                     parameters={"labour_market_tightness_markup_scale": 0.05},
                 ),
-            )
+            ),
+            substitution_bundles=list(range(18)),
         ),
+        households=SimpleNamespace(substitution_bundles=list(range(18))),
         labour_market=SimpleNamespace(
             functions=SimpleNamespace(
                 clearing=SimpleNamespace(
@@ -124,7 +129,7 @@ def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch
                     household_data=[object(), object()],
                     individual_data=[object(), object(), object()],
                 ),
-                firms=SimpleNamespace(firm_data=[object(), object(), object(), object()]),
+                firms=SimpleNamespace(firm_data=range(7)),
                 banks=SimpleNamespace(number_of_banks=1),
                 government_entities=SimpleNamespace(number_of_entities=3),
                 central_bank=object(),
@@ -137,8 +142,9 @@ def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch
     monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
     monkeypatch.setattr(nw, "_load_country_config", lambda cfg: country_cfg)
 
-    def fake_align(cfg, n_industries):
+    def fake_align(cfg, n_industries, n_firms=None):
         assert n_industries == 4
+        assert n_firms == 7
         cfg.aligned = True
         return cfg
 
@@ -156,6 +162,28 @@ def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch
     assert configs["ESP"].aligned is True
     assert configs["ESP"].labour_market.functions.clearing.name == "ReservationWageBindingDefaultLabourMarketClearer"
     assert configs["ESP"].firms.functions.wage_setter.parameters["labour_market_tightness_markup_scale"] == 0.5
+
+
+def test_align_country_configuration_uses_firm_count_for_productivity_planner():
+    country_cfg = _summary_config()
+
+    aligned = align_country_configuration_to_data(
+        country_cfg,
+        n_industries=18,
+        n_firms=821,
+    )
+
+    assert aligned.firms.functions.productivity_investment_planner.parameters["n_firms"] == 821
+    assert aligned.firms.parameters.capital_inputs_delay == [0] * 18
+    assert aligned.firms.parameters.depreciation_rates == [0.0] * 18
+
+
+def test_align_country_configuration_falls_back_to_industry_count_for_productivity_planner():
+    country_cfg = _summary_config()
+
+    aligned = align_country_configuration_to_data(country_cfg, n_industries=18)
+
+    assert aligned.firms.functions.productivity_investment_planner.parameters["n_firms"] == 18
 
 
 def test_summarize_agent_counts_reads_synthetic_country_counts():

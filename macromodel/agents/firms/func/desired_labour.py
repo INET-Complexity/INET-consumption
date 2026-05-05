@@ -87,10 +87,10 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
     ) -> np.ndarray:
         """Calculate desired labor using the default adjustment strategy.
 
-        Adjusts target production downward based on input constraints, then
-        divides by TFP so that higher productivity firms require fewer workers
-        to meet the same output target — consistent with the Leontief production
-        function where effective labour = A * raw_labour.
+        Converts the production target into pre-TFP capacity units before
+        applying intermediate/capital limits. This matches the Leontief
+        production function where TFP scales labour and non-labour constraints alike:
+        Y = min(target, A * labour, A * intermediate_limit, A * capital_limit).
 
         Args:
             current_target_production (np.ndarray): Initial production targets
@@ -101,21 +101,21 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
         Returns:
             np.ndarray: Adjusted labor demand accounting for input complementarities and TFP
         """
-        current_target_production = np.minimum(
-            current_target_production,
-            current_target_production
-            + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - current_target_production),
-        )
-        current_target_production = np.minimum(
-            current_target_production,
-            current_target_production
-            + self.consider_capital_inputs * (current_limiting_capital_inputs - current_target_production),
-        )
         if current_tfp_multiplier is not None:
-            return np.divide(
+            desired_labour = np.divide(
                 current_target_production,
                 current_tfp_multiplier,
                 out=current_target_production.copy(),
                 where=current_tfp_multiplier > 0,
             )
-        return current_target_production
+        else:
+            desired_labour = current_target_production.copy()
+        desired_labour = np.minimum(
+            desired_labour,
+            desired_labour + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - desired_labour),
+        )
+        desired_labour = np.minimum(
+            desired_labour,
+            desired_labour + self.consider_capital_inputs * (current_limiting_capital_inputs - desired_labour),
+        )
+        return desired_labour

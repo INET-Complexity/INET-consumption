@@ -58,6 +58,34 @@ class TestDesiredLabourSetter:
             np.array([50.0, 50.0]),
         )
 
+    def test__tfp_adjusts_target_before_raw_input_constraints(self):
+        assert np.allclose(
+            DefaultDesiredLabourSetter(
+                consider_intermediate_inputs=True,
+                consider_capital_inputs=True,
+            ).compute_desired_labour(
+                current_target_production=np.array([100.0]),
+                current_limiting_intermediate_inputs=np.array([60.0]),
+                current_limiting_capital_inputs=np.array([200.0]),
+                current_tfp_multiplier=np.array([2.0]),
+            ),
+            np.array([50.0]),
+        )
+
+    def test__raw_input_constraints_still_bind_after_tfp_adjustment(self):
+        assert np.allclose(
+            DefaultDesiredLabourSetter(
+                consider_intermediate_inputs=True,
+                consider_capital_inputs=True,
+            ).compute_desired_labour(
+                current_target_production=np.array([100.0]),
+                current_limiting_intermediate_inputs=np.array([40.0]),
+                current_limiting_capital_inputs=np.array([200.0]),
+                current_tfp_multiplier=np.array([2.0]),
+            ),
+            np.array([40.0]),
+        )
+
     def test__tfp_multiplier_none_leaves_desired_labour_unchanged(self):
         """Fix A: omitting tfp_multiplier (None) must reproduce pre-TFP behaviour."""
         setter = DefaultDesiredLabourSetter(

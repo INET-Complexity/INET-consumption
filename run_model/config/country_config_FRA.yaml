@@ -263,7 +263,7 @@ FRA:
           maximum_debt_to_equity_ratio: 2.0
           target_inventory_to_production_fraction: 0.1 # 0.0
       technical_coefficients_growth:
-        name: NoOpTechnicalGrowth
+        name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth
         parameters:
           diminishing_returns_factor: 0.5

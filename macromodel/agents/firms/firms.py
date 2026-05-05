@@ -1282,7 +1282,11 @@ class Firms(Agent):
             )
 
         # Setting total real amount of goods to buy
-        self.set_goods_to_buy(self.ts.current("target_intermediate_inputs") + self.ts.current("target_capital_inputs"))
+        total_goods = self.ts.current("target_intermediate_inputs") + self.ts.current("target_capital_inputs")
+        # Include planned technical investment if it exists
+        if hasattr(self.ts, "planned_technical_investment") and len(self.ts.planned_technical_investment) > 0:
+            total_goods = total_goods + self.ts.current("planned_technical_investment")
+        self.set_goods_to_buy(total_goods)
 
     def prepare_selling_goods(self) -> None:
         """Prepare firms' selling plans for goods market.

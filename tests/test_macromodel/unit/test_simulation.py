@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from macro_data.configuration.countries import Country as CountryName
+from macromodel.agents.firms.func.productivity_investment_planner import SimpleProductivityInvestmentPlanner
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation, check_compatibility
 from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
@@ -838,6 +839,89 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
     assert np.allclose(technical_spy.capital_investment, executed)
     assert technical_spy.intermediate_prices.shape == (executed.shape[1],)
     assert technical_spy.capital_prices.shape == (executed.shape[1],)
+
+
+def test_target_intensity_planner_execution_not_capped_by_net_capital(datawrapper, monkeypatch):
+    """The revised direct-TFP planner executes planned TFP independent of net capital purchases."""
+
+    class DirectPlannerFlag:
+        executes_direct_tfp_independently = True
+
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    firms = simulation.countries["FRA"].firms
+    n_firms = firms.ts.current("n_firms")
+    n_industries = firms.n_industries
+    planned = np.full(n_firms, 100.0)
+
+    firms.functions["productivity_investment_planner"] = DirectPlannerFlag()
+    firms.ts.planned_productivity_investment.append(planned)
+    firms.ts.planned_tfp_investment.append(planned)
+    firms.ts.planned_technical_investment.append(np.zeros((n_firms, n_industries)))
+    monkeypatch.setattr(firms, "compute_net_capital_investment_above_replacement", lambda: np.zeros(n_firms))
+    monkeypatch.setattr(firms, "compute_real_productivity_investment", lambda investment: investment.copy())
+
+    firms.execute_productivity_investment()
+
+    assert np.allclose(firms.ts.current("net_capital_investment_above_replacement"), 0.0)
+    assert np.allclose(firms.ts.current("executed_productivity_investment"), planned)
+    assert np.allclose(firms.ts.current("executed_tfp_investment"), planned)
+
+
+def test_firms_pass_industries_and_effective_rates_to_productivity_planner(datawrapper):
+    """Firms should map bank long-term firm loan rates into firm-level planner rates."""
+
+    class PlannerSpy:
+        firm_industries = None
+        effective_cost_rate = None
+
+        def plan_productivity_investment(self, **kwargs):
+            self.firm_industries = kwargs["firm_industries"].copy()
+            self.effective_cost_rate = kwargs["effective_cost_rate"].copy()
+            n_firms = len(kwargs["current_production"])
+            n_industries = kwargs["n_industries"]
+            return np.zeros(n_firms), np.zeros(n_firms), np.zeros((n_firms, n_industries))
+
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    firms = simulation.countries["FRA"].firms
+    planner_spy = PlannerSpy()
+    bank_rates = np.linspace(0.01, 0.05, simulation.countries["FRA"].banks.ts.current("n_banks"))
+
+    firms.functions["productivity_investment_planner"] = planner_spy
+    firms.plan_productivity_investment(
+        estimated_inflation=0.0,
+        current_good_prices=np.ones(firms.n_industries),
+        bank_interest_rates_on_long_term_firm_loans=bank_rates,
+    )
+
+    assert np.allclose(planner_spy.firm_industries, firms.states["Industry"])
+    assert np.allclose(planner_spy.effective_cost_rate, bank_rates[firms.states["Corresponding Bank ID"]])
+
+
+def test_simple_planner_execution_still_capped_by_net_capital(datawrapper, monkeypatch):
+    """Existing planners keep the net-capital execution cap."""
+
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    firms = simulation.countries["FRA"].firms
+    n_firms = firms.ts.current("n_firms")
+    n_industries = firms.n_industries
+    planned = np.full(n_firms, 100.0)
+    net_capital = np.full(n_firms, 25.0)
+
+    firms.functions["productivity_investment_planner"] = SimpleProductivityInvestmentPlanner(n_firms=n_firms)
+    firms.ts.planned_productivity_investment.append(planned)
+    firms.ts.planned_tfp_investment.append(planned)
+    firms.ts.planned_technical_investment.append(np.zeros((n_firms, n_industries)))
+    monkeypatch.setattr(firms, "compute_net_capital_investment_above_replacement", lambda: net_capital)
+    monkeypatch.setattr(firms, "compute_real_productivity_investment", lambda investment: investment.copy())
+
+    firms.execute_productivity_investment()
+
+    assert np.allclose(firms.ts.current("net_capital_investment_above_replacement"), net_capital)
+    assert np.allclose(firms.ts.current("executed_productivity_investment"), net_capital)
+    assert np.allclose(firms.ts.current("executed_tfp_investment"), net_capital)
 
 
 def test_prehooks(datawrapper):

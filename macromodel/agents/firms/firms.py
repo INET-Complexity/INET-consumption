@@ -480,6 +480,7 @@ class Firms(Agent):
     def set_targets(
         self,
         bank_overdraft_rate_on_firm_deposits: np.ndarray,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray,
         estimated_growth: float,
         estimated_inflation: float,
         current_good_prices: np.ndarray,
@@ -495,6 +496,7 @@ class Firms(Agent):
 
         Args:
             bank_overdraft_rate_on_firm_deposits (np.ndarray): Overdraft interest rates
+            bank_interest_rates_on_long_term_firm_loans (np.ndarray): Long-term firm loan rates by bank
             estimated_growth: Expected real growth rate
             estimated_inflation: Expected inflation rate
             current_good_prices (np.ndarray): Industry-level average prices
@@ -530,6 +532,7 @@ class Firms(Agent):
         total_investment, tfp_investment, technical_investment = self.plan_productivity_investment(
             estimated_inflation=estimated_inflation,
             current_good_prices=current_good_prices,
+            bank_interest_rates_on_long_term_firm_loans=bank_interest_rates_on_long_term_firm_loans,
         )
         # Store total investment for backward compatibility
         self.ts.planned_productivity_investment.append(total_investment)
@@ -542,6 +545,7 @@ class Firms(Agent):
         self,
         estimated_inflation: float,
         current_good_prices: np.ndarray,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment amounts for each firm.
 
@@ -552,6 +556,7 @@ class Firms(Agent):
         Args:
             estimated_inflation: Expected inflation rate
             current_good_prices: Industry-level average prices for inputs
+            bank_interest_rates_on_long_term_firm_loans: Long-term firm loan rates by bank
 
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: Total investment, TFP investment, technical investment
@@ -581,6 +586,12 @@ class Firms(Agent):
         # Only allow positive available cash (no borrowing beyond capacity)
         available_cash = np.maximum(0.0, available_cash)
 
+        if bank_interest_rates_on_long_term_firm_loans is None:
+            effective_cost_rate = None
+        else:
+            corresponding_bank_ids = self.states["Corresponding Bank ID"]
+            effective_cost_rate = bank_interest_rates_on_long_term_firm_loans[corresponding_bank_ids]
+
         # Get investment allocation from planner
         total_investment, tfp_investment, technical_investment = self.functions[
             "productivity_investment_planner"
@@ -597,6 +608,8 @@ class Firms(Agent):
             current_nominal_production=self.ts.current("price") * self.ts.current("production"),
             max_cash_fraction=self.configuration.parameters.max_productivity_cash_fraction,
             max_investment_fraction=self.configuration.parameters.max_productivity_investment_fraction,
+            firm_industries=self.states["Industry"],
+            effective_cost_rate=effective_cost_rate,
         )
 
         return total_investment, tfp_investment, technical_investment
@@ -2159,18 +2172,24 @@ class Firms(Agent):
             planned_productivity_investment = self.ts.current("planned_productivity_investment")
             planned_tfp_investment = self.ts.current("planned_tfp_investment")
             planned_technical_investment = self.ts.current("planned_technical_investment")
-            executed_planned_investment = np.minimum(
-                net_capital_investment, planned_productivity_investment
-            )
-            execution_ratio = np.divide(
-                executed_planned_investment,
-                planned_productivity_investment,
-                out=np.zeros_like(net_capital_investment),
-                where=planned_productivity_investment > 0,
-            )
-            executed_productivity_investment += executed_planned_investment
-            executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
-            executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
+            if getattr(self.functions["productivity_investment_planner"], "executes_direct_tfp_independently", False):
+                executed_planned_investment = planned_productivity_investment.copy()
+                executed_productivity_investment += executed_planned_investment
+                executed_tfp_investment = planned_tfp_investment + forced_productivity_investment
+                executed_technical_investment = planned_technical_investment.copy()
+            else:
+                executed_planned_investment = np.minimum(
+                    net_capital_investment, planned_productivity_investment
+                )
+                execution_ratio = np.divide(
+                    executed_planned_investment,
+                    planned_productivity_investment,
+                    out=np.zeros_like(net_capital_investment),
+                    where=planned_productivity_investment > 0,
+                )
+                executed_productivity_investment += executed_planned_investment
+                executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
+                executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
         real_executed_investment = self.compute_real_productivity_investment(executed_productivity_investment)
 
         # Store in time series

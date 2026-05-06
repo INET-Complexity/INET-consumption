@@ -162,6 +162,7 @@ def summarize_country_config(country_cfg: CountryConfiguration) -> dict[str, Any
     """Return the compact scenario summary shown in the notebook."""
     return {
         "productivity_growth": country_cfg.firms.functions.productivity_growth.name,
+        "productivity_investment_planner": country_cfg.firms.functions.productivity_investment_planner.name,
         "labour_market": {
             "name": country_cfg.labour_market.functions.clearing.name,
             "parameters": country_cfg.labour_market.functions.clearing.parameters,

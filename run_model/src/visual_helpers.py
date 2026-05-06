@@ -585,6 +585,18 @@ def build_macro_output_df(model, country_code):
             return None
         return add_column(name, as_output_series(values))
 
+    def add_average_firm_timeseries_column(output_name, source_name):
+        values = getattr(country.firms.ts, source_name, None)
+        if values is None:
+            return None
+
+        averages = []
+        for value in list(values):
+            array = np.asarray(value, dtype=float)
+            averages.append(float(np.nanmean(array)) if array.size else np.nan)
+
+        return add_column(output_name, as_output_series(averages))
+
     def sector_labels(width):
         industries = list(getattr(country.firms, "industries", []))
         if len(industries) == width:
@@ -652,6 +664,7 @@ def build_macro_output_df(model, country_code):
         add_economy_column(economy_column)
     for economy_column in ["sectoral_growth", "num_insolvent_firms_by_sector"]:
         add_economy_vector_columns(economy_column)
+    add_average_firm_timeseries_column("avg_tfp_multiplier", "tfp_multiplier")
 
     out = pd.DataFrame(output_columns, index=out_index).copy()
     out.attrs["time_unit_months"] = model.timestep.increment

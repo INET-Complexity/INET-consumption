@@ -486,6 +486,9 @@ class Country:
         # Firms set production targets
         self.firms.set_targets(
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+            bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current(
+                "interest_rates_on_long_term_firm_loans"
+            ),
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             current_good_prices=self.economy.ts.current("good_prices"),

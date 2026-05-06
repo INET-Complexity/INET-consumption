@@ -35,7 +35,10 @@ def _summary_config():
             parameters=SimpleNamespace(capital_inputs_delay=[0] * 18, depreciation_rates=[0.0] * 18),
             functions=SimpleNamespace(
                 productivity_growth=SimpleNamespace(name="SimpleTFPGrowth"),
-                productivity_investment_planner=SimpleNamespace(parameters={"n_firms": 18}),
+                productivity_investment_planner=SimpleNamespace(
+                    name="TargetIntensityTFPInvestmentPlanner",
+                    parameters={"n_firms": 18},
+                ),
                 wage_setter=SimpleNamespace(
                     name="WorkEffortFirmWageSetter",
                     parameters={"labour_market_tightness_markup_scale": 0.05},
@@ -219,6 +222,13 @@ def test_benchmark_overrides_default_to_no_overrides():
     config = nw.NotebookRunConfig()
 
     assert config.benchmark_overrides is None
+
+
+def test_run_model_notebook_keeps_simple_productivity_planner_override_available():
+    notebook_text = (RUN_MODEL_PATH / "run_model.ipynb").read_text()
+
+    assert "firms.functions.productivity_investment_planner.name" in notebook_text
+    assert "SimpleProductivityInvestmentPlanner" in notebook_text
 
 
 def test_run_benchmark_uses_cached_dataframe_without_rerun(tmp_path, monkeypatch):

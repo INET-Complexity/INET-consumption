@@ -297,7 +297,8 @@ class ProductivityGrowth(BaseModel):
 class ProductivityInvestmentPlanner(BaseModel):
     """
     The function for planning productivity investments.
-    Options: NoProductivityInvestmentPlanner, SimpleProductivityInvestmentPlanner, OptimalProductivityInvestmentPlanner
+    Options: NoProductivityInvestmentPlanner, SimpleProductivityInvestmentPlanner,
+    TargetIntensityTFPInvestmentPlanner, OptimalProductivityInvestmentPlanner
 
     All parameters can be specified as either:
     - float: uniform value applied to all firms
@@ -307,7 +308,10 @@ class ProductivityInvestmentPlanner(BaseModel):
     """
 
     name: Literal[
-        "NoProductivityInvestmentPlanner", "SimpleProductivityInvestmentPlanner", "OptimalProductivityInvestmentPlanner"
+        "NoProductivityInvestmentPlanner",
+        "SimpleProductivityInvestmentPlanner",
+        "TargetIntensityTFPInvestmentPlanner",
+        "OptimalProductivityInvestmentPlanner",
     ] = "NoProductivityInvestmentPlanner"
     path_name: str = "productivity_investment_planner"
     parameters: dict[str, Any] = {

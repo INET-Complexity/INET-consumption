@@ -213,24 +213,40 @@ FRA:
         name: SimpleTFPGrowth
         path_name: productivity_growth
         parameters:
-          investment_effectiveness: 0.1  # bounded calibration 2026-05-06; phi in [0, 1]
+          investment_effectiveness: 0.003  # revised direct-TFP calibration; previous bounded Simple-planner phi: 0.1
       productivity_investment_planner:
-        name: SimpleProductivityInvestmentPlanner
+        name: TargetIntensityTFPInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
-          hurdle_rate: 0.20  # conservative baseline: 0.30; previous: 0.15
-          investment_effectiveness: 0.02  # conservative baseline: 0.01; previous: 0.1
-          investment_elasticity: 0.8  # previous: 0.3
-          investment_propensity: 0.04  # conservative baseline: 0.02; previous implicit default: 0.2
-          max_cash_fraction: 0.03  # conservative baseline: 0.02; previous implicit default: 0.1
-          max_investment_fraction: 0.015  # conservative baseline: 0.01; previous: 0.1
+          adjustment_cost_lambda: 1.0
+          cap_multiplier: 1.5
+          investment_effectiveness: 0.003  # must match productivity_growth.investment_effectiveness for omega calibration
+          investment_elasticity: 0.3
           n_firms: 18
-          potential_weight: 0.3
-          price_weight: 0.4
-          technical_diminishing_returns: 1.5  # previous: 0.5
-          technical_investment_effectiveness: 0.01  # previous: 0.15
-          tfp_investment_share: 0.25  # Arm C; modest activation arm: 0.15; previous: 0.4
-          usage_weight: 0.3
+          reference_effective_cost_rate: 0.02
+          sector_innovation_intensity:
+            # Sector R&D/turnover calibration using sector means from firm-level data.
+            '0': 0.0594
+            '1': 0.0049
+            '2': 0.0399
+            '3': 0.0059
+            '4': 0.0041
+            '5': 0.0031
+            '6': 0.0126
+            '7': 0.0062
+            '8': 0.0047
+            '9': 0.0391
+            '10': 0.0172
+            '11': 0.0006
+            '12': 0.0113
+            '13': 0.0379
+            '14': 0.005
+            '15': 0.006
+            '16': 0.108
+            '17': 0.0139
+          silence_technical_investment: true
+          target_innovation_intensity: 0.02
+          tfp_risk_premium: 0.0
       profit_estimator:
         name: DefaultFirmProfitsSetter
         path_name: profit_estimator
@@ -328,7 +344,7 @@ FRA:
       price_weight: 0.4
       technical_diminishing_returns: 1.5  # previous: 0.5
       technical_investment_effectiveness: 0.01  # previous: 0.15
-      tfp_base_growth_rate: 0.0015  # conservative baseline: 0.0025
+      tfp_base_growth_rate: 0.0  # revised direct-TFP calibration: all TFP growth comes from firm investment
       tfp_investment_elasticity: 0.3  # bounded calibration 2026-05-06; restores conventional reduced-form elasticity
       tfp_investment_share: 0.25  # Arm C; modest activation arm: 0.15; previous: 0.4
       usage_weight: 0.3

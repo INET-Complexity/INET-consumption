@@ -104,7 +104,16 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
             )
         ),
         economy=SimpleNamespace(ts=_ts(economy_ts)),
-        firms=SimpleNamespace(industries=["agriculture", "services"]),
+        firms=SimpleNamespace(
+            industries=["agriculture", "services"],
+            ts=SimpleNamespace(
+                tfp_multiplier=[
+                    np.array([1.0, 1.1, 1.2]),
+                    np.array([1.1, 1.2, 1.3]),
+                    np.array([1.2, 1.3, 1.4]),
+                ]
+            ),
+        ),
     )
     model = SimpleNamespace(
         timestep=SimpleNamespace(increment=1),
@@ -156,12 +165,14 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "num_insolvent_firms_by_sector_services",
         "npl_firm_loans",
         "npl_hh_cons_loans",
+        "avg_tfp_multiplier",
     }
     assert expected_columns.issubset(output.columns)
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
     assert output["num_insolvent_firms_by_sector"].tolist() == [[1, 2], [3, 4], [5, 6]]
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
+    assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
 
     clutter_columns = {
         "revenue",

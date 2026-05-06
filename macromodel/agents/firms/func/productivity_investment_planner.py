@@ -3,6 +3,28 @@ from typing import Optional
 
 import numpy as np
 
+PRODUCTIVITY_PLANNER_COMPATIBILITY_PARAMETERS = frozenset(
+    {
+        "adjustment_cost_lambda",
+        "bisection_steps",
+        "cap_multiplier",
+        "investment_propensity",
+        "private_value_weight",
+        "reference_effective_cost_rate",
+        "search_steps",
+        "sector_innovation_intensity",
+        "silence_technical_investment",
+        "target_innovation_intensity",
+        "tfp_risk_premium",
+    }
+)
+
+
+def _ignore_compatible_extra_parameters(planner_name: str, extra_parameters: dict[str, object]) -> None:
+    unexpected = sorted(set(extra_parameters) - PRODUCTIVITY_PLANNER_COMPATIBILITY_PARAMETERS)
+    if unexpected:
+        raise TypeError(f"{planner_name}.__init__() got unexpected keyword argument(s): {unexpected}")
+
 
 class ProductivityInvestmentPlanner(ABC):
     """Abstract base class for planning firms' productivity investments.
@@ -40,6 +62,7 @@ class ProductivityInvestmentPlanner(ABC):
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
         max_cash_fraction: float | list[float] = 0.1,
+        **extra_parameters: object,
     ):
         """Initialize the productivity investment planner.
 
@@ -57,6 +80,7 @@ class ProductivityInvestmentPlanner(ABC):
             potential_weight (float | list[float]): Weight for improvement potential targeting
             max_cash_fraction (float | list[float]): Max investment as fraction of available cash
         """
+        _ignore_compatible_extra_parameters(self.__class__.__name__, extra_parameters)
         self.n_firms = n_firms
 
         # Convert all parameters to numpy arrays with shape (n_firms,)
@@ -106,6 +130,8 @@ class ProductivityInvestmentPlanner(ABC):
         current_nominal_production: np.ndarray | None = None,
         max_cash_fraction: float | np.ndarray | None = None,
         max_investment_fraction: float | np.ndarray | None = None,
+        firm_industries: np.ndarray | None = None,
+        effective_cost_rate: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment for each firm.
 
@@ -126,6 +152,8 @@ class ProductivityInvestmentPlanner(ABC):
             current_nominal_production (np.ndarray | None): Firm nominal output, required by nominal planners
             max_cash_fraction (float | np.ndarray | None): Optional cash cap override
             max_investment_fraction (float | np.ndarray | None): Optional output cap override
+            firm_industries (np.ndarray | None): Firm industry indices, used by sector-calibrated planners
+            effective_cost_rate (np.ndarray | None): Firm-level opportunity cost of TFP investment
 
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: Tuple containing:
@@ -495,6 +523,8 @@ class NoProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         current_nominal_production: np.ndarray | None = None,
         max_cash_fraction: float | np.ndarray | None = None,
         max_investment_fraction: float | np.ndarray | None = None,
+        firm_industries: np.ndarray | None = None,
+        effective_cost_rate: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return zero productivity investment for all firms.
 
@@ -517,6 +547,235 @@ class NoProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         total_investment = np.zeros(n_firms)
         tfp_investment = np.zeros(n_firms)
         technical_investment = np.zeros((n_firms, n_industries))
+
+        return total_investment, tfp_investment, technical_investment
+
+
+class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
+    """Direct TFP investment planner based on target innovation intensity."""
+
+    executes_direct_tfp_independently = True
+
+    def __init__(
+        self,
+        n_firms: int,
+        hurdle_rate: float | list[float] = 0.15,
+        max_investment_fraction: float | list[float] = 0.1,
+        investment_effectiveness: float | list[float] = 0.1,
+        investment_elasticity: float | list[float] = 0.3,
+        target_innovation_intensity: float = 0.02,
+        sector_innovation_intensity: dict[int | str, float] | None = None,
+        cap_multiplier: float = 1.0,
+        adjustment_cost_lambda: float = 1.0,
+        reference_effective_cost_rate: float = 0.02,
+        tfp_risk_premium: float = 0.0,
+        private_value_weight: float | list[float] | None = None,
+        silence_technical_investment: bool = True,
+        bisection_steps: int = 60,
+        tfp_investment_share: float | list[float] = 0.4,
+        technical_investment_effectiveness: float | list[float] = 0.15,
+        technical_diminishing_returns: float | list[float] = 0.5,
+        price_weight: float | list[float] = 0.4,
+        usage_weight: float | list[float] = 0.3,
+        potential_weight: float | list[float] = 0.3,
+        max_cash_fraction: float | list[float] = 0.1,
+        **extra_parameters: object,
+    ):
+        _ignore_compatible_extra_parameters(self.__class__.__name__, extra_parameters)
+        super().__init__(
+            n_firms=n_firms,
+            hurdle_rate=hurdle_rate,
+            max_investment_fraction=max_investment_fraction,
+            investment_effectiveness=investment_effectiveness,
+            investment_elasticity=investment_elasticity,
+            tfp_investment_share=tfp_investment_share,
+            technical_investment_effectiveness=technical_investment_effectiveness,
+            technical_diminishing_returns=technical_diminishing_returns,
+            price_weight=price_weight,
+            usage_weight=usage_weight,
+            potential_weight=potential_weight,
+            max_cash_fraction=max_cash_fraction,
+        )
+        if not np.isfinite(target_innovation_intensity) or target_innovation_intensity <= 0:
+            raise ValueError("target_innovation_intensity must be finite and positive.")
+        if not np.isfinite(cap_multiplier) or cap_multiplier <= 0:
+            raise ValueError("cap_multiplier must be finite and positive.")
+        if not np.isfinite(adjustment_cost_lambda) or adjustment_cost_lambda < 0:
+            raise ValueError("adjustment_cost_lambda must be finite and non-negative.")
+        if not np.isfinite(reference_effective_cost_rate) or reference_effective_cost_rate < 0:
+            raise ValueError("reference_effective_cost_rate must be finite and non-negative.")
+        if not np.isfinite(tfp_risk_premium) or tfp_risk_premium < 0:
+            raise ValueError("tfp_risk_premium must be finite and non-negative.")
+        if np.any(~np.isfinite(self.investment_effectiveness)) or np.any(self.investment_effectiveness <= 0):
+            raise ValueError("investment_effectiveness must contain finite positive values.")
+        if (
+            np.any(~np.isfinite(self.investment_elasticity))
+            or np.any(self.investment_elasticity <= 0)
+            or np.any(self.investment_elasticity >= 1)
+        ):
+            raise ValueError("TargetIntensityTFPInvestmentPlanner requires 0 < investment_elasticity < 1.")
+
+        self.target_innovation_intensity = float(target_innovation_intensity)
+        self.sector_innovation_intensity = self._validate_sector_intensity_map(sector_innovation_intensity or {})
+        self.cap_multiplier = float(cap_multiplier)
+        self.adjustment_cost_lambda = float(adjustment_cost_lambda)
+        self.reference_effective_cost_rate = float(reference_effective_cost_rate)
+        self.tfp_risk_premium = float(tfp_risk_premium)
+        self.private_value_weight = None if private_value_weight is None else self._to_array(private_value_weight, n_firms)
+        self.silence_technical_investment = bool(silence_technical_investment)
+        self.bisection_steps = int(bisection_steps)
+        if self.bisection_steps <= 0:
+            raise ValueError("bisection_steps must be positive.")
+
+    @staticmethod
+    def _validate_sector_intensity_map(sector_innovation_intensity: dict[int | str, float]) -> dict[int, float]:
+        validated: dict[int, float] = {}
+        for raw_sector, raw_intensity in sector_innovation_intensity.items():
+            try:
+                sector = int(raw_sector)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("sector_innovation_intensity keys must be numeric industry indices.") from exc
+            intensity = float(raw_intensity)
+            if sector < 0:
+                raise ValueError("sector_innovation_intensity keys must be non-negative industry indices.")
+            if not np.isfinite(intensity) or intensity <= 0:
+                raise ValueError("sector_innovation_intensity values must be finite and positive.")
+            validated[sector] = intensity
+        return validated
+
+    def _target_intensity_by_firm(self, firm_industries: np.ndarray) -> np.ndarray:
+        target = np.full(len(firm_industries), self.target_innovation_intensity, dtype=float)
+        for sector, intensity in self.sector_innovation_intensity.items():
+            target[firm_industries == sector] = intensity
+        return target
+
+    def _private_value_weight_by_firm(self, target_intensity: np.ndarray) -> np.ndarray:
+        if self.private_value_weight is not None:
+            return self.private_value_weight
+        denominator = (
+            self.investment_effectiveness
+            * self.investment_elasticity
+            * np.power(target_intensity, self.investment_elasticity - 1.0)
+        )
+        numerator = self.reference_effective_cost_rate + self.adjustment_cost_lambda * target_intensity
+        return np.divide(numerator, denominator, out=np.zeros_like(target_intensity), where=denominator > 0)
+
+    def _marginal_value(
+        self,
+        intensity: np.ndarray,
+        private_value_weight: np.ndarray,
+        effective_cost_rate: np.ndarray,
+    ) -> np.ndarray:
+        benefit = (
+            private_value_weight
+            * self.investment_effectiveness
+            * self.investment_elasticity
+            * np.power(intensity, self.investment_elasticity - 1.0)
+        )
+        marginal_cost = effective_cost_rate + self.adjustment_cost_lambda * intensity
+        return benefit - marginal_cost
+
+    def _solve_desired_intensity(
+        self,
+        cap_intensity: np.ndarray,
+        private_value_weight: np.ndarray,
+        effective_cost_rate: np.ndarray,
+    ) -> np.ndarray:
+        desired = np.zeros_like(cap_intensity)
+        active = cap_intensity > 0
+        if not np.any(active):
+            return desired
+
+        high = cap_intensity.copy()
+        marginal_at_cap = self._marginal_value(high, private_value_weight, effective_cost_rate)
+        cap_binding = active & (marginal_at_cap >= 0)
+        desired[cap_binding] = high[cap_binding]
+
+        interior = active & ~cap_binding
+        if np.any(interior):
+            low = np.zeros_like(high)
+            for _ in range(self.bisection_steps):
+                mid = 0.5 * (low + high)
+                marginal_mid = self._marginal_value(
+                    np.maximum(mid, np.finfo(float).tiny),
+                    private_value_weight,
+                    effective_cost_rate,
+                )
+                low = np.where(interior & (marginal_mid > 0), mid, low)
+                high = np.where(interior & (marginal_mid <= 0), mid, high)
+            desired[interior] = 0.5 * (low[interior] + high[interior])
+        return desired
+
+    def plan_productivity_investment(
+        self,
+        current_tfp: np.ndarray,
+        current_production: np.ndarray,
+        current_unit_costs: np.ndarray,
+        available_cash: np.ndarray,
+        current_prices: np.ndarray,
+        n_industries: int,
+        input_usage: np.ndarray,
+        current_tech_multipliers: np.ndarray,
+        substitution_bundle_matrix: Optional[np.ndarray],
+        current_nominal_production: np.ndarray | None = None,
+        max_cash_fraction: float | np.ndarray | None = None,
+        max_investment_fraction: float | np.ndarray | None = None,
+        firm_industries: np.ndarray | None = None,
+        effective_cost_rate: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if current_nominal_production is None:
+            raise ValueError("current_nominal_production is required for TargetIntensityTFPInvestmentPlanner.")
+        if firm_industries is None:
+            raise ValueError("firm_industries is required for TargetIntensityTFPInvestmentPlanner.")
+        if not np.all(np.isfinite(current_nominal_production)) or np.any(current_nominal_production < 0):
+            raise ValueError("current_nominal_production must contain finite non-negative values.")
+        firm_industries = np.asarray(firm_industries, dtype=int)
+        if len(firm_industries) != len(current_nominal_production):
+            raise ValueError("firm_industries length must match n_firms.")
+        if np.any(firm_industries < 0):
+            raise ValueError("firm_industries must contain non-negative industry indices.")
+        if np.any(firm_industries >= n_industries):
+            raise ValueError("firm_industries must contain valid industry indices for n_industries.")
+        invalid_sector_keys = [sector for sector in self.sector_innovation_intensity if sector >= n_industries]
+        if invalid_sector_keys:
+            raise ValueError(
+                "sector_innovation_intensity keys must be valid industry indices for n_industries; "
+                f"got {invalid_sector_keys} for n_industries={n_industries}."
+            )
+
+        if effective_cost_rate is None:
+            effective_rate = np.full(len(current_nominal_production), self.reference_effective_cost_rate)
+        else:
+            effective_rate = np.asarray(effective_cost_rate, dtype=float)
+        if effective_rate.shape == ():
+            effective_rate = np.full(len(current_nominal_production), float(effective_rate))
+        if len(effective_rate) != len(current_nominal_production):
+            raise ValueError("effective_cost_rate length must match n_firms.")
+        effective_rate = effective_rate + self.tfp_risk_premium
+        if np.any(~np.isfinite(effective_rate)) or np.any(effective_rate < 0):
+            raise ValueError("effective_cost_rate must contain finite non-negative values.")
+
+        target_intensity = self._target_intensity_by_firm(firm_industries)
+        cap_intensity = self.cap_multiplier * target_intensity
+        private_value_weight = self._private_value_weight_by_firm(target_intensity)
+        desired_intensity = self._solve_desired_intensity(cap_intensity, private_value_weight, effective_rate)
+
+        target_tfp_investment = desired_intensity * current_nominal_production
+        tfp_investment = np.minimum(target_tfp_investment, np.maximum(0.0, available_cash))
+        technical_investment = np.zeros((len(current_nominal_production), n_industries))
+
+        if self.silence_technical_investment:
+            total_investment = tfp_investment.copy()
+        else:
+            total_investment = tfp_investment.copy()
+            _, technical_investment = self.allocate_productivity_investment(
+                total_investment,
+                current_prices,
+                input_usage,
+                current_tech_multipliers,
+                substitution_bundle_matrix,
+            )
+            total_investment = tfp_investment + technical_investment.sum(axis=1)
 
         return total_investment, tfp_investment, technical_investment
 
@@ -544,6 +803,7 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
         max_cash_fraction: float | list[float] = 0.1,
+        **extra_parameters: object,
     ):
         """Initialize the simple productivity investment planner.
 
@@ -556,6 +816,7 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
             investment_propensity (float | list[float]): Fraction of budget to invest
             max_cash_fraction (float | list[float]): Max investment as fraction of available cash
         """
+        _ignore_compatible_extra_parameters(self.__class__.__name__, extra_parameters)
         super().__init__(
             n_firms=n_firms,
             hurdle_rate=hurdle_rate,
@@ -586,6 +847,8 @@ class SimpleProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         current_nominal_production: np.ndarray | None = None,
         max_cash_fraction: float | np.ndarray | None = None,
         max_investment_fraction: float | np.ndarray | None = None,
+        firm_industries: np.ndarray | None = None,
+        effective_cost_rate: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment using simple rules.
 
@@ -689,6 +952,7 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         usage_weight: float | list[float] = 0.3,
         potential_weight: float | list[float] = 0.3,
         max_cash_fraction: float | list[float] = 0.1,
+        **extra_parameters: object,
     ):
         """Initialize the optimal productivity investment planner.
 
@@ -700,6 +964,7 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
             investment_elasticity (float | list[float]): Diminishing returns parameter
             search_steps (int): Number of steps in optimization search
         """
+        _ignore_compatible_extra_parameters(self.__class__.__name__, extra_parameters)
         super().__init__(
             n_firms=n_firms,
             hurdle_rate=hurdle_rate,
@@ -730,6 +995,8 @@ class OptimalProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
         current_nominal_production: np.ndarray | None = None,
         max_cash_fraction: float | np.ndarray | None = None,
         max_investment_fraction: float | np.ndarray | None = None,
+        firm_industries: np.ndarray | None = None,
+        effective_cost_rate: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Plan productivity investment by optimizing expected returns.
 

@@ -213,7 +213,7 @@ FRA:
         name: SimpleTFPGrowth
         path_name: productivity_growth
         parameters:
-          investment_effectiveness: 0.005  # Arm C; previous implicit default: 0.1
+          investment_effectiveness: 0.1  # bounded calibration 2026-05-06; phi in [0, 1]
       productivity_investment_planner:
         name: SimpleProductivityInvestmentPlanner
         path_name: productivity_investment_planner
@@ -329,7 +329,7 @@ FRA:
       technical_diminishing_returns: 1.5  # previous: 0.5
       technical_investment_effectiveness: 0.01  # previous: 0.15
       tfp_base_growth_rate: 0.0015  # conservative baseline: 0.0025
-      tfp_investment_elasticity: 0.8  # previous: 0.3
+      tfp_investment_elasticity: 0.3  # bounded calibration 2026-05-06; restores conventional reduced-form elasticity
       tfp_investment_share: 0.25  # Arm C; modest activation arm: 0.15; previous: 0.4
       usage_weight: 0.3
     substitution_bundles:

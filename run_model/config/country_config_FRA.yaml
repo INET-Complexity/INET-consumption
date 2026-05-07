@@ -220,7 +220,6 @@ FRA:
         parameters:
           adjustment_cost_lambda: 1.0
           cap_multiplier: 1.5
-          investment_effectiveness: 0.003  # must match productivity_growth.investment_effectiveness for omega calibration
           investment_elasticity: 0.3
           n_firms: 18
           private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate

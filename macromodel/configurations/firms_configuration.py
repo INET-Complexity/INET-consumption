@@ -527,6 +527,16 @@ class FirmsConfiguration(BaseModel):
         # This ensures it's correct if the user later activates the planner
         self.functions.productivity_investment_planner.parameters["n_firms"] = n_firms
 
+        if self.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+            growth_phi = self.functions.productivity_growth.parameters.get("investment_effectiveness")
+            if growth_phi is None:
+                raise ValueError(
+                    "TargetIntensityTFPInvestmentPlanner requires "
+                    "productivity_growth.parameters['investment_effectiveness']; "
+                    "realised TFP effectiveness is the canonical phi used by the planner."
+                )
+            self.functions.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
+
         # Only validate list parameter lengths if planner is active
         if self.functions.productivity_investment_planner.name != "NoProductivityInvestmentPlanner":
             # Validate that list parameters in productivity investment planner have correct length

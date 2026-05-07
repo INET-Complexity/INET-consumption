@@ -44,6 +44,16 @@ def align_country_configuration_to_data(
     if planner_params.get("n_firms") != planner_n_firms:
         planner_params["n_firms"] = planner_n_firms
 
+    if cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+        growth_phi = cfg.firms.functions.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        planner_params["investment_effectiveness"] = growth_phi
+
     return cfg
 
 

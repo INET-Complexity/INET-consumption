@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
-import re
 from typing import Any, Iterable, Sequence
 
 import pandas as pd
+from src.monte_carlo import MonteCarloResult, run_seeded_monte_carlo
 
 from macro_data import DataWrapper
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
-from src.monte_carlo import MonteCarloResult, run_seeded_monte_carlo
 
 
 @dataclass(frozen=True)
@@ -106,6 +106,16 @@ def build_country_configurations_with_override(
     configs = deepcopy(country_configurations)
     resolved_path = _normalise_parameter_path(parameter_path, configs, country_code)
     _set_nested_value(configs, resolved_path, parameter_value)
+    country_cfg = configs[country_code]
+    if country_cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+        growth_phi = country_cfg.firms.functions.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        country_cfg.firms.functions.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
     return configs
 
 

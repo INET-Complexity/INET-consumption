@@ -34,7 +34,10 @@ def _summary_config():
         firms=SimpleNamespace(
             parameters=SimpleNamespace(capital_inputs_delay=[0] * 18, depreciation_rates=[0.0] * 18),
             functions=SimpleNamespace(
-                productivity_growth=SimpleNamespace(name="SimpleTFPGrowth"),
+                productivity_growth=SimpleNamespace(
+                    name="SimpleTFPGrowth",
+                    parameters={"investment_effectiveness": 0.003},
+                ),
                 productivity_investment_planner=SimpleNamespace(
                     name="TargetIntensityTFPInvestmentPlanner",
                     parameters={"n_firms": 18},
@@ -177,8 +180,24 @@ def test_align_country_configuration_uses_firm_count_for_productivity_planner():
     )
 
     assert aligned.firms.functions.productivity_investment_planner.parameters["n_firms"] == 821
+    assert aligned.firms.functions.productivity_investment_planner.parameters["investment_effectiveness"] == 0.003
     assert aligned.firms.parameters.capital_inputs_delay == [0] * 18
     assert aligned.firms.parameters.depreciation_rates == [0.0] * 18
+
+
+def test_planner_effectiveness_follows_realised_tfp_phi_after_overrides():
+    country_cfg = _summary_config()
+
+    nw.apply_country_config_overrides(
+        country_cfg,
+        {
+            "firms.functions.productivity_investment_planner.parameters['investment_effectiveness']": 0.01,
+            "firms.functions.productivity_growth.parameters['investment_effectiveness']": 0.004,
+        },
+    )
+
+    planner_params = country_cfg.firms.functions.productivity_investment_planner.parameters
+    assert planner_params["investment_effectiveness"] == 0.004
 
 
 def test_align_country_configuration_falls_back_to_industry_count_for_productivity_planner():

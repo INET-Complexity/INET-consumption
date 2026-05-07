@@ -156,6 +156,15 @@ def apply_country_config_overrides(country_cfg: CountryConfiguration, overrides:
     """Apply notebook scenario overrides to a copied country configuration."""
     for path, value in (overrides or {}).items():
         _set_nested_value(country_cfg, _parse_override_path(path), value)
+    if country_cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+        growth_phi = country_cfg.firms.functions.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        country_cfg.firms.functions.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
 
 
 def summarize_country_config(country_cfg: CountryConfiguration) -> dict[str, Any]:

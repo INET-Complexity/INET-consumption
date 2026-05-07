@@ -213,13 +213,13 @@ FRA:
         name: SimpleTFPGrowth
         path_name: productivity_growth
         parameters:
-          investment_effectiveness: 0.003  # revised direct-TFP calibration; previous bounded Simple-planner phi: 0.1
+          investment_effectiveness: 0.005  # revised direct-TFP calibration; seed-16 phi grid gives ~0.52% annual TFP
       productivity_investment_planner:
         name: TargetIntensityTFPInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
           adjustment_cost_lambda: 1.0
-          cap_multiplier: 1.5
+          cap_multiplier: 2.5
           investment_elasticity: 0.3
           n_firms: 18
           private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate

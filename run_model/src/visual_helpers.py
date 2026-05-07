@@ -597,6 +597,21 @@ def build_macro_output_df(model, country_code):
 
         return add_column(output_name, as_output_series(averages))
 
+    def add_firm_vector_columns(name):
+        values = getattr(country.firms.ts, name, None)
+        if values is None:
+            return
+
+        series = add_column(name, as_output_series(values))
+        non_null = series.dropna()
+        if non_null.empty or not isinstance(non_null.iloc[0], list):
+            return
+
+        labels = sector_labels(len(non_null.iloc[0]))
+        expanded = pd.DataFrame(series.tolist(), index=out_index, columns=[f"{name}_{label}" for label in labels])
+        for column in expanded.columns:
+            output_columns[column] = expanded[column]
+
     def sector_labels(width):
         industries = list(getattr(country.firms, "industries", []))
         if len(industries) == width:
@@ -664,6 +679,10 @@ def build_macro_output_df(model, country_code):
         add_economy_column(economy_column)
     for economy_column in ["sectoral_growth", "num_insolvent_firms_by_sector"]:
         add_economy_vector_columns(economy_column)
+    for firm_column in [
+        "sector_tfp_investment_desired_mb_mc_ratio",
+    ]:
+        add_firm_vector_columns(firm_column)
     add_average_firm_timeseries_column("avg_tfp_multiplier", "tfp_multiplier")
 
     out = pd.DataFrame(output_columns, index=out_index).copy()
@@ -674,6 +693,153 @@ def build_macro_output_df(model, country_code):
     out.attrs["interest_rate_units"] = "Macro interest-rate columns are annualized."
 
     return out
+
+
+def build_sector_tfp_investment_desired_mb_mc_ratio_df(
+    source=None,
+    country_code=None,
+    column="sector_tfp_investment_desired_mb_mc_ratio",
+    sector_labels=None,
+):
+    """Return sector desired MB/MC ratios from a model, firms ts, MC result, or dataframe."""
+    if source is None:
+        raise ValueError("Provide a model, firms time series, MonteCarloResult, or dataframe.")
+
+    if hasattr(source, "countries"):
+        if country_code is None:
+            raise ValueError("country_code is required when source is a model.")
+        country = source.countries[country_code]
+        if sector_labels is None:
+            sector_labels = [str(sector) for sector in getattr(country.firms, "industries", [])]
+        source = country.firms.ts
+
+    if not isinstance(source, pd.DataFrame) and hasattr(source, column):
+        values = getattr(source, column)
+        rows = [np.asarray(unpack_cell(value), dtype=float).reshape(-1) for value in list(values)]
+        if not rows:
+            raise ValueError(f"firms.ts.{column} has no values to plot.")
+        width = rows[0].size
+        if any(row.size != width for row in rows):
+            raise ValueError(f"firms.ts.{column} has inconsistent sector widths.")
+        if sector_labels is None:
+            sector_labels = [str(idx) for idx in range(width)]
+        elif len(sector_labels) != width:
+            raise ValueError("sector_labels length must match the number of sectors.")
+        return pd.DataFrame(rows, columns=[str(label) for label in sector_labels])
+
+    combined = source.combined if hasattr(source, "combined") else source
+    if not isinstance(combined, pd.DataFrame):
+        raise TypeError("source must be a model, firms time series, MonteCarloResult, or pandas DataFrame.")
+    if combined.index.nlevels < 2:
+        raise ValueError("Monte Carlo dataframe must be indexed by seed and simulation time.")
+
+    expanded_prefix = f"{column}_"
+    expanded_columns = [col for col in combined.columns if str(col).startswith(expanded_prefix)]
+    if expanded_columns:
+        out = combined[expanded_columns].apply(pd.to_numeric, errors="coerce").copy()
+        out = out.rename(columns={col: str(col).removeprefix(expanded_prefix) for col in expanded_columns})
+        return out
+
+    if column not in combined.columns:
+        raise ValueError(f"Column {column!r} is not present in the Monte Carlo output.")
+
+    rows = []
+    width = None
+    for value in combined[column]:
+        array = np.asarray(unpack_cell(value), dtype=float).reshape(-1)
+        if width is None:
+            width = array.size
+        if array.size != width:
+            raise ValueError(f"Column {column!r} has inconsistent sector widths.")
+        rows.append(array)
+
+    if width is None:
+        raise ValueError(f"Column {column!r} has no values to plot.")
+    if sector_labels is None:
+        sector_labels = [str(idx) for idx in range(width)]
+    if len(sector_labels) != width:
+        raise ValueError("sector_labels length must match the number of sectors.")
+
+    return pd.DataFrame(rows, index=combined.index, columns=[str(label) for label in sector_labels])
+
+
+def plot_sector_tfp_investment_desired_mb_mc_ratio(
+    source=None,
+    country_code=None,
+    sector_labels=None,
+    title="Sector TFP investment desired MB/MC ratio",
+    line_opacity=0.45,
+    line_width=1.2,
+    height=650,
+    width=1000,
+    show=True,
+):
+    """Display sector desired marginal-benefit/marginal-cost ratios by seed."""
+    ratios = build_sector_tfp_investment_desired_mb_mc_ratio_df(
+        source=source,
+        country_code=country_code,
+        sector_labels=sector_labels,
+    )
+    sectors = list(ratios.columns)
+    colors = _categorical_colors(len(sectors))
+
+    fig = go.Figure()
+    if ratios.index.nlevels >= 2:
+        seeds = ratios.index.get_level_values(0).unique()
+        for sector_idx, sector_code in enumerate(sectors):
+            sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+            for seed_idx, seed in enumerate(seeds):
+                seed_df = ratios.xs(seed, level=0)
+                fig.add_trace(
+                    go.Scatter(
+                        x=seed_df.index,
+                        y=seed_df[sector_code],
+                        mode="lines",
+                        name=f"{sector_code}: {sector_label}",
+                        legendgroup=f"sector-{sector_code}",
+                        showlegend=(seed_idx == 0),
+                        opacity=line_opacity,
+                        line={"color": colors[sector_idx], "width": line_width},
+                        hovertemplate=(
+                            f"seed={seed}<br>sector={sector_code}: {sector_label}"
+                            "<br>time=%{x}<br>desired MB/MC=%{y:.4g}<extra></extra>"
+                        ),
+                    )
+                )
+    else:
+        for sector_idx, sector_code in enumerate(sectors):
+            sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+            fig.add_trace(
+                go.Scatter(
+                    x=ratios.index,
+                    y=ratios[sector_code],
+                    mode="lines",
+                    name=f"{sector_code}: {sector_label}",
+                    legendgroup=f"sector-{sector_code}",
+                    showlegend=True,
+                    line={"color": colors[sector_idx], "width": line_width},
+                    hovertemplate=(
+                        f"sector={sector_code}: {sector_label}<br>time=%{{x}}"
+                        "<br>desired MB/MC=%{y:.4g}<extra></extra>"
+                    ),
+                )
+            )
+
+    fig.add_hline(y=1.0, line_width=1, line_color="black", line_dash="dash")
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        xaxis_title="t",
+        yaxis_title="desired MB/MC ratio",
+        legend_title_text="Sector",
+    )
+
+    if show:
+        fig.show()
+        return None
+    return fig
 
 
 def build_cumulative_insolvent_firms_by_sector_df(df, base_column="num_insolvent_firms_by_sector"):

@@ -407,6 +407,9 @@ class TestTargetIntensityTFPInvestmentPlanner:
         assert np.allclose(total, expected)
         assert np.allclose(tfp, expected)
         assert np.allclose(technical, np.zeros((2, 3)))
+        assert np.allclose(planner.last_diagnostics["desired_mb_mc_ratio"], np.ones(2))
+        assert np.allclose(planner.last_diagnostics["planned_mb_mc_ratio"], np.ones(2))
+        assert np.allclose(planner.last_diagnostics["cash_binding"], np.zeros(2))
 
     def test_sector_intensity_map_applies_and_missing_sector_falls_back(self):
         planner = TargetIntensityTFPInvestmentPlanner(
@@ -457,6 +460,9 @@ class TestTargetIntensityTFPInvestmentPlanner:
         assert np.allclose(total, [5.0])
         assert np.allclose(tfp, [5.0])
         assert np.allclose(technical, np.zeros((1, 18)))
+        assert np.allclose(planner.last_diagnostics["planned_intensity"], [0.005])
+        assert np.allclose(planner.last_diagnostics["cash_binding"], [1.0])
+        assert planner.last_diagnostics["planned_mb_mc_ratio"][0] > 1.0
 
     def test_higher_effective_cost_rate_reduces_desired_intensity_when_not_cap_binding(self):
         planner = TargetIntensityTFPInvestmentPlanner(

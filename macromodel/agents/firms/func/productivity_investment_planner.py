@@ -624,6 +624,7 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         self.private_value_weight = None if private_value_weight is None else self._to_array(private_value_weight, n_firms)
         self.silence_technical_investment = bool(silence_technical_investment)
         self.bisection_steps = int(bisection_steps)
+        self.last_diagnostics: dict[str, np.ndarray] = {}
         if self.bisection_steps <= 0:
             raise ValueError("bisection_steps must be positive.")
 
@@ -674,6 +675,69 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         )
         marginal_cost = effective_cost_rate + self.adjustment_cost_lambda * intensity
         return benefit - marginal_cost
+
+    def _marginal_benefit(
+        self,
+        intensity: np.ndarray,
+        private_value_weight: np.ndarray,
+    ) -> np.ndarray:
+        benefit = np.full_like(intensity, np.nan, dtype=float)
+        valid = np.isfinite(intensity) & (intensity > 0)
+        benefit[valid] = (
+            private_value_weight[valid]
+            * self.investment_effectiveness[valid]
+            * self.investment_elasticity[valid]
+            * np.power(intensity[valid], self.investment_elasticity[valid] - 1.0)
+        )
+        return benefit
+
+    def _store_diagnostics(
+        self,
+        target_intensity: np.ndarray,
+        cap_intensity: np.ndarray,
+        private_value_weight: np.ndarray,
+        effective_rate: np.ndarray,
+        desired_intensity: np.ndarray,
+        planned_intensity: np.ndarray,
+        target_tfp_investment: np.ndarray,
+        tfp_investment: np.ndarray,
+    ) -> None:
+        desired_mb = self._marginal_benefit(desired_intensity, private_value_weight)
+        desired_mc = effective_rate + self.adjustment_cost_lambda * desired_intensity
+        planned_mb = self._marginal_benefit(planned_intensity, private_value_weight)
+        planned_mc = effective_rate + self.adjustment_cost_lambda * planned_intensity
+
+        desired_ratio = np.divide(
+            desired_mb,
+            desired_mc,
+            out=np.full_like(desired_mb, np.nan),
+            where=np.isfinite(desired_mb) & np.isfinite(desired_mc) & (desired_mc > 0),
+        )
+        planned_ratio = np.divide(
+            planned_mb,
+            planned_mc,
+            out=np.full_like(planned_mb, np.nan),
+            where=np.isfinite(planned_mb) & np.isfinite(planned_mc) & (planned_mc > 0),
+        )
+
+        marginal_at_cap = self._marginal_value(cap_intensity, private_value_weight, effective_rate)
+        self.last_diagnostics = {
+            "effective_cost_rate": effective_rate.copy(),
+            "target_intensity": target_intensity.copy(),
+            "cap_intensity": cap_intensity.copy(),
+            "desired_intensity": desired_intensity.copy(),
+            "planned_intensity": planned_intensity.copy(),
+            "desired_marginal_benefit": desired_mb,
+            "desired_marginal_cost": desired_mc,
+            "desired_mb_mc_ratio": desired_ratio,
+            "desired_marginal_gap": desired_mb - desired_mc,
+            "planned_marginal_benefit": planned_mb,
+            "planned_marginal_cost": planned_mc,
+            "planned_mb_mc_ratio": planned_ratio,
+            "planned_marginal_gap": planned_mb - planned_mc,
+            "cap_binding": (marginal_at_cap >= 0).astype(float),
+            "cash_binding": (tfp_investment < target_tfp_investment * (1.0 - 1e-10)).astype(float),
+        }
 
     def _solve_desired_intensity(
         self,
@@ -762,6 +826,22 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
 
         target_tfp_investment = desired_intensity * current_nominal_production
         tfp_investment = np.minimum(target_tfp_investment, np.maximum(0.0, available_cash))
+        planned_intensity = np.divide(
+            tfp_investment,
+            current_nominal_production,
+            out=np.zeros_like(tfp_investment),
+            where=current_nominal_production > 0,
+        )
+        self._store_diagnostics(
+            target_intensity=target_intensity,
+            cap_intensity=cap_intensity,
+            private_value_weight=private_value_weight,
+            effective_rate=effective_rate,
+            desired_intensity=desired_intensity,
+            planned_intensity=planned_intensity,
+            target_tfp_investment=target_tfp_investment,
+            tfp_investment=tfp_investment,
+        )
         technical_investment = np.zeros((len(current_nominal_production), n_industries))
 
         if self.silence_technical_investment:

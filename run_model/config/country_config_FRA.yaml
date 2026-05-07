@@ -224,7 +224,9 @@ FRA:
           investment_elasticity: 0.3
           n_firms: 18
           private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate
-          reference_effective_cost_rate: 0.02
+          # Quarterly reference cost for omega calibration. ECB cost-of-borrowing data for
+          # French NFCs averages ~1.0% quarterly in 2003-2008 and ~0.9% in 2022-2026.
+          reference_effective_cost_rate: 0.01
           sector_innovation_intensity:
             # Sector R&D/turnover calibration using sector means from firm-level data.
             '0': 0.0594

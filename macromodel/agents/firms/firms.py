@@ -541,6 +541,68 @@ class Firms(Agent):
         self.ts.planned_tfp_investment.append(tfp_investment)
         self.ts.planned_technical_investment.append(technical_investment)
 
+        self.append_tfp_investment_foc_diagnostics()
+
+    def append_tfp_investment_foc_diagnostics(self) -> None:
+        """Record planner-time direct-TFP marginal benefit/cost diagnostics."""
+        planner = self.functions.get("productivity_investment_planner")
+        diagnostics = getattr(planner, "last_diagnostics", None)
+        n_firms = self.ts.current("n_firms")
+        n_industries = self.n_industries
+
+        firm_fields = {
+            "effective_cost_rate": "tfp_investment_effective_cost_rate",
+            "target_intensity": "tfp_investment_target_intensity",
+            "cap_intensity": "tfp_investment_cap_intensity",
+            "desired_intensity": "tfp_investment_desired_intensity",
+            "planned_intensity": "tfp_investment_planned_intensity",
+            "desired_marginal_benefit": "tfp_investment_desired_marginal_benefit",
+            "desired_marginal_cost": "tfp_investment_desired_marginal_cost",
+            "desired_mb_mc_ratio": "tfp_investment_desired_mb_mc_ratio",
+            "desired_marginal_gap": "tfp_investment_desired_marginal_gap",
+            "planned_marginal_benefit": "tfp_investment_planned_marginal_benefit",
+            "planned_marginal_cost": "tfp_investment_planned_marginal_cost",
+            "planned_mb_mc_ratio": "tfp_investment_planned_mb_mc_ratio",
+            "planned_marginal_gap": "tfp_investment_planned_marginal_gap",
+            "cap_binding": "tfp_investment_cap_binding",
+            "cash_binding": "tfp_investment_cash_binding",
+        }
+        sector_fields = {
+            "desired_intensity": "sector_tfp_investment_desired_intensity",
+            "planned_intensity": "sector_tfp_investment_planned_intensity",
+            "desired_mb_mc_ratio": "sector_tfp_investment_desired_mb_mc_ratio",
+            "planned_mb_mc_ratio": "sector_tfp_investment_planned_mb_mc_ratio",
+            "desired_marginal_gap": "sector_tfp_investment_desired_marginal_gap",
+            "planned_marginal_gap": "sector_tfp_investment_planned_marginal_gap",
+            "cap_binding": "sector_tfp_investment_cap_binding_share",
+            "cash_binding": "sector_tfp_investment_cash_binding_share",
+        }
+
+        if not diagnostics:
+            for field in firm_fields.values():
+                getattr(self.ts, field).append(np.full(n_firms, np.nan))
+            for field in sector_fields.values():
+                getattr(self.ts, field).append(np.full(n_industries, np.nan))
+            return
+
+        for diagnostic_key, field in firm_fields.items():
+            values = diagnostics.get(diagnostic_key, np.full(n_firms, np.nan))
+            getattr(self.ts, field).append(np.asarray(values, dtype=float).copy())
+
+        firm_industries = np.asarray(self.states["Industry"], dtype=int)
+        for diagnostic_key, field in sector_fields.items():
+            values = np.asarray(diagnostics.get(diagnostic_key, np.full(n_firms, np.nan)), dtype=float)
+            sector_values = np.full(n_industries, np.nan)
+            for sector in range(n_industries):
+                sector_mask = firm_industries == sector
+                if not np.any(sector_mask):
+                    continue
+                sector_data = values[sector_mask]
+                finite = np.isfinite(sector_data)
+                if np.any(finite):
+                    sector_values[sector] = np.mean(sector_data[finite])
+            getattr(self.ts, field).append(sector_values)
+
     def plan_productivity_investment(
         self,
         estimated_inflation: float,

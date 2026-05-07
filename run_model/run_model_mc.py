@@ -148,6 +148,22 @@ def _validate_unique_seeds(seeds: list[int]) -> list[int]:
     return seed_list
 
 
+def _scale_tfp_target_intensities(country_cfg: CountryConfiguration, multiplier: float) -> None:
+    """Scale sector TFP target intensities in-memory for calibration experiments."""
+    if multiplier <= 0:
+        raise ValueError("TFP target-intensity multiplier must be strictly positive.")
+    if multiplier == 1.0:
+        return
+
+    planner_params = country_cfg.firms.functions.productivity_investment_planner.parameters
+    sector_targets = planner_params.get("sector_innovation_intensity")
+    if sector_targets is None:
+        raise ValueError("Cannot scale TFP targets: sector_innovation_intensity is not configured.")
+    planner_params["sector_innovation_intensity"] = {
+        sector: float(target) * multiplier for sector, target in sector_targets.items()
+    }
+
+
 def main(
     seeds: list[int] | None = None,
     t_max: int | None = DEFAULT_T_MAX,
@@ -161,6 +177,7 @@ def main(
     batch_size: int = 1,
     output_file: str | Path | None = None,
     save_h5_dir: str | Path | None = None,
+    tfp_target_intensity_multiplier: float = 1.0,
 ) -> dict[str, object]:
     seed_list = _validate_unique_seeds(DEFAULT_SEEDS if seeds is None else seeds)
 
@@ -225,6 +242,7 @@ def main(
         n_industries=data.n_industries,
         n_firms=len(synthetic_country.firms.firm_data),
     )
+    _scale_tfp_target_intensities(country_cfg, tfp_target_intensity_multiplier)
     country_configurations = {cfg.country_iso3: country_cfg}
 
     country_cfg = country_configurations[cfg.country_iso3]
@@ -262,6 +280,7 @@ def main(
                 "parameters": country_cfg.central_government.functions.debt_interest.parameters,
             },
             "assume_zero_noise": country_cfg.assume_zero_noise,
+            "tfp_target_intensity_multiplier": tfp_target_intensity_multiplier,
         }
     )
 
@@ -535,6 +554,17 @@ def _parse_args() -> argparse.Namespace:
         help="Pickle output path. Relative paths are resolved under the configured output directory.",
     )
     parser.add_argument(
+        "--save-h5-dir",
+        default=None,
+        help="Optional directory for per-seed HDF5 outputs.",
+    )
+    parser.add_argument(
+        "--tfp-target-intensity-multiplier",
+        type=float,
+        default=1.0,
+        help="Scale sector_innovation_intensity targets in-memory for revised TFP calibration runs.",
+    )
+    parser.add_argument(
         "--government-bridge-experiment",
         action="store_true",
         help="Run the four-arm government-consumption bridge Monte Carlo experiment.",
@@ -615,4 +645,6 @@ if __name__ == "__main__":
             verbose=args.verbose,
             batch_size=args.batch_size,
             output_file=args.output_file,
+            save_h5_dir=args.save_h5_dir,
+            tfp_target_intensity_multiplier=args.tfp_target_intensity_multiplier,
         )

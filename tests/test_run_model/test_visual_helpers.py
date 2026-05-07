@@ -17,10 +17,12 @@ from src.visual_helpers import (  # noqa: E402
     build_cumulative_insolvent_firms_by_sector_df,
     build_employment_by_sector_df,
     build_macro_output_df,
+    build_sector_tfp_investment_desired_mb_mc_ratio_df,
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
     plot_ppi_comparison,
+    plot_sector_tfp_investment_desired_mb_mc_ratio,
 )
 
 
@@ -111,7 +113,12 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
                     np.array([1.0, 1.1, 1.2]),
                     np.array([1.1, 1.2, 1.3]),
                     np.array([1.2, 1.3, 1.4]),
-                ]
+                ],
+                sector_tfp_investment_desired_mb_mc_ratio=[
+                    np.array([0.9, 1.1]),
+                    np.array([1.0, 1.2]),
+                    np.array([1.1, 1.3]),
+                ],
             ),
         ),
     )
@@ -165,6 +172,9 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "num_insolvent_firms_by_sector_services",
         "npl_firm_loans",
         "npl_hh_cons_loans",
+        "sector_tfp_investment_desired_mb_mc_ratio",
+        "sector_tfp_investment_desired_mb_mc_ratio_agriculture",
+        "sector_tfp_investment_desired_mb_mc_ratio_services",
         "avg_tfp_multiplier",
     }
     assert expected_columns.issubset(output.columns)
@@ -172,6 +182,8 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
     assert output["num_insolvent_firms_by_sector"].tolist() == [[1, 2], [3, 4], [5, 6]]
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
+    assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
+    assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
     assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
 
     clutter_columns = {
@@ -273,6 +285,64 @@ def test_employment_by_sector_plot_uses_labour_market_series_and_sector_labels()
     ]
     assert [trace.mode for trace in fig.data] == ["lines+markers", "lines+markers"]
     assert fig.layout.yaxis.title.text == "Number of Employed Individuals"
+
+
+def test_sector_tfp_investment_desired_mb_mc_ratio_plot_expands_mc_sector_series():
+    index = pd.MultiIndex.from_product([[12, 13], [0, 1]], names=["seed", "time"])
+    combined = pd.DataFrame(
+        {
+            "sector_tfp_investment_desired_mb_mc_ratio": [
+                [0.9, 1.1],
+                [1.0, 1.2],
+                [0.8, 1.0],
+                [0.95, 1.15],
+            ]
+        },
+        index=index,
+    )
+
+    ratios = build_sector_tfp_investment_desired_mb_mc_ratio_df(combined, sector_labels=["A", "C"])
+    fig = plot_sector_tfp_investment_desired_mb_mc_ratio(combined, sector_labels=["A", "C"], show=False)
+
+    assert ratios.columns.tolist() == ["A", "C"]
+    assert ratios.loc[(12, 1), "C"] == pytest.approx(1.2)
+    assert [trace.name for trace in fig.data[:4]] == [
+        "A: Agriculture, forestry and fishing",
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+        "C: Manufacturing",
+    ]
+    assert [trace.showlegend for trace in fig.data[:4]] == [True, False, True, False]
+    assert fig.layout.yaxis.title.text == "desired MB/MC ratio"
+
+
+def test_sector_tfp_investment_desired_mb_mc_ratio_plot_reads_live_model_firms_ts():
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                firms=SimpleNamespace(
+                    industries=["A", "C"],
+                    ts=SimpleNamespace(
+                        sector_tfp_investment_desired_mb_mc_ratio=[
+                            np.array([0.9, 1.1]),
+                            np.array([1.0, 1.2]),
+                        ]
+                    ),
+                )
+            )
+        }
+    )
+
+    ratios = build_sector_tfp_investment_desired_mb_mc_ratio_df(model, "FRA")
+    fig = plot_sector_tfp_investment_desired_mb_mc_ratio(model, "FRA", show=False)
+
+    assert ratios.columns.tolist() == ["A", "C"]
+    assert ratios["C"].tolist() == [1.1, 1.2]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert fig.data[0].x.tolist() == [0, 1]
 
 
 def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():

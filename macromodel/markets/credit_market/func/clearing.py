@@ -358,7 +358,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
 
         Matches firms with banks for lending, considering:
         - Capital adequacy requirements
-        - Debt-to-equity ratios
+        - Capital-stock collateral limits
         - Return on equity/assets requirements
         - Interest rates
 
@@ -430,9 +430,9 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                     - new_credit_by_bank[bank_id]
                 )
 
-                # Debt to equity
-                debt_to_equity_restrictions = (
-                    banks.parameters.firm_loans_debt_to_equity_ratio
+                # Capital-stock collateral limit
+                capital_stock_collateral_restrictions = (
+                    banks.parameters.firm_loans_capital_stock_collateral_ratio
                     * firms.ts.current("capital_inputs_stock_value")[firm_id]
                     - firms.ts.current("debt")[firm_id]
                     - new_credit_by_firm[firm_id]
@@ -464,7 +464,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                         firm_target_credit[firm_id],
                         total_credit_supply,
                         max_supply_based_on_preferences[bank_id] - new_credit_by_bank[bank_id],
-                        debt_to_equity_restrictions,
+                        capital_stock_collateral_restrictions,
                         return_on_equity_restrictions,
                         return_on_assets_restrictions,
                     ),
@@ -881,8 +881,8 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
                     - (1 - 1.0 / loan_maturity) * banks.ts.current("total_outstanding_loans")[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
-                firm_risk_assessment = (
-                    banks.parameters.firm_loans_debt_to_equity_ratio
+                capital_stock_collateral_capacity = (
+                    banks.parameters.firm_loans_capital_stock_collateral_ratio
                     * firms.ts.current("expected_capital_inputs_stock_value")[firm_id]
                     - (1 - 1.0 / loan_maturity) * firms.ts.current("debt")[firm_id]
                 )
@@ -891,7 +891,7 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
                     min(
                         firm_target_credit[firm_id],
                         bank_cap_req,
-                        firm_risk_assessment,
+                        capital_stock_collateral_capacity,
                     ),
                 )
 
@@ -1147,8 +1147,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
 
         # Determine capacities
         if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN:
-            debt_to_equity_restrictions = (
-                banks.parameters.firm_loans_debt_to_equity_ratio
+            capital_stock_collateral_restrictions = (
+                banks.parameters.firm_loans_capital_stock_collateral_ratio
                 * firms.ts.current("capital_inputs_stock_value")[agents_with_demand]
                 - firms.ts.current("debt")[agents_with_demand]
                 - new_credit_by_firm[agents_with_demand]
@@ -1177,7 +1177,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             return_on_assets_restrictions = np.full(agents_with_demand.shape, np.inf)
             return_on_assets_restrictions[firm_roa < banks.parameters.firm_loans_return_on_assets_ratio] = 0.0
             credit_restrictions = np.minimum(
-                np.minimum(debt_to_equity_restrictions, return_on_equity_restrictions),
+                np.minimum(capital_stock_collateral_restrictions, return_on_equity_restrictions),
                 return_on_assets_restrictions,
             )
         elif loan_type == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN:

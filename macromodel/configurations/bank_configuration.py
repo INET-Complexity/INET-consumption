@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class BankParameters(BaseModel):
@@ -20,7 +20,8 @@ class BankParameters(BaseModel):
 
     Attributes:
         capital_adequacy_ratio (float): Minimum capital to risk-weighted assets ratio
-        firm_loans_debt_to_equity_ratio (float): Maximum firm loan leverage
+        firm_loans_capital_stock_collateral_ratio (float): Maximum firm loan
+            capacity as a fraction of capital input stock value
         firm_loans_return_on_equity_ratio (float): Target return on equity for firm lending
         firm_loans_return_on_assets_ratio (float): Target return on assets for firm lending
         household_consumption_loans_loan_to_income_ratio (float): Maximum consumer loan to income
@@ -34,7 +35,15 @@ class BankParameters(BaseModel):
     """
 
     capital_adequacy_ratio: float = Field(ge=0, le=1, default=0.08)
-    firm_loans_debt_to_equity_ratio: float = Field(ge=0, le=1, default=0.03)
+    firm_loans_capital_stock_collateral_ratio: float = Field(
+        ge=0,
+        le=1,
+        default=0.03,
+        validation_alias=AliasChoices(
+            "firm_loans_capital_stock_collateral_ratio",
+            "firm_loans_debt_to_equity_ratio",
+        ),
+    )
     firm_loans_return_on_equity_ratio: float = Field(ge=0, le=1, default=0.05)
     firm_loans_return_on_assets_ratio: float = Field(ge=0, le=1, default=0.05)
     household_consumption_loans_loan_to_income_ratio: float = Field(ge=0, le=1, default=0.05)

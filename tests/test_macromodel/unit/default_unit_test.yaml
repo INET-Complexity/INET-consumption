@@ -31,8 +31,8 @@ FRA:
         options: ''
         type: float
         value: 0.08
-      firm_loans_debt_to_equity_ratio:
-        desc: The banks required debt to equity ratio for firm loans.
+      firm_loans_capital_stock_collateral_ratio:
+        desc: The banks firm-loan capacity ratio against capital input stock value.
         options: ''
         type: float
         value: 0.03

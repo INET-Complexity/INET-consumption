@@ -17,15 +17,15 @@ country_configs:
     firms_configuration:
       constructor: Default
       zero_initial_deposits: false
-      zero_initial_debt: true
+      zero_initial_debt: false
       initial_inventory_to_input_fraction: 0
       intermediate_inputs_utilisation_rate: 0.85  # 1.0
       capital_inputs_utilisation_rate: 0.85  # 1.0
 
     banks_configuration:
       constructor: Default
-      long_term_firm_loan_maturity: 8  # 60
-      consumption_exp_loan_maturity: 1  # 12
+      long_term_firm_loan_maturity: 20  # 60
+      consumption_exp_loan_maturity: 2  # 12
       mortgage_maturity: 100 # 120
       interest_rates:
         consumption_loans_markup: 0.01
@@ -46,4 +46,3 @@ row_data_config:
   fit_imports: false
   fit_exports: false
   assume_one_exporter_by_industry: true
-

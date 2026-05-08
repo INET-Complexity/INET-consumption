@@ -257,7 +257,7 @@ FRA:
         name: FinancialTargetCapitalInputsSetter
         path_name: target_capital_inputs
         parameters:
-          credit_gap_fraction: 0.0
+          credit_gap_fraction: 0.5
           target_capital_inputs_fraction: 0.0
       target_credit:
         name: DefaultTargetCreditSetter
@@ -267,7 +267,7 @@ FRA:
         name: FinancialTargetIntermediateInputsSetter
         path_name: target_intermediate_inputs
         parameters:
-          credit_gap_fraction: 0.0
+          credit_gap_fraction: 0.5
           target_intermediate_inputs_fraction: 0.0
       target_production:
         name: DefaultTargetProductionSetter
@@ -428,16 +428,23 @@ FRA:
     parameters:
       capital_adequacy_ratio: 0.08
       firm_loans_capital_stock_collateral_ratio: 1.0  # 0.03
+      enable_firm_loans_return_on_assets_restriction: false
       firm_loans_return_on_assets_ratio: 0.05
+      enable_firm_loans_return_on_equity_restriction: false
       firm_loans_return_on_equity_ratio: 0.15  # 0.05
-      household_consumption_loan_maturity: 1
+      enable_firm_loans_dscr_restriction: true
+      firm_loans_min_dscr: 1.25
+      firm_loans_cfads_window: 4
+      firm_loans_cfads_haircut: 1.0
+      firm_loans_dscr_underwriting_rate_mode: max_bank_rate
+      household_consumption_loan_maturity: 2
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
-      long_term_firm_loan_maturity: 8 # 60
+      long_term_firm_loan_maturity: 20 # 60
       mortgage_debt_service_to_income_ratio: 0.35  # 0.05
       mortgage_loan_to_income_ratio: 21  # 0.05
       mortgage_loan_to_value_ratio: 0.8  # 0.05
       mortgage_maturity: 100 #  120
-      short_term_firm_loan_maturity: 1 # 20
+      short_term_firm_loan_maturity: 4 # 20
 
   exchange_rates:
     exchange_rate_type: constant
@@ -507,7 +514,7 @@ FRA:
         parameters:
           allow_household_loans: true
           allow_short_term_firm_loans: true
-          consider_loan_type_fractions: true
+          consider_loan_type_fractions: false
           credit_supply_temperature: 2  # 0.0
           creditor_minimum_fill: 0.0
           creditor_selection_is_deterministic: true

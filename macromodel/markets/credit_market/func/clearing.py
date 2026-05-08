@@ -40,6 +40,129 @@ from macromodel.agents.households.households import Households
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
 
 
+def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray:
+    """Compute lagged cash flow available for firm debt service."""
+    n_firms = firms.ts.current("n_firms")
+    cfads_components = (
+        "nominal_amount_sold_in_lcu",
+        "total_wage",
+        "used_intermediate_inputs_costs",
+        "used_capital_inputs_costs",
+        "taxes_paid_on_production",
+    )
+    histories = {name: firms.ts.historic(name) for name in cfads_components}
+    available_periods = min(window, *(len(history) for history in histories.values()))
+    if available_periods <= 0:
+        return np.zeros(n_firms)
+
+    period_cfads = []
+    for period in range(-available_periods, 0):
+        cash_sales = np.asarray(histories["nominal_amount_sold_in_lcu"][period], dtype=float)
+        costs = (
+            np.asarray(histories["total_wage"][period], dtype=float)
+            + np.asarray(histories["used_intermediate_inputs_costs"][period], dtype=float)
+            + np.asarray(histories["used_capital_inputs_costs"][period], dtype=float)
+            + np.asarray(histories["taxes_paid_on_production"][period], dtype=float)
+        )
+        period_value = cash_sales - costs
+        valid_period = np.isfinite(cash_sales) & np.isfinite(costs) & np.isfinite(period_value)
+        period_cfads.append(np.where(valid_period, np.maximum(0.0, period_value), 0.0))
+
+    cfads = haircut * np.mean(np.vstack(period_cfads), axis=0)
+    return np.where(np.isfinite(cfads), np.maximum(0.0, cfads), 0.0)
+
+
+def _compute_loan_type_preference_caps(
+    banks: Banks,
+    current_npl_firm_loans: float,
+    current_npl_hh_cons_loans: float,
+    current_npl_mortgages: float,
+    credit_supply_temperature: float,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute currency-valued bank supply caps from loan-type preference shares."""
+    max_car = np.maximum(
+        0.0,
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+        - banks.ts.current("total_outstanding_loans"),
+    )
+    firm_weights = banks.ts.initial("new_loans_fraction_firms") * np.exp(
+        -credit_supply_temperature * current_npl_firm_loans
+    )
+    hh_cons_weights = banks.ts.initial("new_loans_fraction_hh_cons") * np.exp(
+        -credit_supply_temperature * current_npl_hh_cons_loans
+    )
+    mortgage_weights = banks.ts.initial("new_loans_fraction_mortgages") * np.exp(
+        -credit_supply_temperature * current_npl_mortgages
+    )
+    weights_sum = firm_weights + hh_cons_weights + mortgage_weights
+
+    firm_caps = np.divide(
+        max_car * firm_weights,
+        weights_sum,
+        out=np.zeros(max_car.shape),
+        where=weights_sum != 0.0,
+    )
+    hh_cons_caps = np.divide(
+        max_car * hh_cons_weights,
+        weights_sum,
+        out=np.zeros(max_car.shape),
+        where=weights_sum != 0.0,
+    )
+    mortgage_caps = np.divide(
+        max_car * mortgage_weights,
+        weights_sum,
+        out=np.zeros(max_car.shape),
+        where=weights_sum != 0.0,
+    )
+    return firm_caps, hh_cons_caps, mortgage_caps
+
+
+def _firm_dscr_underwriting_rate(banks_ir: np.ndarray, mode: str) -> float:
+    """Return the borrower-level underwriting rate used for DSCR capacity."""
+    if mode != "max_bank_rate":
+        raise ValueError("Unknown firm DSCR underwriting rate mode", mode)
+    finite_rates = np.asarray(banks_ir, dtype=float)
+    finite_rates = finite_rates[np.isfinite(finite_rates)]
+    if finite_rates.size == 0:
+        return np.nan
+    return max(0.0, finite_rates.max())
+
+
+def _compute_firm_dscr_capacity(
+    firms: Firms,
+    agents_with_demand: np.ndarray,
+    min_dscr: float,
+    cfads_window: int,
+    cfads_haircut: float,
+    underwriting_rate: float,
+    loan_maturity: int,
+    new_debt_service_by_firm: np.ndarray,
+) -> np.ndarray:
+    """Compute maximum firm loan principal allowed by DSCR capacity."""
+    if not np.isfinite(underwriting_rate) or loan_maturity <= 0:
+        return np.zeros(agents_with_demand.shape)
+
+    incremental_service_rate = underwriting_rate + 1.0 / loan_maturity
+    if incremental_service_rate <= 0 or not np.isfinite(incremental_service_rate):
+        return np.zeros(agents_with_demand.shape)
+
+    cfads = _compute_firm_cfads(firms, cfads_window, cfads_haircut)[agents_with_demand]
+    existing_service = (
+        firms.ts.current("interest_paid_on_loans")[agents_with_demand]
+        + firms.ts.current("debt_installments")[agents_with_demand]
+    )
+    new_service = new_debt_service_by_firm[agents_with_demand]
+
+    valid_capacity = np.isfinite(cfads) & np.isfinite(existing_service) & np.isfinite(new_service)
+    service_room = np.zeros(agents_with_demand.shape)
+    service_room[valid_capacity] = np.maximum(
+        0.0,
+        cfads[valid_capacity] / min_dscr - existing_service[valid_capacity] - new_service[valid_capacity],
+    )
+    dscr_capacity = service_room / incremental_service_rate
+    return np.where(np.isfinite(dscr_capacity), np.maximum(0.0, dscr_capacity), 0.0)
+
+
 class CreditMarketClearer(ABC):
     """Abstract base class for credit market clearing mechanisms.
 
@@ -251,38 +374,23 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
         new_credit_by_household = np.zeros(households.ts.current("n_households"))
+        new_firm_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
+        new_household_consumption_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
+        new_mortgage_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
 
         # Banks may update their preferences for different types of loans, impacting their supply
         if self.consider_loan_type_fractions:
-            max_car = np.maximum(
-                0.0,
-                banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-                - banks.ts.current("total_outstanding_loans")
-                - new_credit_by_bank,
+            (
+                max_supply_based_on_preferences_firms,
+                max_supply_based_on_preferences_hh_cons,
+                max_supply_based_on_preferences_mortgages,
+            ) = _compute_loan_type_preference_caps(
+                banks,
+                current_npl_firm_loans,
+                current_npl_hh_cons_loans,
+                current_npl_mortgages,
+                self.credit_supply_temperature,
             )
-            max_supply_based_on_preferences_firms = banks.ts.initial("new_loans_fraction_firms") * np.exp(
-                -self.credit_supply_temperature * current_npl_firm_loans
-            )
-            max_supply_based_on_preferences_hh_cons = banks.ts.initial("new_loans_fraction_hh_cons") * np.exp(
-                -self.credit_supply_temperature * current_npl_hh_cons_loans
-            )
-            max_supply_based_on_preferences_mortgages = banks.ts.initial("new_loans_fraction_mortgages") * np.exp(
-                -self.credit_supply_temperature * current_npl_mortgages
-            )
-            current_sum = (
-                max_supply_based_on_preferences_firms * max_car
-                + max_supply_based_on_preferences_hh_cons * max_car
-                + max_supply_based_on_preferences_mortgages * max_car
-            )
-            scale = np.divide(
-                max_car,
-                current_sum,
-                out=np.zeros(max_car.shape),
-                where=current_sum != 0.0,
-            )
-            max_supply_based_on_preferences_firms *= scale
-            max_supply_based_on_preferences_hh_cons *= scale
-            max_supply_based_on_preferences_mortgages *= scale
         else:
             max_supply_based_on_preferences_firms = np.full(banks.ts.current("n_banks"), np.inf)
             max_supply_based_on_preferences_hh_cons = np.full(banks.ts.current("n_banks"), np.inf)
@@ -297,6 +405,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 new_credit_by_bank=new_credit_by_bank,
                 new_credit_by_firm=new_credit_by_firm,
                 max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
+                new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
             )
         else:
             new_short_term_firm_loans = empty.copy()
@@ -307,6 +416,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
             new_credit_by_bank=new_credit_by_bank,
             new_credit_by_firm=new_credit_by_firm,
             max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
+            new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
         )
 
         # Household loans
@@ -317,6 +427,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 new_credit_by_bank=new_credit_by_bank,
                 new_credit_by_household=new_credit_by_household,
                 max_supply_based_on_preferences=max_supply_based_on_preferences_hh_cons,
+                new_preference_credit_by_bank=new_household_consumption_preference_credit_by_bank,
             )
             new_mortgages = self.clear_mortgages(
                 banks=banks,
@@ -325,6 +436,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 new_credit_by_bank=new_credit_by_bank,
                 new_credit_by_household=new_credit_by_household,
                 max_supply_based_on_preferences=max_supply_based_on_preferences_mortgages,
+                new_preference_credit_by_bank=new_mortgage_preference_credit_by_bank,
             )
         else:
             new_household_consumption_loans = empty.copy()
@@ -353,6 +465,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_credit_by_bank: np.ndarray,
         new_credit_by_firm: np.ndarray,
         max_supply_based_on_preferences: np.ndarray,
+        new_preference_credit_by_bank: np.ndarray | None = None,
     ) -> pd.DataFrame:
         """Clear the market for firm loans (short-term or long-term).
 
@@ -369,6 +482,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
             new_credit_by_bank (np.ndarray): Running total of new lending by bank
             new_credit_by_firm (np.ndarray): Running total of new borrowing by firm
             max_supply_based_on_preferences (np.ndarray): Maximum lending by bank
+            new_preference_credit_by_bank (np.ndarray | None): Running total of
+                new lending against this loan-type preference cap
 
         Returns:
             pd.DataFrame: Details of newly originated firm loans
@@ -387,6 +502,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_loan_interest_rate = []
         new_loan_bank_id = []
         new_loan_recipient_id = []
+        if new_preference_credit_by_bank is None:
+            new_preference_credit_by_bank = new_credit_by_bank
 
         # Select loan maturity
         if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
@@ -463,7 +580,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                     min(
                         firm_target_credit[firm_id],
                         total_credit_supply,
-                        max_supply_based_on_preferences[bank_id] - new_credit_by_bank[bank_id],
+                        max_supply_based_on_preferences[bank_id] - new_preference_credit_by_bank[bank_id],
                         capital_stock_collateral_restrictions,
                         return_on_equity_restrictions,
                         return_on_assets_restrictions,
@@ -473,6 +590,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Record the new loans
                 if value_granted > 0:
                     new_credit_by_bank[bank_id] += value_granted
+                    new_preference_credit_by_bank[bank_id] += value_granted
                     new_credit_by_firm[firm_id] += value_granted
                     firm_target_credit[firm_id] -= value_granted
                     new_loan_types.append(loan_type)
@@ -501,6 +619,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_credit_by_bank: np.ndarray,
         new_credit_by_household: np.ndarray,
         max_supply_based_on_preferences: np.ndarray,
+        new_preference_credit_by_bank: np.ndarray | None = None,
     ) -> pd.DataFrame:
         """Clear the market for household consumption loans.
 
@@ -516,6 +635,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
             new_credit_by_bank (np.ndarray): Running total of new lending by bank
             new_credit_by_household (np.ndarray): Running total of new borrowing by household
             max_supply_based_on_preferences (np.ndarray): Maximum lending by bank
+            new_preference_credit_by_bank (np.ndarray | None): Running total of
+                new lending against this loan-type preference cap
 
         Returns:
             pd.DataFrame: Details of newly originated consumer loans
@@ -534,6 +655,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_loan_interest_rate = []
         new_loan_bank_id = []
         new_loan_recipient_id = []
+        if new_preference_credit_by_bank is None:
+            new_preference_credit_by_bank = new_credit_by_bank
 
         # Loan maturity
         loan_maturity = banks.parameters.household_consumption_loan_maturity
@@ -587,7 +710,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                     min(
                         household_target_credit[household_id],
                         total_credit_supply,
-                        max_supply_based_on_preferences[bank_id] - new_credit_by_bank[bank_id],
+                        max_supply_based_on_preferences[bank_id] - new_preference_credit_by_bank[bank_id],
                         loan_to_income_restrictions,
                     ),
                 )
@@ -595,6 +718,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Record the new loans
                 if value_granted > 0:
                     new_credit_by_bank[bank_id] += value_granted
+                    new_preference_credit_by_bank[bank_id] += value_granted
                     new_credit_by_household[household_id] += value_granted
                     household_target_credit[household_id] -= value_granted
                     new_loan_types.append(LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN)
@@ -624,6 +748,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_credit_by_bank: np.ndarray,
         new_credit_by_household: np.ndarray,
         max_supply_based_on_preferences: np.ndarray,
+        new_preference_credit_by_bank: np.ndarray | None = None,
     ) -> pd.DataFrame:
         """Clear the market for mortgage loans.
 
@@ -641,6 +766,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
             new_credit_by_bank (np.ndarray): Running total of new lending by bank
             new_credit_by_household (np.ndarray): Running total of new borrowing by household
             max_supply_based_on_preferences (np.ndarray): Maximum lending by bank
+            new_preference_credit_by_bank (np.ndarray | None): Running total of
+                new lending against this loan-type preference cap
 
         Returns:
             pd.DataFrame: Details of newly originated mortgages
@@ -659,6 +786,8 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_loan_interest_rate = []
         new_loan_bank_id = []
         new_loan_recipient_id = []
+        if new_preference_credit_by_bank is None:
+            new_preference_credit_by_bank = new_credit_by_bank
 
         # Get bank interest rates
         banks_ir = banks.ts.current("interest_rates_on_mortgages")
@@ -724,7 +853,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                     min(
                         household_target_credit[household_id],
                         total_credit_supply,
-                        max_supply_based_on_preferences[bank_id] - new_credit_by_bank[bank_id],
+                        max_supply_based_on_preferences[bank_id] - new_preference_credit_by_bank[bank_id],
                         loan_to_income_restrictions,
                         loan_to_value_restrictions,
                         debt_service_to_income_restrictions,
@@ -738,6 +867,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Record the new mortgage
                 if value_granted > 0:
                     new_credit_by_bank[bank_id] += value_granted
+                    new_preference_credit_by_bank[bank_id] += value_granted
                     new_credit_by_household[household_id] += value_granted
                     household_target_credit[household_id] -= value_granted
                     new_loan_types.append(loan_type)
@@ -989,39 +1119,25 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         # Keeping track of new credit
         new_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
+        new_debt_service_by_firm = np.zeros(firms.ts.current("n_firms"))
         new_credit_by_household = np.zeros(households.ts.current("n_households"))
+        new_firm_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
+        new_household_consumption_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
+        new_mortgage_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
 
         # Banks may update their preferences for different types of loans, impacting their supply
         if self.consider_loan_type_fractions:
-            max_car = np.maximum(
-                0.0,
-                banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-                - banks.ts.current("total_outstanding_loans")
-                - new_credit_by_bank,
+            (
+                max_supply_based_on_preferences_firms,
+                max_supply_based_on_preferences_hh_cons,
+                max_supply_based_on_preferences_mortgages,
+            ) = _compute_loan_type_preference_caps(
+                banks,
+                current_npl_firm_loans,
+                current_npl_hh_cons_loans,
+                current_npl_mortgages,
+                self.credit_supply_temperature,
             )
-            max_supply_based_on_preferences_firms = banks.ts.initial("new_loans_fraction_firms") * np.exp(
-                -self.credit_supply_temperature * current_npl_firm_loans
-            )
-            max_supply_based_on_preferences_hh_cons = banks.ts.initial("new_loans_fraction_hh_cons") * np.exp(
-                -self.credit_supply_temperature * current_npl_hh_cons_loans
-            )
-            max_supply_based_on_preferences_mortgages = banks.ts.initial("new_loans_fraction_mortgages") * np.exp(
-                -self.credit_supply_temperature * current_npl_mortgages
-            )
-            current_sum = (
-                max_supply_based_on_preferences_firms * max_car
-                + max_supply_based_on_preferences_hh_cons * max_car
-                + max_supply_based_on_preferences_mortgages * max_car
-            )
-            scale = np.divide(
-                max_car,
-                current_sum,
-                out=np.zeros(max_car.shape),
-                where=current_sum != 0.0,
-            )
-            max_supply_based_on_preferences_firms *= scale
-            max_supply_based_on_preferences_hh_cons *= scale
-            max_supply_based_on_preferences_mortgages *= scale
         else:
             max_supply_based_on_preferences_firms = np.full(banks.ts.current("n_banks"), np.inf)
             max_supply_based_on_preferences_hh_cons = np.full(banks.ts.current("n_banks"), np.inf)
@@ -1037,9 +1153,12 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_firm=new_credit_by_firm,
             new_credit_by_household=new_credit_by_household,
             max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
+            new_debt_service_by_firm=new_debt_service_by_firm,
+            new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
         )
         new_credit_by_firm += new_st_loans[0].sum(axis=0)
         new_credit_by_bank += new_st_loans[0].sum(axis=1)
+        new_firm_preference_credit_by_bank += new_st_loans[0].sum(axis=1)
         new_lt_loans = self.clear_loans(
             banks=banks,
             firms=firms,
@@ -1049,8 +1168,11 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_firm=new_credit_by_firm,
             new_credit_by_household=new_credit_by_household,
             max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
+            new_debt_service_by_firm=new_debt_service_by_firm,
+            new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
         )
         new_credit_by_bank += new_lt_loans[0].sum(axis=1)
+        new_firm_preference_credit_by_bank += new_lt_loans[0].sum(axis=1)
 
         # Household loans
         new_cons_loans = self.clear_loans(
@@ -1062,9 +1184,11 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_firm=new_credit_by_firm,
             new_credit_by_household=new_credit_by_household,
             max_supply_based_on_preferences=max_supply_based_on_preferences_hh_cons,
+            new_preference_credit_by_bank=new_household_consumption_preference_credit_by_bank,
         )
         new_credit_by_household += new_cons_loans[0].sum(axis=0)
         new_credit_by_bank += new_cons_loans[0].sum(axis=1)
+        new_household_consumption_preference_credit_by_bank += new_cons_loans[0].sum(axis=1)
         new_mort_loans = self.clear_loans(
             banks=banks,
             firms=firms,
@@ -1074,6 +1198,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_firm=new_credit_by_firm,
             new_credit_by_household=new_credit_by_household,
             max_supply_based_on_preferences=max_supply_based_on_preferences_mortgages,
+            new_preference_credit_by_bank=new_mortgage_preference_credit_by_bank,
         )
 
         return (
@@ -1093,6 +1218,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_firm: np.ndarray,
         new_credit_by_household: np.ndarray,
         max_supply_based_on_preferences: np.ndarray,
+        new_debt_service_by_firm: np.ndarray | None = None,
+        new_preference_credit_by_bank: np.ndarray | None = None,
     ) -> np.ndarray:
         """Clear the market for a specific loan type using the water bucket algorithm.
 
@@ -1111,6 +1238,10 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_firm (np.ndarray): Running total of new borrowing by firm
             new_credit_by_household (np.ndarray): Running total of new borrowing by household
             max_supply_based_on_preferences (np.ndarray): Maximum supply based on bank preferences
+            new_debt_service_by_firm (np.ndarray | None): Running total of newly
+                committed firm debt service during this clearing pass
+            new_preference_credit_by_bank (np.ndarray | None): Running total of
+                new lending against this loan-type preference cap
 
         Returns:
             np.ndarray: Array of shape [3, n_banks, n_borrowers] containing:
@@ -1140,6 +1271,12 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
 
         # For recording data
         new_loans = np.zeros((3, banks.ts.current("n_banks"), target_credit.shape[0]))
+        if new_debt_service_by_firm is None and (
+            loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN
+        ):
+            new_debt_service_by_firm = np.zeros(firms.ts.current("n_firms"))
+        if new_preference_credit_by_bank is None:
+            new_preference_credit_by_bank = new_credit_by_bank
 
         # Select agents wanting credit and priorities
         agents_with_demand = np.where(target_credit > 0)[0]
@@ -1154,31 +1291,56 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 - new_credit_by_firm[agents_with_demand]
                 + np.minimum(0, firms.ts.current("deposits")[agents_with_demand])
             )
-            return_on_equity_restrictions = (
-                firms.ts.current("capital_inputs_stock_value")[agents_with_demand]
-                + firms.ts.current("deposits")[agents_with_demand]
-                - firms.ts.current("debt")[agents_with_demand]
-                - new_credit_by_firm[agents_with_demand]
-                - firms.ts.current("expected_profits")[agents_with_demand]
-                / banks.parameters.firm_loans_return_on_equity_ratio
-            )
-            # Calculate ROA safely to avoid division by zero
-            firm_expected_profits = firms.ts.current("expected_profits")[agents_with_demand]
-            firm_capital_stock = firms.ts.current("capital_inputs_stock_value")[agents_with_demand]
+            return_on_equity_restrictions = np.full(agents_with_demand.shape, np.inf)
+            if banks.parameters.enable_firm_loans_return_on_equity_restriction:
+                return_on_equity_restrictions = (
+                    firms.ts.current("capital_inputs_stock_value")[agents_with_demand]
+                    + firms.ts.current("deposits")[agents_with_demand]
+                    - firms.ts.current("debt")[agents_with_demand]
+                    - new_credit_by_firm[agents_with_demand]
+                    - firms.ts.current("expected_profits")[agents_with_demand]
+                    / banks.parameters.firm_loans_return_on_equity_ratio
+                )
 
-            firm_roa = np.divide(
-                firm_expected_profits,
-                firm_capital_stock,
-                out=np.zeros_like(firm_expected_profits),
-                where=firm_capital_stock != 0,
-            )
-
-            # Start permissive (allow all), block only firms that fail ROA check
             return_on_assets_restrictions = np.full(agents_with_demand.shape, np.inf)
-            return_on_assets_restrictions[firm_roa < banks.parameters.firm_loans_return_on_assets_ratio] = 0.0
-            credit_restrictions = np.minimum(
-                np.minimum(capital_stock_collateral_restrictions, return_on_equity_restrictions),
-                return_on_assets_restrictions,
+            if banks.parameters.enable_firm_loans_return_on_assets_restriction:
+                # Calculate ROA safely to avoid division by zero
+                firm_expected_profits = firms.ts.current("expected_profits")[agents_with_demand]
+                firm_capital_stock = firms.ts.current("capital_inputs_stock_value")[agents_with_demand]
+
+                firm_roa = np.divide(
+                    firm_expected_profits,
+                    firm_capital_stock,
+                    out=np.zeros_like(firm_expected_profits),
+                    where=firm_capital_stock != 0,
+                )
+                return_on_assets_restrictions[firm_roa < banks.parameters.firm_loans_return_on_assets_ratio] = 0.0
+
+            dscr_restrictions = np.full(agents_with_demand.shape, np.inf)
+            underwriting_rate = np.nan
+            if banks.parameters.enable_firm_loans_dscr_restriction:
+                underwriting_rate = _firm_dscr_underwriting_rate(
+                    banks_ir,
+                    banks.parameters.firm_loans_dscr_underwriting_rate_mode,
+                )
+                dscr_restrictions = _compute_firm_dscr_capacity(
+                    firms=firms,
+                    agents_with_demand=agents_with_demand,
+                    min_dscr=banks.parameters.firm_loans_min_dscr,
+                    cfads_window=banks.parameters.firm_loans_cfads_window,
+                    cfads_haircut=banks.parameters.firm_loans_cfads_haircut,
+                    underwriting_rate=underwriting_rate,
+                    loan_maturity=loan_maturity,
+                    new_debt_service_by_firm=new_debt_service_by_firm,
+                )
+
+            credit_restrictions = np.minimum.reduce(
+                (
+                    capital_stock_collateral_restrictions,
+                    return_on_equity_restrictions,
+                    return_on_assets_restrictions,
+                    dscr_restrictions,
+                )
             )
         elif loan_type == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN:
             loan_to_income_restrictions = (
@@ -1228,7 +1390,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
                 - banks.ts.current("total_outstanding_loans")
                 - new_credit_by_bank,
-                max_supply_based_on_preferences - new_credit_by_bank,
+                max_supply_based_on_preferences - new_preference_credit_by_bank,
             ),
         )
         supply_sum = supply.sum()
@@ -1271,6 +1433,13 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 new_loans[0, bank_idx, agents_with_demand] = loan_matrix[bank_idx, :]
         new_loans[1, :, agents_with_demand] = banks_ir[:, np.newaxis] * new_loans[0, :, agents_with_demand]
         new_loans[2, :, agents_with_demand] = 1.0 / loan_maturity * new_loans[0, :, agents_with_demand]
+        if (
+            new_debt_service_by_firm is not None
+            and (loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN)
+            and banks.parameters.enable_firm_loans_dscr_restriction
+        ):
+            principal_by_firm = new_loans[0].sum(axis=0)
+            new_debt_service_by_firm += principal_by_firm * (underwriting_rate + 1.0 / loan_maturity)
 
         return new_loans
 

@@ -938,7 +938,7 @@ class Households(Agent):
 
         return rent_by_household, imputed_rent_by_household
 
-    def compute_target_credit(self, current_sales: pd.DataFrame) -> None:
+    def compute_target_credit(self, current_sales: pd.DataFrame | None) -> None:
         """Calculate target credit demand.
 
         Determines credit needs for:
@@ -959,11 +959,22 @@ class Households(Agent):
             )
         )
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])
-
         # Mortgages
         target_house_price = np.zeros(self.ts.current("n_households"))
-        if len(current_sales) > 0:
-            target_house_price[current_sales["buyer_id"].values] = current_sales["price_or_rent"].values
+        sells = None
+        if current_sales is not None and len(current_sales) > 0:
+            if "sales_types" in current_sales.columns:
+                sells = current_sales.loc[current_sales["sales_types"] == "Sell"]
+            else:
+                # Backward compatibility: allow passing already-filtered sales rows.
+                sells = current_sales
+
+            if sells is not None and len(sells) > 0:
+                missing = {"buyer_id", "price_or_rent"} - set(sells.columns)
+                if missing:
+                    raise ValueError(f"current_sales is missing columns required for mortgage targeting: {sorted(missing)}")
+                buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
+                target_house_price[buyer_ids] = sells["price_or_rent"].to_numpy(dtype=float, copy=False)
         self.ts.target_mortgage.append(
             self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,

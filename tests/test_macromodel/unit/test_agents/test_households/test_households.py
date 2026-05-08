@@ -1,3 +1,7 @@
+import numpy as np
+import pandas as pd
+
+
 class TestHouseholds:
     def test__create(self, test_households):
         assert test_households.country_name == "FRA"
@@ -18,6 +22,41 @@ class TestHouseholds:
         ]:
             assert state in test_households.states.keys()
 
+
+    def test__mortgage_target_ignores_rentals(self, test_households):
+        n_households = test_households.ts.current("n_households")
+
+        # Make the mortgage target depend only on target_house_price.
+        test_households.ts.override_current(
+            "target_consumption",
+            np.zeros_like(test_households.ts.current("target_consumption")),
+        )
+        test_households.ts.override_current(
+            "expected_income",
+            np.zeros_like(test_households.ts.current("expected_income")),
+        )
+        test_households.ts.override_current(
+            "rent",
+            np.zeros_like(test_households.ts.current("rent")),
+        )
+        test_households.ts.override_current(
+            "wealth_financial_assets",
+            np.zeros_like(test_households.ts.current("wealth_financial_assets")),
+        )
+
+        current_sales = pd.DataFrame(
+            {
+                "sales_types": ["Rental", "Sell"],
+                "buyer_id": [0, 1],
+                "price_or_rent": [100.0, 100000.0],
+            }
+        )
+        test_households.compute_target_credit(current_sales=current_sales)
+
+        target_mortgage = test_households.ts.current("target_mortgage")
+        assert target_mortgage.shape == (n_households,)
+        assert target_mortgage[0] == 0.0
+        assert target_mortgage[1] == 100000.0
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

@@ -579,6 +579,16 @@ def build_macro_output_df(model, country_code):
         else:
             add_annualized_source_column(output_name, label_name, source_name)
 
+    bank_stock_columns = {
+        "short_term_loans_to_firms": "total_short_term_loans_to_firms",
+        "long_term_loans_to_firms": "total_long_term_loans_to_firms",
+        "consumption_loans_to_households": "total_consumption_loans_to_households",
+        "mortgages_to_households": "total_mortgages_to_households",
+    }
+    for output_name, source_name in bank_stock_columns.items():
+        if source_name in df_bank_ts.columns:
+            add_column(output_name, df_bank_ts[source_name])
+
     def add_economy_column(name):
         values = economy_ts_dict.get(name)
         if values is None:

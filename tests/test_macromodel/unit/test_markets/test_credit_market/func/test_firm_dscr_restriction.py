@@ -4,6 +4,7 @@ import numpy as np
 
 from macromodel.markets.credit_market.func.clearing import (
     WaterBucketCreditMarketClearer,
+    _compute_firm_cfads,
     _firm_dscr_underwriting_rate,
 )
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
@@ -59,6 +60,27 @@ def _set_single_firm_case(
     test_firms.ts.override_current("used_intermediate_inputs_costs", np.zeros(n_firms))
     test_firms.ts.override_current("used_capital_inputs_costs", np.zeros(n_firms))
     test_firms.ts.override_current("taxes_paid_on_production", np.zeros(n_firms))
+
+
+def test_surplus_pool_cfads_excludes_capital_compensation_charge(test_firms):
+    n_firms = test_firms.ts.current("n_firms")
+    first_only = np.zeros(n_firms)
+    first_only[0] = 1.0
+
+    test_firms.ts.override_current("nominal_amount_sold_in_lcu", first_only * 100.0)
+    test_firms.ts.override_current("total_wage", first_only * 10.0)
+    test_firms.ts.override_current("used_intermediate_inputs_costs", first_only * 20.0)
+    test_firms.ts.override_current("used_capital_inputs_costs", first_only * 30.0)
+    test_firms.ts.override_current("taxes_paid_on_production", first_only * 5.0)
+
+    test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+    production_cost_cfads = _compute_firm_cfads(test_firms, window=1, haircut=1.0)
+
+    test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+    surplus_pool_cfads = _compute_firm_cfads(test_firms, window=1, haircut=1.0)
+
+    assert production_cost_cfads[0] == 35.0
+    assert surplus_pool_cfads[0] == 65.0
 
 
 def test_roa_roe_switches_allow_lending_when_legacy_profitability_gate_would_block(test_banks, test_firms):

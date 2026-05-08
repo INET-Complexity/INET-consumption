@@ -168,4 +168,27 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
             != 0.0,
         ),
         #
+        credit_supply_cap_total=np.full(len(bank_data), np.nan),
+        credit_supply_cap_firms=np.full(len(bank_data), np.nan),
+        credit_supply_cap_firms_short_term=np.full(len(bank_data), np.nan),
+        credit_supply_cap_firms_long_term=np.full(len(bank_data), np.nan),
+        credit_supply_cap_households_consumption=np.full(len(bank_data), np.nan),
+        credit_supply_cap_mortgages=np.full(len(bank_data), np.nan),
+        total_credit_supply_cap_total=[np.nan],
+        total_credit_supply_cap_firms=[np.nan],
+        total_credit_supply_cap_firms_short_term=[np.nan],
+        total_credit_supply_cap_firms_long_term=[np.nan],
+        total_credit_supply_cap_households_consumption=[np.nan],
+        total_credit_supply_cap_mortgages=[np.nan],
+        #
+        # Credit-market diagnostics (WaterBucket)
+        credit_market_car_room_initial=[np.nan],
+        credit_market_car_room_used=[np.nan],
+        credit_market_pref_cap_firms_initial=[np.nan],
+        credit_market_pref_cap_firms_used=[np.nan],
+        credit_market_pref_cap_hh_cons_initial=[np.nan],
+        credit_market_pref_cap_hh_cons_used=[np.nan],
+        credit_market_pref_cap_mortgages_initial=[np.nan],
+        credit_market_pref_cap_mortgages_used=[np.nan],
+        #
     )

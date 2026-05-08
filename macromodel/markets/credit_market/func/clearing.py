@@ -40,6 +40,35 @@ from macromodel.agents.households.households import Households
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
 
 
+def _clip_nonneg(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    return np.where(np.isfinite(values), np.maximum(0.0, values), 0.0)
+
+
+def _nan_array(n: int) -> np.ndarray:
+    return np.full(n, np.nan)
+
+
+def _append_scalar(ts: object, key: str, value: float) -> None:
+    getattr(ts, key).append([float(value)])
+
+
+def _append_vector(ts: object, key: str, value: np.ndarray) -> None:
+    getattr(ts, key).append(np.asarray(value, dtype=float))
+
+
+# Binding reason enum (stored as float codes in HDF5)
+_BINDING_NOT_BINDING = 0.0
+_BINDING_NO_DEMAND = 1.0
+_BINDING_COLLATERAL = 2.0
+_BINDING_DSCR = 3.0
+_BINDING_ROA = 4.0
+_BINDING_ROE = 5.0
+_BINDING_BANK_CAR = 6.0
+_BINDING_BANK_PREF = 7.0
+_BINDING_OTHER = 8.0
+
+
 def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray:
     """Compute lagged cash flow available for firm debt service."""
     n_firms = firms.ts.current("n_firms")
@@ -55,15 +84,20 @@ def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray
     if available_periods <= 0:
         return np.zeros(n_firms)
 
+    include_capital_costs = (
+        firms.configuration.parameters.capital_compensation_accounting_mode == "production_cost"
+    )
     period_cfads = []
     for period in range(-available_periods, 0):
         cash_sales = np.asarray(histories["nominal_amount_sold_in_lcu"][period], dtype=float)
         costs = (
             np.asarray(histories["total_wage"][period], dtype=float)
             + np.asarray(histories["used_intermediate_inputs_costs"][period], dtype=float)
-            + np.asarray(histories["used_capital_inputs_costs"][period], dtype=float)
             + np.asarray(histories["taxes_paid_on_production"][period], dtype=float)
         )
+        if include_capital_costs:
+            costs = costs + np.asarray(histories["used_capital_inputs_costs"][period], dtype=float)
+
         period_value = cash_sales - costs
         valid_period = np.isfinite(cash_sales) & np.isfinite(costs) & np.isfinite(period_value)
         period_cfads.append(np.where(valid_period, np.maximum(0.0, period_value), 0.0))
@@ -378,6 +412,25 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_household_consumption_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_mortgage_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
 
+        # Bank-side diagnostic rooms/caps at the start of clearing
+        car_room_initial = np.maximum(
+            0.0,
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+            - banks.ts.current("total_outstanding_loans"),
+        )
+        _append_scalar(banks.ts, "credit_market_car_room_initial", float(car_room_initial.sum()))
+
+        # Firm CFADS proxy (only meaningful when DSCR is enabled)
+        if banks.parameters.enable_firm_loans_dscr_restriction:
+            cfads = _compute_firm_cfads(
+                firms,
+                window=banks.parameters.firm_loans_cfads_window,
+                haircut=banks.parameters.firm_loans_cfads_haircut,
+            )
+        else:
+            cfads = _nan_array(firms.ts.current("n_firms"))
+        _append_vector(firms.ts, "credit_market_firm_cfads", cfads)
+
         # Banks may update their preferences for different types of loans, impacting their supply
         if self.consider_loan_type_fractions:
             (
@@ -391,10 +444,28 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 current_npl_mortgages,
                 self.credit_supply_temperature,
             )
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_firms_initial",
+                float(np.sum(max_supply_based_on_preferences_firms)),
+            )
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_hh_cons_initial",
+                float(np.sum(max_supply_based_on_preferences_hh_cons)),
+            )
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_mortgages_initial",
+                float(np.sum(max_supply_based_on_preferences_mortgages)),
+            )
         else:
             max_supply_based_on_preferences_firms = np.full(banks.ts.current("n_banks"), np.inf)
             max_supply_based_on_preferences_hh_cons = np.full(banks.ts.current("n_banks"), np.inf)
             max_supply_based_on_preferences_mortgages = np.full(banks.ts.current("n_banks"), np.inf)
+            _append_scalar(banks.ts, "credit_market_pref_cap_firms_initial", np.nan)
+            _append_scalar(banks.ts, "credit_market_pref_cap_hh_cons_initial", np.nan)
+            _append_scalar(banks.ts, "credit_market_pref_cap_mortgages_initial", np.nan)
 
         # Firm loans
         if self.allow_short_term_firm_loans:
@@ -1201,6 +1272,33 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_preference_credit_by_bank=new_mortgage_preference_credit_by_bank,
         )
 
+        new_credit_by_household += new_mort_loans[0].sum(axis=0)
+        new_credit_by_bank += new_mort_loans[0].sum(axis=1)
+        new_mortgage_preference_credit_by_bank += new_mort_loans[0].sum(axis=1)
+
+        # End-of-clearing diagnostic usage
+        _append_scalar(banks.ts, "credit_market_car_room_used", float(np.sum(new_credit_by_bank)))
+        if self.consider_loan_type_fractions:
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_firms_used",
+                float(np.sum(new_firm_preference_credit_by_bank)),
+            )
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_hh_cons_used",
+                float(np.sum(new_household_consumption_preference_credit_by_bank)),
+            )
+            _append_scalar(
+                banks.ts,
+                "credit_market_pref_cap_mortgages_used",
+                float(np.sum(new_mortgage_preference_credit_by_bank)),
+            )
+        else:
+            _append_scalar(banks.ts, "credit_market_pref_cap_firms_used", np.nan)
+            _append_scalar(banks.ts, "credit_market_pref_cap_hh_cons_used", np.nan)
+            _append_scalar(banks.ts, "credit_market_pref_cap_mortgages_used", np.nan)
+
         return (
             new_st_loans,
             new_lt_loans,
@@ -1379,7 +1477,109 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             np.minimum(target_credit[agents_with_demand], credit_restrictions),
         )
         capacities_sum = capacities.sum()
+
+        diagnostics_enabled = loan_type in (LoanTypes.FIRM_SHORT_TERM_LOAN, LoanTypes.FIRM_LONG_TERM_LOAN)
+        if diagnostics_enabled:
+            n_firms = firms.ts.current("n_firms")
+            demand_full = np.asarray(target_credit, dtype=float)
+            collateral_full = np.zeros(n_firms)
+            capacity_full = np.zeros(n_firms)
+            dscr_full = _nan_array(n_firms)
+            if agents_with_demand.size:
+                collateral_full[agents_with_demand] = _clip_nonneg(capital_stock_collateral_restrictions)
+                capacity_full[agents_with_demand] = capacities
+                if banks.parameters.enable_firm_loans_dscr_restriction:
+                    dscr_full[agents_with_demand] = _clip_nonneg(dscr_restrictions)
+
+            car_room = np.maximum(
+                0.0,
+                banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+                - banks.ts.current("total_outstanding_loans")
+                - new_credit_by_bank,
+            )
+            pref_room = np.maximum(0.0, max_supply_based_on_preferences - new_preference_credit_by_bank)
+            pref_likely_binding = bool(
+                self.consider_loan_type_fractions and np.isfinite(pref_room.sum()) and pref_room.sum() < car_room.sum()
+            )
+
+            def _append_firm_diagnostics(granted_by_firm: np.ndarray) -> None:
+                eps = 1e-9
+                reason = np.full(n_firms, _BINDING_NO_DEMAND, dtype=float)
+                amount = np.zeros(n_firms, dtype=float)
+
+                has_demand = demand_full > 0.0
+                fully_granted = has_demand & (granted_by_firm >= demand_full - eps)
+                reason[fully_granted] = _BINDING_NOT_BINDING
+                amount[fully_granted] = demand_full[fully_granted]
+
+                unmet = has_demand & ~fully_granted
+
+                coll_cap = collateral_full
+                dscr_cap_eff = np.where(np.isfinite(dscr_full), dscr_full, np.inf)
+
+                roa_cap_eff = np.full(n_firms, np.inf)
+                if banks.parameters.enable_firm_loans_return_on_assets_restriction and agents_with_demand.size:
+                    roa_cap_eff[agents_with_demand] = np.where(
+                        np.isfinite(return_on_assets_restrictions) & (return_on_assets_restrictions <= 0.0),
+                        0.0,
+                        np.inf,
+                    )
+
+                roe_cap_eff = np.full(n_firms, np.inf)
+                if banks.parameters.enable_firm_loans_return_on_equity_restriction and agents_with_demand.size:
+                    roe_cap_eff[agents_with_demand] = _clip_nonneg(return_on_equity_restrictions)
+
+                borrower_min = np.minimum.reduce((coll_cap, dscr_cap_eff, roa_cap_eff, roe_cap_eff))
+                borrower_binds = unmet & (borrower_min < demand_full - eps)
+
+                # Tie-break: collateral -> dscr -> roa -> roe
+                coll_binds = borrower_binds & (coll_cap < demand_full - eps) & (coll_cap <= dscr_cap_eff) & (
+                    coll_cap <= roa_cap_eff
+                ) & (coll_cap <= roe_cap_eff)
+                reason[coll_binds] = _BINDING_COLLATERAL
+                amount[coll_binds] = coll_cap[coll_binds]
+
+                dscr_binds = borrower_binds & ~coll_binds & (dscr_cap_eff < demand_full - eps) & (
+                    dscr_cap_eff <= roa_cap_eff
+                ) & (dscr_cap_eff <= roe_cap_eff)
+                reason[dscr_binds] = _BINDING_DSCR
+                amount[dscr_binds] = dscr_full[dscr_binds]
+
+                roa_binds = borrower_binds & ~coll_binds & ~dscr_binds & (roa_cap_eff < demand_full - eps) & (
+                    roa_cap_eff <= roe_cap_eff
+                )
+                reason[roa_binds] = _BINDING_ROA
+                amount[roa_binds] = 0.0
+
+                roe_binds = borrower_binds & ~coll_binds & ~dscr_binds & ~roa_binds & (roe_cap_eff < demand_full - eps)
+                reason[roe_binds] = _BINDING_ROE
+                amount[roe_binds] = roe_cap_eff[roe_binds]
+
+                bank_binds = unmet & ~borrower_binds
+                if np.any(bank_binds):
+                    reason[bank_binds] = _BINDING_BANK_PREF if pref_likely_binding else _BINDING_BANK_CAR
+                    amount[bank_binds] = granted_by_firm[bank_binds]
+
+                other = unmet & (reason == _BINDING_NO_DEMAND)
+                reason[other] = _BINDING_OTHER
+                amount[other] = granted_by_firm[other]
+
+                if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
+                    _append_vector(firms.ts, "credit_market_firm_st_capacity", capacity_full)
+                    _append_vector(firms.ts, "credit_market_firm_st_collateral_cap", collateral_full)
+                    _append_vector(firms.ts, "credit_market_firm_st_dscr_cap", dscr_full)
+                    _append_vector(firms.ts, "credit_market_firm_st_binding_reason", reason)
+                    _append_vector(firms.ts, "credit_market_firm_st_binding_amount", amount)
+                else:
+                    _append_vector(firms.ts, "credit_market_firm_lt_capacity", capacity_full)
+                    _append_vector(firms.ts, "credit_market_firm_lt_collateral_cap", collateral_full)
+                    _append_vector(firms.ts, "credit_market_firm_lt_dscr_cap", dscr_full)
+                    _append_vector(firms.ts, "credit_market_firm_lt_binding_reason", reason)
+                    _append_vector(firms.ts, "credit_market_firm_lt_binding_amount", amount)
+
         if capacities_sum == 0.0:
+            if diagnostics_enabled:
+                _append_firm_diagnostics(np.zeros(n_firms))
             return new_loans
         capacities_weights = capacities / capacities_sum
 
@@ -1395,6 +1595,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         )
         supply_sum = supply.sum()
         if supply_sum == 0.0:
+            if diagnostics_enabled:
+                _append_firm_diagnostics(np.zeros(n_firms))
             return new_loans
         supply_weights = supply / supply_sum
         if self.creditor_selection_is_deterministic:
@@ -1440,6 +1642,9 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         ):
             principal_by_firm = new_loans[0].sum(axis=0)
             new_debt_service_by_firm += principal_by_firm * (underwriting_rate + 1.0 / loan_maturity)
+
+        if diagnostics_enabled:
+            _append_firm_diagnostics(new_loans[0].sum(axis=0))
 
         return new_loans
 

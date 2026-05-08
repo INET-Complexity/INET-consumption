@@ -117,8 +117,58 @@ class TestFirms:
             np.full(18, -24),
         )
 
-    def test__compute_deposits(self, test_firms):
-        pass
+    def test_invalid_capital_compensation_accounting_mode_raises(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "invalid"
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 10.0))
+
+        try:
+            test_firms.compute_profits()
+        except ValueError as exc:
+            assert "capital_compensation_accounting_mode" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError for invalid capital compensation accounting mode")
+
+    def test__compute_profits_surplus_pool_excludes_capital_compensation_charge(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+        test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.taxes_paid_on_production.append(np.full(18, 1.0))
+        test_firms.ts.interest_paid.append(np.full(18, 2.0))
+        test_firms.ts.total_wage.append(np.full(18, 1.0))
+        assert np.allclose(
+            test_firms.compute_profits() - test_firms.ts.current("production") * test_firms.ts.current("price"),
+            np.full(18, -14),
+        )
+
+    def test__compute_unit_costs_surplus_pool_excludes_capital_compensation_charge(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+        test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.taxes_paid_on_production.append(np.full(18, 1.0))
+        test_firms.ts.total_wage.append(np.full(18, 1.0))
+        expected = np.divide(
+            np.full(18, 12.0),
+            test_firms.ts.current("production"),
+            out=np.zeros_like(test_firms.ts.current("production")),
+            where=test_firms.ts.current("production") != 0.0,
+        )
+
+        assert np.allclose(test_firms.compute_unit_costs(), expected)
+
+    def test__compute_deposits_surplus_pool_excludes_capital_compensation_charge(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+        test_firms.ts.deposits.append(np.full(18, 100.0))
+        test_firms.ts.nominal_amount_sold_in_lcu.append(np.full(18, 50.0))
+        test_firms.ts.total_wage.append(np.full(18, 1.0))
+        test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 30.0))
+        test_firms.ts.taxes_paid_on_production.append(np.full(18, 2.0))
+        test_firms.ts.corporate_taxes_paid.append(np.full(18, 3.0))
+        test_firms.ts.interest_paid.append(np.full(18, 4.0))
+        test_firms.ts.received_credit.append(np.full(18, 5.0))
+        test_firms.ts.debt_installments.append(np.full(18, 6.0))
+
+        assert np.allclose(test_firms.compute_deposits(), np.full(18, 129.0))
 
     def test__compute_debt(self, test_firms):
         test_firms.ts.debt.append(np.full(18, 10.0))

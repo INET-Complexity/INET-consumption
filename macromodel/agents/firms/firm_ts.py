@@ -300,6 +300,19 @@ class FirmTimeSeries(TimeSeries):
             total_received_long_term_credit=[0.0],
             received_credit=np.full(data.shape[0], np.nan),
             #
+            # Credit-market (WaterBucket) binding diagnostics
+            credit_market_firm_cfads=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_capacity=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_collateral_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_dscr_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_binding_reason=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_binding_amount=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_capacity=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_collateral_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
+            #
             short_term_loan_debt=np.zeros(data.shape[0]),
             long_term_loan_debt=data["Debt"].values,
             debt=data["Debt"].values,
@@ -531,6 +544,19 @@ def create_firms_timeseries(
         received_long_term_credit=np.full(data.shape[0], np.nan),
         total_received_long_term_credit=[0.0],
         received_credit=np.full(data.shape[0], np.nan),
+        #
+        # Credit-market (WaterBucket) binding diagnostics
+        credit_market_firm_cfads=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_capacity=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_collateral_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_dscr_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_binding_reason=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_binding_amount=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_capacity=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_collateral_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
         #
         short_term_loan_debt=np.zeros(data.shape[0]),
         long_term_loan_debt=data["Debt"].values,

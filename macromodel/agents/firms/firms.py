@@ -1718,6 +1718,12 @@ class Firms(Agent):
     def compute_profits(self) -> np.ndarray:
         """Calculate profits for each firm.
 
+        In ``production_cost`` accounting mode, the capital-compensation-derived
+        ``used_capital_inputs_costs`` are charged as a period production cost.
+        In ``surplus_pool`` mode, they remain available as a separate capital
+        allocation / replacement-demand diagnostic and are not deducted from
+        firm profits.
+
         Computes:
         Revenue
         - Wages
@@ -1728,11 +1734,12 @@ class Firms(Agent):
         Returns:
             np.ndarray: Profits for each firm
         """
+        capital_costs = self.capital_compensation_accounting_costs()
         return (
             self.ts.current("price") * self.ts.current("production")
             - self.ts.current("total_wage")
             - self.ts.current("used_intermediate_inputs_costs")
-            - self.ts.current("used_capital_inputs_costs")
+            - capital_costs
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("interest_paid")
         )
@@ -1749,10 +1756,11 @@ class Firms(Agent):
         Returns:
             np.ndarray: Unit costs for each firm
         """
+        capital_costs = self.capital_compensation_accounting_costs()
         return np.divide(
             self.ts.current("total_wage")
             + self.ts.current("used_intermediate_inputs_costs")
-            + self.ts.current("used_capital_inputs_costs")
+            + capital_costs
             + self.ts.current("taxes_paid_on_production"),
             self.ts.current("production"),
             out=np.zeros_like(self.ts.current("production")),
@@ -1788,12 +1796,24 @@ class Firms(Agent):
             + self.ts.current("nominal_amount_sold_in_lcu")
             - self.ts.current("total_wage")
             - self.ts.current("used_intermediate_inputs_costs")
-            - self.ts.current("used_capital_inputs_costs")
+            - self.capital_compensation_accounting_costs()
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("corporate_taxes_paid")
             - self.ts.current("interest_paid")
             + self.ts.current("received_credit")
             - self.ts.current("debt_installments")
+        )
+
+    def capital_compensation_accounting_costs(self) -> np.ndarray:
+        """Return capital-compensation-derived costs charged in firm accounting."""
+        mode = self.configuration.parameters.capital_compensation_accounting_mode
+        if mode == "production_cost":
+            return self.ts.current("used_capital_inputs_costs")
+        if mode == "surplus_pool":
+            return np.zeros_like(self.ts.current("used_capital_inputs_costs"))
+        raise ValueError(
+            "Unknown capital_compensation_accounting_mode "
+            f"{mode!r}; expected 'production_cost' or 'surplus_pool'."
         )
 
     def compute_gross_operating_surplus_mixed_income(self) -> np.ndarray:

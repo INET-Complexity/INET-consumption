@@ -18,6 +18,7 @@ from src.visual_helpers import (  # noqa: E402
     build_employment_by_sector_df,
     build_macro_output_df,
     build_sector_tfp_investment_desired_mb_mc_ratio_df,
+    plot_agent_timeseries,
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
@@ -235,6 +236,63 @@ def test_build_cpi_comparison_df_uses_explicit_cpi_series_names():
     assert output.columns.tolist() == expected_columns
     assert output["cpi_fixed_basket_minus_transaction"].iloc[1] == pytest.approx(-0.02)
     assert output["cpi_chained_basket_pop_change_minus_transaction"].iloc[2] == pytest.approx(-0.0083)
+
+
+def test_plot_agent_timeseries_aggregates_vector_series_and_can_select_agent_id():
+    index = pd.RangeIndex(3, name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [1.0, 1.0, 1.0]}, index=index)
+    country = SimpleNamespace(
+        firms=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_sales": [10.0, 11.0, 12.0],
+                    "target_short_term_credit": [
+                        np.array([1.0, 2.0]),
+                        np.array([3.0, 4.0]),
+                        np.array([5.0, 6.0]),
+                    ],
+                }
+            )
+        )
+    )
+    model = SimpleNamespace(
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+    )
+
+    fig_sum = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit", "total_sales"],
+        agg="sum",
+        show=False,
+    )
+    assert len(fig_sum.data) == 2
+    assert list(fig_sum.data[0].y) == pytest.approx([3.0, 7.0, 11.0])
+
+    fig_agent = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit"],
+        agent_id=1,
+        show=False,
+    )
+    assert list(fig_agent.data[0].y) == pytest.approx([2.0, 4.0, 6.0])
+
+    fig_multi = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit", "total_sales"],
+        agent_id=[0, 1],
+        show=False,
+    )
+    assert len(fig_multi.data) == 3
+    assert [trace.name for trace in fig_multi.data][:2] == ["id=0", "id=1"]
+    assert list(fig_multi.data[0].y) == pytest.approx([1.0, 3.0, 5.0])
+    assert list(fig_multi.data[1].y) == pytest.approx([2.0, 4.0, 6.0])
 
 
 def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():

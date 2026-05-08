@@ -49,6 +49,94 @@ if TYPE_CHECKING:
     from macromodel.agents.households.households import Households
 
 
+def _compute_credit_supply_caps_by_type(
+    banks: "Banks",
+    current_npl_firm_loans: float,
+    current_npl_hh_cons_loans: float,
+    current_npl_mortgages: float,
+    credit_supply_temperature: float,
+    total_target_short_term_credit: float,
+    total_target_long_term_credit: float,
+) -> dict[str, np.ndarray]:
+    """Compute CAR-based bank credit supply caps (total + split by type).
+
+    Total cap is lending headroom implied by the capital adequacy requirement:
+        max_car = max(0, equity / capital_adequacy_ratio - total_outstanding_loans)
+
+    Type caps follow the same preference-weighted split as credit clearing:
+    initial `new_loans_fraction_*` shares adjusted by `credit_supply_temperature`
+    and the economy-wide NPL rates.
+    """
+    max_car = np.maximum(
+        0.0,
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - banks.ts.current("total_outstanding_loans"),
+    )
+
+    # Import locally to keep CreditMarket module lightweight and avoid circular-import risk.
+    from macromodel.markets.credit_market.func.clearing import _compute_loan_type_preference_caps
+
+    firm_caps, hh_cons_caps, mortgage_caps = _compute_loan_type_preference_caps(
+        banks=banks,
+        current_npl_firm_loans=current_npl_firm_loans,
+        current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+        current_npl_mortgages=current_npl_mortgages,
+        credit_supply_temperature=credit_supply_temperature,
+    )
+
+    denom = float(total_target_short_term_credit + total_target_long_term_credit)
+    if not np.isfinite(denom) or denom <= 0.0:
+        short_term_share = 0.5
+    else:
+        short_term_share = float(total_target_short_term_credit) / denom
+        short_term_share = float(np.clip(short_term_share, 0.0, 1.0))
+
+    firm_caps_short_term = firm_caps * short_term_share
+    firm_caps_long_term = firm_caps * (1.0 - short_term_share)
+    return {
+        "total": max_car,
+        "firms": firm_caps,
+        "firms_short_term": firm_caps_short_term,
+        "firms_long_term": firm_caps_long_term,
+        "households_consumption": hh_cons_caps,
+        "mortgages": mortgage_caps,
+    }
+
+
+def _append_credit_supply_caps_to_banks_ts(
+    banks: "Banks",
+    current_npl_firm_loans: float,
+    current_npl_hh_cons_loans: float,
+    current_npl_mortgages: float,
+    credit_supply_temperature: float,
+    total_target_short_term_credit: float,
+    total_target_long_term_credit: float,
+) -> None:
+    """Append credit supply caps to `banks.ts`."""
+    caps = _compute_credit_supply_caps_by_type(
+        banks=banks,
+        current_npl_firm_loans=current_npl_firm_loans,
+        current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+        current_npl_mortgages=current_npl_mortgages,
+        credit_supply_temperature=credit_supply_temperature,
+        total_target_short_term_credit=total_target_short_term_credit,
+        total_target_long_term_credit=total_target_long_term_credit,
+    )
+
+    banks.ts.credit_supply_cap_total.append(caps["total"])
+    banks.ts.credit_supply_cap_firms.append(caps["firms"])
+    banks.ts.credit_supply_cap_firms_short_term.append(caps["firms_short_term"])
+    banks.ts.credit_supply_cap_firms_long_term.append(caps["firms_long_term"])
+    banks.ts.credit_supply_cap_households_consumption.append(caps["households_consumption"])
+    banks.ts.credit_supply_cap_mortgages.append(caps["mortgages"])
+
+    banks.ts.total_credit_supply_cap_total.append([float(np.nansum(caps["total"]))])
+    banks.ts.total_credit_supply_cap_firms.append([float(np.nansum(caps["firms"]))])
+    banks.ts.total_credit_supply_cap_firms_short_term.append([float(np.nansum(caps["firms_short_term"]))])
+    banks.ts.total_credit_supply_cap_firms_long_term.append([float(np.nansum(caps["firms_long_term"]))])
+    banks.ts.total_credit_supply_cap_households_consumption.append([float(np.nansum(caps["households_consumption"]))])
+    banks.ts.total_credit_supply_cap_mortgages.append([float(np.nansum(caps["mortgages"]))])
+
+
 class CreditMarket:
     """Credit market implementation managing lending relationships and loan lifecycles.
 
@@ -276,6 +364,19 @@ class CreditMarket:
             - Outstanding loan balances
             - Bank portfolio composition
         """
+        credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
+        total_target_short_term_credit = float(np.nansum(firms.ts.current("target_short_term_credit")))
+        total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))
+        _append_credit_supply_caps_to_banks_ts(
+            banks=banks,
+            current_npl_firm_loans=current_npl_firm_loans,
+            current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+            current_npl_mortgages=current_npl_mortgages,
+            credit_supply_temperature=credit_supply_temperature,
+            total_target_short_term_credit=total_target_short_term_credit,
+            total_target_long_term_credit=total_target_long_term_credit,
+        )
+
         # Clear the credit market
         (
             new_st_loans,

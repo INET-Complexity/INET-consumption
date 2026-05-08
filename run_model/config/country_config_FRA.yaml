@@ -319,6 +319,7 @@ FRA:
         - 0
         - 0
       capital_inputs_utilisation_rate: 0.85  # 1.0
+      capital_compensation_accounting_mode: production_cost
       depreciation_rates:
         - 0.0
         - 0.0

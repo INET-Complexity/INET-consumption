@@ -30,6 +30,8 @@ from macromodel.markets.goods_market import GoodsMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.timestep import Timestep
 
+_CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY = "firms.capital_compensation_accounting_mode"
+
 
 @dataclass
 class Simulation:
@@ -98,6 +100,12 @@ class Simulation:
                 )
             if not check_compatibility(data_configuration.country_configs[country], country_sim_conf):  # type: ignore
                 mismatches = get_compatibility_mismatches(data_configuration.country_configs[country], country_sim_conf)
+                if any(mismatch.startswith(_CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY) for mismatch in mismatches):
+                    raise ValueError(
+                        f"Configuration mismatch for {country}. "
+                        "capital_compensation_accounting_mode must match between data_config and country_config. "
+                        f"Mismatches: {'; '.join(mismatches)}"
+                    )
                 warning_message = (
                     f"Configuration mismatch for {country}. "
                     "Resetting firm-dependent synthetic data. "
@@ -553,6 +561,11 @@ def get_compatibility_mismatches(
             "firms.intermediate_inputs_utilisation_rate",
             firm_data_conf.intermediate_inputs_utilisation_rate,
             firm_sim_reset_params["intermediate_inputs_utilisation_rate"],
+        ),
+        (
+            _CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY,
+            firm_data_conf.capital_compensation_accounting_mode,
+            country_sim_configuration.firms.parameters.capital_compensation_accounting_mode,
         ),
         (
             "banks.long_term_firm_loan_maturity",

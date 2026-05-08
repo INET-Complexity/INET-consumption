@@ -8,7 +8,7 @@ import pytest
 from macro_data.configuration.countries import Country as CountryName
 from macromodel.agents.firms.func.productivity_investment_planner import SimpleProductivityInvestmentPlanner
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
-from macromodel.simulation import Simulation, check_compatibility
+from macromodel.simulation import Simulation, check_compatibility, get_compatibility_mismatches
 from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
 
 
@@ -311,6 +311,25 @@ def test_check_compatibility(datawrapper):
     country_sim_configuration.firms.parameters.intermediate_inputs_utilisation_rate = 0.1
 
     assert not check_compatibility(country_data_configuration, country_sim_configuration)
+
+
+def test_capital_compensation_mode_mismatch_is_incompatible(datawrapper):
+    country_data_configuration = datawrapper.configuration.country_configs[CountryName("FRA")]
+    country_sim_configuration = CountryConfiguration()
+    country_sim_configuration.firms.parameters.capital_compensation_accounting_mode = "surplus_pool"
+
+    mismatches = get_compatibility_mismatches(country_data_configuration, country_sim_configuration)
+
+    assert not check_compatibility(country_data_configuration, country_sim_configuration)
+    assert any(mismatch.startswith("firms.capital_compensation_accounting_mode") for mismatch in mismatches)
+
+
+def test_capital_compensation_mode_mismatch_raises_in_simulation(datawrapper):
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    configuration.country_configurations["FRA"].firms.parameters.capital_compensation_accounting_mode = "surplus_pool"
+
+    with pytest.raises(ValueError, match="capital_compensation_accounting_mode must match"):
+        Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
 
 
 def test_random_seed(datawrapper):

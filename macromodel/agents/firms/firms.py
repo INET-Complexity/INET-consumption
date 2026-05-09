@@ -1073,21 +1073,42 @@ class Firms(Agent):
             employer_social_insurance_tax (float): Employer SI tax rate
             cpi (float): Consumer price index
         """
+        self.ts.total_wage.append(
+            self.compute_total_wage_obligation(
+                corresponding_firm=corresponding_firm,
+                individual_wages=individual_wages,
+                income_taxes=income_taxes,
+                employee_social_insurance_tax=employee_social_insurance_tax,
+                employer_social_insurance_tax=employer_social_insurance_tax,
+                cpi=cpi,
+            )
+        )
+        self.ts.real_wage_per_capita.append(
+            self.ts.current("total_wage") / cpi / self.ts.current("number_of_employees")
+        )
+
+    def compute_total_wage_obligation(
+        self,
+        corresponding_firm: np.ndarray,
+        individual_wages: np.ndarray,
+        income_taxes: float,
+        employee_social_insurance_tax: float,
+        employer_social_insurance_tax: float,
+        cpi: float,
+    ) -> np.ndarray:
+        """Preview current wage obligations without appending to time series."""
         real_wages = np.bincount(
             corresponding_firm[corresponding_firm >= 0],
             weights=individual_wages[corresponding_firm >= 0],
             minlength=self.ts.current("n_firms"),
         )
-        self.ts.total_wage.append(
+        return (
             cpi
             * (
                 (1.0 + employer_social_insurance_tax)
                 / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))
                 * real_wages
             )
-        )
-        self.ts.real_wage_per_capita.append(
-            self.ts.current("total_wage") / cpi / self.ts.current("number_of_employees")
         )
 
     def compute_price(
@@ -1334,11 +1355,164 @@ class Firms(Agent):
             limiting_labour_inputs=self.ts.current("labour_inputs"),
         )
 
+    def _append_activity_finance_diagnostics(
+        self,
+        activity_finance_available: np.ndarray,
+        activity_finance_hard_obligations: np.ndarray,
+        activity_finance_gap_before_revision: np.ndarray,
+        intermediate_scale: np.ndarray,
+        capital_scale: np.ndarray,
+        technical_scale: np.ndarray,
+        tfp_scale: np.ndarray,
+        planned_intermediate_costs: np.ndarray,
+        feasible_intermediate_costs: np.ndarray,
+        planned_capital_costs: np.ndarray,
+        feasible_capital_costs: np.ndarray,
+        planned_technical_costs: np.ndarray,
+        feasible_technical_costs: np.ndarray,
+        planned_tfp_costs: np.ndarray,
+        feasible_tfp_costs: np.ndarray,
+    ) -> None:
+        self.ts.activity_finance_available.append(activity_finance_available)
+        self.ts.activity_finance_hard_obligations.append(activity_finance_hard_obligations)
+        self.ts.activity_finance_gap_before_revision.append(activity_finance_gap_before_revision)
+        self.ts.intermediate_purchase_finance_scale.append(intermediate_scale)
+        self.ts.capital_purchase_finance_scale.append(capital_scale)
+        self.ts.technical_investment_finance_scale.append(technical_scale)
+        self.ts.tfp_investment_finance_scale.append(tfp_scale)
+        self.ts.planned_intermediate_purchase_expected_costs.append(planned_intermediate_costs)
+        self.ts.feasible_intermediate_purchase_expected_costs.append(feasible_intermediate_costs)
+        self.ts.planned_capital_purchase_expected_costs.append(planned_capital_costs)
+        self.ts.feasible_capital_purchase_expected_costs.append(feasible_capital_costs)
+        self.ts.planned_technical_investment_expected_costs.append(planned_technical_costs)
+        self.ts.feasible_technical_investment_expected_costs.append(feasible_technical_costs)
+        self.ts.planned_tfp_investment_expected_costs.append(planned_tfp_costs)
+        self.ts.feasible_tfp_investment_expected_costs.append(feasible_tfp_costs)
+
+    @staticmethod
+    def _allocate_activity_finance(
+        remaining_finance: np.ndarray,
+        planned_costs: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        affordable_costs = np.minimum(remaining_finance, planned_costs)
+        scale = np.divide(
+            affordable_costs,
+            planned_costs,
+            out=np.ones_like(planned_costs),
+            where=planned_costs > 0.0,
+        )
+        return np.maximum(0.0, remaining_finance - affordable_costs), scale
+
+    def revise_activity_against_available_finance(
+        self,
+        expected_lcu_prices: np.ndarray,
+        wage_obligation_preview: np.ndarray,
+        production_tax_obligation_preview: np.ndarray,
+    ) -> None:
+        """Revise current planned purchases after credit clears."""
+        n_firms = self.ts.current("n_firms")
+        mode = self.configuration.parameters.firm_activity_finance_revision_mode
+
+        target_intermediate = self.ts.current("target_intermediate_inputs").copy()
+        target_capital = self.ts.current("target_capital_inputs").copy()
+        planned_technical = self.ts.current("planned_technical_investment").copy()
+        planned_tfp = self.ts.current("planned_tfp_investment").copy()
+
+        planned_intermediate_costs = (target_intermediate * expected_lcu_prices[None, :]).sum(axis=1)
+        planned_capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
+        planned_technical_costs = planned_technical.sum(axis=1)
+        planned_tfp_costs = planned_tfp.copy()
+        total_planned_costs = (
+            planned_intermediate_costs + planned_capital_costs + planned_technical_costs + planned_tfp_costs
+        )
+
+        if mode == "none":
+            self._append_activity_finance_diagnostics(
+                activity_finance_available=np.zeros(n_firms),
+                activity_finance_hard_obligations=np.zeros(n_firms),
+                activity_finance_gap_before_revision=np.zeros(n_firms),
+                intermediate_scale=np.ones(n_firms),
+                capital_scale=np.ones(n_firms),
+                technical_scale=np.ones(n_firms),
+                tfp_scale=np.ones(n_firms),
+                planned_intermediate_costs=planned_intermediate_costs,
+                feasible_intermediate_costs=planned_intermediate_costs,
+                planned_capital_costs=planned_capital_costs,
+                feasible_capital_costs=planned_capital_costs,
+                planned_technical_costs=planned_technical_costs,
+                feasible_technical_costs=planned_technical_costs,
+                planned_tfp_costs=planned_tfp_costs,
+                feasible_tfp_costs=planned_tfp_costs,
+            )
+            return
+
+        if mode != "post_credit_cash_budget":
+            raise ValueError(
+                "Unknown firm_activity_finance_revision_mode "
+                f"{mode!r}; expected 'none' or 'post_credit_cash_budget'."
+            )
+
+        hard_obligations = (
+            wage_obligation_preview
+            + production_tax_obligation_preview
+            + self.ts.current("interest_paid")
+            + self.ts.current("debt_installments")
+        )
+        available_finance = np.maximum(
+            0.0,
+            np.maximum(self.ts.current("deposits"), 0.0)
+            + self.ts.current("received_short_term_credit")
+            + self.ts.current("received_long_term_credit")
+            - hard_obligations,
+        )
+        finance_gap = np.maximum(0.0, total_planned_costs - available_finance)
+
+        remaining_finance, intermediate_scale = self._allocate_activity_finance(
+            available_finance, planned_intermediate_costs
+        )
+        remaining_finance, capital_scale = self._allocate_activity_finance(remaining_finance, planned_capital_costs)
+        remaining_finance, technical_scale = self._allocate_activity_finance(
+            remaining_finance, planned_technical_costs
+        )
+        _, tfp_scale = self._allocate_activity_finance(remaining_finance, planned_tfp_costs)
+
+        feasible_intermediate = target_intermediate * intermediate_scale[:, None]
+        feasible_capital = target_capital * capital_scale[:, None]
+        feasible_technical = planned_technical * technical_scale[:, None]
+        feasible_tfp = planned_tfp * tfp_scale
+        feasible_technical_costs = feasible_technical.sum(axis=1)
+
+        self.ts.override_current("target_intermediate_inputs", feasible_intermediate)
+        self.ts.override_current("target_capital_inputs", feasible_capital)
+        self.ts.override_current("planned_technical_investment", feasible_technical)
+        self.ts.override_current("planned_tfp_investment", feasible_tfp)
+        self.ts.override_current("planned_productivity_investment", feasible_tfp + feasible_technical.sum(axis=1))
+
+        self._append_activity_finance_diagnostics(
+            activity_finance_available=available_finance,
+            activity_finance_hard_obligations=hard_obligations,
+            activity_finance_gap_before_revision=finance_gap,
+            intermediate_scale=intermediate_scale,
+            capital_scale=capital_scale,
+            technical_scale=technical_scale,
+            tfp_scale=tfp_scale,
+            planned_intermediate_costs=planned_intermediate_costs,
+            feasible_intermediate_costs=planned_intermediate_costs * intermediate_scale,
+            planned_capital_costs=planned_capital_costs,
+            feasible_capital_costs=planned_capital_costs * capital_scale,
+            planned_technical_costs=planned_technical_costs,
+            feasible_technical_costs=feasible_technical_costs,
+            planned_tfp_costs=planned_tfp_costs,
+            feasible_tfp_costs=feasible_tfp,
+        )
+
     def prepare_buying_goods(
         self,
         previous_good_prices: np.ndarray,
         expected_inflation: float,
         assume_zero_growth: bool = False,
+        wage_obligation_preview: np.ndarray | None = None,
+        production_tax_obligation_preview: np.ndarray | None = None,
     ) -> None:
         """Prepare firms' buying plans for goods market.
 
@@ -1354,6 +1528,8 @@ class Firms(Agent):
             previous_good_prices (np.ndarray): Previous period prices
             expected_inflation (float): Expected inflation rate
             assume_zero_growth (bool, optional): Whether to assume no growth. Defaults to False.
+            wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
+            production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
         """
         # Target intermediate inputs
         if assume_zero_growth:
@@ -1385,11 +1561,28 @@ class Firms(Agent):
                 )
             )
 
+        if wage_obligation_preview is None:
+            wage_obligation_preview = np.zeros(self.ts.current("n_firms"))
+        if production_tax_obligation_preview is None:
+            production_tax_obligation_preview = np.zeros(self.ts.current("n_firms"))
+        expected_lcu_prices = (1 + expected_inflation) * previous_good_prices
+        self.revise_activity_against_available_finance(
+            expected_lcu_prices=expected_lcu_prices,
+            wage_obligation_preview=wage_obligation_preview,
+            production_tax_obligation_preview=production_tax_obligation_preview,
+        )
+
         # Setting total real amount of goods to buy
         total_goods = self.ts.current("target_intermediate_inputs") + self.ts.current("target_capital_inputs")
         # Include planned technical investment if it exists
         if hasattr(self.ts, "planned_technical_investment") and len(self.ts.planned_technical_investment) > 0:
-            total_goods = total_goods + self.ts.current("planned_technical_investment")
+            technical_goods = np.divide(
+                self.ts.current("planned_technical_investment"),
+                expected_lcu_prices[None, :],
+                out=np.zeros_like(self.ts.current("planned_technical_investment")),
+                where=expected_lcu_prices[None, :] > 0.0,
+            )
+            total_goods = total_goods + technical_goods
         self.set_goods_to_buy(total_goods)
 
     def prepare_selling_goods(self) -> None:
@@ -1413,6 +1606,9 @@ class Firms(Agent):
         exchange_rate_usd_to_lcu: float,
         previous_good_prices: np.ndarray,
         expected_inflation: float,
+        wage_obligation_preview: np.ndarray | None = None,
+        production_tax_obligation_preview: np.ndarray | None = None,
+        assume_zero_growth: bool = False,
     ) -> None:
         """Prepare all aspects of goods market participation.
 
@@ -1425,11 +1621,17 @@ class Firms(Agent):
             exchange_rate_usd_to_lcu (float): Exchange rate USD to local currency
             previous_good_prices (np.ndarray): Previous period prices
             expected_inflation (float): Expected inflation rate
+            wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
+            production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
+            assume_zero_growth (bool): Whether to use initial buying targets.
         """
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
         self.prepare_buying_goods(
             previous_good_prices=previous_good_prices,
             expected_inflation=expected_inflation,
+            wage_obligation_preview=wage_obligation_preview,
+            production_tax_obligation_preview=production_tax_obligation_preview,
+            assume_zero_growth=assume_zero_growth,
         )
         self.prepare_selling_goods()
 

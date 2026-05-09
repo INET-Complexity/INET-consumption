@@ -48,3 +48,26 @@ class TestCountry:
 
     def test__country(self, test_country):
         assert test_country is not None
+
+    def test__prepare_goods_market_clearing_passes_activity_finance_inputs(self, test_country, monkeypatch):
+        n_firms = test_country.firms.ts.current("n_firms")
+        wage_preview = np.full(n_firms, 2.0)
+        tax_preview = np.full(n_firms, 3.0)
+        captured = {}
+
+        test_country.assume_zero_growth = True
+        monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **kwargs: wage_preview)
+        monkeypatch.setattr(test_country.firms, "compute_taxes_paid_on_production", lambda **kwargs: tax_preview)
+
+        def capture_firm_prepare(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr(test_country.firms, "prepare_goods_market_clearing", capture_firm_prepare)
+        monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", lambda **kwargs: None)
+        monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **kwargs: None)
+
+        test_country.prepare_goods_market_clearing()
+
+        assert captured["assume_zero_growth"] is True
+        assert np.allclose(captured["wage_obligation_preview"], wage_preview)
+        assert np.allclose(captured["production_tax_obligation_preview"], tax_preview)

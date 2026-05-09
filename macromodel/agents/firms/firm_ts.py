@@ -90,6 +90,9 @@ class FirmTimeSeries(TimeSeries):
     - unconstrained_target_intermediate_inputs: Desired input purchases
     - unconstrained_target_capital_inputs: Desired capital purchases
     - planned_productivity_investment: Investment amount planned for productivity improvement (total)
+    - activity_finance_available: Finance available for post-credit activity revision
+    - activity_finance_hard_obligations: Hard obligations deducted before discretionary purchases
+    - activity_finance_gap_before_revision: Planned expected purchase/investment costs not covered by finance
     - executed_productivity_investment: Executed planned/forced productivity investment (total)
     - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
     - planned_tfp_investment: TFP portion of planned productivity investment (n_firms)
@@ -236,6 +239,21 @@ class FirmTimeSeries(TimeSeries):
             target_intermediate_inputs=used_intermediate_inputs,
             target_capital_inputs=used_capital_inputs,
             planned_productivity_investment=np.zeros(data.shape[0]),
+            activity_finance_available=np.zeros(data.shape[0]),
+            activity_finance_hard_obligations=np.zeros(data.shape[0]),
+            activity_finance_gap_before_revision=np.zeros(data.shape[0]),
+            intermediate_purchase_finance_scale=np.ones(data.shape[0]),
+            capital_purchase_finance_scale=np.ones(data.shape[0]),
+            technical_investment_finance_scale=np.ones(data.shape[0]),
+            tfp_investment_finance_scale=np.ones(data.shape[0]),
+            planned_intermediate_purchase_expected_costs=np.zeros(data.shape[0]),
+            feasible_intermediate_purchase_expected_costs=np.zeros(data.shape[0]),
+            planned_capital_purchase_expected_costs=np.zeros(data.shape[0]),
+            feasible_capital_purchase_expected_costs=np.zeros(data.shape[0]),
+            planned_technical_investment_expected_costs=np.zeros(data.shape[0]),
+            feasible_technical_investment_expected_costs=np.zeros(data.shape[0]),
+            planned_tfp_investment_expected_costs=np.zeros(data.shape[0]),
+            feasible_tfp_investment_expected_costs=np.zeros(data.shape[0]),
             executed_productivity_investment=np.zeros(data.shape[0]),
             net_capital_investment_above_replacement=np.zeros(data.shape[0]),
             real_executed_productivity_investment=np.zeros(data.shape[0]),
@@ -496,6 +514,21 @@ def create_firms_timeseries(
         target_intermediate_inputs=used_intermediate_inputs,
         target_capital_inputs=used_capital_inputs,
         planned_productivity_investment=np.zeros(data.shape[0]),
+        activity_finance_available=np.zeros(data.shape[0]),
+        activity_finance_hard_obligations=np.zeros(data.shape[0]),
+        activity_finance_gap_before_revision=np.zeros(data.shape[0]),
+        intermediate_purchase_finance_scale=np.ones(data.shape[0]),
+        capital_purchase_finance_scale=np.ones(data.shape[0]),
+        technical_investment_finance_scale=np.ones(data.shape[0]),
+        tfp_investment_finance_scale=np.ones(data.shape[0]),
+        planned_intermediate_purchase_expected_costs=np.zeros(data.shape[0]),
+        feasible_intermediate_purchase_expected_costs=np.zeros(data.shape[0]),
+        planned_capital_purchase_expected_costs=np.zeros(data.shape[0]),
+        feasible_capital_purchase_expected_costs=np.zeros(data.shape[0]),
+        planned_technical_investment_expected_costs=np.zeros(data.shape[0]),
+        feasible_technical_investment_expected_costs=np.zeros(data.shape[0]),
+        planned_tfp_investment_expected_costs=np.zeros(data.shape[0]),
+        feasible_tfp_investment_expected_costs=np.zeros(data.shape[0]),
         executed_productivity_investment=np.zeros(data.shape[0]),
         net_capital_investment_above_replacement=np.zeros(data.shape[0]),
         planned_tfp_investment=np.zeros(data.shape[0]),

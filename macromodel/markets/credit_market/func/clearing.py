@@ -1273,6 +1273,17 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_household_consumption_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_mortgage_preference_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
 
+        # Firm CFADS proxy (only meaningful when DSCR is enabled)
+        if banks.parameters.enable_firm_loans_dscr_restriction:
+            cfads = _compute_firm_cfads(
+                firms,
+                window=banks.parameters.firm_loans_cfads_window,
+                haircut=banks.parameters.firm_loans_cfads_haircut,
+            )
+        else:
+            cfads = _nan_array(firms.ts.current("n_firms"))
+        _append_vector(firms.ts, "credit_market_firm_cfads", cfads)
+
         # Banks may update their preferences for different types of loans, impacting their supply
         if self.consider_loan_type_fractions:
             (

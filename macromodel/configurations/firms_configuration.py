@@ -385,6 +385,10 @@ class FirmsParameters(BaseModel):
         initial_inventory_to_input_fraction (float): Initial inventory generated as a fraction of production
         capital_compensation_accounting_mode (Literal["production_cost", "surplus_pool"]): Whether capital
             compensation-derived capital inputs are charged as costs or treated as a surplus allocation.
+        capital_depreciation_accounting_mode (Literal["none", "eurostat_cfc"]): Whether true CFC depreciation
+            is charged as a non-cash accounting cost.
+        capital_replacement_matrix_source (Literal["capital_compensation", "eurostat_cfc_output"]): Source for
+            capital replacement matrix column totals.
         capital_inputs_utilisation_rate (float): Capacity utilization for capital
         intermediate_inputs_utilisation_rate (float): Capacity utilization for inputs
 
@@ -396,6 +400,8 @@ class FirmsParameters(BaseModel):
     depreciation_rates: list[float] = [0.0 for _ in range(18)]
     initial_inventory_to_input_fraction: float = Field(0.0, ge=0.0)
     capital_compensation_accounting_mode: Literal["production_cost", "surplus_pool"] = "production_cost"
+    capital_depreciation_accounting_mode: Literal["none", "eurostat_cfc"] = "none"
+    capital_replacement_matrix_source: Literal["capital_compensation", "eurostat_cfc_output"] = "capital_compensation"
     capital_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     intermediate_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     tfp_base_growth_rate: float = Field(0.0025, ge=0.0, le=0.1, description="Base TFP growth rate (quarterly)")
@@ -461,6 +467,8 @@ class FirmsParameters(BaseModel):
                 "depreciation_rates": [0.0 for _ in range(n_industries)],
                 "initial_inventory_to_input_fraction": 0.0,
                 "capital_compensation_accounting_mode": "production_cost",
+                "capital_depreciation_accounting_mode": "none",
+                "capital_replacement_matrix_source": "capital_compensation",
                 "capital_inputs_utilisation_rate": 1.0,
                 "intermediate_inputs_utilisation_rate": 1.0,
                 "tfp_base_growth_rate": tfp_base_growth_rate,

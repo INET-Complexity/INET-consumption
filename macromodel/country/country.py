@@ -1164,11 +1164,12 @@ class Country:
         )
         self.firms.ts.capital_inputs_stock.append(self.firms.compute_capital_inputs_stock())
         self.firms.ts.capital_inputs_stock_value.append(
-            self.firms.compute_intermediate_inputs_stock_value(
+            self.firms.compute_capital_inputs_stock_value(
                 current_good_prices=self.economy.ts.current("good_prices"),
             )
         )
         self.firms.ts.capital_inputs_stock_industry.append(self.firms.ts.current("capital_inputs_stock").sum(axis=0))
+        self.firms.ts.capital_depreciation_costs.append(self.firms.compute_capital_depreciation_costs())
 
         # D1. FIRM FINANCIAL METRICS
         # Update firm financial positions

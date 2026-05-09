@@ -324,11 +324,24 @@ def test_capital_compensation_mode_mismatch_is_incompatible(datawrapper):
     assert any(mismatch.startswith("firms.capital_compensation_accounting_mode") for mismatch in mismatches)
 
 
+def test_capital_depreciation_settings_mismatch_is_incompatible(datawrapper):
+    country_data_configuration = datawrapper.configuration.country_configs[CountryName("FRA")]
+    country_sim_configuration = CountryConfiguration()
+    country_sim_configuration.firms.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+    country_sim_configuration.firms.parameters.capital_replacement_matrix_source = "eurostat_cfc_output"
+
+    mismatches = get_compatibility_mismatches(country_data_configuration, country_sim_configuration)
+
+    assert not check_compatibility(country_data_configuration, country_sim_configuration)
+    assert any(mismatch.startswith("firms.capital_depreciation_accounting_mode") for mismatch in mismatches)
+    assert any(mismatch.startswith("firms.capital_replacement_matrix_source") for mismatch in mismatches)
+
+
 def test_capital_compensation_mode_mismatch_raises_in_simulation(datawrapper):
     configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
     configuration.country_configurations["FRA"].firms.parameters.capital_compensation_accounting_mode = "surplus_pool"
 
-    with pytest.raises(ValueError, match="capital_compensation_accounting_mode must match"):
+    with pytest.raises(ValueError, match="capital accounting settings must match"):
         Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
 
 

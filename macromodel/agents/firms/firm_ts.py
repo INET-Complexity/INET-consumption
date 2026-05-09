@@ -56,6 +56,7 @@ class FirmTimeSeries(TimeSeries):
     - capital_inputs_stock_industry: Capital stock by industry
     - used_capital_inputs: Capital consumed in production
     - used_capital_inputs_costs: Cost of capital used
+    - capital_depreciation_costs: Non-cash CFC depreciation accounting cost
 
     Financial:
     - profits: Operating profits
@@ -283,8 +284,21 @@ class FirmTimeSeries(TimeSeries):
             expected_capital_inputs_stock_value=np.matmul(capital_inputs_stock, initial_good_prices),
             used_capital_inputs=used_capital_inputs,
             used_capital_inputs_costs=np.matmul(used_capital_inputs, initial_good_prices),
-            total_capital_inputs_bought_costs=np.matmul(used_capital_inputs, initial_good_prices),
-            gross_fixed_capital_formation=(used_capital_inputs * initial_good_prices).sum(axis=0),
+            capital_depreciation_costs=data.get(
+                "Capital Depreciation Costs", pd.Series(0.0, index=data.index)
+            ).values,
+            total_capital_inputs_bought_costs=data.get(
+                "Initial Capital Inputs Bought Costs",
+                pd.Series(np.matmul(used_capital_inputs, initial_good_prices), index=data.index),
+            ).values,
+            gross_fixed_capital_formation=np.bincount(
+                data["Industry"].values.astype(int),
+                weights=data.get(
+                    "Initial Capital Inputs Bought Costs",
+                    pd.Series(np.matmul(used_capital_inputs, initial_good_prices), index=data.index),
+                ).values,
+                minlength=n_industries,
+            ),
             #
             real_amount_bought_as_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
             real_amount_bought_as_capital_goods=np.full((data.shape[0], n_industries), np.nan),
@@ -528,8 +542,19 @@ def create_firms_timeseries(
         expected_capital_inputs_stock_value=np.matmul(capital_inputs_stock, initial_good_prices),
         used_capital_inputs=used_capital_inputs,
         used_capital_inputs_costs=np.matmul(used_capital_inputs, initial_good_prices),
-        total_capital_inputs_bought_costs=np.matmul(used_capital_inputs, initial_good_prices),
-        gross_fixed_capital_formation=(used_capital_inputs * initial_good_prices).sum(axis=0),
+        capital_depreciation_costs=data.get("Capital Depreciation Costs", pd.Series(0.0, index=data.index)).values,
+        total_capital_inputs_bought_costs=data.get(
+            "Initial Capital Inputs Bought Costs",
+            pd.Series(np.matmul(used_capital_inputs, initial_good_prices), index=data.index),
+        ).values,
+        gross_fixed_capital_formation=np.bincount(
+            data["Industry"].values.astype(int),
+            weights=data.get(
+                "Initial Capital Inputs Bought Costs",
+                pd.Series(np.matmul(used_capital_inputs, initial_good_prices), index=data.index),
+            ).values,
+            minlength=n_industries,
+        ),
         #
         real_amount_bought_as_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
         real_amount_bought_as_capital_goods=np.full((data.shape[0], n_industries), np.nan),

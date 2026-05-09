@@ -1,4 +1,8 @@
 import numpy as np
+import pytest
+
+from macromodel.agents.firms.firms import Firms
+from macromodel.configurations.firms_configuration import FirmsConfiguration
 
 
 class TestFirms:
@@ -44,6 +48,7 @@ class TestFirms:
             "capital_inputs_stock_value",
             "used_capital_inputs",
             "used_capital_inputs_costs",
+            "capital_depreciation_costs",
             "real_amount_bought_as_intermediate_inputs",
             "real_amount_bought_as_capital_goods",
             "total_sales",
@@ -69,6 +74,23 @@ class TestFirms:
             # "real_amount_bought_as_capital_inputs",
         ]:
             assert ts_key in test_firms.ts.get_keys()
+
+    def test__from_pickled_agent_rejects_cfc_depreciation_without_cfc_replacement(self, datawrapper):
+        country = datawrapper.synthetic_countries["FRA"]
+        configuration = FirmsConfiguration()
+        configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        configuration.parameters.capital_replacement_matrix_source = "capital_compensation"
+
+        with pytest.raises(ValueError, match="capital_replacement_matrix_source='eurostat_cfc_output'"):
+            Firms.from_pickled_agent(
+                synthetic_firms=country.firms,
+                configuration=configuration,
+                country_name="FRA",
+                all_country_names=["FRA", "ROW"],
+                goods_criticality_matrix=country.goods_criticality_matrix,
+                average_initial_price=country.industry_data["industry_vectors"]["Average Initial Price"].values,
+                industries=datawrapper.industries,
+            )
 
     def test__compute_labour_inputs(self, test_firms):
         assert np.allclose(
@@ -159,6 +181,7 @@ class TestFirms:
         test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
         test_firms.ts.deposits.append(np.full(18, 100.0))
         test_firms.ts.nominal_amount_sold_in_lcu.append(np.full(18, 50.0))
+        test_firms.ts.nominal_amount_spent_in_lcu.append(np.full((18, 18), 1.0))
         test_firms.ts.total_wage.append(np.full(18, 1.0))
         test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
         test_firms.ts.used_capital_inputs_costs.append(np.full(18, 30.0))
@@ -168,7 +191,93 @@ class TestFirms:
         test_firms.ts.received_credit.append(np.full(18, 5.0))
         test_firms.ts.debt_installments.append(np.full(18, 6.0))
 
-        assert np.allclose(test_firms.compute_deposits(), np.full(18, 129.0))
+        assert np.allclose(test_firms.compute_deposits(), np.full(18, 121.0))
+
+    def test__compute_deposits_uses_purchase_spending_not_used_input_costs(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+        test_firms.ts.deposits.append(np.full(18, 100.0))
+        test_firms.ts.nominal_amount_sold_in_lcu.append(np.full(18, 50.0))
+        test_firms.ts.nominal_amount_spent_in_lcu.append(np.full((18, 18), 1.0))
+        test_firms.ts.total_wage.append(np.full(18, 1.0))
+        test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 30.0))
+        test_firms.ts.taxes_paid_on_production.append(np.full(18, 2.0))
+        test_firms.ts.corporate_taxes_paid.append(np.full(18, 3.0))
+        test_firms.ts.interest_paid.append(np.full(18, 4.0))
+        test_firms.ts.received_credit.append(np.full(18, 5.0))
+        test_firms.ts.debt_installments.append(np.full(18, 6.0))
+
+        assert np.allclose(test_firms.compute_deposits(), np.full(18, 121.0))
+
+    def test__depreciation_reduces_profit_and_unit_cost_not_deposits(self, test_firms):
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))
+        test_firms.ts.used_capital_inputs_costs.append(np.full(18, 30.0))
+        test_firms.ts.capital_depreciation_costs.append(np.full(18, 7.0))
+        test_firms.ts.taxes_paid_on_production.append(np.full(18, 2.0))
+        test_firms.ts.interest_paid.append(np.full(18, 4.0))
+        test_firms.ts.total_wage.append(np.full(18, 1.0))
+
+        profit_delta = test_firms.compute_profits() - test_firms.ts.current("production") * test_firms.ts.current("price")
+        assert np.allclose(profit_delta, np.full(18, -24.0))
+
+        expected_unit_costs = np.divide(
+            np.full(18, 20.0),
+            test_firms.ts.current("production"),
+            out=np.zeros_like(test_firms.ts.current("production")),
+            where=test_firms.ts.current("production") != 0.0,
+        )
+        assert np.allclose(test_firms.compute_unit_costs(), expected_unit_costs)
+
+        test_firms.ts.deposits.append(np.full(18, 100.0))
+        test_firms.ts.nominal_amount_sold_in_lcu.append(np.full(18, 50.0))
+        test_firms.ts.nominal_amount_spent_in_lcu.append(np.full((18, 18), 1.0))
+        test_firms.ts.corporate_taxes_paid.append(np.full(18, 3.0))
+        test_firms.ts.received_credit.append(np.full(18, 5.0))
+        test_firms.ts.debt_installments.append(np.full(18, 6.0))
+
+        assert np.allclose(test_firms.compute_deposits(), np.full(18, 121.0))
+
+    def test__compute_capital_depreciation_costs_uses_output_scaled_cfc(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        test_firms.capital_depreciation_rates = np.full(test_firms.n_industries, 0.1)
+        test_firms.ts.override_current("production", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("price", np.full(n_firms, 2.0))
+        test_firms.ts.override_current("capital_inputs_stock_value", np.full(n_firms, 1000.0))
+
+        assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 2.0))
+
+    def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        prices = np.linspace(1.0, 2.0, n_industries)
+        intermediate_stock = np.full((n_firms, n_industries), 2.0)
+        capital_stock = np.full((n_firms, n_industries), 3.0)
+
+        test_firms.ts.override_current("inventory", np.full(n_firms, 4.0))
+        test_firms.ts.override_current("price", np.full(n_firms, 5.0))
+        test_firms.ts.override_current("intermediate_inputs_stock", intermediate_stock)
+        test_firms.ts.override_current("capital_inputs_stock", capital_stock)
+        test_firms.ts.override_current("deposits", np.full(n_firms, 100.0))
+        test_firms.ts.override_current("debt", np.full(n_firms, 7.0))
+        test_firms.ts.override_current("capital_depreciation_costs", np.full(n_firms, 999.0))
+
+        expected = (
+            4.0 * 5.0
+            + intermediate_stock @ prices
+            + capital_stock @ prices
+            + 100.0
+            - 7.0
+        )
+        assert np.allclose(test_firms.compute_equity(prices), expected)
+
+        depleted_capital_stock = capital_stock.copy()
+        depleted_capital_stock[:, 0] -= 1.0
+        test_firms.ts.override_current("capital_inputs_stock", depleted_capital_stock)
+
+        assert np.allclose(test_firms.compute_equity(prices), expected - prices[0])
 
     def test__compute_debt(self, test_firms):
         test_firms.ts.debt.append(np.full(18, 10.0))

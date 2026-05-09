@@ -240,7 +240,7 @@ def test_default_clearer_keeps_household_quota_after_firm_lending(test_banks, te
     _set_initial_loan_type_fractions(test_banks, 0.6, 0.4, 0.0)
     _set_one_firm_one_household_credit_case(test_banks, test_firms, test_households)
 
-    loans = clearer.clear(
+    short_term_loans, _, consumption_loans, _ = clearer.clear(
         banks=test_banks,
         firms=test_firms,
         households=test_households,
@@ -249,8 +249,5 @@ def test_default_clearer_keeps_household_quota_after_firm_lending(test_banks, te
         current_npl_mortgages=0.0,
     )
 
-    short_term = loans.loc[loans["loan_type"] == LoanTypes.FIRM_SHORT_TERM_LOAN, "loan_value"].sum()
-    consumption = loans.loc[loans["loan_type"] == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN, "loan_value"].sum()
-
-    assert np.isclose(short_term, 60.0)
-    assert np.isclose(consumption, 40.0)
+    assert np.isclose(short_term_loans[0, :, 0].sum(), 60.0)
+    assert np.isclose(consumption_loans[0, :, 0].sum(), 40.0)

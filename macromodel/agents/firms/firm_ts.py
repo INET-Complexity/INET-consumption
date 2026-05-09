@@ -67,6 +67,7 @@ class FirmTimeSeries(TimeSeries):
     - short_term_loan_debt: Short-term borrowing
     - long_term_loan_debt: Long-term borrowing
     - debt_installments: Loan repayments
+    - scheduled_debt_service: Next-period scheduled loan interest plus principal repayments
     - interest_paid: Total interest expense
     - interest_paid_on_deposits: Interest on deposits
     - interest_paid_on_loans: Interest on borrowing
@@ -332,6 +333,7 @@ class FirmTimeSeries(TimeSeries):
             debt=data["Debt"].values,
             deposits=data["Deposits"].values,
             debt_installments=data["Debt Installments"].values,
+            scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,
             total_debt_installments=[data["Debt Installments"].values.sum()],
             interest_paid_on_deposits=data["Interest paid on deposits"].values,
             interest_paid_on_loans=data["Interest paid on loans"].values,
@@ -588,6 +590,7 @@ def create_firms_timeseries(
         debt=data["Debt"].values,
         deposits=data["Deposits"].values,
         debt_installments=data["Debt Installments"].values,
+        scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,
         total_debt_installments=[data["Debt Installments"].values.sum()],
         interest_paid_on_deposits=data["Interest paid on deposits"].values,
         interest_paid_on_loans=data["Interest paid on loans"].values,

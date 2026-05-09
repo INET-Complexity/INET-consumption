@@ -159,6 +159,104 @@ def _firm_dscr_underwriting_rate(banks_ir: np.ndarray, mode: str) -> float:
     return max(0.0, finite_rates.max())
 
 
+def _annuity_payment_factor(period_rate: float | np.ndarray, loan_maturity: int) -> float | np.ndarray:
+    """Return fixed-payment debt service per unit principal."""
+    if loan_maturity <= 0:
+        if np.isscalar(period_rate):
+            return np.nan
+        return np.full_like(np.asarray(period_rate, dtype=float), np.nan, dtype=float)
+
+    rate = np.asarray(period_rate, dtype=float)
+    zero_rate_factor = 1.0 / loan_maturity
+    factor = np.divide(
+        rate,
+        1.0 - np.power(1.0 + rate, -loan_maturity),
+        out=np.full_like(rate, zero_rate_factor, dtype=float),
+        where=np.isfinite(rate) & (rate > 0.0),
+    )
+    factor = np.where(np.isfinite(factor) & (factor > 0.0), factor, zero_rate_factor)
+    if np.isscalar(period_rate):
+        return float(factor)
+    return factor
+
+
+def _annuity_payment(principal: np.ndarray, period_rate: np.ndarray, loan_maturity: int) -> np.ndarray:
+    """Return fixed scheduled annuity payments for loan principals."""
+    return np.asarray(principal, dtype=float) * _annuity_payment_factor(period_rate, loan_maturity)
+
+
+def _empty_loan_arrays(
+    banks: Banks,
+    firms: Firms,
+    households: Households,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n_banks = banks.ts.current("n_banks")
+    n_firms = firms.ts.current("n_firms")
+    n_households = households.ts.current("n_households")
+    return (
+        np.zeros((3, n_banks, n_firms)),
+        np.zeros((3, n_banks, n_firms)),
+        np.zeros((3, n_banks, n_households)),
+        np.zeros((3, n_banks, n_households)),
+    )
+
+
+def _add_loan_to_array(
+    loan_array: np.ndarray,
+    bank_id: int,
+    recipient_id: int,
+    value: float,
+    period_rate: float,
+    maturity: int,
+) -> None:
+    """Aggregate a granted loan into one bank-borrower facility cell."""
+    if value <= 0.0:
+        return
+    old_principal = loan_array[0, bank_id, recipient_id]
+    total_principal = old_principal + value
+    loan_array[1, bank_id, recipient_id] = (
+        old_principal * loan_array[1, bank_id, recipient_id] + value * period_rate
+    ) / total_principal
+    loan_array[0, bank_id, recipient_id] = total_principal
+    loan_array[2, bank_id, recipient_id] += value * _annuity_payment_factor(period_rate, maturity)
+
+
+def _loan_frame_to_arrays(
+    loans: pd.DataFrame,
+    banks: Banks,
+    firms: Firms,
+    households: Households,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Convert legacy DataFrame loan outputs to the array loan contract."""
+    st_loans, lt_loans, cons_loans, mort_loans = _empty_loan_arrays(banks, firms, households)
+    if loans.empty:
+        return st_loans, lt_loans, cons_loans, mort_loans
+
+    for row in loans.itertuples(index=False):
+        loan_type = row.loan_type
+        bank_id = int(row.loan_bank_id)
+        recipient_id = int(row.loan_recipient_id)
+        if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
+            loan_array = st_loans
+        elif loan_type == LoanTypes.FIRM_LONG_TERM_LOAN:
+            loan_array = lt_loans
+        elif loan_type == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN:
+            loan_array = cons_loans
+        elif loan_type == LoanTypes.MORTGAGE:
+            loan_array = mort_loans
+        else:
+            raise ValueError("Unknown loan type", loan_type)
+        _add_loan_to_array(
+            loan_array=loan_array,
+            bank_id=bank_id,
+            recipient_id=recipient_id,
+            value=float(row.loan_value),
+            period_rate=float(row.loan_interest_rate),
+            maturity=int(row.loan_maturity),
+        )
+    return st_loans, lt_loans, cons_loans, mort_loans
+
+
 def _compute_firm_dscr_capacity(
     firms: Firms,
     agents_with_demand: np.ndarray,
@@ -173,15 +271,12 @@ def _compute_firm_dscr_capacity(
     if not np.isfinite(underwriting_rate) or loan_maturity <= 0:
         return np.zeros(agents_with_demand.shape)
 
-    incremental_service_rate = underwriting_rate + 1.0 / loan_maturity
+    incremental_service_rate = _annuity_payment_factor(underwriting_rate, loan_maturity)
     if incremental_service_rate <= 0 or not np.isfinite(incremental_service_rate):
         return np.zeros(agents_with_demand.shape)
 
     cfads = _compute_firm_cfads(firms, cfads_window, cfads_haircut)[agents_with_demand]
-    existing_service = (
-        firms.ts.current("interest_paid_on_loans")[agents_with_demand]
-        + firms.ts.current("debt_installments")[agents_with_demand]
-    )
+    existing_service = firms.ts.current("scheduled_debt_service")[agents_with_demand]
     new_service = new_debt_service_by_firm[agents_with_demand]
 
     valid_capacity = np.isfinite(cfads) & np.isfinite(existing_service) & np.isfinite(new_service)
@@ -268,7 +363,7 @@ class CreditMarketClearer(ABC):
         current_npl_firm_loans: float,
         current_npl_hh_cons_loans: float,
         current_npl_mortgages: float,
-    ) -> pd.DataFrame:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Execute market clearing algorithm.
 
         Abstract method that must be implemented by concrete clearers to match
@@ -283,14 +378,9 @@ class CreditMarketClearer(ABC):
             current_npl_mortgages (float): Current NPL rate for mortgages
 
         Returns:
-            pd.DataFrame: Details of newly originated loans with columns:
-                - loan_type: Type of loan (short-term, long-term, etc.)
-                - loan_value_initial: Original principal amount
-                - loan_value: Current principal amount
-                - loan_maturity: Term of the loan
-                - loan_interest_rate: Interest rate
-                - loan_bank_id: ID of lending bank
-                - loan_recipient_id: ID of borrower
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: New loan arrays
+                for short-term firm, long-term firm, household consumption, and
+                mortgage loans.
         """
         pass
 
@@ -324,19 +414,9 @@ class NoCreditMarketClearer(CreditMarketClearer):
             current_npl_mortgages (float): Unused
 
         Returns:
-            pd.DataFrame: Empty DataFrame with loan columns
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: Empty loan arrays
         """
-        return pd.DataFrame(
-            columns=[
-                "loan_type",
-                "loan_value_initial",
-                "loan_value",
-                "loan_maturity",
-                "loan_interest_rate",
-                "loan_bank_id",
-                "loan_recipient_id",
-            ]
-        )
+        return _empty_loan_arrays(banks, firms, households)
 
 
 class DefaultCreditMarketClearer(CreditMarketClearer):
@@ -365,7 +445,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         current_npl_firm_loans: float,
         current_npl_hh_cons_loans: float,
         current_npl_mortgages: float,
-    ) -> pd.DataFrame:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Execute the default market clearing algorithm.
 
         Processes each loan type sequentially, matching borrowers with lenders
@@ -380,7 +460,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
             current_npl_mortgages (float): Current NPL rate for mortgages
 
         Returns:
-            pd.DataFrame: Details of newly originated loans
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: New loan arrays
 
         Note:
             The clearing process:
@@ -523,7 +603,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         new_loans["loan_bank_id"] = new_loans["loan_bank_id"].astype(int)
         new_loans["loan_recipient_id"] = new_loans["loan_recipient_id"].astype(int)
 
-        return new_loans
+        return _loan_frame_to_arrays(new_loans, banks, firms, households)
 
     def clear_firm_loans(
         self,
@@ -977,7 +1057,7 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
         current_npl_firm_loans: float,
         current_npl_hh_cons_loans: float,
         current_npl_mortgages: float,
-    ) -> pd.DataFrame:
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Execute the Poledna market clearing algorithm.
 
         Focuses only on short-term firm lending with simplified constraints.
@@ -991,7 +1071,7 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
             current_npl_mortgages (float): Unused
 
         Returns:
-            pd.DataFrame: Details of newly originated firm loans
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]: New loan arrays
         """
         new_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
@@ -1004,7 +1084,7 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
         ).reset_index(drop=True)
         new_loans["loan_bank_id"] = new_loans["loan_bank_id"].astype(int)
         new_loans["loan_recipient_id"] = new_loans["loan_recipient_id"].astype(int)
-        return new_loans
+        return _loan_frame_to_arrays(new_loans, banks, firms, households)
 
     def clear_firm_loans(
         self,
@@ -1181,8 +1261,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         Note:
             Each loan array has shape [3, n_banks, n_borrowers] where:
             - Index 0: Principal amount
-            - Index 1: Interest rate
-            - Index 2: Monthly payment
+            - Index 1: Period interest rate
+            - Index 2: Scheduled annuity payment
         """
         # Keeping track of new credit
         new_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
@@ -1341,8 +1421,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         Returns:
             np.ndarray: Array of shape [3, n_banks, n_borrowers] containing:
                 - Index 0: Principal amount
-                - Index 1: Interest rate
-                - Index 2: Monthly payment
+                - Index 1: Period interest rate
+                - Index 2: Scheduled annuity payment
         """
         # Get bank interest rates
         if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
@@ -1630,15 +1710,26 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             loan_matrix = np.outer(supply_weights, received_loans_by_debtors)
             for bank_idx in range(len(supply_weights)):
                 new_loans[0, bank_idx, agents_with_demand] = loan_matrix[bank_idx, :]
-        new_loans[1, :, agents_with_demand] = banks_ir[:, np.newaxis] * new_loans[0, :, agents_with_demand]
-        new_loans[2, :, agents_with_demand] = 1.0 / loan_maturity * new_loans[0, :, agents_with_demand]
+        new_loans[1, :, agents_with_demand] = np.where(
+            new_loans[0, :, agents_with_demand] > 0.0,
+            banks_ir[:, np.newaxis],
+            0.0,
+        )
+        new_loans[2, :, agents_with_demand] = _annuity_payment(
+            new_loans[0, :, agents_with_demand],
+            banks_ir[:, np.newaxis],
+            loan_maturity,
+        )
         if (
             new_debt_service_by_firm is not None
             and (loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN)
             and banks.parameters.enable_firm_loans_dscr_restriction
         ):
             principal_by_firm = new_loans[0].sum(axis=0)
-            new_debt_service_by_firm += principal_by_firm * (underwriting_rate + 1.0 / loan_maturity)
+            new_debt_service_by_firm += principal_by_firm * _annuity_payment_factor(
+                underwriting_rate,
+                loan_maturity,
+            )
 
         if diagnostics_enabled:
             _append_firm_diagnostics(new_loans[0].sum(axis=0))

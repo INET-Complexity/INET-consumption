@@ -4,6 +4,7 @@ import numpy as np
 
 from macromodel.markets.credit_market.func.clearing import (
     WaterBucketCreditMarketClearer,
+    _annuity_payment_factor,
     _compute_firm_cfads,
     _firm_dscr_underwriting_rate,
 )
@@ -52,6 +53,7 @@ def _set_single_firm_case(
     test_firms.ts.override_current("expected_profits", first_only * expected_profits)
     test_firms.ts.override_current("interest_paid_on_loans", np.zeros(n_firms))
     test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+    test_firms.ts.override_current("scheduled_debt_service", np.zeros(n_firms))
 
     nominal_amount_sold = np.zeros(n_firms)
     nominal_amount_sold[0] = cfads
@@ -153,13 +155,13 @@ def test_dscr_caps_principal_and_keeps_actual_loan_output_semantics(test_banks, 
         max_supply_based_on_preferences=np.full(n_banks, np.inf),
     )
 
-    expected_principal = (1_250.0 / 1.25) / (0.05 + 1.0 / 8.0)
+    expected_principal = (1_250.0 / 1.25) / _annuity_payment_factor(0.05, 8)
     assert np.isclose(result[0, :, 0].sum(), expected_principal)
     assert np.allclose(
         result[1, :, 0],
-        test_banks.ts.current("interest_rates_on_long_term_firm_loans") * result[0, :, 0],
+        np.where(result[0, :, 0] > 0.0, test_banks.ts.current("interest_rates_on_long_term_firm_loans"), 0.0),
     )
-    assert np.allclose(result[2, :, 0], result[0, :, 0] / 8.0)
+    assert np.allclose(result[2, :, 0], result[0, :, 0] * _annuity_payment_factor(0.05, 8))
 
 
 def test_dscr_underwriting_rate_uses_max_finite_bank_rate():
@@ -269,6 +271,40 @@ def test_short_term_lending_consumes_service_room_before_long_term_lending(test_
     assert short_term[0, :, 0].sum() > 0.0
     assert np.isclose(new_debt_service_by_firm[0], 1_250.0 / 1.25)
     assert long_term[0, :, 0].sum() == 0.0
+
+
+def test_dscr_uses_scheduled_debt_service_for_existing_service(test_banks, test_firms):
+    clearer = _credit_market_clearer()
+    _set_bank_supply_and_rates(test_banks, rate=0.05)
+    _set_single_firm_case(test_firms, target_long_term_credit=1.0e6, cfads=1_250.0)
+
+    n_firms = test_firms.ts.current("n_firms")
+    scheduled_service = np.zeros(n_firms)
+    scheduled_service[0] = 500.0
+    test_firms.ts.override_current("scheduled_debt_service", scheduled_service)
+
+    test_banks.parameters.enable_firm_loans_return_on_assets_restriction = False
+    test_banks.parameters.enable_firm_loans_return_on_equity_restriction = False
+    test_banks.parameters.enable_firm_loans_dscr_restriction = True
+    test_banks.parameters.firm_loans_min_dscr = 1.25
+    test_banks.parameters.firm_loans_cfads_window = 1
+    test_banks.parameters.firm_loans_cfads_haircut = 1.0
+    test_banks.parameters.long_term_firm_loan_maturity = 8
+
+    n_banks = test_banks.ts.current("n_banks")
+    result = clearer.clear_loans(
+        banks=test_banks,
+        firms=test_firms,
+        households=None,
+        loan_type=LoanTypes.FIRM_LONG_TERM_LOAN,
+        new_credit_by_bank=np.zeros(n_banks),
+        new_credit_by_firm=np.zeros(n_firms),
+        new_credit_by_household=np.zeros(1),
+        max_supply_based_on_preferences=np.full(n_banks, np.inf),
+    )
+
+    expected_principal = (1_250.0 / 1.25 - 500.0) / _annuity_payment_factor(0.05, 8)
+    assert np.isclose(result[0, :, 0].sum(), expected_principal)
 
 
 def test_clear_threads_short_term_service_room_into_long_term_lending(test_banks, test_firms, test_households):

@@ -877,6 +877,9 @@ class Country:
         # Calculate the interest on loans paid by firms
         self.firms.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_firm())
 
+        # Scheduled service used by next-period firm DSCR underwriting.
+        self.firms.ts.scheduled_debt_service.append(self.credit_market.compute_scheduled_debt_service_by_firm())
+
         # Calculate the interest on deposits received/paid by firms
         self.firms.ts.interest_paid_on_deposits.append(
             self.firms.compute_interest_paid_on_deposits(

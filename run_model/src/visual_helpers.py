@@ -1775,6 +1775,335 @@ def plot_agent_timeseries(
     return fig
 
 
+def build_credit_rationing_aggregates_df(model, country_code: str) -> pd.DataFrame:
+    """Return aggregate credit rationing measures for firms and banks.
+
+    Firms measure compares total credit demand vs total credit received:
+    - firms.ts.total_target_short_term_credit / total_received_short_term_credit
+    - firms.ts.total_target_long_term_credit / total_received_long_term_credit
+
+    Banks measure compares total credit supply caps vs respective total credit demands:
+    - banks.ts.total_credit_supply_cap_firms_short_term vs firms.ts.total_target_short_term_credit
+    - banks.ts.total_credit_supply_cap_firms_long_term vs firms.ts.total_target_long_term_credit
+    - banks.ts.total_credit_supply_cap_households_consumption vs households.ts.total_target_consumption_loans
+    - banks.ts.total_credit_supply_cap_mortgages vs households.ts.total_target_mortgage
+
+    Returned columns include both levels (demand/received/cap) and derived measures:
+    - rationed_amount = max(demand - received_or_cap, 0)
+    - rationing_rate = rationed_amount / demand, with 0 when demand <= 0
+    """
+    out_index = model.shallow_df_dict()[country_code].index
+    country = model.countries[country_code]
+
+    firms_ts = getattr(getattr(country, "firms", None), "ts", None)
+    households_ts = getattr(getattr(country, "households", None), "ts", None)
+    banks_ts = getattr(getattr(country, "banks", None), "ts", None)
+
+    def _scalar_series(ts, name: str) -> pd.Series | None:
+        values = _safe_ts_values(ts, name)
+        if values is None:
+            return None
+        series = pd.Series(list(values)).reindex(range(len(out_index)))
+        series.index = out_index
+        return pd.to_numeric(series.map(unpack_cell), errors="coerce")
+
+    def _rationed_amount(demand: pd.Series | None, supplied: pd.Series | None) -> pd.Series | None:
+        if demand is None or supplied is None:
+            return None
+        return (demand - supplied).clip(lower=0.0)
+
+    def _rationing_rate(demand: pd.Series | None, supplied: pd.Series | None) -> pd.Series | None:
+        if demand is None or supplied is None:
+            return None
+        rationed = (demand - supplied).clip(lower=0.0)
+        rate = pd.Series(0.0, index=demand.index, dtype=float)
+        mask = demand > 0
+        rate[mask] = (rationed[mask] / demand[mask]).astype(float)
+        return rate.clip(lower=0.0, upper=1.0)
+
+    firm_demand_st = _scalar_series(firms_ts, "total_target_short_term_credit")
+    firm_demand_lt = _scalar_series(firms_ts, "total_target_long_term_credit")
+    firm_received_st = _scalar_series(firms_ts, "total_received_short_term_credit")
+    firm_received_lt = _scalar_series(firms_ts, "total_received_long_term_credit")
+
+    hh_demand_cons = _scalar_series(households_ts, "total_target_consumption_loans")
+    hh_demand_mort = _scalar_series(households_ts, "total_target_mortgage")
+
+    bank_cap_firm_st = _scalar_series(banks_ts, "total_credit_supply_cap_firms_short_term")
+    bank_cap_firm_lt = _scalar_series(banks_ts, "total_credit_supply_cap_firms_long_term")
+    bank_cap_hh_cons = _scalar_series(banks_ts, "total_credit_supply_cap_households_consumption")
+    bank_cap_mort = _scalar_series(banks_ts, "total_credit_supply_cap_mortgages")
+
+    out = pd.DataFrame(
+        {
+            "firm_credit_demand_short_term": firm_demand_st,
+            "firm_credit_received_short_term": firm_received_st,
+            "firm_credit_rationed_short_term": _rationed_amount(firm_demand_st, firm_received_st),
+            "firm_credit_rationing_rate_short_term": _rationing_rate(firm_demand_st, firm_received_st),
+            "firm_credit_demand_long_term": firm_demand_lt,
+            "firm_credit_received_long_term": firm_received_lt,
+            "firm_credit_rationed_long_term": _rationed_amount(firm_demand_lt, firm_received_lt),
+            "firm_credit_rationing_rate_long_term": _rationing_rate(firm_demand_lt, firm_received_lt),
+            "household_credit_demand_consumption": hh_demand_cons,
+            "household_credit_demand_mortgage": hh_demand_mort,
+            "bank_credit_supply_cap_firms_short_term": bank_cap_firm_st,
+            "bank_credit_supply_gap_firms_short_term": _rationed_amount(firm_demand_st, bank_cap_firm_st),
+            "bank_credit_rationing_rate_firms_short_term": _rationing_rate(firm_demand_st, bank_cap_firm_st),
+            "bank_credit_supply_cap_firms_long_term": bank_cap_firm_lt,
+            "bank_credit_supply_gap_firms_long_term": _rationed_amount(firm_demand_lt, bank_cap_firm_lt),
+            "bank_credit_rationing_rate_firms_long_term": _rationing_rate(firm_demand_lt, bank_cap_firm_lt),
+            "bank_credit_supply_cap_households_consumption": bank_cap_hh_cons,
+            "bank_credit_supply_gap_households_consumption": _rationed_amount(hh_demand_cons, bank_cap_hh_cons),
+            "bank_credit_rationing_rate_households_consumption": _rationing_rate(hh_demand_cons, bank_cap_hh_cons),
+            "bank_credit_supply_cap_mortgages": bank_cap_mort,
+            "bank_credit_supply_gap_mortgages": _rationed_amount(hh_demand_mort, bank_cap_mort),
+            "bank_credit_rationing_rate_mortgages": _rationing_rate(hh_demand_mort, bank_cap_mort),
+        },
+        index=out_index,
+    )
+    out.index.name = getattr(out_index, "name", None) or "t"
+    return out
+
+
+def plot_credit_rationing(
+    model,
+    country_code: str,
+    *,
+    title: str | None = None,
+    height: int = 650,
+    width: int = 1050,
+    show: bool = True,
+):
+    """Plot firm and bank credit rationing rates over time (0–1)."""
+    df = build_credit_rationing_aggregates_df(model, country_code)
+
+    if title is None:
+        title = f"Credit rationing ({country_code})"
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=("Firms: rationing rate (received vs demand)", "Banks: rationing rate (supply cap vs demand)"),
+    )
+
+    firm_traces = [
+        ("Short-term", "firm_credit_rationing_rate_short_term"),
+        ("Long-term", "firm_credit_rationing_rate_long_term"),
+    ]
+    for name, col in firm_traces:
+        if col in df.columns and df[col].notna().any():
+            fig.add_trace(go.Scatter(x=df.index, y=df[col], mode="lines", name=f"Firms {name}"), row=1, col=1)
+
+    bank_traces = [
+        ("Firms short-term", "bank_credit_rationing_rate_firms_short_term"),
+        ("Firms long-term", "bank_credit_rationing_rate_firms_long_term"),
+        ("HH consumption", "bank_credit_rationing_rate_households_consumption"),
+        ("Mortgages", "bank_credit_rationing_rate_mortgages"),
+    ]
+    for name, col in bank_traces:
+        if col in df.columns and df[col].notna().any():
+            fig.add_trace(go.Scatter(x=df.index, y=df[col], mode="lines", name=f"Banks {name}"), row=2, col=1)
+
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=1, col=1)
+    fig.add_hline(y=0.0, line_width=1, line_color="black", row=2, col=1)
+    fig.update_yaxes(title_text="rate", range=[0, 1], row=1, col=1)
+    fig.update_yaxes(title_text="rate", range=[0, 1], row=2, col=1)
+    fig.update_xaxes(title_text="t", row=2, col=1)
+    fig.update_layout(height=height, width=width, title_text=title, template="plotly_white")
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
+def plot_firm_credit_to_equity_and_capital(
+    model,
+    country_code: str = "FRA",
+    *,
+    title: str | None = None,
+    height: int = 650,
+    width: int = 1050,
+    show: bool = True,
+    return_df: bool = False,
+):
+    """Plot firm outstanding credit relative to firm equity and capital (aggregate).
+
+    All firm series are summed across firms each period:
+    - firms.ts.capital_inputs_stock_value (total firm capital stock value)
+    - firms.ts.equity (total firm equity)
+
+    Outstanding credit is read from the credit market aggregates:
+    - credit_market.ts.total_outstanding_loans_granted_firms_short_term
+    - credit_market.ts.total_outstanding_loans_granted_firms_long_term
+    """
+    country = model.countries[country_code]
+    out_index = model.shallow_df_dict()[country_code].index
+
+    firms_ts = getattr(getattr(country, "firms", None), "ts", None)
+    credit_market_ts = getattr(getattr(country, "credit_market", None), "ts", None)
+    if firms_ts is None:
+        raise ValueError(f"firms.ts is missing for country {country_code!r}.")
+    if credit_market_ts is None:
+        raise ValueError(f"credit_market.ts is missing for country {country_code!r}.")
+
+    def _sum_over_firms(values) -> pd.Series:
+        values = list(values)
+        horizon = min(len(out_index), len(values))
+        rows: list[float] = []
+        for value in values[:horizon]:
+            unpacked = unpack_cell(value)
+            if unpacked is None:
+                rows.append(np.nan)
+                continue
+            if isinstance(unpacked, (float, int, np.floating, np.integer)):
+                rows.append(float(unpacked))
+                continue
+            array = np.asarray(unpacked, dtype=float).reshape(-1)
+            rows.append(float(np.nansum(array)) if array.size else np.nan)
+        series = pd.Series(rows, index=out_index[:horizon], dtype=float)
+        return series.reindex(out_index)
+
+    def _scalar_series(values) -> pd.Series:
+        values = list(values)
+        horizon = min(len(out_index), len(values))
+        rows = [unpack_cell(value) for value in values[:horizon]]
+        series = pd.Series(rows, index=out_index[:horizon])
+        return pd.to_numeric(series.reindex(out_index), errors="coerce")
+
+    def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+        ratio = pd.Series(np.nan, index=numerator.index, dtype=float)
+        mask = denominator > 0
+        ratio[mask] = (numerator[mask] / denominator[mask]).astype(float)
+        return ratio
+
+    firm_capital_stock_value = _safe_ts_values(firms_ts, "capital_inputs_stock_value")
+    firm_equity = _safe_ts_values(firms_ts, "equity")
+    if firm_capital_stock_value is None:
+        raise ValueError(f"firms.ts has no field {'capital_inputs_stock_value'!r}.")
+    if firm_equity is None:
+        raise ValueError(f"firms.ts has no field {'equity'!r}.")
+
+    outstanding_credit_short_term = _safe_ts_values(
+        credit_market_ts, "total_outstanding_loans_granted_firms_short_term"
+    )
+    outstanding_credit_long_term = _safe_ts_values(credit_market_ts, "total_outstanding_loans_granted_firms_long_term")
+    if outstanding_credit_short_term is None:
+        raise ValueError(
+            "credit_market.ts has no field 'total_outstanding_loans_granted_firms_short_term'."
+        )
+    if outstanding_credit_long_term is None:
+        raise ValueError("credit_market.ts has no field 'total_outstanding_loans_granted_firms_long_term'.")
+
+    total_firm_capital_stock_value = _sum_over_firms(firm_capital_stock_value)
+    total_firm_equity = _sum_over_firms(firm_equity)
+    total_firm_outstanding_credit_short_term = _scalar_series(outstanding_credit_short_term)
+    total_firm_outstanding_credit_long_term = _scalar_series(outstanding_credit_long_term)
+
+    df = pd.DataFrame(
+        {
+            "total_firm_capital_stock_value": total_firm_capital_stock_value,
+            "total_firm_equity": total_firm_equity,
+            "total_firm_outstanding_credit_short_term": total_firm_outstanding_credit_short_term,
+            "total_firm_outstanding_credit_long_term": total_firm_outstanding_credit_long_term,
+        },
+        index=out_index,
+    )
+    df["firm_outstanding_credit_short_term_to_equity"] = _safe_ratio(
+        df["total_firm_outstanding_credit_short_term"], df["total_firm_equity"]
+    )
+    df["firm_outstanding_credit_long_term_to_equity"] = _safe_ratio(
+        df["total_firm_outstanding_credit_long_term"], df["total_firm_equity"]
+    )
+    df["firm_outstanding_credit_short_term_to_capital"] = _safe_ratio(
+        df["total_firm_outstanding_credit_short_term"], df["total_firm_capital_stock_value"]
+    )
+    df["firm_outstanding_credit_long_term_to_capital"] = _safe_ratio(
+        df["total_firm_outstanding_credit_long_term"], df["total_firm_capital_stock_value"]
+    )
+
+    if title is None:
+        title = f"Firm credit ratios ({country_code})"
+
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        shared_xaxes=True,
+        subplot_titles=[
+            "Outstanding short-term credit / equity",
+            "Outstanding long-term credit / equity",
+            "Outstanding short-term credit / capital stock value",
+            "Outstanding long-term credit / capital stock value",
+        ],
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["firm_outstanding_credit_short_term_to_equity"],
+            mode="lines",
+            name="ST / equity",
+        ),
+        row=1,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["firm_outstanding_credit_long_term_to_equity"],
+            mode="lines",
+            name="LT / equity",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["firm_outstanding_credit_short_term_to_capital"],
+            mode="lines",
+            name="ST / capital",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df.index,
+            y=df["firm_outstanding_credit_long_term_to_capital"],
+            mode="lines",
+            name="LT / capital",
+        ),
+        row=2,
+        col=2,
+    )
+
+    fig.update_yaxes(title_text="ratio", row=1, col=1)
+    fig.update_yaxes(title_text="ratio", row=1, col=2)
+    fig.update_yaxes(title_text="ratio", row=2, col=1)
+    fig.update_yaxes(title_text="ratio", row=2, col=2)
+    fig.update_xaxes(title_text="t", row=2, col=1)
+    fig.update_xaxes(title_text="t", row=2, col=2)
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0},
+    )
+
+    if show:
+        fig.show()
+        if return_df:
+            return None, df
+        return None
+
+    if return_df:
+        return fig, df
+    return fig
+
+
 def plot_housing_market_aggregates(
     model=None,
     country_code=None,

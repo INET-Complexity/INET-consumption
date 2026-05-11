@@ -801,9 +801,22 @@ class Country:
 
         Updates loan demands and interest rates before market clearing.
         """
+        firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
+            corresponding_firm=self.individuals.states["Corresponding Firm ID"],
+            individual_wages=self.individuals.ts.current("employee_income"),
+            income_taxes=self.central_government.states["Income Tax"],
+            employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
+            employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+            cpi=self.economy.current_consumer_price_level(),
+        )
+        firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
+            taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
+        )
         self.firms.compute_target_credit(
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            wage_obligation_preview=firm_wage_obligation_preview,
+            production_tax_obligation_preview=firm_production_tax_obligation_preview,
         )
         self.households.compute_target_credit(
             current_sales=self.housing_market.states["current_sales"],
@@ -933,12 +946,17 @@ class Country:
         firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
             taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
         )
+        firm_corporate_tax_obligation_preview = self.firms.estimate_corporate_tax_obligation(
+            estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+        )
         self.firms.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             wage_obligation_preview=firm_wage_obligation_preview,
             production_tax_obligation_preview=firm_production_tax_obligation_preview,
+            corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
             assume_zero_growth=self.assume_zero_growth,
         )
         self.households.prepare_goods_market_clearing(

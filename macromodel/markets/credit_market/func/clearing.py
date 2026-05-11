@@ -1243,6 +1243,13 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         models credit flows like water flowing through a network of buckets.
         It operates in multiple stages to ensure efficient and compliant allocation.
 
+        Firm short-term demand is split into ordinary working-capital demand and
+        emergency overdraft-refinance demand. Ordinary short-term firm loans,
+        long-term firm loans, household consumption loans, and mortgages clear
+        first against their normal caps. Overdraft refinance clears last from
+        residual bank CAR only, so old negative-deposit repair cannot reallocate
+        ordinary firm lending capacity away from long-term investment loans.
+
         Args:
             banks (Banks): Banking sector agent
             firms (Firms): Corporate sector agents
@@ -1302,8 +1309,32 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             max_supply_based_on_preferences_hh_cons = np.full(banks.ts.current("n_banks"), np.inf)
             max_supply_based_on_preferences_mortgages = np.full(banks.ts.current("n_banks"), np.inf)
 
-        # Firm loans
-        new_st_loans = self.clear_loans(
+        target_short_term_credit = np.asarray(firms.ts.current("target_short_term_credit"), dtype=float)
+        target_overdraft_refinance_credit = np.asarray(
+            firms.ts.current("target_overdraft_refinance_credit"),
+            dtype=float,
+        )
+        target_overdraft_refinance_credit = np.minimum(
+            np.maximum(0.0, target_overdraft_refinance_credit),
+            np.maximum(0.0, target_short_term_credit),
+        )
+        ordinary_target_short_term_credit = np.asarray(
+            firms.ts.current("ordinary_target_short_term_credit"),
+            dtype=float,
+        )
+        if np.nansum(ordinary_target_short_term_credit) == 0.0 and np.nansum(target_overdraft_refinance_credit) == 0.0:
+            ordinary_target_short_term_credit = target_short_term_credit.copy()
+        ordinary_target_short_term_credit = np.maximum(
+            0.0,
+            np.minimum(ordinary_target_short_term_credit, target_short_term_credit - target_overdraft_refinance_credit),
+        )
+
+        self._last_received_overdraft_refinance_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
+        initial_new_credit_by_firm = new_credit_by_firm.copy()
+
+        # Ordinary firm loans clear before emergency overdraft refinance so refinance cannot
+        # reallocate ordinary long-term capacity.
+        new_ordinary_st_loans = self.clear_loans(
             banks=banks,
             firms=firms,
             households=households,
@@ -1314,10 +1345,12 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
             new_debt_service_by_firm=new_debt_service_by_firm,
             new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
+            target_credit_override=ordinary_target_short_term_credit,
+            append_firm_diagnostics=False,
         )
-        new_credit_by_firm += new_st_loans[0].sum(axis=0)
-        new_credit_by_bank += new_st_loans[0].sum(axis=1)
-        new_firm_preference_credit_by_bank += new_st_loans[0].sum(axis=1)
+        new_credit_by_firm += new_ordinary_st_loans[0].sum(axis=0)
+        new_credit_by_bank += new_ordinary_st_loans[0].sum(axis=1)
+        new_firm_preference_credit_by_bank += new_ordinary_st_loans[0].sum(axis=1)
         new_lt_loans = self.clear_loans(
             banks=banks,
             firms=firms,
@@ -1330,6 +1363,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_debt_service_by_firm=new_debt_service_by_firm,
             new_preference_credit_by_bank=new_firm_preference_credit_by_bank,
         )
+        new_credit_by_firm += new_lt_loans[0].sum(axis=0)
         new_credit_by_bank += new_lt_loans[0].sum(axis=1)
         new_firm_preference_credit_by_bank += new_lt_loans[0].sum(axis=1)
 
@@ -1363,6 +1397,147 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_household += new_mort_loans[0].sum(axis=0)
         new_credit_by_bank += new_mort_loans[0].sum(axis=1)
         new_mortgage_preference_credit_by_bank += new_mort_loans[0].sum(axis=1)
+
+        residual_car_room = np.maximum(
+            0.0,
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+            - banks.ts.current("total_outstanding_loans")
+            - new_credit_by_bank,
+        )
+        firm_pref_room_before_refinance = np.maximum(
+            0.0,
+            max_supply_based_on_preferences_firms - new_firm_preference_credit_by_bank,
+        )
+        firm_pref_likely_binding_before_refinance = bool(
+            self.consider_loan_type_fractions
+            and np.isfinite(firm_pref_room_before_refinance.sum())
+            and firm_pref_room_before_refinance.sum() < residual_car_room.sum()
+        )
+        new_refinance_st_loans = self.clear_loans(
+            banks=banks,
+            firms=firms,
+            households=households,
+            loan_type=LoanTypes.FIRM_SHORT_TERM_LOAN,
+            new_credit_by_bank=new_credit_by_bank,
+            new_credit_by_firm=new_credit_by_firm,
+            new_credit_by_household=new_credit_by_household,
+            max_supply_based_on_preferences=residual_car_room,
+            new_debt_service_by_firm=new_debt_service_by_firm,
+            new_preference_credit_by_bank=np.zeros(banks.ts.current("n_banks")),
+            target_credit_override=target_overdraft_refinance_credit,
+            append_firm_diagnostics=False,
+        )
+        self._last_received_overdraft_refinance_credit_by_firm = new_refinance_st_loans[0].sum(axis=0)
+        new_credit_by_firm += new_refinance_st_loans[0].sum(axis=0)
+        new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1)
+        new_st_loans = np.zeros_like(new_ordinary_st_loans)
+        new_st_loans[0] = new_ordinary_st_loans[0] + new_refinance_st_loans[0]
+        new_st_loans[1] = np.divide(
+            new_ordinary_st_loans[1] * new_ordinary_st_loans[0]
+            + new_refinance_st_loans[1] * new_refinance_st_loans[0],
+            new_st_loans[0],
+            out=np.zeros_like(new_st_loans[0]),
+            where=new_st_loans[0] > 0.0,
+        )
+        new_st_loans[2] = new_ordinary_st_loans[2] + new_refinance_st_loans[2]
+
+        n_firms = firms.ts.current("n_firms")
+        st_granted_by_firm = new_st_loans[0].sum(axis=0)
+        st_reason = np.full(n_firms, _BINDING_NO_DEMAND, dtype=float)
+        st_amount = np.zeros(n_firms, dtype=float)
+        st_collateral_cap = np.zeros(n_firms, dtype=float)
+        st_dscr_cap = _nan_array(n_firms)
+        st_has_demand = target_short_term_credit > 0.0
+        st_fully_granted = st_has_demand & (st_granted_by_firm >= target_short_term_credit - 1e-9)
+        st_unmet = st_has_demand & ~st_fully_granted
+        st_reason[st_fully_granted] = _BINDING_NOT_BINDING
+        st_amount[st_fully_granted] = target_short_term_credit[st_fully_granted]
+        if np.any(st_has_demand):
+            st_agents_with_demand = np.where(st_has_demand)[0]
+            st_collateral_cap[st_agents_with_demand] = _clip_nonneg(
+                banks.parameters.firm_loans_capital_stock_collateral_ratio
+                * firms.ts.current("capital_inputs_stock_value")[st_agents_with_demand]
+                - firms.ts.current("debt")[st_agents_with_demand]
+                - initial_new_credit_by_firm[st_agents_with_demand]
+                + np.minimum(0.0, firms.ts.current("deposits")[st_agents_with_demand])
+            )
+            st_roa_cap = np.full(n_firms, np.inf)
+            if banks.parameters.enable_firm_loans_return_on_assets_restriction:
+                firm_expected_profits = firms.ts.current("expected_profits")[st_agents_with_demand]
+                firm_capital_stock = firms.ts.current("capital_inputs_stock_value")[st_agents_with_demand]
+                firm_roa = np.divide(
+                    firm_expected_profits,
+                    firm_capital_stock,
+                    out=np.zeros_like(firm_expected_profits),
+                    where=firm_capital_stock != 0,
+                )
+                st_roa_cap[st_agents_with_demand[firm_roa < banks.parameters.firm_loans_return_on_assets_ratio]] = 0.0
+
+            st_roe_cap = np.full(n_firms, np.inf)
+            if banks.parameters.enable_firm_loans_return_on_equity_restriction:
+                st_roe_cap[st_agents_with_demand] = _clip_nonneg(
+                    firms.ts.current("capital_inputs_stock_value")[st_agents_with_demand]
+                    + firms.ts.current("deposits")[st_agents_with_demand]
+                    - firms.ts.current("debt")[st_agents_with_demand]
+                    - initial_new_credit_by_firm[st_agents_with_demand]
+                    - firms.ts.current("expected_profits")[st_agents_with_demand]
+                    / banks.parameters.firm_loans_return_on_equity_ratio
+                )
+
+            st_dscr_cap_eff = np.full(n_firms, np.inf)
+            if banks.parameters.enable_firm_loans_dscr_restriction:
+                st_underwriting_rate = _firm_dscr_underwriting_rate(
+                    banks.ts.current("interest_rates_on_short_term_firm_loans"),
+                    banks.parameters.firm_loans_dscr_underwriting_rate_mode,
+                )
+                st_dscr_cap[st_agents_with_demand] = _clip_nonneg(
+                    _compute_firm_dscr_capacity(
+                        firms=firms,
+                        agents_with_demand=st_agents_with_demand,
+                        min_dscr=banks.parameters.firm_loans_min_dscr,
+                        cfads_window=banks.parameters.firm_loans_cfads_window,
+                        cfads_haircut=banks.parameters.firm_loans_cfads_haircut,
+                        underwriting_rate=st_underwriting_rate,
+                        loan_maturity=banks.parameters.short_term_firm_loan_maturity,
+                        new_debt_service_by_firm=np.zeros(n_firms),
+                    )
+                )
+                st_dscr_cap_eff = np.where(np.isfinite(st_dscr_cap), st_dscr_cap, np.inf)
+
+            st_borrower_cap = np.minimum.reduce((st_collateral_cap, st_roa_cap, st_roe_cap, st_dscr_cap_eff))
+            st_borrower_binds = st_unmet & (st_borrower_cap < target_short_term_credit - 1e-9)
+
+            st_collateral_binds = st_borrower_binds & (st_collateral_cap <= st_roa_cap) & (
+                st_collateral_cap <= st_roe_cap
+            ) & (st_collateral_cap <= st_dscr_cap_eff)
+            st_reason[st_collateral_binds] = _BINDING_COLLATERAL
+            st_amount[st_collateral_binds] = st_collateral_cap[st_collateral_binds]
+
+            st_dscr_binds = st_borrower_binds & ~st_collateral_binds & (st_dscr_cap_eff <= st_roa_cap) & (
+                st_dscr_cap_eff <= st_roe_cap
+            )
+            st_reason[st_dscr_binds] = _BINDING_DSCR
+            st_amount[st_dscr_binds] = st_dscr_cap[st_dscr_binds]
+
+            st_roa_binds = st_borrower_binds & ~st_collateral_binds & ~st_dscr_binds & (st_roa_cap <= st_roe_cap)
+            st_reason[st_roa_binds] = _BINDING_ROA
+            st_amount[st_roa_binds] = 0.0
+
+            st_roe_binds = st_borrower_binds & ~st_collateral_binds & ~st_dscr_binds & ~st_roa_binds
+            st_reason[st_roe_binds] = _BINDING_ROE
+            st_amount[st_roe_binds] = st_roe_cap[st_roe_binds]
+
+            st_bank_binds = st_unmet & ~st_borrower_binds
+            st_reason[st_bank_binds] = (
+                _BINDING_BANK_PREF if firm_pref_likely_binding_before_refinance else _BINDING_BANK_CAR
+            )
+            st_amount[st_bank_binds] = st_granted_by_firm[st_bank_binds]
+
+        _append_vector(firms.ts, "credit_market_firm_st_capacity", st_granted_by_firm)
+        _append_vector(firms.ts, "credit_market_firm_st_collateral_cap", st_collateral_cap)
+        _append_vector(firms.ts, "credit_market_firm_st_dscr_cap", st_dscr_cap)
+        _append_vector(firms.ts, "credit_market_firm_st_binding_reason", st_reason)
+        _append_vector(firms.ts, "credit_market_firm_st_binding_amount", st_amount)
 
         # End-of-clearing diagnostic usage
         _append_scalar(banks.ts, "credit_market_car_room_used", float(np.sum(new_credit_by_bank)))
@@ -1406,6 +1581,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         max_supply_based_on_preferences: np.ndarray,
         new_debt_service_by_firm: np.ndarray | None = None,
         new_preference_credit_by_bank: np.ndarray | None = None,
+        target_credit_override: np.ndarray | None = None,
+        append_firm_diagnostics: bool = True,
     ) -> np.ndarray:
         """Clear the market for a specific loan type using the water bucket algorithm.
 
@@ -1428,6 +1605,13 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 committed firm debt service during this clearing pass
             new_preference_credit_by_bank (np.ndarray | None): Running total of
                 new lending against this loan-type preference cap
+            target_credit_override (np.ndarray | None): Optional demand vector used
+                for tranche-level clearing, such as ordinary short-term or overdraft
+                refinance demand. The recorded target series is left unchanged.
+            append_firm_diagnostics (bool): Whether this call appends firm-level
+                binding diagnostics. Split short-term tranches disable this and
+                append one aggregate short-term diagnostic after the tranches are
+                recombined.
 
         Returns:
             np.ndarray: Array of shape [3, n_banks, n_borrowers] containing:
@@ -1454,6 +1638,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             target_credit = households.ts.current("target_mortgage")
         else:
             raise ValueError("Unknown loan type", loan_type)
+        if target_credit_override is not None:
+            target_credit = np.asarray(target_credit_override, dtype=float)
 
         # For recording data
         new_loans = np.zeros((3, banks.ts.current("n_banks"), target_credit.shape[0]))
@@ -1566,7 +1752,10 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         )
         capacities_sum = capacities.sum()
 
-        diagnostics_enabled = loan_type in (LoanTypes.FIRM_SHORT_TERM_LOAN, LoanTypes.FIRM_LONG_TERM_LOAN)
+        diagnostics_enabled = append_firm_diagnostics and loan_type in (
+            LoanTypes.FIRM_SHORT_TERM_LOAN,
+            LoanTypes.FIRM_LONG_TERM_LOAN,
+        )
         if diagnostics_enabled:
             n_firms = firms.ts.current("n_firms")
             demand_full = np.asarray(target_credit, dtype=float)

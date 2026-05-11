@@ -64,6 +64,7 @@ def _compute_credit_supply_caps_by_type(
     credit_supply_temperature: float,
     total_target_short_term_credit: float,
     total_target_long_term_credit: float,
+    total_ordinary_target_short_term_credit: float | None = None,
 ) -> dict[str, np.ndarray]:
     """Compute CAR-based bank credit supply caps (total + split by type).
 
@@ -73,6 +74,11 @@ def _compute_credit_supply_caps_by_type(
     Type caps follow the same preference-weighted split as credit clearing:
     initial `new_loans_fraction_*` shares adjusted by `credit_supply_temperature`
     and the economy-wide NPL rates.
+
+    Firm short-term vs long-term caps are split using ordinary short-term firm
+    demand when it is provided. Emergency overdraft-refinance demand remains part
+    of total short-term borrower demand, but it is excluded from this cap split so
+    old overdraft repair cannot mechanically starve long-term investment capacity.
     """
     max_car = np.maximum(
         0.0,
@@ -90,11 +96,16 @@ def _compute_credit_supply_caps_by_type(
         credit_supply_temperature=credit_supply_temperature,
     )
 
-    denom = float(total_target_short_term_credit + total_target_long_term_credit)
+    if total_ordinary_target_short_term_credit is None:
+        ordinary_target_short_term_credit = float(total_target_short_term_credit)
+    else:
+        ordinary_target_short_term_credit = max(0.0, float(total_ordinary_target_short_term_credit))
+
+    denom = float(ordinary_target_short_term_credit + total_target_long_term_credit)
     if not np.isfinite(denom) or denom <= 0.0:
         short_term_share = 0.5
     else:
-        short_term_share = float(total_target_short_term_credit) / denom
+        short_term_share = float(ordinary_target_short_term_credit) / denom
         short_term_share = float(np.clip(short_term_share, 0.0, 1.0))
 
     firm_caps_short_term = firm_caps * short_term_share
@@ -117,8 +128,15 @@ def _append_credit_supply_caps_to_banks_ts(
     credit_supply_temperature: float,
     total_target_short_term_credit: float,
     total_target_long_term_credit: float,
+    total_ordinary_target_short_term_credit: float | None = None,
 ) -> None:
-    """Append credit supply caps to `banks.ts`."""
+    """Append credit supply caps to `banks.ts`.
+
+    The recorded firm short-term/long-term cap split reflects ordinary
+    short-term demand versus long-term demand. Overdraft-refinance demand is
+    tracked separately on firms and clears from residual capacity in the
+    WaterBucket clearer.
+    """
     caps = _compute_credit_supply_caps_by_type(
         banks=banks,
         current_npl_firm_loans=current_npl_firm_loans,
@@ -127,6 +145,7 @@ def _append_credit_supply_caps_to_banks_ts(
         credit_supply_temperature=credit_supply_temperature,
         total_target_short_term_credit=total_target_short_term_credit,
         total_target_long_term_credit=total_target_long_term_credit,
+        total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
     )
 
     banks.ts.credit_supply_cap_total.append(caps["total"])
@@ -385,7 +404,16 @@ class CreditMarket:
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
 
         credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
-        total_target_short_term_credit = float(np.nansum(firms.ts.current("target_short_term_credit")))
+        target_short_term_credit = firms.ts.current("target_short_term_credit")
+        target_overdraft_refinance_credit = firms.ts.current("target_overdraft_refinance_credit")
+        ordinary_target_short_term_credit = firms.ts.current("ordinary_target_short_term_credit")
+        if (
+            float(np.nansum(ordinary_target_short_term_credit)) == 0.0
+            and float(np.nansum(target_overdraft_refinance_credit)) == 0.0
+        ):
+            ordinary_target_short_term_credit = target_short_term_credit
+        total_target_short_term_credit = float(np.nansum(target_short_term_credit))
+        total_ordinary_target_short_term_credit = float(np.nansum(ordinary_target_short_term_credit))
         total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))
         _append_credit_supply_caps_to_banks_ts(
             banks=banks,
@@ -395,6 +423,7 @@ class CreditMarket:
             credit_supply_temperature=credit_supply_temperature,
             total_target_short_term_credit=total_target_short_term_credit,
             total_target_long_term_credit=total_target_long_term_credit,
+            total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
         )
 
         # Clear the credit market
@@ -422,6 +451,26 @@ class CreditMarket:
         # Calculate aggregates for firms
         firms.ts.received_short_term_credit.append(new_st_loans[0].sum(axis=0))
         firms.ts.total_received_short_term_credit.append([firms.ts.current("received_short_term_credit").sum()])
+        received_overdraft_refinance_credit = getattr(
+            self.functions["clearing"],
+            "_last_received_overdraft_refinance_credit_by_firm",
+            np.minimum(
+                firms.ts.current("target_overdraft_refinance_credit"),
+                firms.ts.current("received_short_term_credit"),
+            ),
+        )
+        received_overdraft_refinance_credit = np.minimum(
+            received_overdraft_refinance_credit,
+            firms.ts.current("received_short_term_credit"),
+        )
+        received_ordinary_short_term_credit = np.maximum(
+            0.0,
+            firms.ts.current("received_short_term_credit") - received_overdraft_refinance_credit,
+        )
+        firms.ts.received_overdraft_refinance_credit.append(received_overdraft_refinance_credit)
+        firms.ts.total_received_overdraft_refinance_credit.append([received_overdraft_refinance_credit.sum()])
+        firms.ts.received_ordinary_short_term_credit.append(received_ordinary_short_term_credit)
+        firms.ts.total_received_ordinary_short_term_credit.append([received_ordinary_short_term_credit.sum()])
         firms.ts.received_long_term_credit.append(new_lt_loans[0].sum(axis=0))
         firms.ts.total_received_long_term_credit.append([firms.ts.current("received_long_term_credit").sum()])
         firms.ts.received_credit.append(

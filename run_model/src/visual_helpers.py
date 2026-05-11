@@ -1782,11 +1782,23 @@ def build_credit_rationing_aggregates_df(model, country_code: str) -> pd.DataFra
     - firms.ts.total_target_short_term_credit / total_received_short_term_credit
     - firms.ts.total_target_long_term_credit / total_received_long_term_credit
 
+    Firm short-term demand is the total borrower-facing request. In current firm
+    finance runs this may include emergency overdraft-refinance demand as well as
+    ordinary working-capital demand. Separate firm time series
+    (`total_target_overdraft_refinance_credit` and
+    `total_ordinary_target_short_term_credit`) expose that decomposition when the
+    model writes it.
+
     Banks measure compares total credit supply caps vs respective total credit demands:
     - banks.ts.total_credit_supply_cap_firms_short_term vs firms.ts.total_target_short_term_credit
     - banks.ts.total_credit_supply_cap_firms_long_term vs firms.ts.total_target_long_term_credit
     - banks.ts.total_credit_supply_cap_households_consumption vs households.ts.total_target_consumption_loans
     - banks.ts.total_credit_supply_cap_mortgages vs households.ts.total_target_mortgage
+
+    The firm short-term supply cap is split from total firm lending capacity using
+    ordinary short-term demand, not emergency overdraft-refinance demand. This
+    means total ST demand can exceed the plotted ST cap when refinance is large;
+    use the separate refinance/ordinary ST series to interpret that case.
 
     Returned columns include both levels (demand/received/cap) and derived measures:
     - rationed_amount = max(demand - received_or_cap, 0)

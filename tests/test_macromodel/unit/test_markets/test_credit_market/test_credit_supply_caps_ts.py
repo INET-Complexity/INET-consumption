@@ -79,6 +79,32 @@ def test_compute_credit_supply_caps_by_type_matches_hand_calculation_when_temper
     assert np.allclose(caps["mortgages"], np.array([20.0, 40.0]))
 
 
+def test_compute_credit_supply_caps_by_type_excludes_overdraft_refinance_from_st_lt_split():
+    banks = _make_banks_stub(
+        equity=np.array([10.0, 20.0]),
+        total_outstanding_loans=np.array([0.0, 0.0]),
+        firms_fraction=np.array([0.5, 0.5]),
+        hh_cons_fraction=np.array([0.3, 0.3]),
+        mortgage_fraction=np.array([0.2, 0.2]),
+        capital_adequacy_ratio=0.1,
+    )
+
+    caps = _compute_credit_supply_caps_by_type(
+        banks=banks,
+        current_npl_firm_loans=0.0,
+        current_npl_hh_cons_loans=0.0,
+        current_npl_mortgages=0.0,
+        credit_supply_temperature=0.0,
+        total_target_short_term_credit=1_000.0,
+        total_target_long_term_credit=90.0,
+        total_ordinary_target_short_term_credit=10.0,
+    )
+
+    assert np.allclose(caps["firms"], np.array([50.0, 100.0]))
+    assert np.allclose(caps["firms_short_term"], np.array([5.0, 10.0]))
+    assert np.allclose(caps["firms_long_term"], np.array([45.0, 90.0]))
+
+
 def test_compute_credit_supply_caps_by_type_returns_zero_type_caps_when_no_weights():
     banks = _make_banks_stub(
         equity=np.array([10.0, 20.0]),

@@ -1245,43 +1245,110 @@ class Firms(Agent):
             current_good_prices,
         )
 
-    def compute_target_credit(self, estimated_growth: float, estimated_inflation: float) -> None:
+    def compute_target_credit(
+        self,
+        estimated_growth: float,
+        estimated_inflation: float,
+        wage_obligation_preview: np.ndarray | None = None,
+        production_tax_obligation_preview: np.ndarray | None = None,
+    ) -> None:
         """Calculate target borrowing levels for each firm.
 
         Determines desired short-term and long-term credit based on:
         - Expected growth and inflation
         - Projected cash flows
+        - Existing overdraft liabilities
         - Input purchase needs
         - Investment plans
+
+        `target_short_term_credit` remains the total borrower-facing short-term
+        credit request. It is decomposed into:
+        - `target_overdraft_refinance_credit`: the part needed to repair existing
+          negative deposits after hard obligations and expected sales are budgeted.
+        - `ordinary_target_short_term_credit`: the remaining short-term request for
+          ordinary working-capital activity.
+
+        The split is used by the credit market so emergency overdraft refinance
+        cannot determine the ordinary short-term/long-term firm lending cap split.
 
         Args:
             estimated_growth (float): Expected real growth rate
             estimated_inflation (float): Expected inflation rate
+            wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
+            production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
         """
-        estimated_corporate_taxes = (
-            (1 + estimated_growth) * (1 + estimated_inflation) * self.ts.current("corporate_taxes_paid")
+        n_firms = self.ts.current("n_firms")
+        if wage_obligation_preview is None:
+            wage_obligation_preview = self.ts.current("total_wage")
+        if production_tax_obligation_preview is None:
+            production_tax_obligation_preview = self.ts.current("taxes_paid_on_production")
+
+        estimated_corporate_taxes = self.estimate_corporate_tax_obligation(
+            estimated_growth=estimated_growth,
+            estimated_inflation=estimated_inflation,
         )
-        estimated_change_in_deposits = (
-            self.ts.current("price") * self.ts.current("production")
-            - self.ts.current("total_wage")
-            - self.ts.current("labour_costs")
-            - self.ts.current("taxes_paid_on_production")
-            - estimated_corporate_taxes
-            - self.ts.current("interest_paid")
-            - self.ts.current("debt_installments")
+        internal_cash = np.maximum(0.0, self.ts.current("deposits"))
+        existing_overdraft = np.maximum(0.0, -self.ts.current("deposits"))
+        expected_sales = np.maximum(
+            0.0,
+            (1 + estimated_growth) * (1 + estimated_inflation) * self.ts.current("price")
+            * self.ts.current("target_production"),
         )
-        estimated_deposits = self.ts.current("deposits") + estimated_change_in_deposits
+        hard_obligations = (
+            wage_obligation_preview
+            + production_tax_obligation_preview
+            + estimated_corporate_taxes
+            + self.ts.current("interest_paid")
+            + self.ts.current("debt_installments")
+        )
+        planned_technical_investment_costs = (
+            self.ts.current("planned_technical_investment").sum(axis=1)
+            if len(self.ts.planned_technical_investment) > 0
+            else np.zeros(n_firms)
+        )
+        planned_tfp_investment_costs = (
+            self.ts.current("planned_tfp_investment")
+            if len(self.ts.planned_tfp_investment) > 0
+            else np.zeros(n_firms)
+        )
         target_short_term_credit, target_long_term_credit = self.functions["target_credit"].compute_target_credit(
-            estimated_deposits=estimated_deposits,
+            internal_cash=internal_cash,
+            existing_overdraft=existing_overdraft,
+            expected_sales=expected_sales,
+            hard_obligations=hard_obligations,
             unconstrained_target_intermediate_inputs_costs=self.ts.current(
                 "unconstrained_target_intermediate_inputs_costs"
             ),
             unconstrained_target_capital_inputs_costs=self.ts.current("unconstrained_target_capital_inputs_costs"),
+            planned_technical_investment_costs=planned_technical_investment_costs,
+            planned_tfp_investment_costs=planned_tfp_investment_costs,
         )
+        cash_after_hard_obligations = internal_cash + expected_sales - hard_obligations
+        target_overdraft_refinance_credit = np.maximum(
+            0.0,
+            existing_overdraft - np.maximum(0.0, cash_after_hard_obligations),
+        )
+        target_overdraft_refinance_credit = np.minimum(target_overdraft_refinance_credit, target_short_term_credit)
+        ordinary_target_short_term_credit = np.maximum(0.0, target_short_term_credit - target_overdraft_refinance_credit)
         self.ts.target_short_term_credit.append(target_short_term_credit)
         self.ts.total_target_short_term_credit.append([target_short_term_credit.sum()])
+        self.ts.target_overdraft_refinance_credit.append(target_overdraft_refinance_credit)
+        self.ts.total_target_overdraft_refinance_credit.append([target_overdraft_refinance_credit.sum()])
+        self.ts.ordinary_target_short_term_credit.append(ordinary_target_short_term_credit)
+        self.ts.total_ordinary_target_short_term_credit.append([ordinary_target_short_term_credit.sum()])
         self.ts.target_long_term_credit.append(target_long_term_credit)
         self.ts.total_target_long_term_credit.append([target_long_term_credit.sum()])
+
+    def estimate_corporate_tax_obligation(
+        self,
+        estimated_growth: float,
+        estimated_inflation: float,
+    ) -> np.ndarray:
+        """Estimate current-period corporate tax cash obligation."""
+        return np.maximum(
+            0.0,
+            (1 + estimated_growth) * (1 + estimated_inflation) * self.ts.current("corporate_taxes_paid"),
+        )
 
     def compute_debt(self) -> np.ndarray:
         return self.ts.current("short_term_loan_debt") + self.ts.current("long_term_loan_debt")
@@ -1408,10 +1475,13 @@ class Firms(Agent):
         expected_lcu_prices: np.ndarray,
         wage_obligation_preview: np.ndarray,
         production_tax_obligation_preview: np.ndarray,
+        corporate_tax_obligation_preview: np.ndarray | None = None,
     ) -> None:
         """Revise current planned purchases after credit clears."""
         n_firms = self.ts.current("n_firms")
         mode = self.configuration.parameters.firm_activity_finance_revision_mode
+        if corporate_tax_obligation_preview is None:
+            corporate_tax_obligation_preview = np.zeros(n_firms)
 
         target_intermediate = self.ts.current("target_intermediate_inputs").copy()
         target_capital = self.ts.current("target_capital_inputs").copy()
@@ -1455,12 +1525,13 @@ class Firms(Agent):
         hard_obligations = (
             wage_obligation_preview
             + production_tax_obligation_preview
+            + corporate_tax_obligation_preview
             + self.ts.current("interest_paid")
             + self.ts.current("debt_installments")
         )
         available_finance = np.maximum(
             0.0,
-            np.maximum(self.ts.current("deposits"), 0.0)
+            self.ts.current("deposits")
             + self.ts.current("received_short_term_credit")
             + self.ts.current("received_long_term_credit")
             - hard_obligations,
@@ -1513,6 +1584,7 @@ class Firms(Agent):
         assume_zero_growth: bool = False,
         wage_obligation_preview: np.ndarray | None = None,
         production_tax_obligation_preview: np.ndarray | None = None,
+        corporate_tax_obligation_preview: np.ndarray | None = None,
     ) -> None:
         """Prepare firms' buying plans for goods market.
 
@@ -1530,10 +1602,13 @@ class Firms(Agent):
             assume_zero_growth (bool, optional): Whether to assume no growth. Defaults to False.
             wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
             production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
+            corporate_tax_obligation_preview (np.ndarray | None): Estimated current corporate-tax obligation.
         """
         # Target intermediate inputs
         if assume_zero_growth:
             self.ts.target_intermediate_inputs.append(self.ts.initial("target_intermediate_inputs"))
+        elif self.configuration.parameters.firm_activity_finance_revision_mode == "post_credit_cash_budget":
+            self.ts.target_intermediate_inputs.append(self.ts.current("unconstrained_target_intermediate_inputs"))
         else:
             self.ts.target_intermediate_inputs.append(
                 self.functions["target_intermediate_inputs"].compute_target_intermediate_inputs(
@@ -1550,6 +1625,8 @@ class Firms(Agent):
         # Target capital inputs
         if assume_zero_growth:
             self.ts.target_capital_inputs.append(self.ts.initial("target_capital_inputs"))
+        elif self.configuration.parameters.firm_activity_finance_revision_mode == "post_credit_cash_budget":
+            self.ts.target_capital_inputs.append(self.ts.current("unconstrained_target_capital_inputs"))
         else:
             self.ts.target_capital_inputs.append(
                 self.functions["target_capital_inputs"].compute_target_capital_inputs(
@@ -1565,11 +1642,14 @@ class Firms(Agent):
             wage_obligation_preview = np.zeros(self.ts.current("n_firms"))
         if production_tax_obligation_preview is None:
             production_tax_obligation_preview = np.zeros(self.ts.current("n_firms"))
+        if corporate_tax_obligation_preview is None:
+            corporate_tax_obligation_preview = np.zeros(self.ts.current("n_firms"))
         expected_lcu_prices = (1 + expected_inflation) * previous_good_prices
         self.revise_activity_against_available_finance(
             expected_lcu_prices=expected_lcu_prices,
             wage_obligation_preview=wage_obligation_preview,
             production_tax_obligation_preview=production_tax_obligation_preview,
+            corporate_tax_obligation_preview=corporate_tax_obligation_preview,
         )
 
         # Setting total real amount of goods to buy
@@ -1608,6 +1688,7 @@ class Firms(Agent):
         expected_inflation: float,
         wage_obligation_preview: np.ndarray | None = None,
         production_tax_obligation_preview: np.ndarray | None = None,
+        corporate_tax_obligation_preview: np.ndarray | None = None,
         assume_zero_growth: bool = False,
     ) -> None:
         """Prepare all aspects of goods market participation.
@@ -1623,6 +1704,7 @@ class Firms(Agent):
             expected_inflation (float): Expected inflation rate
             wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
             production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
+            corporate_tax_obligation_preview (np.ndarray | None): Estimated current corporate-tax obligation.
             assume_zero_growth (bool): Whether to use initial buying targets.
         """
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
@@ -1631,6 +1713,7 @@ class Firms(Agent):
             expected_inflation=expected_inflation,
             wage_obligation_preview=wage_obligation_preview,
             production_tax_obligation_preview=production_tax_obligation_preview,
+            corporate_tax_obligation_preview=corporate_tax_obligation_preview,
             assume_zero_growth=assume_zero_growth,
         )
         self.prepare_selling_goods()
@@ -1968,6 +2051,7 @@ class Firms(Agent):
         """
         capital_costs = self.capital_compensation_accounting_costs()
         capital_depreciation_costs = self.capital_depreciation_accounting_costs()
+        direct_tfp_expense = self.direct_tfp_investment_cash_expense()
         return (
             self.ts.current("price") * self.ts.current("production")
             - self.ts.current("total_wage")
@@ -1976,6 +2060,7 @@ class Firms(Agent):
             - capital_depreciation_costs
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("interest_paid")
+            - direct_tfp_expense
         )
 
     def compute_unit_costs(self) -> np.ndarray:
@@ -2032,12 +2117,25 @@ class Firms(Agent):
             + self.ts.current("nominal_amount_sold_in_lcu")
             - self.ts.current("total_wage")
             - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - self.direct_tfp_investment_cash_expense()
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("corporate_taxes_paid")
             - self.ts.current("interest_paid")
             + self.ts.current("received_credit")
             - self.ts.current("debt_installments")
         )
+
+    def direct_tfp_investment_cash_expense(self) -> np.ndarray:
+        """Return current direct-TFP spending charged to firm cash accounts.
+
+        Forced productivity investment is excluded because it is injected by
+        policy hooks rather than paid from firm deposits.
+        """
+        if len(self.ts.direct_tfp_investment_cash_expense) > 0:
+            return self.ts.current("direct_tfp_investment_cash_expense")
+        if len(self.ts.planned_tfp_investment) == 0:
+            return np.zeros(self.ts.current("n_firms"))
+        return self.ts.current("planned_tfp_investment")
 
     def capital_compensation_accounting_costs(self) -> np.ndarray:
         """Return capital-compensation-derived costs charged in firm accounting."""
@@ -2496,6 +2594,7 @@ class Firms(Agent):
         net_capital_investment = self.compute_net_capital_investment_above_replacement()
         executed_productivity_investment = forced_productivity_investment.copy()
         executed_tfp_investment = forced_productivity_investment.copy()
+        direct_tfp_cash_expense = np.zeros_like(forced_productivity_investment)
         executed_technical_investment = np.zeros_like(self.ts.current("planned_technical_investment"))
         if len(self.ts.planned_productivity_investment) > 0:
             planned_productivity_investment = self.ts.current("planned_productivity_investment")
@@ -2505,6 +2604,7 @@ class Firms(Agent):
                 executed_planned_investment = planned_productivity_investment.copy()
                 executed_productivity_investment += executed_planned_investment
                 executed_tfp_investment = planned_tfp_investment + forced_productivity_investment
+                direct_tfp_cash_expense = planned_tfp_investment.copy()
                 executed_technical_investment = planned_technical_investment.copy()
             else:
                 executed_planned_investment = np.minimum(
@@ -2518,6 +2618,7 @@ class Firms(Agent):
                 )
                 executed_productivity_investment += executed_planned_investment
                 executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
+                direct_tfp_cash_expense = planned_tfp_investment * execution_ratio
                 executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
         real_executed_investment = self.compute_real_productivity_investment(executed_productivity_investment)
 
@@ -2525,6 +2626,7 @@ class Firms(Agent):
         self.ts.net_capital_investment_above_replacement.append(net_capital_investment)
         self.ts.executed_productivity_investment.append(executed_productivity_investment)
         self.ts.executed_tfp_investment.append(executed_tfp_investment)
+        self.ts.direct_tfp_investment_cash_expense.append(direct_tfp_cash_expense)
         self.ts.executed_technical_investment.append(executed_technical_investment)
         self.ts.real_executed_productivity_investment.append(real_executed_investment)
         self.states["forced_productivity_investment"] = np.zeros_like(self.states["forced_productivity_investment"])

@@ -76,8 +76,12 @@ class FirmTimeSeries(TimeSeries):
 
     Credit Market:
     - target_short_term_credit: Desired short-term borrowing
+    - target_overdraft_refinance_credit: Short-term borrowing to repair existing overdrafts
+    - ordinary_target_short_term_credit: Short-term borrowing for new working-capital activity
     - target_long_term_credit: Desired long-term borrowing
     - received_short_term_credit: Actual short-term credit received
+    - received_overdraft_refinance_credit: Short-term credit granted for overdraft repair
+    - received_ordinary_short_term_credit: Short-term credit granted for new working-capital activity
     - received_long_term_credit: Actual long-term credit received
     - received_credit: Total new credit received
 
@@ -97,6 +101,7 @@ class FirmTimeSeries(TimeSeries):
     - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
     - planned_tfp_investment: TFP portion of planned productivity investment (n_firms)
     - executed_tfp_investment: TFP portion of executed productivity investment (n_firms)
+    - direct_tfp_investment_cash_expense: Firm-paid direct-TFP cash expense (n_firms)
     - tfp_investment_*: Planner-time direct-TFP FOC diagnostics by firm
     - sector_tfp_investment_*: Planner-time direct-TFP FOC diagnostics aggregated by sector
     - planned_technical_investment: Technical coefficient portion of planned productivity investment (n_firms x n_industries)
@@ -259,6 +264,7 @@ class FirmTimeSeries(TimeSeries):
             real_executed_productivity_investment=np.zeros(data.shape[0]),
             planned_tfp_investment=np.zeros(data.shape[0]),
             executed_tfp_investment=np.zeros(data.shape[0]),
+            direct_tfp_investment_cash_expense=np.zeros(data.shape[0]),
             tfp_investment_effective_cost_rate=np.full(data.shape[0], np.nan),
             tfp_investment_target_intensity=np.full(data.shape[0], np.nan),
             tfp_investment_cap_intensity=np.full(data.shape[0], np.nan),
@@ -325,10 +331,18 @@ class FirmTimeSeries(TimeSeries):
             #
             target_short_term_credit=np.zeros(data.shape[0]),
             total_target_short_term_credit=[0.0],
+            target_overdraft_refinance_credit=np.zeros(data.shape[0]),
+            total_target_overdraft_refinance_credit=[0.0],
+            ordinary_target_short_term_credit=np.zeros(data.shape[0]),
+            total_ordinary_target_short_term_credit=[0.0],
             target_long_term_credit=np.zeros(data.shape[0]),
             total_target_long_term_credit=[0.0],
             received_short_term_credit=np.full(data.shape[0], np.nan),
             total_received_short_term_credit=[0.0],
+            received_overdraft_refinance_credit=np.full(data.shape[0], np.nan),
+            total_received_overdraft_refinance_credit=[0.0],
+            received_ordinary_short_term_credit=np.full(data.shape[0], np.nan),
+            total_received_ordinary_short_term_credit=[0.0],
             received_long_term_credit=np.full(data.shape[0], np.nan),
             total_received_long_term_credit=[0.0],
             received_credit=np.full(data.shape[0], np.nan),
@@ -533,6 +547,7 @@ def create_firms_timeseries(
         net_capital_investment_above_replacement=np.zeros(data.shape[0]),
         planned_tfp_investment=np.zeros(data.shape[0]),
         executed_tfp_investment=np.zeros(data.shape[0]),
+        direct_tfp_investment_cash_expense=np.zeros(data.shape[0]),
         tfp_investment_effective_cost_rate=np.full(data.shape[0], np.nan),
         tfp_investment_target_intensity=np.full(data.shape[0], np.nan),
         tfp_investment_cap_intensity=np.full(data.shape[0], np.nan),
@@ -597,10 +612,18 @@ def create_firms_timeseries(
         #
         target_short_term_credit=np.zeros(data.shape[0]),
         total_target_short_term_credit=[0.0],
+        target_overdraft_refinance_credit=np.zeros(data.shape[0]),
+        total_target_overdraft_refinance_credit=[0.0],
+        ordinary_target_short_term_credit=np.zeros(data.shape[0]),
+        total_ordinary_target_short_term_credit=[0.0],
         target_long_term_credit=np.zeros(data.shape[0]),
         total_target_long_term_credit=[0.0],
         received_short_term_credit=np.full(data.shape[0], np.nan),
         total_received_short_term_credit=[0.0],
+        received_overdraft_refinance_credit=np.full(data.shape[0], np.nan),
+        total_received_overdraft_refinance_credit=[0.0],
+        received_ordinary_short_term_credit=np.full(data.shape[0], np.nan),
+        total_received_ordinary_short_term_credit=[0.0],
         received_long_term_credit=np.full(data.shape[0], np.nan),
         total_received_long_term_credit=[0.0],
         received_credit=np.full(data.shape[0], np.nan),

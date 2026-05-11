@@ -414,7 +414,7 @@ FRA:
         name: DefaultBankDemography
         path_name: demography
         parameters:
-          solvency_ratio: 0.1  # 0.05
+          solvency_ratio: 0.05
       interest_rates:
         name: MarkUpInterestRatesSetter
         path_name: interest_rates

@@ -1,0 +1,1 @@
+"""Synthetic firms processing package."""

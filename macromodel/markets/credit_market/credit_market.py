@@ -56,6 +56,34 @@ def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarra
     return {key: np.zeros_like(states[key]) for key in _LOAN_KEYS}
 
 
+def _zero_like_firm_service_schedule(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {key: np.zeros_like(states[key][0]) for key in ("st_loans", "lt_loans")}
+
+
+def _copy_firm_service_schedule(schedule: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {key: values.copy() for key, values in schedule.items()}
+
+
+def _scheduled_service_components(
+    loans: np.ndarray,
+    opening_principal_arrears: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return scheduled interest and principal due for a loan state."""
+    interest_due = loans[0] * loans[1]
+    raw_principal_due = np.minimum(
+        loans[0],
+        np.maximum(loans[2] - interest_due, 0.0),
+    )
+    if opening_principal_arrears is None:
+        principal_due = raw_principal_due
+    else:
+        principal_due = np.minimum(
+            raw_principal_due,
+            np.maximum(loans[0] - np.maximum(opening_principal_arrears, 0.0), 0.0),
+        )
+    return interest_due, principal_due
+
+
 def _compute_credit_supply_caps_by_type(
     banks: "Banks",
     current_npl_firm_loans: float,
@@ -223,9 +251,20 @@ class CreditMarket:
         self.initial_states = initial_states
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._reset_firm_service_period_tracking()
+
+    def _reset_firm_service_period_tracking(self) -> None:
         self._last_interest_by_firm = np.zeros(self.states["st_loans"].shape[2])
         self._last_interest_by_household = np.zeros(self.states["cons_loans"].shape[2])
         self._last_interest_by_bank = np.zeros(self.states["st_loans"].shape[1])
+        self._scheduled_firm_opening_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_opening_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
 
     @classmethod
     def from_pickled_market(
@@ -304,9 +343,9 @@ class CreditMarket:
         self.ts.reset()
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
-        self._last_interest_by_firm = np.zeros(self.states["st_loans"].shape[2])
-        self._last_interest_by_household = np.zeros(self.states["cons_loans"].shape[2])
-        self._last_interest_by_bank = np.zeros(self.states["st_loans"].shape[1])
+        self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._reset_firm_service_period_tracking()
         update_functions(model=configuration.functions, loc="macromodel.agents.credit_market", functions=self.functions)
 
     @classmethod
@@ -402,6 +441,7 @@ class CreditMarket:
         """
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._reset_firm_service_period_tracking()
 
         credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
         target_short_term_credit = firms.ts.current("target_short_term_credit")
@@ -451,22 +491,38 @@ class CreditMarket:
         # Calculate aggregates for firms
         firms.ts.received_short_term_credit.append(new_st_loans[0].sum(axis=0))
         firms.ts.total_received_short_term_credit.append([firms.ts.current("received_short_term_credit").sum()])
+        received_debt_rollover_credit = getattr(
+            self.functions["clearing"],
+            "_last_received_debt_rollover_credit_by_firm",
+            np.minimum(
+                firms.ts.current("target_debt_rollover_credit"),
+                firms.ts.current("received_short_term_credit"),
+            ),
+        )
+        received_debt_rollover_credit = np.minimum(
+            received_debt_rollover_credit,
+            firms.ts.current("received_short_term_credit"),
+        )
         received_overdraft_refinance_credit = getattr(
             self.functions["clearing"],
             "_last_received_overdraft_refinance_credit_by_firm",
             np.minimum(
                 firms.ts.current("target_overdraft_refinance_credit"),
-                firms.ts.current("received_short_term_credit"),
+                np.maximum(0.0, firms.ts.current("received_short_term_credit") - received_debt_rollover_credit),
             ),
         )
         received_overdraft_refinance_credit = np.minimum(
             received_overdraft_refinance_credit,
-            firms.ts.current("received_short_term_credit"),
+            np.maximum(0.0, firms.ts.current("received_short_term_credit") - received_debt_rollover_credit),
         )
         received_ordinary_short_term_credit = np.maximum(
             0.0,
-            firms.ts.current("received_short_term_credit") - received_overdraft_refinance_credit,
+            firms.ts.current("received_short_term_credit")
+            - received_debt_rollover_credit
+            - received_overdraft_refinance_credit,
         )
+        firms.ts.received_debt_rollover_credit.append(received_debt_rollover_credit)
+        firms.ts.total_received_debt_rollover_credit.append([received_debt_rollover_credit.sum()])
         firms.ts.received_overdraft_refinance_credit.append(received_overdraft_refinance_credit)
         firms.ts.total_received_overdraft_refinance_credit.append([received_overdraft_refinance_credit.sum()])
         firms.ts.received_ordinary_short_term_credit.append(received_ordinary_short_term_credit)
@@ -591,6 +647,44 @@ class CreditMarket:
 
         return principal_paid_by_borrower, interest_paid_by_borrower, interest_paid_by_bank
 
+    def _scheduled_service_by_borrower_and_bank(
+        self,
+        loan_keys: tuple[str, ...],
+        loan_states: dict[str, np.ndarray] | None = None,
+        principal_arrears_by_key: dict[str, np.ndarray] | None = None,
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray, np.ndarray, np.ndarray]:
+        """Compute scheduled interest/principal due without mutating loan state."""
+        if loan_states is None:
+            loan_states = self.states
+
+        n_borrowers = loan_states[loan_keys[0]].shape[2]
+        n_banks = loan_states[loan_keys[0]].shape[1]
+        interest_due_by_key: dict[str, np.ndarray] = {}
+        principal_due_by_key: dict[str, np.ndarray] = {}
+        principal_due_by_borrower = np.zeros(n_borrowers)
+        interest_due_by_borrower = np.zeros(n_borrowers)
+        interest_due_by_bank = np.zeros(n_banks)
+
+        for key in loan_keys:
+            opening_principal_arrears = None if principal_arrears_by_key is None else principal_arrears_by_key[key]
+            interest_due, principal_due = _scheduled_service_components(
+                loan_states[key],
+                opening_principal_arrears=opening_principal_arrears,
+            )
+            interest_due_by_key[key] = interest_due
+            principal_due_by_key[key] = principal_due
+            principal_due_by_borrower += principal_due.sum(axis=0)
+            interest_due_by_borrower += interest_due.sum(axis=0)
+            interest_due_by_bank += interest_due.sum(axis=1)
+
+        return (
+            interest_due_by_key,
+            principal_due_by_key,
+            principal_due_by_borrower,
+            interest_due_by_borrower,
+            interest_due_by_bank,
+        )
+
     def _scheduled_service_by_borrower(self, loan_keys: tuple[str, ...]) -> np.ndarray:
         """Compute next-period interest plus principal due on outstanding loans."""
         n_borrowers = self.states[loan_keys[0]].shape[2]
@@ -598,13 +692,288 @@ class CreditMarket:
         for key in loan_keys:
             loans = self.states[key]
             interest_due = loans[0] * loans[1]
-            principal_due = np.minimum(loans[0], np.maximum(loans[2] - interest_due, 0.0))
-            service += (interest_due + principal_due).sum(axis=0)
+            opening_interest_arrears = self._firm_interest_arrears_by_cell[key]
+            opening_principal_arrears = self._firm_principal_arrears_by_cell[key]
+            _, principal_due = _scheduled_service_components(
+                loans,
+                opening_principal_arrears=opening_principal_arrears,
+            )
+            service += (interest_due + opening_interest_arrears + principal_due + opening_principal_arrears).sum(axis=0)
         return service
 
     def compute_scheduled_debt_service_by_firm(self) -> np.ndarray:
         """Calculate next-period scheduled firm loan interest and principal service."""
         return self._scheduled_service_by_borrower(("st_loans", "lt_loans"))
+
+    def _compute_firm_installment_buckets(
+        self,
+        loan_states: dict[str, np.ndarray] | None = None,
+    ) -> dict[str, dict[str, np.ndarray] | np.ndarray]:
+        """Return firm debt-service buckets with arrears-inclusive totals."""
+        if loan_states is None:
+            loan_states = self.states
+
+        n_firms = loan_states["st_loans"].shape[2]
+        (
+            contractual_interest_due_by_key,
+            contractual_principal_due_by_key,
+            contractual_principal_due_by_firm,
+            contractual_interest_due_by_firm,
+            _,
+        ) = self._scheduled_service_by_borrower_and_bank(
+            ("st_loans", "lt_loans"),
+            loan_states=loan_states,
+            principal_arrears_by_key=self._firm_principal_arrears_by_cell,
+        )
+        opening_interest_arrears_by_key = _copy_firm_service_schedule(self._firm_interest_arrears_by_cell)
+        opening_principal_arrears_by_key = _copy_firm_service_schedule(self._firm_principal_arrears_by_cell)
+        opening_interest_arrears_by_firm = np.zeros(n_firms)
+        opening_principal_arrears_by_firm = np.zeros(n_firms)
+        for key in ("st_loans", "lt_loans"):
+            opening_interest_arrears_by_firm += opening_interest_arrears_by_key[key].sum(axis=0)
+            opening_principal_arrears_by_firm += opening_principal_arrears_by_key[key].sum(axis=0)
+
+        scheduled_interest_due_by_key = {
+            key: contractual_interest_due_by_key[key] + opening_interest_arrears_by_key[key]
+            for key in ("st_loans", "lt_loans")
+        }
+        scheduled_principal_due_by_key = {
+            key: contractual_principal_due_by_key[key] + opening_principal_arrears_by_key[key]
+            for key in ("st_loans", "lt_loans")
+        }
+        return {
+            "opening_interest_arrears_by_key": opening_interest_arrears_by_key,
+            "opening_principal_arrears_by_key": opening_principal_arrears_by_key,
+            "contractual_interest_due_by_key": contractual_interest_due_by_key,
+            "contractual_principal_due_by_key": contractual_principal_due_by_key,
+            "scheduled_interest_due_by_key": scheduled_interest_due_by_key,
+            "scheduled_principal_due_by_key": scheduled_principal_due_by_key,
+            "opening_interest_arrears_by_firm": opening_interest_arrears_by_firm,
+            "opening_principal_arrears_by_firm": opening_principal_arrears_by_firm,
+            "contractual_interest_due_by_firm": contractual_interest_due_by_firm,
+            "contractual_principal_due_by_firm": contractual_principal_due_by_firm,
+            "scheduled_interest_due_by_firm": opening_interest_arrears_by_firm + contractual_interest_due_by_firm,
+            "scheduled_principal_due_by_firm": opening_principal_arrears_by_firm + contractual_principal_due_by_firm,
+        }
+
+    def compute_scheduled_firm_installments_preview(self) -> dict[str, np.ndarray]:
+        """Return current-period firm debt-service buckets before credit clearing."""
+        buckets = self._compute_firm_installment_buckets()
+        return {
+            "opening_interest_arrears": np.asarray(buckets["opening_interest_arrears_by_firm"], dtype=float).copy(),
+            "opening_principal_arrears": np.asarray(buckets["opening_principal_arrears_by_firm"], dtype=float).copy(),
+            "contractual_interest_due": np.asarray(buckets["contractual_interest_due_by_firm"], dtype=float).copy(),
+            "contractual_principal_due": np.asarray(buckets["contractual_principal_due_by_firm"], dtype=float).copy(),
+            "scheduled_interest_due": np.asarray(buckets["scheduled_interest_due_by_firm"], dtype=float).copy(),
+            "scheduled_principal_due": np.asarray(buckets["scheduled_principal_due_by_firm"], dtype=float).copy(),
+        }
+
+    def schedule_firm_installments(self) -> dict[str, np.ndarray]:
+        """Stage current-period firm loan service for later cash-feasible settlement."""
+        buckets = self._compute_firm_installment_buckets(
+            loan_states=self._serviceable_loans_this_period,
+        )
+        self._scheduled_firm_opening_interest_arrears_by_cell = _copy_firm_service_schedule(
+            buckets["opening_interest_arrears_by_key"]
+        )
+        self._scheduled_firm_opening_principal_arrears_by_cell = _copy_firm_service_schedule(
+            buckets["opening_principal_arrears_by_key"]
+        )
+        self._scheduled_firm_contractual_interest_due_by_cell = _copy_firm_service_schedule(
+            buckets["contractual_interest_due_by_key"]
+        )
+        self._scheduled_firm_contractual_principal_due_by_cell = _copy_firm_service_schedule(
+            buckets["contractual_principal_due_by_key"]
+        )
+        self._scheduled_firm_interest_due_by_cell = _copy_firm_service_schedule(buckets["scheduled_interest_due_by_key"])
+        self._scheduled_firm_principal_due_by_cell = _copy_firm_service_schedule(
+            buckets["scheduled_principal_due_by_key"]
+        )
+        return {
+            "opening_interest_arrears": np.asarray(buckets["opening_interest_arrears_by_firm"], dtype=float).copy(),
+            "opening_principal_arrears": np.asarray(buckets["opening_principal_arrears_by_firm"], dtype=float).copy(),
+            "contractual_interest_due": np.asarray(buckets["contractual_interest_due_by_firm"], dtype=float).copy(),
+            "contractual_principal_due": np.asarray(buckets["contractual_principal_due_by_firm"], dtype=float).copy(),
+            "scheduled_interest_due": np.asarray(buckets["scheduled_interest_due_by_firm"], dtype=float).copy(),
+            "scheduled_principal_due": np.asarray(buckets["scheduled_principal_due_by_firm"], dtype=float).copy(),
+        }
+
+    def settle_firm_installments(
+        self,
+        payable_principal_by_firm: np.ndarray,
+        payable_interest_by_firm: np.ndarray,
+        *,
+        overwrite_bank_interest: bool = False,
+        payable_opening_interest_arrears_by_firm: np.ndarray | None = None,
+        payable_contractual_interest_by_firm: np.ndarray | None = None,
+        payable_opening_principal_arrears_by_firm: np.ndarray | None = None,
+        payable_contractual_principal_by_firm: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Apply actual firm debt-service payments after cash-feasibility is known."""
+        n_firms = self.states["st_loans"].shape[2]
+        payable_principal_by_firm = np.asarray(payable_principal_by_firm, dtype=float).copy()
+        payable_interest_by_firm = np.asarray(payable_interest_by_firm, dtype=float).copy()
+        opening_interest_arrears_by_firm = np.zeros(n_firms)
+        opening_principal_arrears_by_firm = np.zeros(n_firms)
+        contractual_interest_due_by_firm = np.zeros(n_firms)
+        contractual_principal_due_by_firm = np.zeros(n_firms)
+        for key in ("st_loans", "lt_loans"):
+            opening_interest_arrears_by_firm += self._scheduled_firm_opening_interest_arrears_by_cell[key].sum(axis=0)
+            opening_principal_arrears_by_firm += self._scheduled_firm_opening_principal_arrears_by_cell[key].sum(axis=0)
+            contractual_interest_due_by_firm += self._scheduled_firm_contractual_interest_due_by_cell[key].sum(axis=0)
+            contractual_principal_due_by_firm += self._scheduled_firm_contractual_principal_due_by_cell[key].sum(axis=0)
+        scheduled_interest_due_by_firm = opening_interest_arrears_by_firm + contractual_interest_due_by_firm
+        scheduled_principal_due_by_firm = opening_principal_arrears_by_firm + contractual_principal_due_by_firm
+
+        payable_principal_by_firm = np.minimum(
+            np.maximum(payable_principal_by_firm, 0.0),
+            scheduled_principal_due_by_firm,
+        )
+        payable_interest_by_firm = np.minimum(
+            np.maximum(payable_interest_by_firm, 0.0),
+            scheduled_interest_due_by_firm,
+        )
+        if payable_opening_interest_arrears_by_firm is None:
+            payable_opening_interest_arrears_by_firm = np.minimum(
+                opening_interest_arrears_by_firm,
+                payable_interest_by_firm,
+            )
+        else:
+            payable_opening_interest_arrears_by_firm = np.minimum(
+                np.maximum(np.asarray(payable_opening_interest_arrears_by_firm, dtype=float), 0.0),
+                np.minimum(opening_interest_arrears_by_firm, payable_interest_by_firm),
+            )
+        remaining_interest_capacity = np.maximum(0.0, payable_interest_by_firm - payable_opening_interest_arrears_by_firm)
+        if payable_contractual_interest_by_firm is None:
+            payable_contractual_interest_by_firm = np.minimum(
+                contractual_interest_due_by_firm,
+                remaining_interest_capacity,
+            )
+        else:
+            payable_contractual_interest_by_firm = np.minimum(
+                np.maximum(np.asarray(payable_contractual_interest_by_firm, dtype=float), 0.0),
+                np.minimum(contractual_interest_due_by_firm, remaining_interest_capacity),
+            )
+        payable_interest_by_firm = payable_opening_interest_arrears_by_firm + payable_contractual_interest_by_firm
+
+        if payable_opening_principal_arrears_by_firm is None:
+            payable_opening_principal_arrears_by_firm = np.minimum(
+                opening_principal_arrears_by_firm,
+                payable_principal_by_firm,
+            )
+        else:
+            payable_opening_principal_arrears_by_firm = np.minimum(
+                np.maximum(np.asarray(payable_opening_principal_arrears_by_firm, dtype=float), 0.0),
+                np.minimum(opening_principal_arrears_by_firm, payable_principal_by_firm),
+            )
+        remaining_principal_capacity = np.maximum(
+            0.0,
+            payable_principal_by_firm - payable_opening_principal_arrears_by_firm,
+        )
+        if payable_contractual_principal_by_firm is None:
+            payable_contractual_principal_by_firm = np.minimum(
+                contractual_principal_due_by_firm,
+                remaining_principal_capacity,
+            )
+        else:
+            payable_contractual_principal_by_firm = np.minimum(
+                np.maximum(np.asarray(payable_contractual_principal_by_firm, dtype=float), 0.0),
+                np.minimum(contractual_principal_due_by_firm, remaining_principal_capacity),
+            )
+        payable_principal_by_firm = payable_opening_principal_arrears_by_firm + payable_contractual_principal_by_firm
+
+        principal_paid_by_firm = np.zeros(n_firms)
+        interest_paid_by_firm = np.zeros(n_firms)
+        interest_paid_by_bank = np.zeros(self.states["st_loans"].shape[1])
+
+        for key in ("st_loans", "lt_loans"):
+            loans = self.states[key]
+            serviceable = self._serviceable_loans_this_period.get(key, loans).copy()
+            current_new = self._new_loans_this_period.get(key, np.zeros_like(loans))
+            opening_interest_due = self._scheduled_firm_opening_interest_arrears_by_cell[key]
+            contractual_interest_due = self._scheduled_firm_contractual_interest_due_by_cell[key]
+            opening_principal_due = self._scheduled_firm_opening_principal_arrears_by_cell[key]
+            contractual_principal_due = self._scheduled_firm_contractual_principal_due_by_cell[key]
+
+            opening_interest_ratio = np.divide(
+                payable_opening_interest_arrears_by_firm,
+                opening_interest_arrears_by_firm,
+                out=np.zeros_like(payable_opening_interest_arrears_by_firm),
+                where=opening_interest_arrears_by_firm > 0.0,
+            )
+            contractual_interest_ratio = np.divide(
+                payable_contractual_interest_by_firm,
+                contractual_interest_due_by_firm,
+                out=np.zeros_like(payable_contractual_interest_by_firm),
+                where=contractual_interest_due_by_firm > 0.0,
+            )
+            opening_principal_ratio = np.divide(
+                payable_opening_principal_arrears_by_firm,
+                opening_principal_arrears_by_firm,
+                out=np.zeros_like(payable_opening_principal_arrears_by_firm),
+                where=opening_principal_arrears_by_firm > 0.0,
+            )
+            contractual_principal_ratio = np.divide(
+                payable_contractual_principal_by_firm,
+                contractual_principal_due_by_firm,
+                out=np.zeros_like(payable_contractual_principal_by_firm),
+                where=contractual_principal_due_by_firm > 0.0,
+            )
+
+            opening_interest_paid = opening_interest_due * opening_interest_ratio[None, :]
+            contractual_interest_paid = contractual_interest_due * contractual_interest_ratio[None, :]
+            opening_principal_paid = opening_principal_due * opening_principal_ratio[None, :]
+            contractual_principal_paid = contractual_principal_due * contractual_principal_ratio[None, :]
+            interest_paid = opening_interest_paid + contractual_interest_paid
+            principal_paid = opening_principal_paid + contractual_principal_paid
+            serviceable_principal = np.minimum(serviceable[0], loans[0])
+
+            loans[0] = np.maximum(loans[0] - principal_paid, 0.0)
+
+            remaining_serviceable_principal = np.maximum(serviceable_principal - principal_paid, 0.0)
+            fully_repaid = np.isclose(remaining_serviceable_principal, 0.0, atol=1e-2)
+            loans[2] = np.maximum(loans[2] - np.where(fully_repaid, serviceable[2], 0.0), 0.0)
+            self._firm_interest_arrears_by_cell[key] = np.maximum(0.0, opening_interest_due - opening_interest_paid)
+            self._firm_interest_arrears_by_cell[key] += np.maximum(0.0, contractual_interest_due - contractual_interest_paid)
+            self._firm_principal_arrears_by_cell[key] = np.maximum(0.0, opening_principal_due - opening_principal_paid)
+            self._firm_principal_arrears_by_cell[key] += np.maximum(
+                0.0,
+                contractual_principal_due - contractual_principal_paid,
+            )
+            self._firm_principal_arrears_by_cell[key] = np.minimum(self._firm_principal_arrears_by_cell[key], loans[0])
+            self._firm_interest_arrears_by_cell[key][fully_repaid] = 0.0
+            self._firm_principal_arrears_by_cell[key][fully_repaid] = 0.0
+
+            rate_weighted_principal = (
+                remaining_serviceable_principal * serviceable[1]
+                + current_new[0] * current_new[1]
+            )
+            loans[1] = np.divide(
+                rate_weighted_principal,
+                loans[0],
+                out=np.zeros_like(loans[0]),
+                where=loans[0] > 0.0,
+            )
+
+            principal_paid_by_firm += principal_paid.sum(axis=0)
+            interest_paid_by_firm += interest_paid.sum(axis=0)
+            interest_paid_by_bank += interest_paid.sum(axis=1)
+
+            self._new_loans_this_period[key] = np.zeros_like(loans)
+            self._serviceable_loans_this_period[key] = loans.copy()
+
+        self._last_interest_by_firm = interest_paid_by_firm
+        if overwrite_bank_interest:
+            self._last_interest_by_bank = interest_paid_by_bank
+        else:
+            self._last_interest_by_bank += interest_paid_by_bank
+        self._scheduled_firm_opening_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_opening_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        return principal_paid_by_firm
 
     def pay_firm_installments(self) -> np.ndarray:
         """Process current-period principal payments on existing firm loans.
@@ -612,10 +981,16 @@ class CreditMarket:
         Current-quarter originations are excluded from same-quarter service.
         Interest due is stored for `compute_interest_paid_by_firm`.
         """
-        principal_paid, interest_paid, interest_by_bank = self._service_loans(("st_loans", "lt_loans"))
-        self._last_interest_by_firm = interest_paid
-        self._last_interest_by_bank = interest_by_bank
-        return principal_paid
+        staged_installments = self.schedule_firm_installments()
+        return self.settle_firm_installments(
+            payable_principal_by_firm=staged_installments["scheduled_principal_due"],
+            payable_interest_by_firm=staged_installments["scheduled_interest_due"],
+            overwrite_bank_interest=True,
+            payable_opening_interest_arrears_by_firm=staged_installments["opening_interest_arrears"],
+            payable_contractual_interest_by_firm=staged_installments["contractual_interest_due"],
+            payable_opening_principal_arrears_by_firm=staged_installments["opening_principal_arrears"],
+            payable_contractual_principal_by_firm=staged_installments["contractual_principal_due"],
+        )
 
     def pay_household_installments(self) -> np.ndarray:
         """Process current-period principal payments on existing household loans.
@@ -628,20 +1003,21 @@ class CreditMarket:
         self._last_interest_by_bank += interest_by_bank
         return principal_paid
 
-    def remove_repaid_loans(self) -> None:
+    def remove_repaid_loans(self, loan_keys: tuple[str, ...] | None = None) -> None:
         """Clean up fully repaid loans from the market state.
 
         Identifies loans with near-zero balances (accounting for numerical precision)
         and removes them from the market state by zeroing out all their attributes.
         """
-        for loans in [
-            self.states["st_loans"],
-            self.states["lt_loans"],
-            self.states["cons_loans"],
-            self.states["mort_loans"],
-        ]:
+        if loan_keys is None:
+            loan_keys = ("st_loans", "lt_loans", "cons_loans", "mort_loans")
+        for key in loan_keys:
+            loans = self.states[key]
             ind = np.isclose(loans[0], 0.0, atol=1e-2)
             loans[:, ind] = 0.0
+            if key in ("st_loans", "lt_loans"):
+                self._firm_interest_arrears_by_cell[key][ind] = 0.0
+                self._firm_principal_arrears_by_cell[key][ind] = 0.0
 
     def compute_aggregates(self) -> None:
         """Update aggregate loan statistics.
@@ -772,6 +1148,10 @@ class CreditMarket:
         total_amount = self.states["st_loans"][0][:, firm_id].sum() + self.states["lt_loans"][0][:, firm_id].sum()
         self.states["st_loans"][:, :, firm_id] = 0.0
         self.states["lt_loans"][:, :, firm_id] = 0.0
+        self._firm_interest_arrears_by_cell["st_loans"][:, firm_id] = 0.0
+        self._firm_interest_arrears_by_cell["lt_loans"][:, firm_id] = 0.0
+        self._firm_principal_arrears_by_cell["st_loans"][:, firm_id] = 0.0
+        self._firm_principal_arrears_by_cell["lt_loans"][:, firm_id] = 0.0
         return total_amount
 
     def remove_loans_to_households(self, household_id: int | np.ndarray) -> Tuple[float, float]:
@@ -803,6 +1183,10 @@ class CreditMarket:
         self.states["lt_loans"][:, bank_id] = 0.0
         self.states["cons_loans"][:, bank_id] = 0.0
         self.states["mort_loans"][:, bank_id] = 0.0
+        self._firm_interest_arrears_by_cell["st_loans"][bank_id] = 0.0
+        self._firm_interest_arrears_by_cell["lt_loans"][bank_id] = 0.0
+        self._firm_principal_arrears_by_cell["st_loans"][bank_id] = 0.0
+        self._firm_principal_arrears_by_cell["lt_loans"][bank_id] = 0.0
 
     def save_to_h5(self, group: h5py.Group):
         """Save credit market state to HDF5 file.

@@ -276,6 +276,51 @@ def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(
     assert np.isclose(clearer._last_received_overdraft_refinance_credit_by_firm[0], 20.0)
 
 
+def test_waterbucket_clears_debt_rollover_from_residual_capacity_after_lt(test_banks, test_firms, test_households):
+    clearer = _waterbucket_clearer(consider_loan_type_fractions=True)
+    _set_bank_lending_room(test_banks, max_car=100.0)
+    _set_initial_loan_type_fractions(test_banks, 1.0, 0.0, 0.0)
+
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    n_households = test_households.ts.current("n_households")
+    first_firm = np.zeros(n_firms)
+    first_firm[0] = 1.0
+
+    test_banks.ts.override_current("interest_rates_on_short_term_firm_loans", np.full(n_banks, 0.05))
+    test_banks.ts.override_current("interest_rates_on_long_term_firm_loans", np.full(n_banks, 0.05))
+    test_banks.parameters.enable_firm_loans_return_on_assets_restriction = False
+    test_banks.parameters.enable_firm_loans_return_on_equity_restriction = False
+    test_banks.parameters.enable_firm_loans_dscr_restriction = False
+
+    test_firms.ts.override_current("target_short_term_credit", first_firm * 1_000.0)
+    test_firms.ts.override_current("target_debt_rollover_credit", first_firm * 1_000.0)
+    test_firms.ts.override_current("target_overdraft_refinance_credit", np.zeros(n_firms))
+    test_firms.ts.override_current("ordinary_target_short_term_credit", np.zeros(n_firms))
+    test_firms.ts.override_current("target_long_term_credit", first_firm * 80.0)
+    test_firms.ts.override_current("capital_inputs_stock_value", first_firm * 1.0e6)
+    test_firms.ts.override_current("debt", np.zeros(n_firms))
+    test_firms.ts.override_current("deposits", np.zeros(n_firms))
+    test_firms.ts.override_current("expected_profits", first_firm * 50_000.0)
+
+    test_households.ts.override_current("target_consumption_loans", np.zeros(n_households))
+    test_households.ts.override_current("target_mortgage", np.zeros(n_households))
+
+    short_term, long_term, _, _ = clearer.clear(
+        banks=test_banks,
+        firms=test_firms,
+        households=test_households,
+        current_npl_firm_loans=0.0,
+        current_npl_hh_cons_loans=0.0,
+        current_npl_mortgages=0.0,
+    )
+
+    assert np.isclose(long_term[0, :, 0].sum(), 80.0)
+    assert np.isclose(short_term[0, :, 0].sum(), 20.0)
+    assert np.isclose(clearer._last_received_debt_rollover_credit_by_firm[0], 20.0)
+    assert np.isclose(clearer._last_received_overdraft_refinance_credit_by_firm[0], 0.0)
+
+
 def test_default_clearer_keeps_household_quota_after_firm_lending(test_banks, test_firms, test_households):
     clearer = _default_clearer()
     _set_bank_lending_room(test_banks, max_car=100.0)

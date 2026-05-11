@@ -75,15 +75,38 @@ class FirmTimeSeries(TimeSeries):
     - taxes_paid_on_production: Production taxes paid
 
     Credit Market:
-    - target_short_term_credit: Desired short-term borrowing
-    - target_overdraft_refinance_credit: Short-term borrowing to repair existing overdrafts
-    - ordinary_target_short_term_credit: Short-term borrowing for new working-capital activity
+        - target_short_term_credit: Desired short-term borrowing
+        - target_debt_rollover_credit: Short-term borrowing to refinance scheduled principal service
+        - target_overdraft_refinance_credit: Short-term borrowing to repair existing overdrafts
+        - ordinary_target_short_term_credit: Short-term borrowing for new working-capital activity
+    - credit_budget_*: Pro forma cash-waterfall components used to explain target-credit demand
     - target_long_term_credit: Desired long-term borrowing
     - received_short_term_credit: Actual short-term credit received
-    - received_overdraft_refinance_credit: Short-term credit granted for overdraft repair
-    - received_ordinary_short_term_credit: Short-term credit granted for new working-capital activity
-    - received_long_term_credit: Actual long-term credit received
-    - received_credit: Total new credit received
+    - received_debt_rollover_credit: Short-term credit granted for scheduled principal refinance
+        - received_overdraft_refinance_credit: Short-term credit granted for overdraft repair
+        - received_ordinary_short_term_credit: Short-term credit granted for new working-capital activity
+        - received_long_term_credit: Actual long-term credit received
+        - received_credit: Total new credit received
+        - firm_settlement_available_cash_before_debt_service: Post-goods cash available before firm loan service
+        - firm_settlement_corporate_tax_reserve: Preview corporate-tax cash reserved ahead of debt settlement
+        - firm_settlement_cash_after_tax_reserve: Residual ordinary cash after tax reserve, before loan service
+        - firm_settlement_opening_interest_arrears: Carried interest arrears entering this period
+        - firm_settlement_scheduled_interest_due: Total current-period firm loan interest due (opening arrears + current)
+        - firm_settlement_contractual_interest_due: Current-period contractual firm loan interest due
+        - firm_settlement_payable_interest: Firm loan interest actually payable this period
+        - firm_settlement_closing_interest_arrears: Interest arrears carried forward after settlement
+        - firm_settlement_unpaid_interest: Backward-compatible alias of closing interest arrears
+        - firm_settlement_opening_principal_arrears: Carried principal arrears entering this period
+        - firm_settlement_scheduled_principal_due: Total current-period firm principal due (opening arrears + current)
+        - firm_settlement_contractual_principal_due: Current-period contractual firm principal due
+        - firm_settlement_payable_principal: Firm principal actually paid this period
+        - firm_settlement_closing_principal_arrears: Principal arrears carried forward after settlement
+        - firm_settlement_unpaid_principal: Backward-compatible alias of closing principal arrears
+        - firm_settlement_debt_rollover_shortfall: Scheduled principal not covered by received rollover credit
+        - firm_settlement_overdraft_refinance_shortfall: Target overdraft repair not met by received refinance credit
+        - firm_settlement_residual_overdraft_exposure: End-of-period negative-deposit exposure after settlement
+        - firm_settlement_default_flag: Settlement-triggered default after opening arrears remain unresolved
+        - total_credit_exposure: Explicit firm debt plus end-of-period residual overdraft exposure
 
     Planning & Targets:
     - limiting_intermediate_inputs: Input constraints on production
@@ -329,8 +352,29 @@ class FirmTimeSeries(TimeSeries):
             real_amount_bought_as_capital_goods=np.full((data.shape[0], n_industries), np.nan),
             total_sales=data["Price"].values * data["Production"].values - data["Taxes paid on Production"].values,
             #
+            credit_budget_internal_cash=np.zeros(data.shape[0]),
+            credit_budget_existing_overdraft=np.zeros(data.shape[0]),
+            credit_budget_expected_sales=np.zeros(data.shape[0]),
+            credit_budget_wage_obligations=np.zeros(data.shape[0]),
+            credit_budget_production_tax_obligations=np.zeros(data.shape[0]),
+            credit_budget_corporate_tax_obligations=np.zeros(data.shape[0]),
+            credit_budget_interest_obligations=np.zeros(data.shape[0]),
+            credit_budget_debt_installments=np.zeros(data.shape[0]),
+            credit_budget_hard_obligations=np.zeros(data.shape[0]),
+            credit_budget_cash_after_hard_obligations=np.zeros(data.shape[0]),
+            credit_budget_available_after_hard_and_overdraft=np.zeros(data.shape[0]),
+            credit_budget_intermediate_costs=np.zeros(data.shape[0]),
+            credit_budget_tfp_costs=np.zeros(data.shape[0]),
+            credit_budget_working_capital_budget=np.zeros(data.shape[0]),
+            credit_budget_capital_costs=np.zeros(data.shape[0]),
+            credit_budget_technical_investment_costs=np.zeros(data.shape[0]),
+            credit_budget_investment_budget=np.zeros(data.shape[0]),
+            credit_budget_remaining_internal_finance_after_working_capital=np.zeros(data.shape[0]),
+            #
             target_short_term_credit=np.zeros(data.shape[0]),
             total_target_short_term_credit=[0.0],
+            target_debt_rollover_credit=np.zeros(data.shape[0]),
+            total_target_debt_rollover_credit=[0.0],
             target_overdraft_refinance_credit=np.zeros(data.shape[0]),
             total_target_overdraft_refinance_credit=[0.0],
             ordinary_target_short_term_credit=np.zeros(data.shape[0]),
@@ -339,6 +383,8 @@ class FirmTimeSeries(TimeSeries):
             total_target_long_term_credit=[0.0],
             received_short_term_credit=np.full(data.shape[0], np.nan),
             total_received_short_term_credit=[0.0],
+            received_debt_rollover_credit=np.full(data.shape[0], np.nan),
+            total_received_debt_rollover_credit=[0.0],
             received_overdraft_refinance_credit=np.full(data.shape[0], np.nan),
             total_received_overdraft_refinance_credit=[0.0],
             received_ordinary_short_term_credit=np.full(data.shape[0], np.nan),
@@ -346,6 +392,25 @@ class FirmTimeSeries(TimeSeries):
             received_long_term_credit=np.full(data.shape[0], np.nan),
             total_received_long_term_credit=[0.0],
             received_credit=np.full(data.shape[0], np.nan),
+            firm_settlement_available_cash_before_debt_service=np.zeros(data.shape[0]),
+            firm_settlement_corporate_tax_reserve=np.zeros(data.shape[0]),
+            firm_settlement_cash_after_tax_reserve=np.zeros(data.shape[0]),
+            firm_settlement_opening_interest_arrears=np.zeros(data.shape[0]),
+            firm_settlement_scheduled_interest_due=data["Interest paid on loans"].values,
+            firm_settlement_contractual_interest_due=data["Interest paid on loans"].values,
+            firm_settlement_payable_interest=data["Interest paid on loans"].values,
+            firm_settlement_closing_interest_arrears=np.zeros(data.shape[0]),
+            firm_settlement_unpaid_interest=np.zeros(data.shape[0]),
+            firm_settlement_opening_principal_arrears=np.zeros(data.shape[0]),
+            firm_settlement_scheduled_principal_due=data["Debt Installments"].values,
+            firm_settlement_contractual_principal_due=data["Debt Installments"].values,
+            firm_settlement_payable_principal=data["Debt Installments"].values,
+            firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
+            firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
+            firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+            firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
+            firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
+            firm_settlement_default_flag=np.full(data.shape[0], False),
             #
             # Credit-market (WaterBucket) binding diagnostics
             credit_market_firm_cfads=np.full(data.shape[0], np.nan),
@@ -363,6 +428,7 @@ class FirmTimeSeries(TimeSeries):
             short_term_loan_debt=np.zeros(data.shape[0]),
             long_term_loan_debt=data["Debt"].values,
             debt=data["Debt"].values,
+            total_credit_exposure=data["Debt"].values + np.maximum(0.0, -data["Deposits"].values),
             deposits=data["Deposits"].values,
             debt_installments=data["Debt Installments"].values,
             scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,
@@ -610,8 +676,29 @@ def create_firms_timeseries(
         real_amount_bought_as_capital_goods=np.full((data.shape[0], n_industries), np.nan),
         total_sales=data["Price"].values * data["Production"].values - data["Taxes paid on Production"].values,
         #
+        credit_budget_internal_cash=np.zeros(data.shape[0]),
+        credit_budget_existing_overdraft=np.zeros(data.shape[0]),
+        credit_budget_expected_sales=np.zeros(data.shape[0]),
+        credit_budget_wage_obligations=np.zeros(data.shape[0]),
+        credit_budget_production_tax_obligations=np.zeros(data.shape[0]),
+        credit_budget_corporate_tax_obligations=np.zeros(data.shape[0]),
+        credit_budget_interest_obligations=np.zeros(data.shape[0]),
+        credit_budget_debt_installments=np.zeros(data.shape[0]),
+        credit_budget_hard_obligations=np.zeros(data.shape[0]),
+        credit_budget_cash_after_hard_obligations=np.zeros(data.shape[0]),
+        credit_budget_available_after_hard_and_overdraft=np.zeros(data.shape[0]),
+        credit_budget_intermediate_costs=np.zeros(data.shape[0]),
+        credit_budget_tfp_costs=np.zeros(data.shape[0]),
+        credit_budget_working_capital_budget=np.zeros(data.shape[0]),
+        credit_budget_capital_costs=np.zeros(data.shape[0]),
+        credit_budget_technical_investment_costs=np.zeros(data.shape[0]),
+        credit_budget_investment_budget=np.zeros(data.shape[0]),
+        credit_budget_remaining_internal_finance_after_working_capital=np.zeros(data.shape[0]),
+        #
         target_short_term_credit=np.zeros(data.shape[0]),
         total_target_short_term_credit=[0.0],
+        target_debt_rollover_credit=np.zeros(data.shape[0]),
+        total_target_debt_rollover_credit=[0.0],
         target_overdraft_refinance_credit=np.zeros(data.shape[0]),
         total_target_overdraft_refinance_credit=[0.0],
         ordinary_target_short_term_credit=np.zeros(data.shape[0]),
@@ -620,6 +707,8 @@ def create_firms_timeseries(
         total_target_long_term_credit=[0.0],
         received_short_term_credit=np.full(data.shape[0], np.nan),
         total_received_short_term_credit=[0.0],
+        received_debt_rollover_credit=np.full(data.shape[0], np.nan),
+        total_received_debt_rollover_credit=[0.0],
         received_overdraft_refinance_credit=np.full(data.shape[0], np.nan),
         total_received_overdraft_refinance_credit=[0.0],
         received_ordinary_short_term_credit=np.full(data.shape[0], np.nan),
@@ -627,6 +716,25 @@ def create_firms_timeseries(
         received_long_term_credit=np.full(data.shape[0], np.nan),
         total_received_long_term_credit=[0.0],
         received_credit=np.full(data.shape[0], np.nan),
+        firm_settlement_available_cash_before_debt_service=np.zeros(data.shape[0]),
+        firm_settlement_corporate_tax_reserve=np.zeros(data.shape[0]),
+        firm_settlement_cash_after_tax_reserve=np.zeros(data.shape[0]),
+        firm_settlement_opening_interest_arrears=np.zeros(data.shape[0]),
+        firm_settlement_scheduled_interest_due=data["Interest paid on loans"].values,
+        firm_settlement_contractual_interest_due=data["Interest paid on loans"].values,
+        firm_settlement_payable_interest=data["Interest paid on loans"].values,
+        firm_settlement_closing_interest_arrears=np.zeros(data.shape[0]),
+        firm_settlement_unpaid_interest=np.zeros(data.shape[0]),
+        firm_settlement_opening_principal_arrears=np.zeros(data.shape[0]),
+        firm_settlement_scheduled_principal_due=data["Debt Installments"].values,
+        firm_settlement_contractual_principal_due=data["Debt Installments"].values,
+        firm_settlement_payable_principal=data["Debt Installments"].values,
+        firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
+        firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
+        firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+        firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
+        firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
+        firm_settlement_default_flag=np.full(data.shape[0], False),
         #
         # Credit-market (WaterBucket) binding diagnostics
         credit_market_firm_cfads=np.full(data.shape[0], np.nan),
@@ -644,6 +752,7 @@ def create_firms_timeseries(
         short_term_loan_debt=np.zeros(data.shape[0]),
         long_term_loan_debt=data["Debt"].values,
         debt=data["Debt"].values,
+        total_credit_exposure=data["Debt"].values + np.maximum(0.0, -data["Deposits"].values),
         deposits=data["Deposits"].values,
         debt_installments=data["Debt Installments"].values,
         scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,

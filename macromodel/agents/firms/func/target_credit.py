@@ -14,14 +14,15 @@ class TargetCreditSetter(ABC):
     - Unconstrained costs for capital inputs (investment needs)
 
     The credit demand is split into:
-    - Short-term credit: total short-term demand, including any existing-overdraft
-      repair that cannot be covered by post-obligation cash plus ordinary working
-      capital needs
+    - Short-term credit: total short-term demand, including scheduled-principal
+      rollover, existing-overdraft repair that cannot be covered by
+      post-obligation cash, and ordinary working-capital needs
     - Long-term credit: primarily for capital investments
 
     The setter returns only total short-term and long-term targets. `Firms.compute_target_credit`
-    records the accounting split between `target_overdraft_refinance_credit` and
-    `ordinary_target_short_term_credit` from the same pro forma cash waterfall.
+    records the accounting split between `target_debt_rollover_credit`,
+    `target_overdraft_refinance_credit`, and `ordinary_target_short_term_credit`
+    from the same pro forma cash waterfall.
     """
 
     @abstractmethod
@@ -52,8 +53,8 @@ class TargetCreditSetter(ABC):
 
         Returns:
             Tuple[np.ndarray, np.ndarray]: Target short-term and long-term credit amounts
-                First array is total short-term credit, including overdraft repair
-                and ordinary working-capital credit.
+                First array is total short-term credit, including principal
+                rollover, overdraft repair, and ordinary working-capital credit.
                 Second array is long-term credit for investments
         """
         pass

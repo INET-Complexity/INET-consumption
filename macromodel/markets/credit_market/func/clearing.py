@@ -1243,12 +1243,13 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         models credit flows like water flowing through a network of buckets.
         It operates in multiple stages to ensure efficient and compliant allocation.
 
-        Firm short-term demand is split into ordinary working-capital demand and
-        emergency overdraft-refinance demand. Ordinary short-term firm loans,
-        long-term firm loans, household consumption loans, and mortgages clear
-        first against their normal caps. Overdraft refinance clears last from
-        residual bank CAR only, so old negative-deposit repair cannot reallocate
-        ordinary firm lending capacity away from long-term investment loans.
+        Firm short-term demand is split into ordinary working-capital demand,
+        scheduled-principal rollover demand, and emergency overdraft-refinance
+        demand. Ordinary short-term firm loans, long-term firm loans, household
+        consumption loans, and mortgages clear first against their normal caps.
+        Debt rollover and overdraft refinance clear afterward from residual bank
+        CAR only, so legacy-liability repair cannot reallocate ordinary firm
+        lending capacity away from long-term investment loans.
 
         Args:
             banks (Banks): Banking sector agent
@@ -1310,29 +1311,45 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             max_supply_based_on_preferences_mortgages = np.full(banks.ts.current("n_banks"), np.inf)
 
         target_short_term_credit = np.asarray(firms.ts.current("target_short_term_credit"), dtype=float)
+        target_debt_rollover_credit = np.asarray(
+            firms.ts.current("target_debt_rollover_credit"),
+            dtype=float,
+        )
+        target_debt_rollover_credit = np.minimum(
+            np.maximum(0.0, target_debt_rollover_credit),
+            np.maximum(0.0, target_short_term_credit),
+        )
         target_overdraft_refinance_credit = np.asarray(
             firms.ts.current("target_overdraft_refinance_credit"),
             dtype=float,
         )
         target_overdraft_refinance_credit = np.minimum(
             np.maximum(0.0, target_overdraft_refinance_credit),
-            np.maximum(0.0, target_short_term_credit),
+            np.maximum(0.0, target_short_term_credit - target_debt_rollover_credit),
         )
         ordinary_target_short_term_credit = np.asarray(
             firms.ts.current("ordinary_target_short_term_credit"),
             dtype=float,
         )
-        if np.nansum(ordinary_target_short_term_credit) == 0.0 and np.nansum(target_overdraft_refinance_credit) == 0.0:
+        if (
+            np.nansum(ordinary_target_short_term_credit) == 0.0
+            and np.nansum(target_debt_rollover_credit) == 0.0
+            and np.nansum(target_overdraft_refinance_credit) == 0.0
+        ):
             ordinary_target_short_term_credit = target_short_term_credit.copy()
         ordinary_target_short_term_credit = np.maximum(
             0.0,
-            np.minimum(ordinary_target_short_term_credit, target_short_term_credit - target_overdraft_refinance_credit),
+            np.minimum(
+                ordinary_target_short_term_credit,
+                target_short_term_credit - target_debt_rollover_credit - target_overdraft_refinance_credit,
+            ),
         )
 
+        self._last_received_debt_rollover_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
         self._last_received_overdraft_refinance_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
         initial_new_credit_by_firm = new_credit_by_firm.copy()
 
-        # Ordinary firm loans clear before emergency overdraft refinance so refinance cannot
+        # Ordinary firm loans clear before rollover/refinance so legacy-liability repair cannot
         # reallocate ordinary long-term capacity.
         new_ordinary_st_loans = self.clear_loans(
             banks=banks,
@@ -1404,6 +1421,30 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             - banks.ts.current("total_outstanding_loans")
             - new_credit_by_bank,
         )
+        new_debt_rollover_st_loans = self.clear_loans(
+            banks=banks,
+            firms=firms,
+            households=households,
+            loan_type=LoanTypes.FIRM_SHORT_TERM_LOAN,
+            new_credit_by_bank=new_credit_by_bank,
+            new_credit_by_firm=new_credit_by_firm,
+            new_credit_by_household=new_credit_by_household,
+            max_supply_based_on_preferences=residual_car_room,
+            new_debt_service_by_firm=new_debt_service_by_firm,
+            new_preference_credit_by_bank=np.zeros(banks.ts.current("n_banks")),
+            target_credit_override=target_debt_rollover_credit,
+            append_firm_diagnostics=False,
+        )
+        self._last_received_debt_rollover_credit_by_firm = new_debt_rollover_st_loans[0].sum(axis=0)
+        new_credit_by_firm += new_debt_rollover_st_loans[0].sum(axis=0)
+        new_credit_by_bank += new_debt_rollover_st_loans[0].sum(axis=1)
+
+        residual_car_room = np.maximum(
+            0.0,
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+            - banks.ts.current("total_outstanding_loans")
+            - new_credit_by_bank,
+        )
         firm_pref_room_before_refinance = np.maximum(
             0.0,
             max_supply_based_on_preferences_firms - new_firm_preference_credit_by_bank,
@@ -1431,15 +1472,16 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_firm += new_refinance_st_loans[0].sum(axis=0)
         new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1)
         new_st_loans = np.zeros_like(new_ordinary_st_loans)
-        new_st_loans[0] = new_ordinary_st_loans[0] + new_refinance_st_loans[0]
+        new_st_loans[0] = new_ordinary_st_loans[0] + new_debt_rollover_st_loans[0] + new_refinance_st_loans[0]
         new_st_loans[1] = np.divide(
             new_ordinary_st_loans[1] * new_ordinary_st_loans[0]
+            + new_debt_rollover_st_loans[1] * new_debt_rollover_st_loans[0]
             + new_refinance_st_loans[1] * new_refinance_st_loans[0],
             new_st_loans[0],
             out=np.zeros_like(new_st_loans[0]),
             where=new_st_loans[0] > 0.0,
         )
-        new_st_loans[2] = new_ordinary_st_loans[2] + new_refinance_st_loans[2]
+        new_st_loans[2] = new_ordinary_st_loans[2] + new_debt_rollover_st_loans[2] + new_refinance_st_loans[2]
 
         n_firms = firms.ts.current("n_firms")
         st_granted_by_firm = new_st_loans[0].sum(axis=0)

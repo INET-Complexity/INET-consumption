@@ -443,12 +443,12 @@ FRA:
       firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       household_consumption_loan_maturity: 2
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
-      long_term_firm_loan_maturity: 20 # 60
+      long_term_firm_loan_maturity: 60 # 60
+      short_term_firm_loan_maturity: 12 # 20
       mortgage_debt_service_to_income_ratio: 0.35  # 0.05
       mortgage_loan_to_income_ratio: 21  # 0.05
       mortgage_loan_to_value_ratio: 0.8  # 0.05
       mortgage_maturity: 100 #  120
-      short_term_firm_loan_maturity: 4 # 20
 
   exchange_rates:
     exchange_rate_type: constant

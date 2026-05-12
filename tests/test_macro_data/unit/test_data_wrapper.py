@@ -100,6 +100,44 @@ class TestCreator:
         )
         assert creator.synthetic_countries.keys() == {"FRA"}
 
+    def test_reset_does_not_rescale_household_balances(self, data_config_path):
+        with open(data_config_path, "r") as f:
+            config_dict = yaml.safe_load(f)
+        configuration = DataConfiguration(**config_dict)
+        configuration.prune_date = None
+        configuration.seed = 0
+        raw_data_path = TEST_PATH / "unit" / "sample_raw_data"
+
+        creator = DataWrapper.from_config(
+            configuration=configuration,
+            raw_data_path=raw_data_path,
+            single_hfcs_survey=True,
+        )
+
+        country = creator.synthetic_countries["FRA"]
+        before_deposits = float(country.banks.bank_data["Deposits from Households"].sum())
+        before_loans = float(country.banks.bank_data["Loans to Households"].sum())
+        before_mortgages = float(country.banks.bank_data["Mortgages to Households"].sum())
+        before_population_deposits = float(country.population.household_data["Wealth in Deposits"].sum())
+
+        country.reset_firm_function_dependent(
+            capital_inputs_utilisation_rate=0.1,
+            initial_inventory_to_input_fraction=0.1,
+            intermediate_inputs_utilisation_rate=0.2,
+            zero_initial_debt=False,
+            zero_initial_deposits=False,
+        )
+
+        after_deposits = float(country.banks.bank_data["Deposits from Households"].sum())
+        after_loans = float(country.banks.bank_data["Loans to Households"].sum())
+        after_mortgages = float(country.banks.bank_data["Mortgages to Households"].sum())
+        after_population_deposits = float(country.population.household_data["Wealth in Deposits"].sum())
+
+        assert np.isclose(after_deposits, before_deposits)
+        assert np.isclose(after_loans, before_loans)
+        assert np.isclose(after_mortgages, before_mortgages)
+        assert np.isclose(after_population_deposits, before_population_deposits)
+
     def test__single_banks(self, data_config_path):
         with open(data_config_path, "r") as f:
             config_dict = yaml.safe_load(f)

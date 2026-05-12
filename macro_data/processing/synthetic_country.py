@@ -681,7 +681,7 @@ class SyntheticCountry:
             population=population,
         )
         match_firms_with_banks_optimal(firms=firms, banks=banks)
-        population.compute_household_wealth(independents=independents)
+        population.ensure_household_wealth(independents=independents)
         match_households_with_banks_optimal(population=population, banks=banks)
 
     @classmethod

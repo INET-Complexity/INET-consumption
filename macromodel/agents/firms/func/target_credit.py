@@ -195,10 +195,10 @@ class SimpleTargetCreditSetter(TargetCreditSetter):
             out=np.ones_like(total_activity_budget),
             where=total_activity_budget > 0.0,
         )
-        target_short_term_credit = (
-            unconstrained_target_intermediate_inputs_costs + planned_tfp_investment_costs
-        ) * (1.0 - activity_scale)
-        target_long_term_credit = (
-            unconstrained_target_capital_inputs_costs + planned_technical_investment_costs
-        ) * (1.0 - activity_scale)
+        target_short_term_credit = (unconstrained_target_intermediate_inputs_costs + planned_tfp_investment_costs) * (
+            1.0 - activity_scale
+        )
+        target_long_term_credit = (unconstrained_target_capital_inputs_costs + planned_technical_investment_costs) * (
+            1.0 - activity_scale
+        )
         return target_short_term_credit, target_long_term_credit

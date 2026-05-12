@@ -325,7 +325,9 @@ class DataWrapper:
             for country in country_names
         }
         capital_depreciation_accounting_modes = {
-            str(country): configuration.country_configs[country].firms_configuration.capital_depreciation_accounting_mode
+            str(country): configuration.country_configs[
+                country
+            ].firms_configuration.capital_depreciation_accounting_mode
             for country in country_names
         }
 

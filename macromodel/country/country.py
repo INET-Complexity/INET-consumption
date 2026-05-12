@@ -486,9 +486,7 @@ class Country:
         # Firms set production targets
         self.firms.set_targets(
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
-            bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current(
-                "interest_rates_on_long_term_firm_loans"
-            ),
+            bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current("interest_rates_on_long_term_firm_loans"),
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             current_good_prices=self.economy.ts.current("good_prices"),
@@ -940,12 +938,11 @@ class Country:
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
-        firm_interest_obligation_preview = (
-            self.firms.ts.current("firm_settlement_scheduled_interest_due")
-            + self.firms.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
-                bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
-            )
+        firm_interest_obligation_preview = self.firms.ts.current(
+            "firm_settlement_scheduled_interest_due"
+        ) + self.firms.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
         )
         firm_loan_interest_obligation_preview = self.firms.ts.current("firm_settlement_scheduled_interest_due")
         firm_debt_installment_preview = self.firms.ts.current("firm_settlement_scheduled_principal_due")
@@ -1276,10 +1273,16 @@ class Country:
             illiquid_flag=firm_debt_settlement["illiquid_flag"],
         )
         self.economy.ts.npl_firm_loans.append([npl_firm_loans])
-        self.firms.ts.override_current("short_term_loan_debt", self.credit_market.compute_outstanding_short_term_loans_by_firm())
-        self.firms.ts.override_current("long_term_loan_debt", self.credit_market.compute_outstanding_long_term_loans_by_firm())
+        self.firms.ts.override_current(
+            "short_term_loan_debt", self.credit_market.compute_outstanding_short_term_loans_by_firm()
+        )
+        self.firms.ts.override_current(
+            "long_term_loan_debt", self.credit_market.compute_outstanding_long_term_loans_by_firm()
+        )
         self.firms.ts.override_current("debt", self.firms.compute_debt())
-        self.firms.ts.override_current("scheduled_debt_service", self.credit_market.compute_scheduled_debt_service_by_firm())
+        self.firms.ts.override_current(
+            "scheduled_debt_service", self.credit_market.compute_scheduled_debt_service_by_firm()
+        )
         self.firms.finalize_firm_debt_settlement(
             settlement=firm_debt_settlement,
             residual_overdraft_exposure=np.maximum(0.0, -self.firms.ts.current("deposits")),

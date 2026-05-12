@@ -323,7 +323,6 @@ class SectoralTFPGrowth(ProductivityGrowth):
         )
 
         if np.any(valid_firms):
-
             # Apply sector-specific effectiveness if available
             if sector_ids is not None:
                 for sector in np.unique(sector_ids):

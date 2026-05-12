@@ -93,7 +93,9 @@ class TestCountry:
 
         monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **kwargs: wage_preview)
         monkeypatch.setattr(test_country.firms, "compute_taxes_paid_on_production", lambda **kwargs: tax_preview)
-        monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **kwargs: deposit_interest_preview)
+        monkeypatch.setattr(
+            test_country.firms, "compute_interest_paid_on_deposits", lambda **kwargs: deposit_interest_preview
+        )
         monkeypatch.setattr(
             test_country.credit_market,
             "compute_scheduled_firm_installments_preview",

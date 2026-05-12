@@ -112,7 +112,8 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
             desired_labour = current_target_production.copy()
         desired_labour = np.minimum(
             desired_labour,
-            desired_labour + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - desired_labour),
+            desired_labour
+            + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - desired_labour),
         )
         desired_labour = np.minimum(
             desired_labour,

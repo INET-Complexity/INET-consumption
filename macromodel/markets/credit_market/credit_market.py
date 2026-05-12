@@ -110,7 +110,8 @@ def _compute_credit_supply_caps_by_type(
     """
     max_car = np.maximum(
         0.0,
-        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - banks.ts.current("total_outstanding_loans"),
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+        - banks.ts.current("total_outstanding_loans"),
     )
 
     # Import locally to keep CreditMarket module lightweight and avoid circular-import risk.
@@ -475,7 +476,9 @@ class CreditMarket:
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._reset_firm_service_period_tracking()
 
-        credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
+        credit_supply_temperature = float(
+            getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0
+        )
         target_short_term_credit = firms.ts.current("target_short_term_credit")
         target_debt_rollover_credit = firms.ts.current("target_debt_rollover_credit")
         target_overdraft_refinance_credit = firms.ts.current("target_overdraft_refinance_credit")
@@ -660,10 +663,7 @@ class CreditMarket:
             fully_repaid = np.isclose(remaining_serviceable_principal, 0.0, atol=1e-2)
             loans[2] = np.maximum(loans[2] - np.where(fully_repaid, serviceable[2], 0.0), 0.0)
 
-            rate_weighted_principal = (
-                remaining_serviceable_principal * serviceable[1]
-                + current_new[0] * current_new[1]
-            )
+            rate_weighted_principal = remaining_serviceable_principal * serviceable[1] + current_new[0] * current_new[1]
             loans[1] = np.divide(
                 rate_weighted_principal,
                 loans[0],
@@ -818,7 +818,9 @@ class CreditMarket:
         self._scheduled_firm_contractual_principal_due_by_cell = _copy_firm_service_schedule(
             buckets["contractual_principal_due_by_key"]
         )
-        self._scheduled_firm_interest_due_by_cell = _copy_firm_service_schedule(buckets["scheduled_interest_due_by_key"])
+        self._scheduled_firm_interest_due_by_cell = _copy_firm_service_schedule(
+            buckets["scheduled_interest_due_by_key"]
+        )
         self._scheduled_firm_principal_due_by_cell = _copy_firm_service_schedule(
             buckets["scheduled_principal_due_by_key"]
         )
@@ -876,7 +878,9 @@ class CreditMarket:
                 np.maximum(np.asarray(payable_opening_interest_arrears_by_firm, dtype=float), 0.0),
                 np.minimum(opening_interest_arrears_by_firm, payable_interest_by_firm),
             )
-        remaining_interest_capacity = np.maximum(0.0, payable_interest_by_firm - payable_opening_interest_arrears_by_firm)
+        remaining_interest_capacity = np.maximum(
+            0.0, payable_interest_by_firm - payable_opening_interest_arrears_by_firm
+        )
         if payable_contractual_interest_by_firm is None:
             payable_contractual_interest_by_firm = np.minimum(
                 contractual_interest_due_by_firm,

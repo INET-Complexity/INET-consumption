@@ -977,8 +977,7 @@ class SyntheticCountry:
         gross_hh_investment = np.outer(investment_weights, investment_rate * income).T
 
         capital_formation = (
-            self.industry_data["industry_vectors"]["Firm Capital Inputs in LCU"].sum()
-            + gross_hh_investment.sum()
+            self.industry_data["industry_vectors"]["Firm Capital Inputs in LCU"].sum() + gross_hh_investment.sum()
         )
 
         hh_consumption = self.industry_data["industry_vectors"]["Household Consumption in LCU"].sum() * (

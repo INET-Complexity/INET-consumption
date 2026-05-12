@@ -267,7 +267,9 @@ def test_tfp_growth_applies_after_current_period_production(datawrapper):
 
     np.testing.assert_allclose(firms_with_growth.ts.current("production"), firms_no_growth.ts.current("production"))
     assert np.mean(firms_with_growth.states["tfp_multiplier"]) > np.mean(firms_no_growth.states["tfp_multiplier"])
-    np.testing.assert_allclose(firms_with_growth.ts.current("tfp_multiplier"), firms_with_growth.states["tfp_multiplier"])
+    np.testing.assert_allclose(
+        firms_with_growth.ts.current("tfp_multiplier"), firms_with_growth.states["tfp_multiplier"]
+    )
     assert np.mean(firms_with_growth.ts.current("tfp_multiplier")) > np.mean(
         firms_with_growth.ts.prev("tfp_multiplier")
     )

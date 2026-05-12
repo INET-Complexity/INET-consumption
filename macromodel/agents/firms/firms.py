@@ -1145,13 +1145,10 @@ class Firms(Agent):
             weights=individual_wages[corresponding_firm >= 0],
             minlength=self.ts.current("n_firms"),
         )
-        return (
-            cpi
-            * (
-                (1.0 + employer_social_insurance_tax)
-                / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))
-                * real_wages
-            )
+        return cpi * (
+            (1.0 + employer_social_insurance_tax)
+            / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))
+            * real_wages
         )
 
     def compute_price(
@@ -1270,9 +1267,7 @@ class Firms(Agent):
         """
         return self.functions["target_capital_inputs"].compute_unconstrained_target_capital_inputs(
             current_target_production=self.ts.current("target_capital_inputs_production"),
-            capital_input_use_matrix=self.base_capital_input_use_matrix[
-                :, self.states["Industry"]
-            ].T,
+            capital_input_use_matrix=self.base_capital_input_use_matrix[:, self.states["Industry"]].T,
             prev_capital_inputs_stock=self.ts.current("capital_inputs_stock"),
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=self.ts.current("production"),
@@ -1350,7 +1345,9 @@ class Firms(Agent):
         existing_overdraft = np.maximum(0.0, -self.ts.current("deposits"))
         expected_sales = np.maximum(
             0.0,
-            (1 + estimated_growth) * (1 + estimated_inflation) * self.ts.current("price")
+            (1 + estimated_growth)
+            * (1 + estimated_inflation)
+            * self.ts.current("price")
             * self.ts.current("target_production"),
         )
         hard_obligations = (
@@ -1368,15 +1365,15 @@ class Firms(Agent):
             else np.zeros(n_firms)
         )
         planned_tfp_investment_costs = (
-            self.ts.current("planned_tfp_investment")
-            if len(self.ts.planned_tfp_investment) > 0
-            else np.zeros(n_firms)
+            self.ts.current("planned_tfp_investment") if len(self.ts.planned_tfp_investment) > 0 else np.zeros(n_firms)
         )
         intermediate_costs = self.ts.current("unconstrained_target_intermediate_inputs_costs")
         capital_costs = self.ts.current("unconstrained_target_capital_inputs_costs")
         working_capital_budget = intermediate_costs + planned_tfp_investment_costs
         investment_budget = capital_costs + planned_technical_investment_costs
-        ordinary_target_short_term_credit, target_long_term_credit = self.functions["target_credit"].compute_target_credit(
+        ordinary_target_short_term_credit, target_long_term_credit = self.functions[
+            "target_credit"
+        ].compute_target_credit(
             internal_cash=internal_cash,
             existing_overdraft=existing_overdraft,
             expected_sales=expected_sales,
@@ -1410,9 +1407,7 @@ class Firms(Agent):
         )
         target_long_term_credit = np.maximum(0.0, target_long_term_credit)
         target_short_term_credit = (
-            target_debt_rollover_credit
-            + target_overdraft_refinance_credit
-            + ordinary_target_short_term_credit
+            target_debt_rollover_credit + target_overdraft_refinance_credit + ordinary_target_short_term_credit
         )
         self._append_credit_budget_diagnostics(
             internal_cash=internal_cash,
@@ -1531,10 +1526,18 @@ class Firms(Agent):
         self.ts.firm_settlement_available_cash_before_debt_service.append(np.zeros(n_firms))
         self.ts.firm_settlement_corporate_tax_reserve.append(np.zeros(n_firms))
         self.ts.firm_settlement_cash_after_tax_reserve.append(np.zeros(n_firms))
-        self.ts.firm_settlement_opening_interest_arrears.append(np.asarray(opening_interest_arrears, dtype=float).copy())
-        self.ts.firm_settlement_opening_principal_arrears.append(np.asarray(opening_principal_arrears, dtype=float).copy())
-        self.ts.firm_settlement_contractual_interest_due.append(np.asarray(contractual_interest_due, dtype=float).copy())
-        self.ts.firm_settlement_contractual_principal_due.append(np.asarray(contractual_principal_due, dtype=float).copy())
+        self.ts.firm_settlement_opening_interest_arrears.append(
+            np.asarray(opening_interest_arrears, dtype=float).copy()
+        )
+        self.ts.firm_settlement_opening_principal_arrears.append(
+            np.asarray(opening_principal_arrears, dtype=float).copy()
+        )
+        self.ts.firm_settlement_contractual_interest_due.append(
+            np.asarray(contractual_interest_due, dtype=float).copy()
+        )
+        self.ts.firm_settlement_contractual_principal_due.append(
+            np.asarray(contractual_principal_due, dtype=float).copy()
+        )
         self.ts.firm_settlement_scheduled_interest_due.append(np.asarray(scheduled_interest_due, dtype=float).copy())
         self.ts.firm_settlement_payable_interest.append(np.zeros(n_firms))
         self.ts.firm_settlement_closing_interest_arrears.append(np.zeros(n_firms))
@@ -1924,8 +1927,7 @@ class Firms(Agent):
 
         if mode != "post_credit_cash_budget":
             raise ValueError(
-                "Unknown firm_activity_finance_revision_mode "
-                f"{mode!r}; expected 'none' or 'post_credit_cash_budget'."
+                f"Unknown firm_activity_finance_revision_mode {mode!r}; expected 'none' or 'post_credit_cash_budget'."
             )
 
         hard_obligations = (
@@ -2346,9 +2348,7 @@ class Firms(Agent):
         """
         return self.functions["production"].compute_capital_inputs_used(
             realised_production=self.ts.current("production"),
-            capital_input_use_matrix=self.base_capital_input_use_matrix[
-                :, self.states["Industry"]
-            ].T,
+            capital_input_use_matrix=self.base_capital_input_use_matrix[:, self.states["Industry"]].T,
             capital_inputs_stock=self.ts.current("capital_inputs_stock"),
             goods_criticality_matrix=self.current_goods_criticality_by_firm(),
             substitution_bundle_matrix=self.substitution_bundles,
@@ -2429,10 +2429,7 @@ class Firms(Agent):
         if mode == "eurostat_cfc":
             rates = self.capital_depreciation_rates[self.states["Industry"]]
             return rates * self.ts.current("production") * self.ts.current("price")
-        raise ValueError(
-            "Unknown capital_depreciation_accounting_mode "
-            f"{mode!r}; expected 'none' or 'eurostat_cfc'."
-        )
+        raise ValueError(f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'.")
 
     def compute_total_inventory_change(self) -> np.ndarray:
         """Calculate nominal change in inventory value.
@@ -2566,8 +2563,7 @@ class Firms(Agent):
         if mode == "surplus_pool":
             return np.zeros_like(self.ts.current("used_capital_inputs_costs"))
         raise ValueError(
-            "Unknown capital_compensation_accounting_mode "
-            f"{mode!r}; expected 'production_cost' or 'surplus_pool'."
+            f"Unknown capital_compensation_accounting_mode {mode!r}; expected 'production_cost' or 'surplus_pool'."
         )
 
     def capital_depreciation_accounting_costs(self) -> np.ndarray:
@@ -2577,10 +2573,7 @@ class Firms(Agent):
             return self.ts.current("capital_depreciation_costs")
         if mode == "none":
             return np.zeros_like(self.ts.current("capital_depreciation_costs"))
-        raise ValueError(
-            "Unknown capital_depreciation_accounting_mode "
-            f"{mode!r}; expected 'none' or 'eurostat_cfc'."
-        )
+        raise ValueError(f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'.")
 
     def compute_gross_operating_surplus_mixed_income(self) -> np.ndarray:
         """Calculate gross operating surplus and mixed income.
@@ -3035,9 +3028,7 @@ class Firms(Agent):
                 direct_tfp_cash_expense = planned_tfp_investment.copy()
                 executed_technical_investment = planned_technical_investment.copy()
             else:
-                executed_planned_investment = np.minimum(
-                    net_capital_investment, planned_productivity_investment
-                )
+                executed_planned_investment = np.minimum(net_capital_investment, planned_productivity_investment)
                 execution_ratio = np.divide(
                     executed_planned_investment,
                     planned_productivity_investment,

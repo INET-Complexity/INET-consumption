@@ -234,7 +234,9 @@ def test_waterbucket_clear_keeps_household_quota_after_firm_lending(test_banks, 
     assert np.isclose(consumption[0, :, 0].sum(), 40.0)
 
 
-def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(test_banks, test_firms, test_households):
+def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(
+    test_banks, test_firms, test_households
+):
     clearer = _waterbucket_clearer(consider_loan_type_fractions=False)
     _set_bank_lending_room(test_banks, max_car=100.0)
 

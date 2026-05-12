@@ -302,7 +302,9 @@ class TestFirms:
         test_firms.ts.interest_paid.append(np.full(18, 4.0))
         test_firms.ts.total_wage.append(np.full(18, 1.0))
 
-        profit_delta = test_firms.compute_profits() - test_firms.ts.current("production") * test_firms.ts.current("price")
+        profit_delta = test_firms.compute_profits() - test_firms.ts.current("production") * test_firms.ts.current(
+            "price"
+        )
         assert np.allclose(profit_delta, np.full(18, -24.0))
 
         expected_unit_costs = np.divide(
@@ -368,13 +370,7 @@ class TestFirms:
         test_firms.ts.override_current("debt", np.full(n_firms, 7.0))
         test_firms.ts.override_current("capital_depreciation_costs", np.full(n_firms, 999.0))
 
-        expected = (
-            4.0 * 5.0
-            + intermediate_stock @ prices
-            + capital_stock @ prices
-            + 100.0
-            - 7.0
-        )
+        expected = 4.0 * 5.0 + intermediate_stock @ prices + capital_stock @ prices + 100.0 - 7.0
         assert np.allclose(test_firms.compute_equity(prices), expected)
 
         depleted_capital_stock = capital_stock.copy()
@@ -1385,7 +1381,9 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("equity")[0], -1.0)
         assert np.isclose(test_firms.ts.current("deposits")[0], 10.0)
 
-    def test__handle_insolvency_does_not_reset_balance_sheet_solvent_illiquid_firm(self, test_firms, test_credit_market):
+    def test__handle_insolvency_does_not_reset_balance_sheet_solvent_illiquid_firm(
+        self, test_firms, test_credit_market
+    ):
         n_firms = test_firms.ts.current("n_firms")
         illiquid_flag = np.full(n_firms, False)
         illiquid_flag[0] = True
@@ -1464,14 +1462,14 @@ class TestFirms:
         )
 
         planned_cost = (
-            (
-                test_firms.ts.initial("target_intermediate_inputs")
-                + test_firms.ts.initial("target_capital_inputs")
-            )
+            (test_firms.ts.initial("target_intermediate_inputs") + test_firms.ts.initial("target_capital_inputs"))
             * (previous_prices * (1 + expected_inflation))[None, :]
         ).sum(axis=1)
-        assert np.allclose(test_firms.ts.current("planned_intermediate_purchase_expected_costs")
-                           + test_firms.ts.current("planned_capital_purchase_expected_costs"), planned_cost)
+        assert np.allclose(
+            test_firms.ts.current("planned_intermediate_purchase_expected_costs")
+            + test_firms.ts.current("planned_capital_purchase_expected_costs"),
+            planned_cost,
+        )
         assert np.allclose(test_firms.transactor_buyer_states["Initial Goods"], 0.0)
 
     def test__prepare_buying_goods_converts_nominal_technical_investment_to_real_goods(self, test_firms):

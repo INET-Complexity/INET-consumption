@@ -22,7 +22,6 @@ class TestHouseholds:
         ]:
             assert state in test_households.states.keys()
 
-
     def test__mortgage_target_ignores_rentals(self, test_households):
         n_households = test_households.ts.current("n_households")
 
@@ -57,6 +56,7 @@ class TestHouseholds:
         assert target_mortgage.shape == (n_households,)
         assert target_mortgage[0] == 0.0
         assert target_mortgage[1] == 100000.0
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

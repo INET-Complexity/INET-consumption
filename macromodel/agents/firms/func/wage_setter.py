@@ -405,9 +405,7 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             (1 + current_wage_tightness_markup) * tfp_ratio * productivity_ratio * historic_average_wages
         )
         new_individual_wages = np.where(
-            has_historic_average_wage
-            & (prev_labour_productivity_factor > 0)
-            & np.isfinite(new_individual_wages),
+            has_historic_average_wage & (prev_labour_productivity_factor > 0) & np.isfinite(new_individual_wages),
             new_individual_wages,
             fallback_wages,
         )

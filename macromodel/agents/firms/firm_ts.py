@@ -337,9 +337,7 @@ class FirmTimeSeries(TimeSeries):
             expected_capital_inputs_stock_value=np.matmul(capital_inputs_stock, initial_good_prices),
             used_capital_inputs=used_capital_inputs,
             used_capital_inputs_costs=np.matmul(used_capital_inputs, initial_good_prices),
-            capital_depreciation_costs=data.get(
-                "Capital Depreciation Costs", pd.Series(0.0, index=data.index)
-            ).values,
+            capital_depreciation_costs=data.get("Capital Depreciation Costs", pd.Series(0.0, index=data.index)).values,
             total_capital_inputs_bought_costs=data.get(
                 "Initial Capital Inputs Bought Costs",
                 pd.Series(np.matmul(used_capital_inputs, initial_good_prices), index=data.index),

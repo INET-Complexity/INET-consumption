@@ -123,11 +123,11 @@ def test_partial_firm_settlement_is_prorated_and_preserves_unpaid_principal():
     assert np.isclose(market.compute_interest_paid_by_firm()[0], 7.5)
     assert np.isclose(market.compute_interest_received_by_bank()[0], 5.0)
     assert np.isclose(market.compute_interest_received_by_bank()[1], 2.5)
-    assert np.isclose(market.states["st_loans"][0, 0, 0], 90.0)
-    assert np.isclose(market.states["lt_loans"][0, 1, 0], 42.5)
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 95.0)
+    assert np.isclose(market.states["lt_loans"][0, 1, 0], 45.0)
 
 
-def test_missed_firm_payment_carries_arrears_into_next_schedule():
+def test_missed_firm_payment_capitalizes_interest_and_carries_principal_arrears():
     st_loans = _loan_array(n_borrowers=1)
     st_loans[0, 0, 0] = 100.0
     st_loans[1, 0, 0] = 0.10
@@ -150,12 +150,38 @@ def test_missed_firm_payment_carries_arrears_into_next_schedule():
 
     assert np.isclose(staged["contractual_interest_due"][0], 10.0)
     assert np.isclose(staged["contractual_principal_due"][0], 20.0)
-    assert np.isclose(next_preview["opening_interest_arrears"][0], 10.0)
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 110.0)
+    assert np.isclose(next_preview["opening_interest_arrears"][0], 0.0)
     assert np.isclose(next_preview["opening_principal_arrears"][0], 20.0)
-    assert np.isclose(next_preview["contractual_interest_due"][0], 10.0)
-    assert np.isclose(next_preview["contractual_principal_due"][0], 20.0)
-    assert np.isclose(next_preview["scheduled_interest_due"][0], 20.0)
-    assert np.isclose(next_preview["scheduled_principal_due"][0], 40.0)
+    assert np.isclose(next_preview["contractual_interest_due"][0], 11.0)
+    assert np.isclose(next_preview["contractual_principal_due"][0], 19.0)
+    assert np.isclose(next_preview["scheduled_interest_due"][0], 11.0)
+    assert np.isclose(next_preview["scheduled_principal_due"][0], 39.0)
+
+
+def test_capitalized_firm_interest_is_not_cash_interest_received():
+    st_loans = _loan_array(n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.10
+    st_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_borrowers=1),
+        cons_loans=_loan_array(n_borrowers=1),
+        mort_loans=_loan_array(n_borrowers=1),
+    )
+
+    market.schedule_firm_installments()
+    market.settle_firm_installments(
+        payable_principal_by_firm=np.zeros(1),
+        payable_interest_by_firm=np.zeros(1),
+        overwrite_bank_interest=True,
+    )
+
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 110.0)
+    assert np.isclose(market.compute_interest_paid_by_firm()[0], 0.0)
+    assert np.isclose(market.compute_interest_received_by_bank()[0], 0.0)
 
 
 def test_principal_arrears_do_not_exceed_outstanding_principal_next_period():
@@ -179,9 +205,11 @@ def test_principal_arrears_do_not_exceed_outstanding_principal_next_period():
     )
     next_preview = market.compute_scheduled_firm_installments_preview()
 
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 33.0)
+    assert np.isclose(next_preview["opening_interest_arrears"][0], 0.0)
     assert np.isclose(next_preview["opening_principal_arrears"][0], 27.0)
-    assert np.isclose(next_preview["contractual_principal_due"][0], 3.0)
-    assert np.isclose(next_preview["scheduled_principal_due"][0], 30.0)
+    assert np.isclose(next_preview["contractual_principal_due"][0], 6.0)
+    assert np.isclose(next_preview["scheduled_principal_due"][0], 33.0)
 
 
 def test_firm_arrears_clear_when_loan_is_removed():

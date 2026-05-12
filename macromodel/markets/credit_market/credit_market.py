@@ -960,14 +960,16 @@ class CreditMarket:
             interest_paid = opening_interest_paid + contractual_interest_paid
             principal_paid = opening_principal_paid + contractual_principal_paid
             serviceable_principal = np.minimum(serviceable[0], loans[0])
+            capitalized_interest = np.maximum(0.0, opening_interest_due - opening_interest_paid)
+            capitalized_interest += np.maximum(0.0, contractual_interest_due - contractual_interest_paid)
 
             loans[0] = np.maximum(loans[0] - principal_paid, 0.0)
+            loans[0] += capitalized_interest
 
             remaining_serviceable_principal = np.maximum(serviceable_principal - principal_paid, 0.0)
-            fully_repaid = np.isclose(remaining_serviceable_principal, 0.0, atol=1e-2)
+            fully_repaid = np.isclose(remaining_serviceable_principal + capitalized_interest, 0.0, atol=1e-2)
             loans[2] = np.maximum(loans[2] - np.where(fully_repaid, serviceable[2], 0.0), 0.0)
-            self._firm_interest_arrears_by_cell[key] = np.maximum(0.0, opening_interest_due - opening_interest_paid)
-            self._firm_interest_arrears_by_cell[key] += np.maximum(0.0, contractual_interest_due - contractual_interest_paid)
+            self._firm_interest_arrears_by_cell[key] = np.zeros_like(capitalized_interest)
             self._firm_principal_arrears_by_cell[key] = np.maximum(0.0, opening_principal_due - opening_principal_paid)
             self._firm_principal_arrears_by_cell[key] += np.maximum(
                 0.0,
@@ -979,6 +981,7 @@ class CreditMarket:
 
             rate_weighted_principal = (
                 remaining_serviceable_principal * serviceable[1]
+                + capitalized_interest * serviceable[1]
                 + current_new[0] * current_new[1]
             )
             loans[1] = np.divide(

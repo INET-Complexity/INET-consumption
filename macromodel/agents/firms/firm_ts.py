@@ -94,8 +94,10 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_scheduled_interest_due: Total current-period firm loan interest due (opening arrears + current)
         - firm_settlement_contractual_interest_due: Current-period contractual firm loan interest due
         - firm_settlement_payable_interest: Firm loan interest actually payable this period
-        - firm_settlement_closing_interest_arrears: Interest arrears carried forward after settlement
-        - firm_settlement_unpaid_interest: Backward-compatible alias of closing interest arrears
+        - firm_settlement_closing_interest_arrears: Interest arrears carried forward after settlement; zero when
+          unpaid loan interest is capitalized
+        - firm_settlement_unpaid_interest: Backward-compatible alias of capitalized interest
+        - firm_settlement_capitalized_interest: Unpaid loan interest added to outstanding principal
         - firm_settlement_opening_principal_arrears: Carried principal arrears entering this period
         - firm_settlement_scheduled_principal_due: Total current-period firm principal due (opening arrears + current)
         - firm_settlement_contractual_principal_due: Current-period contractual firm principal due
@@ -103,9 +105,12 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_closing_principal_arrears: Principal arrears carried forward after settlement
         - firm_settlement_unpaid_principal: Backward-compatible alias of closing principal arrears
         - firm_settlement_debt_rollover_shortfall: Scheduled principal not covered by received rollover credit
+        - firm_settlement_overdraft_refinance_used: Overdraft-refinance credit used to close negative ordinary cash
+          before loan debt service
         - firm_settlement_overdraft_refinance_shortfall: Target overdraft repair not met by received refinance credit
         - firm_settlement_residual_overdraft_exposure: End-of-period negative-deposit exposure after settlement
-        - firm_settlement_default_flag: Settlement-triggered default after opening arrears remain unresolved
+        - firm_settlement_illiquid_flag: Settlement liquidity failure after rollover and cash funding
+        - firm_settlement_default_flag: Settlement-triggered default after illiquidity and negative equity coincide
         - total_credit_exposure: Explicit firm debt plus end-of-period residual overdraft exposure
 
     Planning & Targets:
@@ -401,6 +406,7 @@ class FirmTimeSeries(TimeSeries):
             firm_settlement_payable_interest=data["Interest paid on loans"].values,
             firm_settlement_closing_interest_arrears=np.zeros(data.shape[0]),
             firm_settlement_unpaid_interest=np.zeros(data.shape[0]),
+            firm_settlement_capitalized_interest=np.zeros(data.shape[0]),
             firm_settlement_opening_principal_arrears=np.zeros(data.shape[0]),
             firm_settlement_scheduled_principal_due=data["Debt Installments"].values,
             firm_settlement_contractual_principal_due=data["Debt Installments"].values,
@@ -408,8 +414,10 @@ class FirmTimeSeries(TimeSeries):
             firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
             firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
             firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+            firm_settlement_overdraft_refinance_used=np.zeros(data.shape[0]),
             firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
             firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
+            firm_settlement_illiquid_flag=np.full(data.shape[0], False),
             firm_settlement_default_flag=np.full(data.shape[0], False),
             #
             # Credit-market (WaterBucket) binding diagnostics
@@ -725,6 +733,7 @@ def create_firms_timeseries(
         firm_settlement_payable_interest=data["Interest paid on loans"].values,
         firm_settlement_closing_interest_arrears=np.zeros(data.shape[0]),
         firm_settlement_unpaid_interest=np.zeros(data.shape[0]),
+        firm_settlement_capitalized_interest=np.zeros(data.shape[0]),
         firm_settlement_opening_principal_arrears=np.zeros(data.shape[0]),
         firm_settlement_scheduled_principal_due=data["Debt Installments"].values,
         firm_settlement_contractual_principal_due=data["Debt Installments"].values,
@@ -732,8 +741,10 @@ def create_firms_timeseries(
         firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
         firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
         firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+        firm_settlement_overdraft_refinance_used=np.zeros(data.shape[0]),
         firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
         firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
+        firm_settlement_illiquid_flag=np.full(data.shape[0], False),
         firm_settlement_default_flag=np.full(data.shape[0], False),
         #
         # Credit-market (WaterBucket) binding diagnostics

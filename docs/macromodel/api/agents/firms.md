@@ -3,9 +3,16 @@
 This section documents the Firms agent in the macromodel package, which represents the productive sector of the economy and manages firm-level production, pricing, investment, and financial decisions.
 
 The Firms agent includes comprehensive support for productivity dynamics through:
-- **Productivity Investment Planning**: Firms can strategically invest in productivity improvements based on expected returns
+- **Productivity Investment Planning**: Firms can strategically invest in productivity improvements based on expected nominal returns and financing constraints
 - **Total Factor Productivity (TFP) Growth**: Multiple models for how productivity evolves over time, including deterministic, stochastic, and sector-specific growth patterns
 - **Endogenous Growth**: Productivity improvements driven by firm-level investment decisions, creating a feedback loop between profitability and productivity
+
+Productivity investment uses a split accounting convention:
+
+- Planning and hurdle checks are nominal. The Simple planner uses nominal production and the configured cash/output caps to decide whether planned investment is financially feasible.
+- Realized TFP growth is real/volume based. Executed nominal productivity investment is deflated with a firm-specific capital-goods bundle deflator and stored as `real_executed_productivity_investment` before entering TFP growth.
+- TFP and technical-coefficient updates are one-period lagged. Target setting, desired labour, wage setting, and production use the same opening-period productivity state; productivity investment realized in the current period affects the next period's productivity state.
+- Productivity subsidies stage nominal forced investment through the normal execution path, so subsidized and ordinary productivity investment share the same deflation and TFP-growth logic.
 
 The Firms agent also supports flexible production structures through:
 - **Substitution Bundles**: Groups of inputs that can be substituted for one another using CES (Constant Elasticity of Substitution) production functions
@@ -169,12 +176,15 @@ The Firms agent also supports flexible production structures through:
 
 ### Productivity Investment Planning
 
+Productivity investment planners return three objects: total planned productivity investment, the TFP component, and the technical-coefficient component by input. `SimpleProductivityInvestmentPlanner` is the active repaired v1 mechanism for nominal planning with real TFP realization. `OptimalProductivityInvestmentPlanner` remains available as an API class, but has not yet received the same economic repair and should be treated as experimental.
+
 ::: macromodel.agents.firms.func.productivity_investment_planner.ProductivityInvestmentPlanner
     options:
         members:
             - ProductivityInvestmentPlanner
-            - NoOpProductivityInvestmentPlanner
+            - NoProductivityInvestmentPlanner
             - SimpleProductivityInvestmentPlanner
+            - OptimalProductivityInvestmentPlanner
         show_root_heading: true
         show_signature_annotations: true
         show_docstring: true

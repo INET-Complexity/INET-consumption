@@ -297,7 +297,8 @@ class ProductivityGrowth(BaseModel):
 class ProductivityInvestmentPlanner(BaseModel):
     """
     The function for planning productivity investments.
-    Options: NoProductivityInvestmentPlanner, SimpleProductivityInvestmentPlanner, OptimalProductivityInvestmentPlanner
+    Options: NoProductivityInvestmentPlanner, SimpleProductivityInvestmentPlanner,
+    TargetIntensityTFPInvestmentPlanner, OptimalProductivityInvestmentPlanner
 
     All parameters can be specified as either:
     - float: uniform value applied to all firms
@@ -307,7 +308,10 @@ class ProductivityInvestmentPlanner(BaseModel):
     """
 
     name: Literal[
-        "NoProductivityInvestmentPlanner", "SimpleProductivityInvestmentPlanner", "OptimalProductivityInvestmentPlanner"
+        "NoProductivityInvestmentPlanner",
+        "SimpleProductivityInvestmentPlanner",
+        "TargetIntensityTFPInvestmentPlanner",
+        "OptimalProductivityInvestmentPlanner",
     ] = "NoProductivityInvestmentPlanner"
     path_name: str = "productivity_investment_planner"
     parameters: dict[str, Any] = {
@@ -522,6 +526,16 @@ class FirmsConfiguration(BaseModel):
         # Always set n_firms in productivity investment planner (even if not currently active)
         # This ensures it's correct if the user later activates the planner
         self.functions.productivity_investment_planner.parameters["n_firms"] = n_firms
+
+        if self.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+            growth_phi = self.functions.productivity_growth.parameters.get("investment_effectiveness")
+            if growth_phi is None:
+                raise ValueError(
+                    "TargetIntensityTFPInvestmentPlanner requires "
+                    "productivity_growth.parameters['investment_effectiveness']; "
+                    "realised TFP effectiveness is the canonical phi used by the planner."
+                )
+            self.functions.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
 
         # Only validate list parameter lengths if planner is active
         if self.functions.productivity_investment_planner.name != "NoProductivityInvestmentPlanner":

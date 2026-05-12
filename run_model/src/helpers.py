@@ -17,14 +17,16 @@ def _default_substitution_bundles(n_industries: int) -> list[int]:
 def align_country_configuration_to_data(
     country_cfg: CountryConfiguration,
     n_industries: int,
+    n_firms: int | None = None,
 ) -> CountryConfiguration:
     """
-    Align industry-dimensioned parts of a CountryConfiguration to the data shape.
+    Align data-dimensioned parts of a CountryConfiguration to the data shape.
 
     The goal is to preserve YAML-loaded behavioral settings and only repair
-    fields whose lengths must match the model dimension implied by the data.
+    fields whose lengths must match the model dimensions implied by the data.
     """
     cfg = deepcopy(country_cfg)
+    planner_n_firms = n_industries if n_firms is None else n_firms
 
     if len(cfg.firms.parameters.capital_inputs_delay) != n_industries:
         cfg.firms.parameters.capital_inputs_delay = [0] * n_industries
@@ -39,8 +41,18 @@ def align_country_configuration_to_data(
         cfg.households.substitution_bundles = _default_substitution_bundles(n_industries)
 
     planner_params = cfg.firms.functions.productivity_investment_planner.parameters
-    if planner_params.get("n_firms") != n_industries:
-        planner_params["n_firms"] = n_industries
+    if planner_params.get("n_firms") != planner_n_firms:
+        planner_params["n_firms"] = planner_n_firms
+
+    if cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+        growth_phi = cfg.firms.functions.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        planner_params["investment_effectiveness"] = growth_phi
 
     return cfg
 

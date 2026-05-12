@@ -148,6 +148,7 @@ class FirmWageSetter(ABC):
         employer_social_insurance_tax: float,
         unemployment_benefits_by_individual: float,
         current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create a function that calculates offered wages based on labor inputs.
 
@@ -175,6 +176,8 @@ class FirmWageSetter(ABC):
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
             unemployment_benefits_by_individual (float): Minimum wage floor
+            current_tfp_multiplier (np.ndarray): Current firm-level TFP multiplier
+            prev_tfp_multiplier (np.ndarray): Previous firm-level TFP multiplier
 
         Returns:
             Callable[[int, float | np.ndarray], float | np.ndarray]: Function that
@@ -334,6 +337,7 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         employer_social_insurance_tax: float,
         unemployment_benefits_by_individual: float,
         current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create a function for calculating wage offers based on work effort.
 
@@ -345,7 +349,9 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
 
         Args:
             [same as parent class]
-            current_tfp_multiplier (np.ndarray): Per-firm TFP level; scales fallback wages so new-hire offers reflect technology level
+            current_tfp_multiplier (np.ndarray): Current per-firm TFP level; scales fallback wages.
+            prev_tfp_multiplier (np.ndarray): Previous per-firm TFP level; normal historical
+                wage offers scale with current TFP relative to previous TFP.
 
         Returns:
             Callable[[int, float | np.ndarray], float | np.ndarray]: Function that
@@ -363,11 +369,22 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             weights=current_individual_labour_inputs[employed],
             minlength=current_target_production.shape[0],
         )
+        has_historic_average_wage = total_labour_inputs > 0
 
         tfp = (
             current_tfp_multiplier
             if current_tfp_multiplier is not None
             else np.ones_like(current_labour_productivity_factor)
+        )
+        tfp_ratio = (
+            np.divide(
+                tfp,
+                prev_tfp_multiplier,
+                out=np.ones_like(tfp),
+                where=prev_tfp_multiplier > 0,
+            )
+            if prev_tfp_multiplier is not None
+            else np.ones_like(tfp)
         )
         fallback_wages = (
             (1 + current_wage_tightness_markup) * tfp * current_labour_productivity_factor * initial_wage_per_capita
@@ -384,12 +401,13 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             out=np.ones_like(current_labour_productivity_factor),
             where=prev_labour_productivity_factor > 0,
         )
-        new_individual_wages = (1 + current_wage_tightness_markup) * productivity_ratio * historic_average_wages
+        new_individual_wages = (
+            (1 + current_wage_tightness_markup) * tfp_ratio * productivity_ratio * historic_average_wages
+        )
         new_individual_wages = np.where(
-            np.logical_and(
-                prev_labour_productivity_factor > 0,
-                np.isfinite(new_individual_wages),
-            ),
+            has_historic_average_wage
+            & (prev_labour_productivity_factor > 0)
+            & np.isfinite(new_individual_wages),
             new_individual_wages,
             fallback_wages,
         )

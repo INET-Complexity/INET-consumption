@@ -10,6 +10,7 @@ class TestFirms:
             "Employments",
             "is_insolvent",
             "Excess Demand",
+            "forced_productivity_investment",
         ]:
             assert state in test_firms.states.keys()
 
@@ -63,6 +64,8 @@ class TestFirms:
             "labour_inputs",
             "desired_labour_inputs",
             "labour_costs",
+            "real_executed_productivity_investment",
+            "net_capital_investment_above_replacement",
             # "real_amount_bought_as_capital_inputs",
         ]:
             assert ts_key in test_firms.ts.get_keys()
@@ -125,7 +128,7 @@ class TestFirms:
         test_firms.ts.long_term_loan_debt.append(np.full(18, 10.0))
         assert np.allclose(test_firms.compute_debt(), np.full(18, 13.0))
 
-    def test__compute_productivity_investment_uses_industry_good_prices(self, test_firms):
+    def test__compute_net_capital_investment_uses_industry_good_prices(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries
         industry_prices = np.linspace(1.0, 2.0, n_industries)
@@ -139,6 +142,87 @@ class TestFirms:
         test_firms.ts.total_capital_inputs_bought_costs.append(np.full(n_firms, 10.0))
 
         expected_replacement_cost = production * industry_prices[test_firms.states["Industry"]]
-        expected_productivity_investment = np.maximum(0.0, 10.0 - expected_replacement_cost)
+        expected_net_capital_investment = np.maximum(0.0, 10.0 - expected_replacement_cost)
 
-        assert np.allclose(test_firms.compute_productivity_investment(), expected_productivity_investment)
+        assert np.allclose(
+            test_firms.compute_net_capital_investment_above_replacement(),
+            expected_net_capital_investment,
+        )
+
+    def test__real_productivity_investment_uses_capital_bundle_deflator(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        industry_prices = np.linspace(1.0, 2.0, n_industries)
+        nominal_investment = np.full(n_firms, 10.0)
+
+        test_firms.current_good_prices = industry_prices
+        test_firms.ts.production.append(np.ones(n_firms))
+        test_firms.base_capital_inputs_depreciation_matrix = np.eye(n_industries)
+
+        expected_deflator = industry_prices[test_firms.states["Industry"]]
+        assert np.allclose(test_firms.compute_capital_bundle_deflator(), expected_deflator)
+        assert np.allclose(
+            test_firms.compute_real_productivity_investment(nominal_investment),
+            nominal_investment / expected_deflator,
+        )
+
+    def test__real_productivity_investment_falls_when_capital_prices_rise(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        nominal_investment = np.full(n_firms, 10.0)
+
+        test_firms.ts.production.append(np.ones(n_firms))
+        test_firms.base_capital_inputs_depreciation_matrix = np.eye(n_industries)
+
+        test_firms.current_good_prices = np.ones(n_industries)
+        real_at_base_prices = test_firms.compute_real_productivity_investment(nominal_investment)
+
+        test_firms.current_good_prices = np.full(n_industries, 2.0)
+        real_at_high_prices = test_firms.compute_real_productivity_investment(nominal_investment)
+
+        assert np.allclose(real_at_high_prices, real_at_base_prices / 2.0)
+
+    def test__execute_productivity_investment_splits_net_capital_from_planner_execution(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+
+        test_firms.current_good_prices = np.ones(n_industries)
+        test_firms.ts.production.append(np.ones(n_firms))
+        test_firms.base_capital_inputs_depreciation_matrix = np.zeros((n_industries, n_industries))
+        test_firms.ts.total_capital_inputs_bought_costs.append(np.full(n_firms, 10.0))
+        test_firms.ts.planned_productivity_investment.append(np.zeros(n_firms))
+        test_firms.ts.planned_tfp_investment.append(np.zeros(n_firms))
+        test_firms.ts.planned_technical_investment.append(np.zeros((n_firms, n_industries)))
+
+        test_firms.execute_productivity_investment()
+
+        assert test_firms.ts.current("net_capital_investment_above_replacement").sum() > 0
+        assert np.allclose(test_firms.ts.current("executed_productivity_investment"), 0.0)
+        assert np.allclose(test_firms.ts.current("executed_tfp_investment"), 0.0)
+        assert np.allclose(test_firms.ts.current("executed_technical_investment"), 0.0)
+        assert np.allclose(test_firms.ts.current("real_executed_productivity_investment"), 0.0)
+
+    def test__compute_tfp_growth_uses_nominal_tfp_investment_over_nominal_output(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        production = np.full(n_firms, 10.0)
+        prices = np.full(n_firms, 2.0)
+        executed_tfp_investment = np.full(n_firms, 1.0)
+
+        class TFPGrowthSpy:
+            def __init__(self):
+                self.kwargs = None
+
+            def compute_tfp_growth(self, **kwargs):
+                self.kwargs = kwargs
+                return np.zeros_like(kwargs["current_tfp"])
+
+        spy = TFPGrowthSpy()
+        test_firms.functions["productivity_growth"] = spy
+        test_firms.ts.production.append(production)
+        test_firms.ts.price.append(prices)
+        test_firms.ts.executed_tfp_investment.append(executed_tfp_investment)
+
+        test_firms.compute_tfp_growth()
+
+        assert np.allclose(spy.kwargs["productivity_investment"], executed_tfp_investment)
+        assert np.allclose(spy.kwargs["output_value"], prices * production)

@@ -156,12 +156,22 @@ def apply_country_config_overrides(country_cfg: CountryConfiguration, overrides:
     """Apply notebook scenario overrides to a copied country configuration."""
     for path, value in (overrides or {}).items():
         _set_nested_value(country_cfg, _parse_override_path(path), value)
+    if country_cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
+        growth_phi = country_cfg.firms.functions.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        country_cfg.firms.functions.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
 
 
 def summarize_country_config(country_cfg: CountryConfiguration) -> dict[str, Any]:
     """Return the compact scenario summary shown in the notebook."""
     return {
         "productivity_growth": country_cfg.firms.functions.productivity_growth.name,
+        "productivity_investment_planner": country_cfg.firms.functions.productivity_investment_planner.name,
         "labour_market": {
             "name": country_cfg.labour_market.functions.clearing.name,
             "parameters": country_cfg.labour_market.functions.clearing.parameters,
@@ -270,11 +280,16 @@ def build_country_config(
     """Load, align, and optionally override the country configuration."""
     cfg, _, _, _ = _resolve_runtime_config(config)
     country_cfg = _load_country_config(cfg)
-    country_cfg = align_country_configuration_to_data(country_cfg, n_industries=data.n_industries)
+    agent_counts = summarize_agent_counts(data, cfg.country_iso3)
+    country_cfg = align_country_configuration_to_data(
+        country_cfg,
+        n_industries=data.n_industries,
+        n_firms=agent_counts["firms"],
+    )
     apply_country_config_overrides(country_cfg, overrides)
     country_configurations = {cfg.country_iso3: country_cfg}
     summary = summarize_country_config(country_cfg)
-    summary["agent_counts"] = summarize_agent_counts(data, cfg.country_iso3)
+    summary["agent_counts"] = agent_counts
     print("Configuration summary")
     pprint(summary, sort_dicts=False)
     return country_configurations

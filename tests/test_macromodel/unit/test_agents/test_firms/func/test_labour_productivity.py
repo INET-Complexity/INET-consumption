@@ -36,6 +36,23 @@ class TestWorkEffortLabourProductivitySetter:
 
         assert np.allclose(labour_productivity_factor, np.array([1.2, 1.5]))
 
+    def test__tfp_adjusted_capacity_does_not_look_like_extra_effort(self):
+        labour_productivity_factor = WorkEffortLabourProductivitySetter(
+            max_increase_in_work_effort=1.5,
+            consider_intermediate_inputs=True,
+            consider_capital_inputs=True,
+            work_effort_increase_speed=1.0,
+        ).compute_labour_productivity_factor(
+            current_target_production=np.array([100.0]),
+            current_limiting_intermediate_inputs=np.array([100.0]),
+            current_limiting_capital_inputs=np.array([100.0]),
+            labour_inputs_from_employees=np.array([5.0]),
+            industry_labour_productivity_by_firm=np.array([10.0]),
+            current_tfp_multiplier=np.array([2.0]),
+        )
+
+        assert np.allclose(labour_productivity_factor, np.array([1.0]))
+
     def test__low_target_reduces_utilisation(self):
         labour_productivity_factor = WorkEffortLabourProductivitySetter(
             max_increase_in_work_effort=1.5,

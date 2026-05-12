@@ -146,6 +146,14 @@ class SyntheticCreditMarket:
 
         longterm_loans = LongtermLoans.from_agent_data(banks.bank_data, firms.firm_data, firm_loan_maturity)
         shortterm_loans = ShorttermLoans.from_agent_data(banks.bank_data, firms.firm_data, firm_loan_maturity)
+
+        if zero_firm_debt:
+            longterm_loans.principal[...] = 0.0
+            longterm_loans.interest[...] = 0.0
+            longterm_loans.installments[...] = 0.0
+            shortterm_loans.principal[...] = 0.0
+            shortterm_loans.interest[...] = 0.0
+            shortterm_loans.installments[...] = 0.0
         consumption_expansion_loans = ConsumptionExpansionLoans.from_agent_data(
             banks.bank_data, population.household_data, hh_consumption_maturity
         )

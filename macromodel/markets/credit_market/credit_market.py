@@ -49,6 +49,101 @@ if TYPE_CHECKING:
     from macromodel.agents.households.households import Households
 
 
+_LOAN_KEYS = ("st_loans", "lt_loans", "cons_loans", "mort_loans")
+
+
+def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {key: np.zeros_like(states[key]) for key in _LOAN_KEYS}
+
+
+def _compute_credit_supply_caps_by_type(
+    banks: "Banks",
+    current_npl_firm_loans: float,
+    current_npl_hh_cons_loans: float,
+    current_npl_mortgages: float,
+    credit_supply_temperature: float,
+    total_target_short_term_credit: float,
+    total_target_long_term_credit: float,
+) -> dict[str, np.ndarray]:
+    """Compute CAR-based bank credit supply caps (total + split by type).
+
+    Total cap is lending headroom implied by the capital adequacy requirement:
+        max_car = max(0, equity / capital_adequacy_ratio - total_outstanding_loans)
+
+    Type caps follow the same preference-weighted split as credit clearing:
+    initial `new_loans_fraction_*` shares adjusted by `credit_supply_temperature`
+    and the economy-wide NPL rates.
+    """
+    max_car = np.maximum(
+        0.0,
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - banks.ts.current("total_outstanding_loans"),
+    )
+
+    # Import locally to keep CreditMarket module lightweight and avoid circular-import risk.
+    from macromodel.markets.credit_market.func.clearing import _compute_loan_type_preference_caps
+
+    firm_caps, hh_cons_caps, mortgage_caps = _compute_loan_type_preference_caps(
+        banks=banks,
+        current_npl_firm_loans=current_npl_firm_loans,
+        current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+        current_npl_mortgages=current_npl_mortgages,
+        credit_supply_temperature=credit_supply_temperature,
+    )
+
+    denom = float(total_target_short_term_credit + total_target_long_term_credit)
+    if not np.isfinite(denom) or denom <= 0.0:
+        short_term_share = 0.5
+    else:
+        short_term_share = float(total_target_short_term_credit) / denom
+        short_term_share = float(np.clip(short_term_share, 0.0, 1.0))
+
+    firm_caps_short_term = firm_caps * short_term_share
+    firm_caps_long_term = firm_caps * (1.0 - short_term_share)
+    return {
+        "total": max_car,
+        "firms": firm_caps,
+        "firms_short_term": firm_caps_short_term,
+        "firms_long_term": firm_caps_long_term,
+        "households_consumption": hh_cons_caps,
+        "mortgages": mortgage_caps,
+    }
+
+
+def _append_credit_supply_caps_to_banks_ts(
+    banks: "Banks",
+    current_npl_firm_loans: float,
+    current_npl_hh_cons_loans: float,
+    current_npl_mortgages: float,
+    credit_supply_temperature: float,
+    total_target_short_term_credit: float,
+    total_target_long_term_credit: float,
+) -> None:
+    """Append credit supply caps to `banks.ts`."""
+    caps = _compute_credit_supply_caps_by_type(
+        banks=banks,
+        current_npl_firm_loans=current_npl_firm_loans,
+        current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+        current_npl_mortgages=current_npl_mortgages,
+        credit_supply_temperature=credit_supply_temperature,
+        total_target_short_term_credit=total_target_short_term_credit,
+        total_target_long_term_credit=total_target_long_term_credit,
+    )
+
+    banks.ts.credit_supply_cap_total.append(caps["total"])
+    banks.ts.credit_supply_cap_firms.append(caps["firms"])
+    banks.ts.credit_supply_cap_firms_short_term.append(caps["firms_short_term"])
+    banks.ts.credit_supply_cap_firms_long_term.append(caps["firms_long_term"])
+    banks.ts.credit_supply_cap_households_consumption.append(caps["households_consumption"])
+    banks.ts.credit_supply_cap_mortgages.append(caps["mortgages"])
+
+    banks.ts.total_credit_supply_cap_total.append([float(np.nansum(caps["total"]))])
+    banks.ts.total_credit_supply_cap_firms.append([float(np.nansum(caps["firms"]))])
+    banks.ts.total_credit_supply_cap_firms_short_term.append([float(np.nansum(caps["firms_short_term"]))])
+    banks.ts.total_credit_supply_cap_firms_long_term.append([float(np.nansum(caps["firms_long_term"]))])
+    banks.ts.total_credit_supply_cap_households_consumption.append([float(np.nansum(caps["households_consumption"]))])
+    banks.ts.total_credit_supply_cap_mortgages.append([float(np.nansum(caps["mortgages"]))])
+
+
 class CreditMarket:
     """Credit market implementation managing lending relationships and loan lifecycles.
 
@@ -64,8 +159,8 @@ class CreditMarket:
 
     Loan types are tracked in separate arrays with dimensions [3, n_banks, n_borrowers]:
     - Index 0: Outstanding principal
-    - Index 1: Interest rate
-    - Index 2: Monthly payment amount
+    - Index 1: Period interest rate
+    - Index 2: Scheduled annuity payment
 
     Attributes:
         country_name (str): Name of the country this market operates in
@@ -107,6 +202,11 @@ class CreditMarket:
         self.ts = ts
         self.states = states
         self.initial_states = initial_states
+        self._new_loans_this_period = _zero_like_loan_states(self.states)
+        self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._last_interest_by_firm = np.zeros(self.states["st_loans"].shape[2])
+        self._last_interest_by_household = np.zeros(self.states["cons_loans"].shape[2])
+        self._last_interest_by_bank = np.zeros(self.states["st_loans"].shape[1])
 
     @classmethod
     def from_pickled_market(
@@ -183,6 +283,11 @@ class CreditMarket:
         """
         self.states = deepcopy(self.initial_states)
         self.ts.reset()
+        self._new_loans_this_period = _zero_like_loan_states(self.states)
+        self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._last_interest_by_firm = np.zeros(self.states["st_loans"].shape[2])
+        self._last_interest_by_household = np.zeros(self.states["cons_loans"].shape[2])
+        self._last_interest_by_bank = np.zeros(self.states["st_loans"].shape[1])
         update_functions(model=configuration.functions, loc="macromodel.agents.credit_market", functions=self.functions)
 
     @classmethod
@@ -212,8 +317,8 @@ class CreditMarket:
         Note:
             Each loan array has shape [3, n_banks, n_borrowers] where:
             - Index 0: Outstanding principal
-            - Index 1: Interest rate
-            - Index 2: Monthly payment amount
+            - Index 1: Period interest rate
+            - Index 2: Scheduled annuity payment
         """
         # Record the states of all loans
         states = {
@@ -276,6 +381,22 @@ class CreditMarket:
             - Outstanding loan balances
             - Bank portfolio composition
         """
+        self._new_loans_this_period = _zero_like_loan_states(self.states)
+        self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+
+        credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
+        total_target_short_term_credit = float(np.nansum(firms.ts.current("target_short_term_credit")))
+        total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))
+        _append_credit_supply_caps_to_banks_ts(
+            banks=banks,
+            current_npl_firm_loans=current_npl_firm_loans,
+            current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+            current_npl_mortgages=current_npl_mortgages,
+            credit_supply_temperature=credit_supply_temperature,
+            total_target_short_term_credit=total_target_short_term_credit,
+            total_target_long_term_credit=total_target_long_term_credit,
+        )
+
         # Clear the credit market
         (
             new_st_loans,
@@ -291,11 +412,12 @@ class CreditMarket:
             current_npl_mortgages=current_npl_mortgages,
         )
 
-        # Record the new loans
-        self.states["st_loans"] += new_st_loans
-        self.states["lt_loans"] += new_lt_loans
-        self.states["cons_loans"] += new_cons_loans
-        self.states["mort_loans"] += new_mort_loans
+        # Record the new loans. Slot 1 is a period rate, so it must be
+        # principal-weighted instead of added as an interest cash-flow amount.
+        self._add_new_loans("st_loans", new_st_loans)
+        self._add_new_loans("lt_loans", new_lt_loans)
+        self._add_new_loans("cons_loans", new_cons_loans)
+        self._add_new_loans("mort_loans", new_mort_loans)
 
         # Calculate aggregates for firms
         firms.ts.received_short_term_credit.append(new_st_loans[0].sum(axis=0))
@@ -356,35 +478,106 @@ class CreditMarket:
             )
         )
 
+    def _add_new_loans(self, key: str, new_loans: np.ndarray) -> None:
+        """Add new principal while preserving period-rate loan semantics."""
+        self._new_loans_this_period[key] = new_loans.copy()
+        loans = self.states[key]
+        old_principal = loans[0].copy()
+        old_rate_weighted_principal = old_principal * loans[1]
+        new_principal = new_loans[0]
+        total_principal = old_principal + new_principal
+
+        loans[0] = total_principal
+        loans[1] = np.divide(
+            old_rate_weighted_principal + new_principal * new_loans[1],
+            total_principal,
+            out=np.zeros_like(total_principal),
+            where=total_principal > 0.0,
+        )
+        loans[2] += new_loans[2]
+
+    def _service_loans(self, loan_keys: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Service loans that existed before current-quarter origination."""
+        n_borrowers = self.states[loan_keys[0]].shape[2]
+        n_banks = self.states[loan_keys[0]].shape[1]
+        principal_paid_by_borrower = np.zeros(n_borrowers)
+        interest_paid_by_borrower = np.zeros(n_borrowers)
+        interest_paid_by_bank = np.zeros(n_banks)
+
+        for key in loan_keys:
+            loans = self.states[key]
+            serviceable = self._serviceable_loans_this_period.get(key, loans).copy()
+            current_new = self._new_loans_this_period.get(key, np.zeros_like(loans))
+
+            serviceable_principal = np.minimum(serviceable[0], loans[0])
+            interest_due = serviceable_principal * serviceable[1]
+            principal_due = np.minimum(
+                serviceable_principal,
+                np.maximum(serviceable[2] - interest_due, 0.0),
+            )
+
+            loans[0] = np.maximum(loans[0] - principal_due, 0.0)
+
+            remaining_serviceable_principal = np.maximum(serviceable_principal - principal_due, 0.0)
+            fully_repaid = np.isclose(remaining_serviceable_principal, 0.0, atol=1e-2)
+            loans[2] = np.maximum(loans[2] - np.where(fully_repaid, serviceable[2], 0.0), 0.0)
+
+            rate_weighted_principal = (
+                remaining_serviceable_principal * serviceable[1]
+                + current_new[0] * current_new[1]
+            )
+            loans[1] = np.divide(
+                rate_weighted_principal,
+                loans[0],
+                out=np.zeros_like(loans[0]),
+                where=loans[0] > 0.0,
+            )
+
+            principal_paid_by_borrower += principal_due.sum(axis=0)
+            interest_paid_by_borrower += interest_due.sum(axis=0)
+            interest_paid_by_bank += interest_due.sum(axis=1)
+
+            self._new_loans_this_period[key] = np.zeros_like(loans)
+            self._serviceable_loans_this_period[key] = loans.copy()
+
+        return principal_paid_by_borrower, interest_paid_by_borrower, interest_paid_by_bank
+
+    def _scheduled_service_by_borrower(self, loan_keys: tuple[str, ...]) -> np.ndarray:
+        """Compute next-period interest plus principal due on outstanding loans."""
+        n_borrowers = self.states[loan_keys[0]].shape[2]
+        service = np.zeros(n_borrowers)
+        for key in loan_keys:
+            loans = self.states[key]
+            interest_due = loans[0] * loans[1]
+            principal_due = np.minimum(loans[0], np.maximum(loans[2] - interest_due, 0.0))
+            service += (interest_due + principal_due).sum(axis=0)
+        return service
+
+    def compute_scheduled_debt_service_by_firm(self) -> np.ndarray:
+        """Calculate next-period scheduled firm loan interest and principal service."""
+        return self._scheduled_service_by_borrower(("st_loans", "lt_loans"))
+
     def pay_firm_installments(self) -> np.ndarray:
-        """Process firm loan payments for the current period.
+        """Process current-period principal payments on existing firm loans.
 
-        Processes monthly payments for both short-term and long-term firm loans.
-        The payment amount is the minimum of the scheduled payment and outstanding balance.
-
-        Returns:
-            np.ndarray: Array of total payments made by each firm
+        Current-quarter originations are excluded from same-quarter service.
+        Interest due is stored for `compute_interest_paid_by_firm`.
         """
-        di_st = np.minimum(self.states["st_loans"][0], self.states["st_loans"][2])
-        di_lt = np.minimum(self.states["lt_loans"][0], self.states["lt_loans"][2])
-        self.states["st_loans"][0] -= di_st
-        self.states["lt_loans"][0] -= di_lt
-        return di_st.sum(axis=0) + di_lt.sum(axis=0)
+        principal_paid, interest_paid, interest_by_bank = self._service_loans(("st_loans", "lt_loans"))
+        self._last_interest_by_firm = interest_paid
+        self._last_interest_by_bank = interest_by_bank
+        return principal_paid
 
     def pay_household_installments(self) -> np.ndarray:
-        """Process household loan payments for the current period.
+        """Process current-period principal payments on existing household loans.
 
-        Processes monthly payments for both consumer loans and mortgages.
-        The payment amount is the minimum of the scheduled payment and outstanding balance.
-
-        Returns:
-            np.ndarray: Array of total payments made by each household
+        Current-quarter originations are excluded from same-quarter service.
+        Interest due is stored for `compute_interest_paid_by_household`.
         """
-        di_cons = np.minimum(self.states["cons_loans"][0], self.states["cons_loans"][2])
-        di_mort = np.minimum(self.states["mort_loans"][0], self.states["mort_loans"][2])
-        self.states["cons_loans"][0] -= di_cons
-        self.states["mort_loans"][0] -= di_mort
-        return di_cons.sum(axis=0) + di_mort.sum(axis=0)
+        principal_paid, interest_paid, interest_by_bank = self._service_loans(("cons_loans", "mort_loans"))
+        self._last_interest_by_household = interest_paid
+        self._last_interest_by_bank += interest_by_bank
+        return principal_paid
 
     def remove_repaid_loans(self) -> None:
         """Clean up fully repaid loans from the market state.
@@ -498,7 +691,7 @@ class CreditMarket:
         Returns:
             np.ndarray: Array of interest payments by firm across all loan types
         """
-        return self.states["st_loans"][1].sum(axis=0) + self.states["lt_loans"][1].sum(axis=0)
+        return self._last_interest_by_firm
 
     def compute_interest_paid_by_household(self) -> np.ndarray:
         """Calculate total interest paid by each household.
@@ -506,7 +699,7 @@ class CreditMarket:
         Returns:
             np.ndarray: Array of interest payments by household across all loan types
         """
-        return self.states["cons_loans"][1].sum(axis=0) + self.states["mort_loans"][1].sum(axis=0)
+        return self._last_interest_by_household
 
     def compute_interest_received_by_bank(self) -> np.ndarray:
         """Calculate total interest received by each bank.
@@ -514,12 +707,7 @@ class CreditMarket:
         Returns:
             np.ndarray: Array of interest income by bank across all loan types
         """
-        return (
-            self.states["st_loans"][1].sum(axis=1)
-            + self.states["lt_loans"][1].sum(axis=1)
-            + self.states["cons_loans"][1].sum(axis=1)
-            + self.states["mort_loans"][1].sum(axis=1)
-        )
+        return self._last_interest_by_bank
 
     def remove_loans_to_firm(self, firm_id: int | np.ndarray) -> float:
         """Remove all loans associated with specified firm(s).

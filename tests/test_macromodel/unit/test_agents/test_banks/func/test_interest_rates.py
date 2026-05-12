@@ -117,7 +117,7 @@ class TestMarkUpInterestRatesSetter:
 
         np.testing.assert_allclose(result, np.array([0.00, 0.03]))
 
-    def test_keeps_deposit_side_at_policy_rate(self):
+    def test_keeps_deposit_rates_at_policy_rate(self):
         setter = MarkUpInterestRatesSetter()
 
         np.testing.assert_allclose(
@@ -129,6 +129,22 @@ class TestMarkUpInterestRatesSetter:
             ),
             np.array([0.02, 0.02]),
         )
+
+    def test_constructor_spreads_apply_to_overdraft_rates(self):
+        setter = MarkUpInterestRatesSetter(
+            firm_short_spread=0.03,
+            hh_consumption_spread=0.05,
+        )
+
+        np.testing.assert_allclose(
+            setter.compute_overdraft_rate_on_firm_deposits(
+                central_bank_policy_rate=0.02,
+                prev_overdraft_rate_on_firm_deposits=np.array([0.05, 0.06]),
+                firm_pt=0.0,
+                firm_ect=0.0,
+            ),
+            np.array([0.05, 0.05]),
+        )
         np.testing.assert_allclose(
             setter.compute_overdraft_rate_on_household_deposits(
                 central_bank_policy_rate=0.02,
@@ -136,7 +152,31 @@ class TestMarkUpInterestRatesSetter:
                 hh_cons_pt=0.0,
                 hh_cons_ect=0.0,
             ),
-            np.array([0.02, 0.02]),
+            np.array([0.07, 0.07]),
+        )
+
+    def test_overdraft_rates_fall_back_to_state_spreads(self):
+        setter = MarkUpInterestRatesSetter()
+
+        np.testing.assert_allclose(
+            setter.compute_overdraft_rate_on_firm_deposits(
+                central_bank_policy_rate=0.02,
+                prev_overdraft_rate_on_firm_deposits=np.array([0.05, 0.06]),
+                firm_pt=0.0,
+                firm_ect=0.0,
+                firm_short_spread=np.array([0.01, 0.02]),
+            ),
+            np.array([0.03, 0.04]),
+        )
+        np.testing.assert_allclose(
+            setter.compute_overdraft_rate_on_household_deposits(
+                central_bank_policy_rate=0.02,
+                prev_overdraft_rate_on_hh_deposits=np.array([0.05, 0.06]),
+                hh_cons_pt=0.0,
+                hh_cons_ect=0.0,
+                hh_consumption_spread=np.array([0.03, 0.04]),
+            ),
+            np.array([0.05, 0.06]),
         )
 
 
@@ -170,11 +210,11 @@ class TestBanksMarkUpInterestRates:
         )
         np.testing.assert_allclose(
             test_banks.ts.current("overdraft_rate_on_firm_deposits"),
-            np.full(deposit_template.shape, 0.02),
+            test_banks.ts.current("interest_rates_on_short_term_firm_loans"),
         )
         np.testing.assert_allclose(
             test_banks.ts.current("overdraft_rate_on_household_deposits"),
-            np.full(deposit_template.shape, 0.02),
+            test_banks.ts.current("interest_rates_on_household_consumption_loans"),
         )
 
     def test_set_interest_rates_prefers_constructor_overrides(self, test_banks):
@@ -201,3 +241,11 @@ class TestBanksMarkUpInterestRates:
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_long_term_firm_loans"), 0.05)
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_household_consumption_loans"), 0.06)
         np.testing.assert_allclose(test_banks.ts.current("interest_rates_on_mortgages"), 0.03)
+        np.testing.assert_allclose(
+            test_banks.ts.current("overdraft_rate_on_firm_deposits"),
+            test_banks.ts.current("interest_rates_on_short_term_firm_loans"),
+        )
+        np.testing.assert_allclose(
+            test_banks.ts.current("overdraft_rate_on_household_deposits"),
+            test_banks.ts.current("interest_rates_on_household_consumption_loans"),
+        )

@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class BankParameters(BaseModel):
@@ -20,9 +20,24 @@ class BankParameters(BaseModel):
 
     Attributes:
         capital_adequacy_ratio (float): Minimum capital to risk-weighted assets ratio
-        firm_loans_debt_to_equity_ratio (float): Maximum firm loan leverage
+        firm_loans_capital_stock_collateral_ratio (float): Maximum firm loan
+            capacity as a fraction of capital input stock value
         firm_loans_return_on_equity_ratio (float): Target return on equity for firm lending
         firm_loans_return_on_assets_ratio (float): Target return on assets for firm lending
+        enable_firm_loans_return_on_equity_restriction (bool): Whether to apply
+            the legacy ROE-style firm-loan restriction
+        enable_firm_loans_return_on_assets_restriction (bool): Whether to apply
+            the legacy ROA-style firm-loan restriction
+        enable_firm_loans_dscr_restriction (bool): Whether to apply the firm-loan
+            debt-service coverage capacity restriction
+        firm_loans_min_dscr (float): Minimum debt-service coverage ratio for
+            firm-loan underwriting
+        firm_loans_cfads_window (int): Trailing periods used for firm CFADS
+            smoothing
+        firm_loans_cfads_haircut (float): Haircut applied to CFADS before
+            underwriting
+        firm_loans_dscr_underwriting_rate_mode (str): Rule for choosing the
+            borrower-level underwriting rate
         household_consumption_loans_loan_to_income_ratio (float): Maximum consumer loan to income
         mortgage_loan_to_income_ratio (float): Maximum mortgage to income ratio
         mortgage_loan_to_value_ratio (float): Maximum mortgage to property value
@@ -34,9 +49,24 @@ class BankParameters(BaseModel):
     """
 
     capital_adequacy_ratio: float = Field(ge=0, le=1, default=0.08)
-    firm_loans_debt_to_equity_ratio: float = Field(ge=0, le=1, default=0.03)
+    firm_loans_capital_stock_collateral_ratio: float = Field(
+        ge=0,
+        le=1,
+        default=0.03,
+        validation_alias=AliasChoices(
+            "firm_loans_capital_stock_collateral_ratio",
+            "firm_loans_debt_to_equity_ratio",
+        ),
+    )
     firm_loans_return_on_equity_ratio: float = Field(ge=0, le=1, default=0.05)
     firm_loans_return_on_assets_ratio: float = Field(ge=0, le=1, default=0.05)
+    enable_firm_loans_return_on_equity_restriction: bool = True
+    enable_firm_loans_return_on_assets_restriction: bool = True
+    enable_firm_loans_dscr_restriction: bool = False
+    firm_loans_min_dscr: float = Field(gt=0, default=1.25)
+    firm_loans_cfads_window: int = Field(ge=1, default=4)
+    firm_loans_cfads_haircut: float = Field(ge=0, le=1, default=1.0)
+    firm_loans_dscr_underwriting_rate_mode: Literal["max_bank_rate"] = "max_bank_rate"
     household_consumption_loans_loan_to_income_ratio: float = Field(ge=0, le=1, default=0.05)
     mortgage_loan_to_income_ratio: float = Field(ge=0, le=30, default=0.05)
     mortgage_loan_to_value_ratio: float = Field(ge=0, le=1, default=0.05)

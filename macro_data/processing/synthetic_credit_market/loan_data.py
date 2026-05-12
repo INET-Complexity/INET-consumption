@@ -6,7 +6,7 @@ used to initialize behavioral models. Key preprocessing includes:
 1. Loan Parameter Processing:
    - Principal amount calculations
    - Interest rate applications
-   - Installment computations
+   - Annuity payment computations
 
 2. Bank-Borrower Relationships:
    - Firm-bank loan mappings
@@ -42,8 +42,8 @@ class LoanData:
 
     The preprocessed data includes:
     - Principal amounts by bank-borrower pair
-    - Interest amounts by bank-borrower pair
-    - Installment amounts by bank-borrower pair
+    - Period interest rates by bank-borrower pair
+    - Scheduled annuity payments by bank-borrower pair
 
     Note:
         This is a data container class. The actual loan behavior (repayment,
@@ -52,8 +52,8 @@ class LoanData:
 
     Attributes:
         principal (np.ndarray): Initial loan principal amounts
-        interest (np.ndarray): Initial loan interest amounts
-        installments (np.ndarray): Initial loan installment amounts
+        interest (np.ndarray): Initial loan period rates
+        installments (np.ndarray): Initial scheduled annuity payments
     """
 
     principal: np.ndarray
@@ -64,9 +64,18 @@ class LoanData:
         """Stack loan parameters for preprocessing.
 
         Returns:
-            np.ndarray: Stacked array of [principal, interest, installments]
+            np.ndarray: Stacked array of [principal, period rate, scheduled payment]
         """
         return np.stack([self.principal, self.interest, self.installments])
+
+
+def annuity_payment(principal: float, period_rate: float, maturity: int) -> float:
+    """Return the fixed per-period annuity payment for a principal."""
+    if principal <= 0.0 or maturity <= 0:
+        return 0.0
+    if not np.isfinite(period_rate) or period_rate <= 0.0:
+        return principal / maturity
+    return principal * period_rate / (1.0 - (1.0 + period_rate) ** (-maturity))
 
 
 @dataclass
@@ -75,8 +84,8 @@ class LongtermLoans(LoanData):
 
     This class organizes initial state data for long-term loans to firms. It processes:
     - Principal amounts from firm debt data
-    - Interest amounts using bank long-term rates
-    - Installment amounts based on maturity
+    - Period rates from bank long-term rates
+    - Scheduled annuity payments based on maturity
 
     Note:
         This is a data container class. The actual loan behavior is implemented
@@ -111,11 +120,13 @@ class LongtermLoans(LoanData):
 
         for firm_id in range(firm_debt.shape[0]):
             principal[firms_corresponding_bank[firm_id], firm_id] = firm_debt[firm_id]
-            interest[firms_corresponding_bank[firm_id], firm_id] = (
-                bank_data["Long-Term Interest Rates on Firm Loans"].values[firms_corresponding_bank[firm_id]]
-                * firm_debt[firm_id]
+            rate = bank_data["Long-Term Interest Rates on Firm Loans"].values[firms_corresponding_bank[firm_id]]
+            interest[firms_corresponding_bank[firm_id], firm_id] = rate
+            discount[firms_corresponding_bank[firm_id], firm_id] = annuity_payment(
+                firm_debt[firm_id],
+                rate,
+                firm_loan_maturity,
             )
-            discount[firms_corresponding_bank[firm_id], firm_id] = 1.0 / firm_loan_maturity * firm_debt[firm_id]
 
         return cls(principal, interest, discount)
 
@@ -126,8 +137,8 @@ class ShorttermLoans(LoanData):
 
     This class organizes initial state data for short-term loans to firms. It processes:
     - Principal amounts from firm debt data
-    - Interest amounts using bank short-term rates
-    - Installment amounts based on maturity
+    - Period rates from bank short-term rates
+    - Scheduled annuity payments based on maturity
 
     Note:
         This is a data container class. The actual loan behavior is implemented
@@ -168,8 +179,8 @@ class ConsumptionExpansionLoans(LoanData):
 
     This class organizes initial state data for household consumption loans. It processes:
     - Principal amounts from household debt data
-    - Interest amounts using bank consumer rates
-    - Installment amounts based on maturity
+    - Period rates from bank consumer rates
+    - Scheduled annuity payments based on maturity
 
     Note:
         This is a data container class. The actual loan behavior is implemented
@@ -204,14 +215,14 @@ class ConsumptionExpansionLoans(LoanData):
 
         for household_id in range(household_other_debt.shape[0]):
             principal[households_corresponding_bank[household_id], household_id] = household_other_debt[household_id]
-            interest[households_corresponding_bank[household_id], household_id] = (
-                bank_data["Interest Rates on Household Consumption Loans"].values[
-                    households_corresponding_bank[household_id]
-                ]
-                * household_other_debt[household_id]
-            )
-            discount[households_corresponding_bank[household_id], household_id] = (
-                1.0 / consumption_loan_maturity * household_other_debt[household_id]
+            rate = bank_data["Interest Rates on Household Consumption Loans"].values[
+                households_corresponding_bank[household_id]
+            ]
+            interest[households_corresponding_bank[household_id], household_id] = rate
+            discount[households_corresponding_bank[household_id], household_id] = annuity_payment(
+                household_other_debt[household_id],
+                rate,
+                consumption_loan_maturity,
             )
 
         return cls(principal, interest, discount)
@@ -223,8 +234,8 @@ class PaydayLoans(LoanData):
 
     This class organizes initial state data for household payday loans. It processes:
     - Principal amounts from household data
-    - Interest amounts using bank payday rates
-    - Installment amounts based on maturity
+    - Period rates from bank payday rates
+    - Scheduled annuity payments based on maturity
 
     Note:
         This is a data container class. The actual loan behavior is implemented
@@ -263,8 +274,8 @@ class MortgageLoans(LoanData):
 
     This class organizes initial state data for household mortgages. It processes:
     - Principal amounts from household mortgage data
-    - Interest amounts using bank mortgage rates
-    - Installment amounts based on maturity
+    - Period rates from bank mortgage rates
+    - Scheduled annuity payments based on maturity
 
     Note:
         This is a data container class. The actual loan behavior is implemented
@@ -297,12 +308,12 @@ class MortgageLoans(LoanData):
 
         for household_id in range(household_mortgage_debt.shape[0]):
             principal[households_corresponding_bank[household_id], household_id] = household_mortgage_debt[household_id]
-            interest[households_corresponding_bank[household_id], household_id] = (
-                bank_data["Interest Rates on Mortgages"].values[households_corresponding_bank[household_id]]
-                * household_mortgage_debt[household_id]
-            )
-            discount[households_corresponding_bank[household_id], household_id] = (
-                1.0 / mortgage_maturity * household_mortgage_debt[household_id]
+            rate = bank_data["Interest Rates on Mortgages"].values[households_corresponding_bank[household_id]]
+            interest[households_corresponding_bank[household_id], household_id] = rate
+            discount[households_corresponding_bank[household_id], household_id] = annuity_payment(
+                household_mortgage_debt[household_id],
+                rate,
+                mortgage_maturity,
             )
 
         return cls(principal, interest, discount)

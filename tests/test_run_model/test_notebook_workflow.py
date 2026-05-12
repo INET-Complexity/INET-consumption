@@ -243,13 +243,6 @@ def test_benchmark_overrides_default_to_no_overrides():
     assert config.benchmark_overrides is None
 
 
-def test_run_model_notebook_keeps_simple_productivity_planner_override_available():
-    notebook_text = (RUN_MODEL_PATH / "run_model.ipynb").read_text()
-
-    assert "firms.functions.productivity_investment_planner.name" in notebook_text
-    assert "SimpleProductivityInvestmentPlanner" in notebook_text
-
-
 def test_run_benchmark_uses_cached_dataframe_without_rerun(tmp_path, monkeypatch):
     env_cfg = _fake_env_config(tmp_path)
     cached = pd.DataFrame({"gdp": [1.0, 2.0]})

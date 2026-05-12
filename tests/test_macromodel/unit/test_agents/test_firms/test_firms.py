@@ -1353,6 +1353,19 @@ class TestFirms:
         assert np.allclose(test_firms.base_capital_input_use_matrix, replacement_coefficients)
         assert np.allclose(test_firms.base_capital_inputs_depreciation_matrix, replacement_coefficients)
 
+    def test__current_goods_criticality_by_firm_falls_back_for_legacy_18_sector_matrix(self, test_firms):
+        original_n_industries = test_firms.n_industries
+        test_firms.n_industries = 43
+        test_firms.goods_criticality_matrix = np.eye(18)
+
+        try:
+            criticality = test_firms.current_goods_criticality_by_firm()
+        finally:
+            test_firms.n_industries = original_n_industries
+
+        assert criticality.shape == (test_firms.ts.current("n_firms"), 43)
+        assert np.allclose(criticality, 1.0)
+
     def test__handle_insolvency_does_not_reset_balance_sheet_insolvent_liquid_firm(
         self,
         test_firms,

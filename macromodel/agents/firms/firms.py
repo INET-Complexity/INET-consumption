@@ -203,6 +203,9 @@ class Firms(Agent):
         if criticality.ndim == 1 and criticality.shape == (n_industries,):
             return np.broadcast_to(criticality[None, :], (n_firms, n_industries))
 
+        if criticality.shape == (18, 18) and n_industries != 18:
+            return np.ones((n_firms, n_industries))
+
         raise ValueError(
             "Unsupported goods_criticality_matrix shape "
             f"{criticality.shape}; expected ({n_industries},{n_industries}), "

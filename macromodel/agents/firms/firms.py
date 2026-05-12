@@ -65,6 +65,7 @@ class Firms(Agent):
         intermediate_inputs_productivity_matrix: np.ndarray,
         capital_inputs_productivity_matrix: np.ndarray,
         capital_inputs_depreciation_matrix: np.ndarray,
+        capital_depreciation_rates: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         intermediate_inputs_utilisation_rate: float,
         capital_inputs_utilisation_rate: float,
@@ -87,6 +88,7 @@ class Firms(Agent):
             intermediate_inputs_productivity_matrix (np.ndarray): Input-output coefficients
             capital_inputs_productivity_matrix (np.ndarray): Capital productivity coefficients
             capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation rates
+            capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
             goods_criticality_matrix (np.ndarray): Critical input requirements
             intermediate_inputs_utilisation_rate (float): Input capacity utilization
             capital_inputs_utilisation_rate (float): Capital capacity utilization
@@ -119,6 +121,7 @@ class Firms(Agent):
         self.base_intermediate_inputs_productivity_matrix = intermediate_inputs_productivity_matrix
         self.base_capital_inputs_productivity_matrix = capital_inputs_productivity_matrix
         self.base_capital_inputs_depreciation_matrix = capital_inputs_depreciation_matrix
+        self.capital_depreciation_rates = capital_depreciation_rates
         self.goods_criticality_matrix = goods_criticality_matrix
         self.intermediate_inputs_utilisation_rate = intermediate_inputs_utilisation_rate
         self.capital_inputs_utilisation_rate = capital_inputs_utilisation_rate
@@ -200,11 +203,24 @@ class Firms(Agent):
         Returns:
             Firms: Initialized Firms instance
         """
+        if (
+            configuration.parameters.capital_depreciation_accounting_mode == "eurostat_cfc"
+            and configuration.parameters.capital_replacement_matrix_source != "eurostat_cfc_output"
+        ):
+            raise ValueError(
+                "capital_depreciation_accounting_mode='eurostat_cfc' requires "
+                "capital_replacement_matrix_source='eurostat_cfc_output'."
+            )
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.firms")
 
         intermediate_inputs_productivity_matrix = synthetic_firms.intermediate_inputs_productivity_matrix
         capital_inputs_productivity_matrix = synthetic_firms.capital_inputs_productivity_matrix
         capital_inputs_depreciation_matrix = synthetic_firms.capital_inputs_depreciation_matrix
+        capital_depreciation_rates = getattr(
+            synthetic_firms,
+            "capital_depreciation_rates",
+            np.zeros(len(synthetic_firms.industries)),
+        )
         if isinstance(goods_criticality_matrix, pd.DataFrame):
             goods_criticality_matrix = goods_criticality_matrix.values
 
@@ -295,6 +311,7 @@ class Firms(Agent):
             intermediate_inputs_productivity_matrix,
             capital_inputs_productivity_matrix,
             capital_inputs_depreciation_matrix,
+            capital_depreciation_rates,
             goods_criticality_matrix,
             configuration.parameters.intermediate_inputs_utilisation_rate,
             configuration.parameters.capital_inputs_utilisation_rate,
@@ -1692,6 +1709,19 @@ class Firms(Agent):
         """
         return (self.ts.current("capital_inputs_stock") * current_good_prices).sum(axis=1)
 
+    def compute_capital_depreciation_costs(self) -> np.ndarray:
+        """Calculate non-cash CFC depreciation costs for firm accounting."""
+        mode = self.configuration.parameters.capital_depreciation_accounting_mode
+        if mode == "none":
+            return np.zeros(self.ts.current("n_firms"))
+        if mode == "eurostat_cfc":
+            rates = self.capital_depreciation_rates[self.states["Industry"]]
+            return rates * self.ts.current("production") * self.ts.current("price")
+        raise ValueError(
+            "Unknown capital_depreciation_accounting_mode "
+            f"{mode!r}; expected 'none' or 'eurostat_cfc'."
+        )
+
     def compute_total_inventory_change(self) -> np.ndarray:
         """Calculate nominal change in inventory value.
 
@@ -1728,11 +1758,14 @@ class Firms(Agent):
         Returns:
             np.ndarray: Profits for each firm
         """
+        capital_costs = self.capital_compensation_accounting_costs()
+        capital_depreciation_costs = self.capital_depreciation_accounting_costs()
         return (
             self.ts.current("price") * self.ts.current("production")
             - self.ts.current("total_wage")
             - self.ts.current("used_intermediate_inputs_costs")
-            - self.ts.current("used_capital_inputs_costs")
+            - capital_costs
+            - capital_depreciation_costs
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("interest_paid")
         )
@@ -1749,10 +1782,13 @@ class Firms(Agent):
         Returns:
             np.ndarray: Unit costs for each firm
         """
+        capital_costs = self.capital_compensation_accounting_costs()
+        capital_depreciation_costs = self.capital_depreciation_accounting_costs()
         return np.divide(
             self.ts.current("total_wage")
             + self.ts.current("used_intermediate_inputs_costs")
-            + self.ts.current("used_capital_inputs_costs")
+            + capital_costs
+            + capital_depreciation_costs
             + self.ts.current("taxes_paid_on_production"),
             self.ts.current("production"),
             out=np.zeros_like(self.ts.current("production")),
@@ -1787,13 +1823,36 @@ class Firms(Agent):
             self.ts.current("deposits")
             + self.ts.current("nominal_amount_sold_in_lcu")
             - self.ts.current("total_wage")
-            - self.ts.current("used_intermediate_inputs_costs")
-            - self.ts.current("used_capital_inputs_costs")
+            - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("corporate_taxes_paid")
             - self.ts.current("interest_paid")
             + self.ts.current("received_credit")
             - self.ts.current("debt_installments")
+        )
+
+    def capital_compensation_accounting_costs(self) -> np.ndarray:
+        """Return capital-compensation-derived costs charged in firm accounting."""
+        mode = self.configuration.parameters.capital_compensation_accounting_mode
+        if mode == "production_cost":
+            return self.ts.current("used_capital_inputs_costs")
+        if mode == "surplus_pool":
+            return np.zeros_like(self.ts.current("used_capital_inputs_costs"))
+        raise ValueError(
+            "Unknown capital_compensation_accounting_mode "
+            f"{mode!r}; expected 'production_cost' or 'surplus_pool'."
+        )
+
+    def capital_depreciation_accounting_costs(self) -> np.ndarray:
+        """Return true CFC depreciation charged in non-cash accounting."""
+        mode = self.configuration.parameters.capital_depreciation_accounting_mode
+        if mode == "eurostat_cfc":
+            return self.ts.current("capital_depreciation_costs")
+        if mode == "none":
+            return np.zeros_like(self.ts.current("capital_depreciation_costs"))
+        raise ValueError(
+            "Unknown capital_depreciation_accounting_mode "
+            f"{mode!r}; expected 'none' or 'eurostat_cfc'."
         )
 
     def compute_gross_operating_surplus_mixed_income(self) -> np.ndarray:

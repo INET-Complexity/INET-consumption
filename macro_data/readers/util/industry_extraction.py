@@ -8,6 +8,7 @@ from macro_data.readers.economic_data.exchange_rates import ExchangeRatesReader
 from macro_data.readers.economic_data.oecd_economic_data import OECDEconData
 from macro_data.readers.io_tables.icio_reader import ICIOReader
 from macro_data.readers.socioeconomic_data.wiod_sea_data import WIODSEAReader
+from macro_data.readers.util.capital_depreciation import load_eurostat_capital_depreciation_data
 
 
 def compile_industry_data(
@@ -16,12 +17,18 @@ def compile_industry_data(
     country_names: list[Country],
     single_firm_per_industry: dict[str, bool],
     yearly_factor: float = 4.0,
+    capital_replacement_matrix_sources: dict[str, str] | None = None,
+    capital_depreciation_accounting_modes: dict[str, str] | None = None,
 ) -> dict[str, dict[str, pd.DataFrame]]:
     industry_data = {}
     current_icio_reader = readers.icio[year]
     sea_reader = readers.wiod_sea
     exchange_rates = readers.exchange_rates
     econ_reader = readers.oecd_econ
+    if capital_replacement_matrix_sources is None:
+        capital_replacement_matrix_sources = {}
+    if capital_depreciation_accounting_modes is None:
+        capital_depreciation_accounting_modes = {}
 
     for country_name in country_names:
         # Matrices
@@ -31,10 +38,46 @@ def compile_industry_data(
             country_name=country_name,
             capital_stock=sea_reader.get_values_in_usd(country_name, "Capital Stock"),
         )
-        capital_inputs_depreciation_matrix = current_icio_reader.get_capital_inputs_depreciation(
-            country_name=country_name,
-            capital_compensation=sea_reader.get_values_in_usd(country_name, "Capital Compensation"),
-        )
+        capital_depreciation_data = None
+        replacement_source = capital_replacement_matrix_sources.get(str(country_name), "capital_compensation")
+        depreciation_mode = capital_depreciation_accounting_modes.get(str(country_name), "none")
+        if depreciation_mode == "eurostat_cfc" and replacement_source != "eurostat_cfc_output":
+            raise ValueError(
+                "capital_depreciation_accounting_mode='eurostat_cfc' requires "
+                "capital_replacement_matrix_source='eurostat_cfc_output'."
+            )
+        if replacement_source == "eurostat_cfc_output" or depreciation_mode == "eurostat_cfc":
+            capital_depreciation_data = load_eurostat_capital_depreciation_data(
+                eurostat_path=readers.eurostat.path,
+                country_name=country_name,
+                year=year,
+                industries=list(current_icio_reader.industries),
+            )
+            capital_depreciation_data["Annual Capital Depreciation Rate"] = capital_depreciation_data[
+                "Capital Depreciation Rate"
+            ]
+            capital_depreciation_data["Capital Depreciation Rate"] = (
+                capital_depreciation_data["Capital Depreciation Rate"] / yearly_factor
+            )
+            capital_depreciation_data["Annual CFC Output Ratio"] = capital_depreciation_data["CFC Output Ratio"]
+            capital_depreciation_data["Capital Depreciation Output Ratio"] = capital_depreciation_data[
+                "CFC Output Ratio"
+            ]
+        if replacement_source == "capital_compensation":
+            capital_inputs_depreciation_matrix = current_icio_reader.get_capital_inputs_depreciation(
+                country_name=country_name,
+                capital_compensation=sea_reader.get_values_in_usd(country_name, "Capital Compensation"),
+            )
+        elif replacement_source == "eurostat_cfc_output":
+            capital_inputs_depreciation_matrix = current_icio_reader.get_capital_inputs_depreciation_from_cfc_output(
+                country_name=country_name,
+                cfc_output_ratios=capital_depreciation_data["CFC Output Ratio"],
+            )
+        else:
+            raise ValueError(
+                "Unknown capital_replacement_matrix_source "
+                f"{replacement_source!r}; expected 'capital_compensation' or 'eurostat_cfc_output'."
+            )
 
         # Exchange rates
         exchange_rate = exchange_rates.from_usd_to_lcu(country_name, sea_reader.year)
@@ -50,6 +93,19 @@ def compile_industry_data(
             trade_partners=country_names + ["ROW"],
             yearly_factor=yearly_factor,
         )
+        if capital_depreciation_data is not None:
+            for column in capital_depreciation_data.columns:
+                industry_vectors[column] = capital_depreciation_data[column].reindex(industry_vectors.index).values
+        if depreciation_mode == "eurostat_cfc":
+            labour_lcu = industry_vectors["Labour Output Ratio"].values * industry_vectors["Output in LCU"].values
+            production_taxes_lcu = (
+                industry_vectors["Production Tax Output Ratio"].values * industry_vectors["Output in LCU"].values
+            )
+            industry_vectors["Labour Compensation in LCU"] = labour_lcu
+            industry_vectors["Labour Compensation in USD"] = labour_lcu / exchange_rate
+            industry_vectors["Taxes Less Subsidies in LCU"] = production_taxes_lcu
+            industry_vectors["Taxes Less Subsidies in USD"] = production_taxes_lcu / exchange_rate
+            industry_vectors["Taxes Less Subsidies Rates"] = industry_vectors["Production Tax Output Ratio"]
 
         # Record all
         industry_data[country_name] = {

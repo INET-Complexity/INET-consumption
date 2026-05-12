@@ -73,6 +73,12 @@ class FirmsDataConfiguration(BaseModel):
         initial_inventory_to_input_fraction (float): Ratio of initial inventory to inputs
         intermediate_inputs_utilisation_rate (float): Rate at which intermediate inputs are used
         capital_inputs_utilisation_rate (float): Rate at which capital inputs are used
+        capital_compensation_accounting_mode (Literal["production_cost", "surplus_pool"]): Whether capital
+            compensation-derived capital inputs are charged as costs or treated as a surplus allocation.
+        capital_depreciation_accounting_mode (Literal["none", "eurostat_cfc"]): Whether true CFC depreciation
+            is charged as a non-cash accounting cost.
+        capital_replacement_matrix_source (Literal["capital_compensation", "eurostat_cfc_output"]): Source for
+            capital replacement matrix column totals.
     """
 
     constructor: Literal["Compustat", "Default"] = "Compustat"
@@ -81,6 +87,9 @@ class FirmsDataConfiguration(BaseModel):
     initial_inventory_to_input_fraction: float = 0
     intermediate_inputs_utilisation_rate: float = 1.0
     capital_inputs_utilisation_rate: float = 1.0
+    capital_compensation_accounting_mode: Literal["production_cost", "surplus_pool"] = "production_cost"
+    capital_depreciation_accounting_mode: Literal["none", "eurostat_cfc"] = "none"
+    capital_replacement_matrix_source: Literal["capital_compensation", "eurostat_cfc_output"] = "capital_compensation"
 
 
 class InterestRates(BaseModel):

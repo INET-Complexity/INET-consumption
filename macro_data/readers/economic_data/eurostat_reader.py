@@ -112,6 +112,8 @@ class EuroStatReader:
         total_output: Optional[dict[str, float]] = None,
         proxy_country: str = "GBR",
     ):
+        self.path = Path(path)
+
         # Handle country codes
         self.c_map = pd.read_csv(country_code_path)
         # switch 2-digit code for Greece
@@ -130,7 +132,7 @@ class EuroStatReader:
         self.files_with_codes = self.get_files_with_codes()
         self.data = {}
         for key in self.files_with_codes.keys():
-            self.data[key] = pd.read_csv(path / (self.files_with_codes[key] + ".csv"))
+            self.data[key] = pd.read_csv(self.path / (self.files_with_codes[key] + ".csv"))
             if "geo" in self.data[key].columns:
                 self.data[key]["geo"] = self.country_code_switch(self.data[key]["geo"])
 

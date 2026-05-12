@@ -320,6 +320,14 @@ class DataWrapper:
         single_firm_dict = {
             country: configuration.country_configs[country].single_firm_per_industry for country in country_names
         }
+        capital_replacement_matrix_sources = {
+            str(country): configuration.country_configs[country].firms_configuration.capital_replacement_matrix_source
+            for country in country_names
+        }
+        capital_depreciation_accounting_modes = {
+            str(country): configuration.country_configs[country].firms_configuration.capital_depreciation_accounting_mode
+            for country in country_names
+        }
 
         industry_data = compile_industry_data(
             year=year,
@@ -327,6 +335,8 @@ class DataWrapper:
             country_names=country_names,
             single_firm_per_industry=single_firm_dict,
             yearly_factor=yearly_factor,
+            capital_replacement_matrix_sources=capital_replacement_matrix_sources,
+            capital_depreciation_accounting_modes=capital_depreciation_accounting_modes,
         )
 
         year_range = 1 if single_hfcs_survey else 10

@@ -319,6 +319,9 @@ FRA:
         - 0
         - 0
       capital_inputs_utilisation_rate: 0.85  # 1.0
+      capital_compensation_accounting_mode: surplus_pool
+      capital_depreciation_accounting_mode: eurostat_cfc
+      capital_replacement_matrix_source: eurostat_cfc_output
       depreciation_rates:
         - 0.0
         - 0.0

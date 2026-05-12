@@ -28,6 +28,7 @@ jobs:
 
       - name: Install h5py dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install libhdf5-dev    
 
       - name: Install dependencies

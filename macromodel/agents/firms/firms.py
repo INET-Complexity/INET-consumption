@@ -182,6 +182,33 @@ class Firms(Agent):
 
         return base_coefficients
 
+    def current_goods_criticality_by_firm(self) -> np.ndarray:
+        """Return goods criticality aligned with firm-by-good arrays.
+
+        The goods criticality data typically arrives as an (n_industries, n_industries)
+        matrix: output/demand industry × input/supply good. Production routines apply
+        criticality masks to firm-by-good matrices (n_firms × n_industries), so we
+        select the appropriate output-industry row for each firm.
+        """
+        criticality = np.asarray(self.goods_criticality_matrix)
+        n_firms = self.ts.current("n_firms")
+        n_industries = self.n_industries
+
+        if criticality.ndim == 2:
+            if criticality.shape == (n_industries, n_industries):
+                return criticality[self.states["Industry"]]
+            if criticality.shape == (n_firms, n_industries):
+                return criticality
+
+        if criticality.ndim == 1 and criticality.shape == (n_industries,):
+            return np.broadcast_to(criticality[None, :], (n_firms, n_industries))
+
+        raise ValueError(
+            "Unsupported goods_criticality_matrix shape "
+            f"{criticality.shape}; expected ({n_industries},{n_industries}), "
+            f"({n_firms},{n_industries}), or ({n_industries},)."
+        )
+
     @classmethod
     def from_pickled_agent(
         cls,
@@ -530,12 +557,13 @@ class Firms(Agent):
             estimated_inflation: Expected inflation rate
             current_good_prices (np.ndarray): Industry-level average prices
         """
+        goods_criticality_by_firm = self.current_goods_criticality_by_firm()
         self.ts.limiting_intermediate_inputs.append(
             self.functions["production"].compute_limiting_intermediate_inputs_stock(
                 intermediate_inputs_productivity_matrix=self.get_effective_intermediate_coefficients(),
                 intermediate_inputs_stock=self.ts.current("intermediate_inputs_stock"),
                 intermediate_inputs_utilisation_rate=self.intermediate_inputs_utilisation_rate,
-                goods_criticality_matrix=self.goods_criticality_matrix,
+                goods_criticality_matrix=goods_criticality_by_firm,
                 substitution_bundle_matrix=self.substitution_bundles,
             )
         )
@@ -544,7 +572,7 @@ class Firms(Agent):
                 capital_inputs_productivity_matrix=self.get_effective_capital_coefficients(),
                 capital_inputs_stock=self.ts.current("capital_inputs_stock"),
                 capital_inputs_utilisation_rate=self.capital_inputs_utilisation_rate,
-                goods_criticality_matrix=self.goods_criticality_matrix,
+                goods_criticality_matrix=goods_criticality_by_firm,
                 substitution_bundle_matrix=self.substitution_bundles,
             )
         )
@@ -2217,7 +2245,7 @@ class Firms(Agent):
             realised_production=self.ts.current("production"),
             intermediate_inputs_productivity_matrix=self.get_effective_intermediate_coefficients(),
             intermediate_inputs_stock=self.ts.current("intermediate_inputs_stock"),
-            goods_criticality_matrix=self.goods_criticality_matrix,
+            goods_criticality_matrix=self.current_goods_criticality_by_firm(),
             substitution_bundle_matrix=self.substitution_bundles,
         )
 
@@ -2279,7 +2307,7 @@ class Firms(Agent):
                 :, self.states["Industry"]
             ].T,
             capital_inputs_stock=self.ts.current("capital_inputs_stock"),
-            goods_criticality_matrix=self.goods_criticality_matrix,
+            goods_criticality_matrix=self.current_goods_criticality_by_firm(),
             substitution_bundle_matrix=self.substitution_bundles,
         )
 

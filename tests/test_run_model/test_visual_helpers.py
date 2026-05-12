@@ -17,10 +17,15 @@ from src.visual_helpers import (  # noqa: E402
     build_cumulative_insolvent_firms_by_sector_df,
     build_employment_by_sector_df,
     build_macro_output_df,
+    build_production_by_sector_df,
+    build_sector_tfp_investment_desired_mb_mc_ratio_df,
+    plot_agent_timeseries,
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
     plot_ppi_comparison,
+    plot_production_by_sector,
+    plot_sector_tfp_investment_desired_mb_mc_ratio,
 )
 
 
@@ -104,7 +109,21 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
             )
         ),
         economy=SimpleNamespace(ts=_ts(economy_ts)),
-        firms=SimpleNamespace(industries=["agriculture", "services"]),
+        firms=SimpleNamespace(
+            industries=["agriculture", "services"],
+            ts=SimpleNamespace(
+                tfp_multiplier=[
+                    np.array([1.0, 1.1, 1.2]),
+                    np.array([1.1, 1.2, 1.3]),
+                    np.array([1.2, 1.3, 1.4]),
+                ],
+                sector_tfp_investment_desired_mb_mc_ratio=[
+                    np.array([0.9, 1.1]),
+                    np.array([1.0, 1.2]),
+                    np.array([1.1, 1.3]),
+                ],
+            ),
+        ),
     )
     model = SimpleNamespace(
         timestep=SimpleNamespace(increment=1),
@@ -156,12 +175,19 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "num_insolvent_firms_by_sector_services",
         "npl_firm_loans",
         "npl_hh_cons_loans",
+        "sector_tfp_investment_desired_mb_mc_ratio",
+        "sector_tfp_investment_desired_mb_mc_ratio_agriculture",
+        "sector_tfp_investment_desired_mb_mc_ratio_services",
+        "avg_tfp_multiplier",
     }
     assert expected_columns.issubset(output.columns)
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
     assert output["num_insolvent_firms_by_sector"].tolist() == [[1, 2], [3, 4], [5, 6]]
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
+    assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
+    assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
+    assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
 
     clutter_columns = {
         "revenue",
@@ -214,6 +240,63 @@ def test_build_cpi_comparison_df_uses_explicit_cpi_series_names():
     assert output["cpi_chained_basket_pop_change_minus_transaction"].iloc[2] == pytest.approx(-0.0083)
 
 
+def test_plot_agent_timeseries_aggregates_vector_series_and_can_select_agent_id():
+    index = pd.RangeIndex(3, name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [1.0, 1.0, 1.0]}, index=index)
+    country = SimpleNamespace(
+        firms=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_sales": [10.0, 11.0, 12.0],
+                    "target_short_term_credit": [
+                        np.array([1.0, 2.0]),
+                        np.array([3.0, 4.0]),
+                        np.array([5.0, 6.0]),
+                    ],
+                }
+            )
+        )
+    )
+    model = SimpleNamespace(
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+    )
+
+    fig_sum = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit", "total_sales"],
+        agg="sum",
+        show=False,
+    )
+    assert len(fig_sum.data) == 2
+    assert list(fig_sum.data[0].y) == pytest.approx([3.0, 7.0, 11.0])
+
+    fig_agent = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit"],
+        agent_id=1,
+        show=False,
+    )
+    assert list(fig_agent.data[0].y) == pytest.approx([2.0, 4.0, 6.0])
+
+    fig_multi = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit", "total_sales"],
+        agent_id=[0, 1],
+        show=False,
+    )
+    assert len(fig_multi.data) == 3
+    assert [trace.name for trace in fig_multi.data][:2] == ["id=0", "id=1"]
+    assert list(fig_multi.data[0].y) == pytest.approx([1.0, 3.0, 5.0])
+    assert list(fig_multi.data[1].y) == pytest.approx([2.0, 4.0, 6.0])
+
+
 def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():
     df = pd.DataFrame(
         {
@@ -262,6 +345,107 @@ def test_employment_by_sector_plot_uses_labour_market_series_and_sector_labels()
     ]
     assert [trace.mode for trace in fig.data] == ["lines+markers", "lines+markers"]
     assert fig.layout.yaxis.title.text == "Number of Employed Individuals"
+
+
+def test_production_by_sector_plot_sums_firm_production_and_uses_sector_labels():
+    class DummyFirmTS:
+        def __init__(self, production):
+            self._production = production
+
+        def historic(self, name):
+            if name != "production":
+                raise KeyError(name)
+            return self._production
+
+    # 2 sectors, 3 firms (two in A, one in C)
+    production = [
+        [1.0, 2.0, 3.0],
+        [1.5, 2.5, 3.5],
+        [2.0, 3.0, 4.0],
+    ]
+    industries = ["A", "C"]
+    firm_industry_idx = np.array([0, 0, 1])
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                firms=SimpleNamespace(
+                    industries=industries,
+                    states={"Industry": firm_industry_idx},
+                    ts=DummyFirmTS(production),
+                )
+            )
+        }
+    )
+
+    sector_production = build_production_by_sector_df(model, "FRA")
+    fig = plot_production_by_sector(model, "FRA", show=False)
+
+    assert sector_production.columns.tolist() == ["A", "C"]
+    assert sector_production["A"].tolist() == [3.0, 4.0, 5.0]
+    assert sector_production["C"].tolist() == [3.0, 3.5, 4.0]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert fig.layout.yaxis.title.text == "Production"
+
+
+def test_sector_tfp_investment_desired_mb_mc_ratio_plot_expands_mc_sector_series():
+    index = pd.MultiIndex.from_product([[12, 13], [0, 1]], names=["seed", "time"])
+    combined = pd.DataFrame(
+        {
+            "sector_tfp_investment_desired_mb_mc_ratio": [
+                [0.9, 1.1],
+                [1.0, 1.2],
+                [0.8, 1.0],
+                [0.95, 1.15],
+            ]
+        },
+        index=index,
+    )
+
+    ratios = build_sector_tfp_investment_desired_mb_mc_ratio_df(combined, sector_labels=["A", "C"])
+    fig = plot_sector_tfp_investment_desired_mb_mc_ratio(combined, sector_labels=["A", "C"], show=False)
+
+    assert ratios.columns.tolist() == ["A", "C"]
+    assert ratios.loc[(12, 1), "C"] == pytest.approx(1.2)
+    assert [trace.name for trace in fig.data[:4]] == [
+        "A: Agriculture, forestry and fishing",
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+        "C: Manufacturing",
+    ]
+    assert [trace.showlegend for trace in fig.data[:4]] == [True, False, True, False]
+    assert fig.layout.yaxis.title.text == "desired MB/MC ratio"
+
+
+def test_sector_tfp_investment_desired_mb_mc_ratio_plot_reads_live_model_firms_ts():
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                firms=SimpleNamespace(
+                    industries=["A", "C"],
+                    ts=SimpleNamespace(
+                        sector_tfp_investment_desired_mb_mc_ratio=[
+                            np.array([0.9, 1.1]),
+                            np.array([1.0, 1.2]),
+                        ]
+                    ),
+                )
+            )
+        }
+    )
+
+    ratios = build_sector_tfp_investment_desired_mb_mc_ratio_df(model, "FRA")
+    fig = plot_sector_tfp_investment_desired_mb_mc_ratio(model, "FRA", show=False)
+
+    assert ratios.columns.tolist() == ["A", "C"]
+    assert ratios["C"].tolist() == [1.1, 1.2]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert fig.data[0].x.tolist() == [0, 1]
 
 
 def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():

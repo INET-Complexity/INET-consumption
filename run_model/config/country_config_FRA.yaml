@@ -206,7 +206,7 @@ FRA:
           price_setting_speed_dp: 0.025
           price_setting_speed_gf: 1.0
       production:
-        name: PureLeontief
+        name: CriticalAndImportantLeontief
         path_name: production
         parameters: {}
       productivity_growth:

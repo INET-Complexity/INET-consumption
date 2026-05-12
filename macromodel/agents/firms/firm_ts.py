@@ -67,6 +67,7 @@ class FirmTimeSeries(TimeSeries):
     - short_term_loan_debt: Short-term borrowing
     - long_term_loan_debt: Long-term borrowing
     - debt_installments: Loan repayments
+    - scheduled_debt_service: Next-period scheduled loan interest plus principal repayments
     - interest_paid: Total interest expense
     - interest_paid_on_deposits: Interest on deposits
     - interest_paid_on_loans: Interest on borrowing
@@ -314,11 +315,25 @@ class FirmTimeSeries(TimeSeries):
             total_received_long_term_credit=[0.0],
             received_credit=np.full(data.shape[0], np.nan),
             #
+            # Credit-market (WaterBucket) binding diagnostics
+            credit_market_firm_cfads=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_capacity=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_collateral_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_dscr_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_binding_reason=np.full(data.shape[0], np.nan),
+            credit_market_firm_st_binding_amount=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_capacity=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_collateral_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
+            credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
+            #
             short_term_loan_debt=np.zeros(data.shape[0]),
             long_term_loan_debt=data["Debt"].values,
             debt=data["Debt"].values,
             deposits=data["Deposits"].values,
             debt_installments=data["Debt Installments"].values,
+            scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,
             total_debt_installments=[data["Debt Installments"].values.sum()],
             interest_paid_on_deposits=data["Interest paid on deposits"].values,
             interest_paid_on_loans=data["Interest paid on loans"].values,
@@ -557,11 +572,25 @@ def create_firms_timeseries(
         total_received_long_term_credit=[0.0],
         received_credit=np.full(data.shape[0], np.nan),
         #
+        # Credit-market (WaterBucket) binding diagnostics
+        credit_market_firm_cfads=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_capacity=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_collateral_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_dscr_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_binding_reason=np.full(data.shape[0], np.nan),
+        credit_market_firm_st_binding_amount=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_capacity=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_collateral_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
+        credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
+        #
         short_term_loan_debt=np.zeros(data.shape[0]),
         long_term_loan_debt=data["Debt"].values,
         debt=data["Debt"].values,
         deposits=data["Deposits"].values,
         debt_installments=data["Debt Installments"].values,
+        scheduled_debt_service=data["Debt Installments"].values + data["Interest paid on loans"].values,
         total_debt_installments=[data["Debt Installments"].values.sum()],
         interest_paid_on_deposits=data["Interest paid on deposits"].values,
         interest_paid_on_loans=data["Interest paid on loans"].values,

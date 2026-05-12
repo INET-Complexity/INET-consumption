@@ -311,12 +311,7 @@ class Banks(Agent):
             [self.ts.current("interest_rate_on_firm_deposits").mean()]
         )
         self.ts.overdraft_rate_on_firm_deposits.append(
-            self.functions["interest_rates"].compute_overdraft_rate_on_firm_deposits(
-                central_bank_policy_rate=central_bank_policy_rate,
-                prev_overdraft_rate_on_firm_deposits=self.ts.current("overdraft_rate_on_firm_deposits"),
-                firm_pt=self.states["Firm Pass Through"],
-                firm_ect=self.states["Firm ECT"],
-            )
+            self.ts.current("interest_rates_on_short_term_firm_loans").copy()
         )
         self.ts.average_overdraft_rate_on_firm_deposits.append(
             [self.ts.current("overdraft_rate_on_firm_deposits").mean()]
@@ -333,12 +328,7 @@ class Banks(Agent):
             [self.ts.current("interest_rate_on_household_deposits").mean()]
         )
         self.ts.overdraft_rate_on_household_deposits.append(
-            self.functions["interest_rates"].compute_overdraft_rate_on_household_deposits(
-                central_bank_policy_rate=central_bank_policy_rate,
-                prev_overdraft_rate_on_hh_deposits=self.ts.current("overdraft_rate_on_household_deposits"),
-                hh_cons_pt=self.states["Household Consumption Pass Through"],
-                hh_cons_ect=self.states["Household Consumption ECT"],
-            )
+            self.ts.current("interest_rates_on_household_consumption_loans").copy()
         )
         self.ts.average_overdraft_rate_on_household_deposits.append(
             [self.ts.current("overdraft_rate_on_household_deposits").mean()]

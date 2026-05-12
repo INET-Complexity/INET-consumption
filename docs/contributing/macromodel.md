@@ -1208,7 +1208,7 @@ country_configurations:
     banks:
       parameters:
         capital_adequacy_ratio: 0.08
-        firm_loans_debt_to_equity_ratio: 0.03
+        firm_loans_capital_stock_collateral_ratio: 0.03
 ```
 
 ### Adding New Configuration Parameters

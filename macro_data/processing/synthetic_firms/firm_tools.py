@@ -441,7 +441,7 @@ def initialise_basic_firm_fields(
 def function_parameters_dependent_initialisation(
     firm_data: pd.DataFrame,
     intermediate_inputs_productivity_matrix: np.ndarray,
-    capital_inputs_depreciation_matrix: np.ndarray,
+    capital_input_use_matrix: np.ndarray,
     capital_inputs_productivity_matrix: np.ndarray,
     total_firm_deposits: float,
     total_firm_debt: float,
@@ -467,7 +467,7 @@ def function_parameters_dependent_initialisation(
     Args:
         firm_data (pd.DataFrame): Firm data container to update
         intermediate_inputs_productivity_matrix (np.ndarray): Input productivity
-        capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation
+        capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
         capital_inputs_productivity_matrix (np.ndarray): Capital productivity
         total_firm_deposits (float): Aggregate firm deposits
         total_firm_debt (float): Aggregate firm debt
@@ -481,7 +481,7 @@ def function_parameters_dependent_initialisation(
         tuple: Preprocessed capital stock, input stock, and utilization data
     """
     # This needs to be moved to the macromodel package
-    # note that firm_data, intermediate_inputs_productivity_matrix, capital_inputs_depreciation_matrix,
+    # note that firm_data, intermediate_inputs_productivity_matrix, capital_input_use_matrix,
     # firm deposits, and firm debt will be attributes of the synthetic firm class
     firm_data["Inventory"] = initial_inventory_to_input_fraction * firm_data["Production"]
     firm_data["Demand"] = firm_data["Production"] + firm_data["Inventory"]  # I am not sure about this
@@ -499,7 +499,7 @@ def function_parameters_dependent_initialisation(
         * (firm_data["Production"].values / capital_inputs_productivity_matrix[:, firm_data["Industry"].values]).T
     )
     used_capital_inputs = (
-        firm_data["Production"].values * capital_inputs_depreciation_matrix[:, firm_data["Industry"].values]
+        firm_data["Production"].values * capital_input_use_matrix[:, firm_data["Industry"].values]
     ).T.astype(float)
     # TODO : Sam's version with compustat data can have firms with negative deposits, and this doesn't work
 

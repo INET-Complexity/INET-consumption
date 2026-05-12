@@ -206,7 +206,7 @@ FRA:
           price_setting_speed_dp: 0.025
           price_setting_speed_gf: 1.0
       production:
-        name: PureLeontief
+        name: CriticalAndImportantLeontief
         path_name: production
         parameters: {}
       productivity_growth:
@@ -322,6 +322,7 @@ FRA:
       capital_compensation_accounting_mode: surplus_pool
       capital_depreciation_accounting_mode: eurostat_cfc
       capital_replacement_matrix_source: eurostat_cfc_output
+      firm_activity_finance_revision_mode: post_credit_cash_budget
       depreciation_rates:
         - 0.0
         - 0.0

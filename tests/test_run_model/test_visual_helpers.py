@@ -17,11 +17,13 @@ from src.visual_helpers import (  # noqa: E402
     build_cumulative_insolvent_firms_by_sector_df,
     build_employment_by_sector_df,
     build_macro_output_df,
+    build_production_by_sector_df,
     build_sector_tfp_investment_desired_mb_mc_ratio_df,
     plot_agent_timeseries,
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
+    plot_production_by_sector,
     plot_ppi_comparison,
     plot_sector_tfp_investment_desired_mb_mc_ratio,
 )
@@ -343,6 +345,49 @@ def test_employment_by_sector_plot_uses_labour_market_series_and_sector_labels()
     ]
     assert [trace.mode for trace in fig.data] == ["lines+markers", "lines+markers"]
     assert fig.layout.yaxis.title.text == "Number of Employed Individuals"
+
+
+def test_production_by_sector_plot_sums_firm_production_and_uses_sector_labels():
+    class DummyFirmTS:
+        def __init__(self, production):
+            self._production = production
+
+        def historic(self, name):
+            if name != "production":
+                raise KeyError(name)
+            return self._production
+
+    # 2 sectors, 3 firms (two in A, one in C)
+    production = [
+        [1.0, 2.0, 3.0],
+        [1.5, 2.5, 3.5],
+        [2.0, 3.0, 4.0],
+    ]
+    industries = ["A", "C"]
+    firm_industry_idx = np.array([0, 0, 1])
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                firms=SimpleNamespace(
+                    industries=industries,
+                    states={"Industry": firm_industry_idx},
+                    ts=DummyFirmTS(production),
+                )
+            )
+        }
+    )
+
+    sector_production = build_production_by_sector_df(model, "FRA")
+    fig = plot_production_by_sector(model, "FRA", show=False)
+
+    assert sector_production.columns.tolist() == ["A", "C"]
+    assert sector_production["A"].tolist() == [3.0, 4.0, 5.0]
+    assert sector_production["C"].tolist() == [3.0, 3.5, 4.0]
+    assert [trace.name for trace in fig.data] == [
+        "A: Agriculture, forestry and fishing",
+        "C: Manufacturing",
+    ]
+    assert fig.layout.yaxis.title.text == "Production"
 
 
 def test_sector_tfp_investment_desired_mb_mc_ratio_plot_expands_mc_sector_series():

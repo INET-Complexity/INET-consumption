@@ -1303,6 +1303,72 @@ def plot_employment_by_sector(
     return fig
 
 
+def build_production_by_sector_df(model, country_code):
+    """Return total firm production by sector from a model country."""
+    country = model.countries[country_code]
+    production = np.asarray(country.firms.ts.historic("production"), dtype=float)
+    if production.ndim != 2:
+        raise ValueError("production must be a 2D time x firm series.")
+
+    firm_industries = np.asarray(country.firms.states["Industry"], dtype=int)
+    n_sectors = len(getattr(country.firms, "industries", [])) or int(firm_industries.max() + 1)
+    by_sector = np.zeros((production.shape[0], n_sectors), dtype=float)
+    for t in range(production.shape[0]):
+        by_sector[t] = np.bincount(
+            firm_industries,
+            weights=production[t],
+            minlength=n_sectors,
+        )
+
+    sectors = [str(sector) for sector in getattr(country.firms, "industries", [])]
+    if len(sectors) != by_sector.shape[1]:
+        sectors = [str(idx) for idx in range(by_sector.shape[1])]
+
+    return pd.DataFrame(by_sector, columns=sectors)
+
+
+def plot_production_by_sector(
+    model,
+    country_code,
+    title="Production by sector (model)",
+    height=650,
+    width=1000,
+    show=True,
+):
+    """Plot total firm production for each economic sector."""
+    production = build_production_by_sector_df(model, country_code)
+    colors = _categorical_colors(len(production.columns))
+
+    fig = go.Figure()
+    for idx, sector_code in enumerate(production.columns):
+        sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+        fig.add_trace(
+            go.Scatter(
+                x=production.index,
+                y=production[sector_code],
+                mode="lines+markers",
+                name=f"{sector_code}: {sector_label}",
+                line={"color": colors[idx], "width": 2},
+                marker={"size": 6},
+            )
+        )
+
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        xaxis_title="Time Period",
+        yaxis_title="Production",
+        legend_title_text="Sector",
+    )
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
 def summarize_ppi_comparison(ppi_comparison_df):
     """Return descriptive statistics for PPI level and change comparisons."""
     columns = [

@@ -15,6 +15,8 @@ Run with (from inet-macro-dev directory):
     streamlit run path/to/macromodel/util/dash_h5.py
 """
 
+# ruff: noqa: E402, I001
+
 import os
 import sys
 from pathlib import Path

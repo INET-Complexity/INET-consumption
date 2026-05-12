@@ -5,7 +5,9 @@ from macromodel.agents.firms.func.productivity_investment_planner import (
     NoProductivityInvestmentPlanner,
     OptimalProductivityInvestmentPlanner,
     SimpleProductivityInvestmentPlanner,
+    TargetIntensityTFPInvestmentPlanner,
 )
+from macromodel.configurations.firms_configuration import ProductivityInvestmentPlanner
 
 
 def create_test_params(n_firms, n_industries=18):
@@ -16,6 +18,7 @@ def create_test_params(n_firms, n_industries=18):
         "input_usage": np.ones((n_firms, n_industries)),
         "current_tech_multipliers": np.ones((n_firms, n_industries)),
         "substitution_bundle_matrix": None,
+        "current_nominal_production": np.full(n_firms, 1000.0),
     }
 
 
@@ -73,6 +76,24 @@ class TestNoProductivityInvestmentPlanner:
 class TestSimpleProductivityInvestmentPlanner:
     """Test the SimpleProductivityInvestmentPlanner implementation."""
 
+    def test_ignores_target_intensity_planner_specific_parameters(self):
+        planner = SimpleProductivityInvestmentPlanner(
+            n_firms=1,
+            adjustment_cost_lambda=1.0,
+            cap_multiplier=1.0,
+            reference_effective_cost_rate=0.02,
+            sector_innovation_intensity={"0": 0.02},
+            silence_technical_investment=True,
+            target_innovation_intensity=0.02,
+            tfp_risk_premium=0.0,
+        )
+
+        assert planner.n_firms == 1
+
+    def test_rejects_unknown_constructor_parameters(self):
+        with pytest.raises(TypeError, match="unexpected keyword"):
+            SimpleProductivityInvestmentPlanner(n_firms=1, adjustmant_cost_lambda=1.0)
+
     def test_basic_investment_calculation_with_cost_savings(self):
         """Test basic investment calculation using cost savings logic."""
         planner = SimpleProductivityInvestmentPlanner(
@@ -102,12 +123,11 @@ class TestSimpleProductivityInvestmentPlanner:
         assert np.all(total_investment >= 0)
         assert np.all(tfp_investment >= 0)
         assert np.all(technical_investment >= 0)
-        # Should not exceed maximum investment constraints
-        max_investment = np.minimum(0.5 * available_cash, 0.1 * current_production)
-        assert np.all(total_investment <= max_investment + 1e-10)
+        budget = planner.compute_investment_budget(available_cash, np.full(n_firms, 1000.0))
+        assert np.all(total_investment <= budget + 1e-10)
 
     def test_higher_unit_costs_encourage_investment(self):
-        """Test that firms with higher unit costs invest more (higher returns from cost savings)."""
+        """Test that firms with higher unit costs invest more due to nominal cost savings."""
         planner = SimpleProductivityInvestmentPlanner(
             hurdle_rate=0.05,  # Low hurdle rate to allow investment
             investment_propensity=0.5,
@@ -115,10 +135,9 @@ class TestSimpleProductivityInvestmentPlanner:
             n_firms=2,
         )
 
-        # Two identical firms except for unit costs
         current_tfp = np.array([1.0, 1.0])
         current_production = np.array([100.0, 100.0])
-        current_unit_costs = np.array([5.0, 15.0])  # Second firm has higher costs
+        current_unit_costs = np.array([5.0, 15.0])
         available_cash = np.array([1000.0, 1000.0])
 
         total_investment, tfp_investment, technical_investment = planner.plan_productivity_investment(
@@ -129,7 +148,6 @@ class TestSimpleProductivityInvestmentPlanner:
             **create_test_params(2),
         )
 
-        # Firm with higher unit costs should invest more (higher returns from cost reduction)
         assert total_investment[1] >= total_investment[0]
 
     def test_hurdle_rate_constraint_with_cost_savings(self):
@@ -184,8 +202,9 @@ class TestSimpleProductivityInvestmentPlanner:
         )
 
         # Investment should be limited by cash constraint
-        cash_constraint = 0.5 * available_cash[0]  # Default max_cash_fraction = 0.5
-        output_constraint = 0.2 * current_production[0]
+        nominal_output = create_test_params(1)["current_nominal_production"][0]
+        cash_constraint = 0.3 * available_cash[0]
+        output_constraint = 0.2 * nominal_output
         expected_budget = min(cash_constraint, output_constraint)
 
         # Investment should not exceed the more restrictive constraint
@@ -238,6 +257,88 @@ class TestSimpleProductivityInvestmentPlanner:
         assert np.allclose(tfp_investment, [0.0])
         assert np.allclose(technical_investment, [0.0])
 
+    def test_simple_planner_requires_nominal_production(self):
+        """Test that Simple planner fails explicitly without nominal output."""
+        planner = SimpleProductivityInvestmentPlanner(n_firms=1)
+
+        with pytest.raises(ValueError, match="current_nominal_production is required"):
+            planner.plan_productivity_investment(
+                current_tfp=np.array([1.0]),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([10.0]),
+                available_cash=np.array([500.0]),
+                current_prices=np.ones(1),
+                n_industries=1,
+                input_usage=np.ones((1, 1)),
+                current_tech_multipliers=np.ones((1, 1)),
+                substitution_bundle_matrix=None,
+            )
+
+    @pytest.mark.parametrize("nominal_output", [np.nan, np.inf, -1.0])
+    def test_simple_planner_rejects_invalid_nominal_production(self, nominal_output):
+        """Test that invalid nominal output fails explicitly."""
+        planner = SimpleProductivityInvestmentPlanner(n_firms=1)
+
+        with pytest.raises(ValueError, match="current_nominal_production must contain finite non-negative values"):
+            planner.plan_productivity_investment(
+                current_tfp=np.array([1.0]),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([10.0]),
+                available_cash=np.array([500.0]),
+                current_prices=np.ones(1),
+                n_industries=1,
+                input_usage=np.ones((1, 1)),
+                current_tech_multipliers=np.ones((1, 1)),
+                substitution_bundle_matrix=None,
+                current_nominal_production=np.array([nominal_output]),
+            )
+
+    def test_simple_planner_rejects_invalid_nominal_costs(self):
+        """Test that invalid nominal production costs fail explicitly."""
+        planner = SimpleProductivityInvestmentPlanner(n_firms=1)
+
+        with pytest.raises(ValueError, match="current nominal production costs"):
+            planner.plan_productivity_investment(
+                current_tfp=np.array([1.0]),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([np.nan]),
+                available_cash=np.array([500.0]),
+                current_prices=np.ones(1),
+                n_industries=1,
+                input_usage=np.ones((1, 1)),
+                current_tech_multipliers=np.ones((1, 1)),
+                substitution_bundle_matrix=None,
+                current_nominal_production=np.array([1000.0]),
+            )
+
+    def test_simple_planner_invariant_to_physical_unit_rescaling(self):
+        """Test nominal planning is invariant to pure physical-unit rescaling."""
+        planner = SimpleProductivityInvestmentPlanner(
+            hurdle_rate=0.05,
+            investment_propensity=0.5,
+            investment_effectiveness=0.1,
+            n_firms=1,
+        )
+        params = create_test_params(1)
+        params["current_nominal_production"] = np.array([1000.0])
+
+        total_a, _, _ = planner.plan_productivity_investment(
+            current_tfp=np.array([1.0]),
+            current_production=np.array([100.0]),
+            current_unit_costs=np.array([10.0]),
+            available_cash=np.array([500.0]),
+            **params,
+        )
+        total_b, _, _ = planner.plan_productivity_investment(
+            current_tfp=np.array([1.0]),
+            current_production=np.array([200.0]),
+            current_unit_costs=np.array([5.0]),
+            available_cash=np.array([500.0]),
+            **params,
+        )
+
+        assert np.allclose(total_a, total_b)
+
     def test_hurdle_value_calculation_correctness(self):
         """Test that the hurdle-adjusted value calculation is mathematically correct."""
         planner = SimpleProductivityInvestmentPlanner(
@@ -264,6 +365,193 @@ class TestSimpleProductivityInvestmentPlanner:
         )
 
         assert np.allclose(computed_value, expected_value)
+
+
+class TestTargetIntensityTFPInvestmentPlanner:
+    """Test the target-intensity direct TFP investment planner."""
+
+    def test_ignores_simple_planner_specific_parameters(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=1,
+            investment_effectiveness=0.1,
+            investment_elasticity=0.3,
+            investment_propensity=0.2,
+            search_steps=20,
+        )
+
+        assert planner.target_innovation_intensity == 0.02
+
+    def test_homogeneous_fallback_invests_target_intensity_when_cash_nonbinding(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=2,
+            target_innovation_intensity=0.02,
+            cap_multiplier=1.0,
+            investment_effectiveness=0.1,
+            investment_elasticity=0.3,
+            reference_effective_cost_rate=0.02,
+        )
+        params = create_test_params(2, n_industries=3)
+        params["current_nominal_production"] = np.array([1000.0, 2000.0])
+
+        total, tfp, technical = planner.plan_productivity_investment(
+            current_tfp=np.ones(2),
+            current_production=np.array([100.0, 200.0]),
+            current_unit_costs=np.array([10.0, 10.0]),
+            available_cash=np.array([1000.0, 1000.0]),
+            firm_industries=np.array([0, 1]),
+            effective_cost_rate=np.array([0.02, 0.02]),
+            **params,
+        )
+
+        expected = np.array([20.0, 40.0])
+        assert np.allclose(total, expected)
+        assert np.allclose(tfp, expected)
+        assert np.allclose(technical, np.zeros((2, 3)))
+        assert np.allclose(planner.last_diagnostics["desired_mb_mc_ratio"], np.ones(2))
+        assert np.allclose(planner.last_diagnostics["planned_mb_mc_ratio"], np.ones(2))
+        assert np.allclose(planner.last_diagnostics["cash_binding"], np.zeros(2))
+
+    def test_sector_intensity_map_applies_and_missing_sector_falls_back(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=3,
+            target_innovation_intensity=0.02,
+            sector_innovation_intensity={"1": 0.04},
+            cap_multiplier=1.0,
+            investment_effectiveness=0.1,
+            investment_elasticity=0.3,
+            reference_effective_cost_rate=0.02,
+        )
+        params = create_test_params(3, n_industries=3)
+        params["current_nominal_production"] = np.full(3, 1000.0)
+
+        total, tfp, _ = planner.plan_productivity_investment(
+            current_tfp=np.ones(3),
+            current_production=np.full(3, 100.0),
+            current_unit_costs=np.full(3, 10.0),
+            available_cash=np.full(3, 1000.0),
+            firm_industries=np.array([0, 1, 2]),
+            effective_cost_rate=np.full(3, 0.02),
+            **params,
+        )
+
+        assert np.allclose(total, [20.0, 40.0, 20.0])
+        assert np.allclose(tfp, [20.0, 40.0, 20.0])
+
+    def test_available_cash_caps_planned_tfp_investment(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=1,
+            target_innovation_intensity=0.02,
+            investment_effectiveness=0.1,
+            investment_elasticity=0.3,
+        )
+        params = create_test_params(1)
+        params["current_nominal_production"] = np.array([1000.0])
+
+        total, tfp, technical = planner.plan_productivity_investment(
+            current_tfp=np.ones(1),
+            current_production=np.array([100.0]),
+            current_unit_costs=np.array([10.0]),
+            available_cash=np.array([5.0]),
+            firm_industries=np.array([0]),
+            effective_cost_rate=np.array([0.02]),
+            **params,
+        )
+
+        assert np.allclose(total, [5.0])
+        assert np.allclose(tfp, [5.0])
+        assert np.allclose(technical, np.zeros((1, 18)))
+        assert np.allclose(planner.last_diagnostics["planned_intensity"], [0.005])
+        assert np.allclose(planner.last_diagnostics["cash_binding"], [1.0])
+        assert planner.last_diagnostics["planned_mb_mc_ratio"][0] > 1.0
+
+    def test_higher_effective_cost_rate_reduces_desired_intensity_when_not_cap_binding(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=2,
+            target_innovation_intensity=0.02,
+            cap_multiplier=2.0,
+            investment_effectiveness=0.1,
+            investment_elasticity=0.3,
+            reference_effective_cost_rate=0.02,
+        )
+        params = create_test_params(2)
+        params["current_nominal_production"] = np.full(2, 1000.0)
+
+        total, _, _ = planner.plan_productivity_investment(
+            current_tfp=np.ones(2),
+            current_production=np.full(2, 100.0),
+            current_unit_costs=np.full(2, 10.0),
+            available_cash=np.full(2, 1000.0),
+            firm_industries=np.array([0, 0]),
+            effective_cost_rate=np.array([0.02, 0.10]),
+            **params,
+        )
+
+        assert total[0] > total[1]
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"target_innovation_intensity": 0.0}, "target_innovation_intensity"),
+            ({"investment_elasticity": 1.0}, "0 < investment_elasticity < 1"),
+            ({"sector_innovation_intensity": {"bad": 0.02}}, "numeric industry indices"),
+            ({"sector_innovation_intensity": {1: -0.02}}, "finite and positive"),
+        ],
+    )
+    def test_rejects_invalid_parameters(self, kwargs, match):
+        params = {"investment_effectiveness": 0.1, "investment_elasticity": 0.3}
+        params.update(kwargs)
+        with pytest.raises(ValueError, match=match):
+            TargetIntensityTFPInvestmentPlanner(
+                n_firms=1,
+                **params,
+            )
+
+    def test_rejects_invalid_nominal_production(self):
+        planner = TargetIntensityTFPInvestmentPlanner(n_firms=1)
+        with pytest.raises(ValueError, match="current_nominal_production"):
+            planner.plan_productivity_investment(
+                current_tfp=np.ones(1),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([10.0]),
+                available_cash=np.array([1000.0]),
+                firm_industries=np.array([0]),
+                effective_cost_rate=np.array([0.02]),
+                **{**create_test_params(1), "current_nominal_production": np.array([np.nan])},
+            )
+
+    def test_rejects_firm_industry_outside_model_range(self):
+        planner = TargetIntensityTFPInvestmentPlanner(n_firms=1)
+        with pytest.raises(ValueError, match="firm_industries"):
+            planner.plan_productivity_investment(
+                current_tfp=np.ones(1),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([10.0]),
+                available_cash=np.array([1000.0]),
+                firm_industries=np.array([18]),
+                effective_cost_rate=np.array([0.02]),
+                **{**create_test_params(1, n_industries=18), "current_nominal_production": np.array([1000.0])},
+            )
+
+    def test_rejects_sector_intensity_key_outside_model_range(self):
+        planner = TargetIntensityTFPInvestmentPlanner(
+            n_firms=1,
+            sector_innovation_intensity={"18": 0.02},
+        )
+        with pytest.raises(ValueError, match="sector_innovation_intensity keys"):
+            planner.plan_productivity_investment(
+                current_tfp=np.ones(1),
+                current_production=np.array([100.0]),
+                current_unit_costs=np.array([10.0]),
+                available_cash=np.array([1000.0]),
+                firm_industries=np.array([0]),
+                effective_cost_rate=np.array([0.02]),
+                **{**create_test_params(1, n_industries=18), "current_nominal_production": np.array([1000.0])},
+            )
+
+    def test_configuration_accepts_target_intensity_planner_name(self):
+        config = ProductivityInvestmentPlanner(name="TargetIntensityTFPInvestmentPlanner")
+
+        assert config.name == "TargetIntensityTFPInvestmentPlanner"
 
 
 class TestOptimalProductivityInvestmentPlanner:
@@ -331,13 +619,15 @@ class TestOptimalProductivityInvestmentPlanner:
             available_cash=available_cash,
             **create_test_params(1),
         )
+        simple_params = create_test_params(1)
+        simple_params["current_nominal_production"] = current_production
 
         simple_total, simple_tfp, simple_tech = simple_planner.plan_productivity_investment(
             current_tfp=current_tfp,
             current_production=current_production,
             current_unit_costs=current_unit_costs,
             available_cash=available_cash,
-            **create_test_params(1),
+            **simple_params,
         )
 
         # Calculate NPV for both solutions
@@ -489,13 +779,15 @@ class TestProductivityInvestmentPlannerUtilities:
         current_production = np.array([100.0, 0.0])  # Second firm has zero production
         current_unit_costs = np.array([10.0, 12.0])
         available_cash = np.array([500.0, 300.0])
+        params = create_test_params(2)
+        params["current_nominal_production"] = np.array([1000.0, 0.0])
 
         total_investment, tfp_investment, technical_investment = planner.plan_productivity_investment(
             current_tfp=current_tfp,
             current_production=current_production,
             current_unit_costs=current_unit_costs,
             available_cash=available_cash,
-            **create_test_params(2),
+            **params,
         )
 
         # No NaN or inf values

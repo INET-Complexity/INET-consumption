@@ -80,7 +80,7 @@ final_tfp = df['avg_tfp_multiplier'].iloc[-1]
 **Captured Metrics**:
 - `avg_tfp_multiplier`: Average TFP across all firms
 - `tfp_by_industry`: TFP by industry (ndarray)
-- `executed_productivity_investment`: Total TFP investment
+- `executed_productivity_investment`: Executed planned/forced productivity investment
 - `total_production`, `total_target_production`: Production metrics
 - `avg_capacity_utilization`: Actual/target production ratio
 - `total_estimated_demand`: Firm demand expectations

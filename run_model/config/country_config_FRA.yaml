@@ -212,22 +212,43 @@ FRA:
       productivity_growth:
         name: SimpleTFPGrowth
         path_name: productivity_growth
-        parameters: {}
+        parameters:
+          investment_effectiveness: 0.003  # revised direct-TFP calibration; previous bounded Simple-planner phi: 0.1
       productivity_investment_planner:
-        name: NoProductivityInvestmentPlanner
+        name: TargetIntensityTFPInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
-          hurdle_rate: 0.15
-          investment_effectiveness: 0.1
+          adjustment_cost_lambda: 1.0
+          cap_multiplier: 1.5
           investment_elasticity: 0.3
-          max_investment_fraction: 0.1
           n_firms: 18
-          potential_weight: 0.3
-          price_weight: 0.4
-          technical_diminishing_returns: 0.5
-          technical_investment_effectiveness: 0.15
-          tfp_investment_share: 0.4
-          usage_weight: 0.3
+          private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate
+          # Quarterly reference cost for omega calibration. ECB cost-of-borrowing data for
+          # French NFCs averages ~1.0% quarterly in 2003-2008 and ~0.9% in 2022-2026.
+          reference_effective_cost_rate: 0.01
+          sector_innovation_intensity:
+            # Sector R&D/turnover calibration using sector means from firm-level data.
+            '0': 0.0594
+            '1': 0.0049
+            '2': 0.0399
+            '3': 0.0059
+            '4': 0.0041
+            '5': 0.0031
+            '6': 0.0126
+            '7': 0.0062
+            '8': 0.0047
+            '9': 0.0391
+            '10': 0.0172
+            '11': 0.0006
+            '12': 0.0113
+            '13': 0.0379
+            '14': 0.005
+            '15': 0.006
+            '16': 0.108
+            '17': 0.0139
+          silence_technical_investment: true
+          target_innovation_intensity: 0.02
+          tfp_risk_premium: 0.0
       profit_estimator:
         name: DefaultFirmProfitsSetter
         path_name: profit_estimator
@@ -263,11 +284,11 @@ FRA:
           maximum_debt_to_equity_ratio: 2.0
           target_inventory_to_production_fraction: 0.1 # 0.0
       technical_coefficients_growth:
-        name: NoOpTechnicalGrowth
+        name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth
         parameters:
-          diminishing_returns_factor: 0.5
-          investment_effectiveness: 0.15
+          diminishing_returns_factor: 1.5  # previous: 0.5
+          investment_effectiveness: 0.01  # previous: 0.15
       wage_setter:  # determines realized wages after matching. This should update incomes for existing workers and bind accepted offers for new hires.
         name: WorkEffortFirmWageSetter
         path_name: wage_setter
@@ -319,15 +340,15 @@ FRA:
         - 0.0
       enable_bundle_arbitrage: false
       intermediate_inputs_utilisation_rate: 0.85 # 1.0
-      max_productivity_cash_fraction: 0.3
-      max_productivity_investment_fraction: 0.15
+      max_productivity_cash_fraction: 0.03  # conservative baseline: 0.02; previous: 0.3
+      max_productivity_investment_fraction: 0.015  # conservative baseline: 0.01; previous: 0.15
       potential_weight: 0.3
       price_weight: 0.4
-      technical_diminishing_returns: 0.5
-      technical_investment_effectiveness: 0.15
-      tfp_base_growth_rate: 0.0025
-      tfp_investment_elasticity: 0.3
-      tfp_investment_share: 0.4
+      technical_diminishing_returns: 1.5  # previous: 0.5
+      technical_investment_effectiveness: 0.01  # previous: 0.15
+      tfp_base_growth_rate: 0.0  # revised direct-TFP calibration: all TFP growth comes from firm investment
+      tfp_investment_elasticity: 0.3  # legacy Simple planner parameter; revised planner uses investment_elasticity above
+      tfp_investment_share: 0.25  # legacy Simple planner parameter; revised planner silences technical investment
       usage_weight: 0.3
     substitution_bundles:
       - 0

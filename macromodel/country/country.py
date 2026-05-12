@@ -486,6 +486,9 @@ class Country:
         # Firms set production targets
         self.firms.set_targets(
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+            bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current(
+                "interest_rates_on_long_term_firm_loans"
+            ),
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             current_good_prices=self.economy.ts.current("good_prices"),
@@ -636,12 +639,6 @@ class Country:
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
-
-        # Update TFP before production (only if TFP growth is configured)
-        if not self.assume_zero_growth:
-            self.firms.update_tfp()
-            # Update technical coefficient multipliers
-            self.firms.update_technical_coefficients()
 
         # Firm production
         if self.assume_zero_growth:
@@ -1111,6 +1108,9 @@ class Country:
 
         # Execute and record productivity investment after capital purchases are known
         self.firms.execute_productivity_investment()
+        if not self.assume_zero_growth:
+            self.firms.update_tfp()
+            self.firms.update_technical_coefficients()
 
         self.firms.ts.demand.append(self.firms.compute_demand())
 

@@ -129,3 +129,93 @@ class TestFirmWageSetter:
             **common_kwargs, current_tfp_multiplier=np.array([2.0])
         )
         assert f_tfp2(0, 1.0) == 2.0 * f_tfp1(0, 1.0)
+
+    def test__offered_wage_fallback_is_not_scaled_again_by_tfp_ratio(self):
+        setter = WorkEffortFirmWageSetter(
+            labour_market_tightness_markup_scale=0.0,
+            markup_time_span=12,
+            max_increase_in_work_effort=1.5,
+        )
+
+        offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(
+            corresponding_firm=np.array([-1]),
+            current_individual_labour_inputs=np.array([1.0]),
+            previous_employee_income=np.array([0.0]),
+            current_target_production=np.array([1.0]),
+            current_limiting_capital_inputs=np.array([1.0]),
+            current_limiting_intermediate_inputs=np.array([1.0]),
+            industry_labour_productivity_by_firm=np.array([1.0]),
+            initial_wage_per_capita=np.array([10.0]),
+            current_wage_per_capita=np.array([10.0]),
+            current_labour_productivity_factor=np.array([1.1]),
+            prev_labour_productivity_factor=np.array([1.0]),
+            current_wage_tightness_markup=np.array([0.0]),
+            income_taxes=0.0,
+            employee_social_insurance_tax=0.0,
+            employer_social_insurance_tax=0.0,
+            unemployment_benefits_by_individual=0.0,
+            current_tfp_multiplier=np.array([2.0]),
+            prev_tfp_multiplier=np.array([1.0]),
+        )
+
+        np.testing.assert_allclose(offered_wage_function(0, 1.0), 22.0)
+
+    def test__tfp_ratio_scales_offered_wage_from_historic_average(self):
+        setter = WorkEffortFirmWageSetter(
+            labour_market_tightness_markup_scale=0.0,
+            markup_time_span=12,
+            max_increase_in_work_effort=1.5,
+        )
+
+        offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(
+            corresponding_firm=np.array([0]),
+            current_individual_labour_inputs=np.array([1.0]),
+            previous_employee_income=np.array([100.0]),
+            current_target_production=np.array([1.0]),
+            current_limiting_capital_inputs=np.array([1.0]),
+            current_limiting_intermediate_inputs=np.array([1.0]),
+            industry_labour_productivity_by_firm=np.array([1.0]),
+            initial_wage_per_capita=np.array([10.0]),
+            current_wage_per_capita=np.array([100.0]),
+            current_labour_productivity_factor=np.array([1.0]),
+            prev_labour_productivity_factor=np.array([1.0]),
+            current_wage_tightness_markup=np.array([0.0]),
+            income_taxes=0.0,
+            employee_social_insurance_tax=0.0,
+            employer_social_insurance_tax=0.0,
+            unemployment_benefits_by_individual=0.0,
+            current_tfp_multiplier=np.array([2.0]),
+            prev_tfp_multiplier=np.array([1.0]),
+        )
+
+        assert offered_wage_function(0, 1.0) == 200.0
+
+    def test__tfp_ratio_and_effort_ratio_scale_offered_wage_from_historic_average(self):
+        setter = WorkEffortFirmWageSetter(
+            labour_market_tightness_markup_scale=0.0,
+            markup_time_span=12,
+            max_increase_in_work_effort=1.5,
+        )
+
+        offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(
+            corresponding_firm=np.array([0]),
+            current_individual_labour_inputs=np.array([1.0]),
+            previous_employee_income=np.array([100.0]),
+            current_target_production=np.array([1.0]),
+            current_limiting_capital_inputs=np.array([1.0]),
+            current_limiting_intermediate_inputs=np.array([1.0]),
+            industry_labour_productivity_by_firm=np.array([1.0]),
+            initial_wage_per_capita=np.array([10.0]),
+            current_wage_per_capita=np.array([100.0]),
+            current_labour_productivity_factor=np.array([1.1]),
+            prev_labour_productivity_factor=np.array([1.0]),
+            current_wage_tightness_markup=np.array([0.0]),
+            income_taxes=0.0,
+            employee_social_insurance_tax=0.0,
+            employer_social_insurance_tax=0.0,
+            unemployment_benefits_by_individual=0.0,
+            current_tfp_multiplier=np.array([2.0]),
+            prev_tfp_multiplier=np.array([1.0]),
+        )
+
+        np.testing.assert_allclose(offered_wage_function(0, 1.0), 220.0)

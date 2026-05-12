@@ -34,6 +34,7 @@ class FirmTimeSeries(TimeSeries):
     - labour_inputs: Effective labor input (productivity-adjusted)
     - labour_productivity: Output per unit of labor
     - labour_productivity_factor: Productivity adjustment factor
+    - tfp_multiplier: Firm-level total factor productivity multiplier
     - normalised_labour_inputs: Labor input normalized by industry
     - desired_labour_inputs: Target employment level
     - labour_costs: Total labor cost
@@ -86,10 +87,13 @@ class FirmTimeSeries(TimeSeries):
     - estimated_growth_by_firm: Expected growth rates
     - unconstrained_target_intermediate_inputs: Desired input purchases
     - unconstrained_target_capital_inputs: Desired capital purchases
-    - planned_productivity_investment: Investment amount planned for TFP improvement (total)
-    - executed_productivity_investment: Actual investment made in TFP improvement (total)
+    - planned_productivity_investment: Investment amount planned for productivity improvement (total)
+    - executed_productivity_investment: Executed planned/forced productivity investment (total)
+    - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
     - planned_tfp_investment: TFP portion of planned productivity investment (n_firms)
     - executed_tfp_investment: TFP portion of executed productivity investment (n_firms)
+    - tfp_investment_*: Planner-time direct-TFP FOC diagnostics by firm
+    - sector_tfp_investment_*: Planner-time direct-TFP FOC diagnostics aggregated by sector
     - planned_technical_investment: Technical coefficient portion of planned productivity investment (n_firms x n_industries)
     - executed_technical_investment: Technical coefficient portion of executed productivity investment (n_firms x n_industries)
     - technical_investment_by_input: Distribution of technical investment across input types (n_firms x n_industries)
@@ -231,8 +235,33 @@ class FirmTimeSeries(TimeSeries):
             target_capital_inputs=used_capital_inputs,
             planned_productivity_investment=np.zeros(data.shape[0]),
             executed_productivity_investment=np.zeros(data.shape[0]),
+            net_capital_investment_above_replacement=np.zeros(data.shape[0]),
+            real_executed_productivity_investment=np.zeros(data.shape[0]),
             planned_tfp_investment=np.zeros(data.shape[0]),
             executed_tfp_investment=np.zeros(data.shape[0]),
+            tfp_investment_effective_cost_rate=np.full(data.shape[0], np.nan),
+            tfp_investment_target_intensity=np.full(data.shape[0], np.nan),
+            tfp_investment_cap_intensity=np.full(data.shape[0], np.nan),
+            tfp_investment_desired_intensity=np.full(data.shape[0], np.nan),
+            tfp_investment_planned_intensity=np.full(data.shape[0], np.nan),
+            tfp_investment_desired_marginal_benefit=np.full(data.shape[0], np.nan),
+            tfp_investment_desired_marginal_cost=np.full(data.shape[0], np.nan),
+            tfp_investment_desired_mb_mc_ratio=np.full(data.shape[0], np.nan),
+            tfp_investment_desired_marginal_gap=np.full(data.shape[0], np.nan),
+            tfp_investment_planned_marginal_benefit=np.full(data.shape[0], np.nan),
+            tfp_investment_planned_marginal_cost=np.full(data.shape[0], np.nan),
+            tfp_investment_planned_mb_mc_ratio=np.full(data.shape[0], np.nan),
+            tfp_investment_planned_marginal_gap=np.full(data.shape[0], np.nan),
+            tfp_investment_cap_binding=np.full(data.shape[0], np.nan),
+            tfp_investment_cash_binding=np.full(data.shape[0], np.nan),
+            sector_tfp_investment_desired_intensity=np.full(n_industries, np.nan),
+            sector_tfp_investment_planned_intensity=np.full(n_industries, np.nan),
+            sector_tfp_investment_desired_mb_mc_ratio=np.full(n_industries, np.nan),
+            sector_tfp_investment_planned_mb_mc_ratio=np.full(n_industries, np.nan),
+            sector_tfp_investment_desired_marginal_gap=np.full(n_industries, np.nan),
+            sector_tfp_investment_planned_marginal_gap=np.full(n_industries, np.nan),
+            sector_tfp_investment_cap_binding_share=np.full(n_industries, np.nan),
+            sector_tfp_investment_cash_binding_share=np.full(n_industries, np.nan),
             planned_technical_investment=np.zeros((data.shape[0], n_industries)),
             executed_technical_investment=np.zeros((data.shape[0], n_industries)),
             technical_investment_by_input=np.zeros((data.shape[0], n_industries)),
@@ -288,6 +317,7 @@ class FirmTimeSeries(TimeSeries):
             labour_inputs=data["Labour Inputs"].values,
             labour_productivity=data["Labour Productivity"].values,
             labour_productivity_factor=np.ones(data.shape[0]),
+            tfp_multiplier=np.ones(data.shape[0]),
             normalised_labour_inputs=data["Labour Inputs"].values,
             desired_labour_inputs=data["Labour Inputs"].values,
             labour_costs=np.full(data.shape[0], np.nan),
@@ -438,8 +468,32 @@ def create_firms_timeseries(
         target_capital_inputs=used_capital_inputs,
         planned_productivity_investment=np.zeros(data.shape[0]),
         executed_productivity_investment=np.zeros(data.shape[0]),
+        net_capital_investment_above_replacement=np.zeros(data.shape[0]),
         planned_tfp_investment=np.zeros(data.shape[0]),
         executed_tfp_investment=np.zeros(data.shape[0]),
+        tfp_investment_effective_cost_rate=np.full(data.shape[0], np.nan),
+        tfp_investment_target_intensity=np.full(data.shape[0], np.nan),
+        tfp_investment_cap_intensity=np.full(data.shape[0], np.nan),
+        tfp_investment_desired_intensity=np.full(data.shape[0], np.nan),
+        tfp_investment_planned_intensity=np.full(data.shape[0], np.nan),
+        tfp_investment_desired_marginal_benefit=np.full(data.shape[0], np.nan),
+        tfp_investment_desired_marginal_cost=np.full(data.shape[0], np.nan),
+        tfp_investment_desired_mb_mc_ratio=np.full(data.shape[0], np.nan),
+        tfp_investment_desired_marginal_gap=np.full(data.shape[0], np.nan),
+        tfp_investment_planned_marginal_benefit=np.full(data.shape[0], np.nan),
+        tfp_investment_planned_marginal_cost=np.full(data.shape[0], np.nan),
+        tfp_investment_planned_mb_mc_ratio=np.full(data.shape[0], np.nan),
+        tfp_investment_planned_marginal_gap=np.full(data.shape[0], np.nan),
+        tfp_investment_cap_binding=np.full(data.shape[0], np.nan),
+        tfp_investment_cash_binding=np.full(data.shape[0], np.nan),
+        sector_tfp_investment_desired_intensity=np.full(n_industries, np.nan),
+        sector_tfp_investment_planned_intensity=np.full(n_industries, np.nan),
+        sector_tfp_investment_desired_mb_mc_ratio=np.full(n_industries, np.nan),
+        sector_tfp_investment_planned_mb_mc_ratio=np.full(n_industries, np.nan),
+        sector_tfp_investment_desired_marginal_gap=np.full(n_industries, np.nan),
+        sector_tfp_investment_planned_marginal_gap=np.full(n_industries, np.nan),
+        sector_tfp_investment_cap_binding_share=np.full(n_industries, np.nan),
+        sector_tfp_investment_cash_binding_share=np.full(n_industries, np.nan),
         planned_technical_investment=np.zeros((data.shape[0], n_industries)),
         executed_technical_investment=np.zeros((data.shape[0], n_industries)),
         technical_investment_by_input=np.zeros((data.shape[0], n_industries)),
@@ -495,6 +549,7 @@ def create_firms_timeseries(
         labour_inputs=data["Labour Inputs"].values,
         labour_productivity=data["Labour Productivity"].values,
         labour_productivity_factor=np.ones(data.shape[0]),
+        tfp_multiplier=np.ones(data.shape[0]),
         normalised_labour_inputs=data["Labour Inputs"].values,
         desired_labour_inputs=data["Labour Inputs"].values,
         labour_costs=np.full(data.shape[0], np.nan),

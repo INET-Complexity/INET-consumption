@@ -111,6 +111,21 @@ def functions_from_model(model: BaseModel, loc: str) -> dict[str, Any]:
         )
     """
     loaded_classes = {}
+    if (
+        loc.endswith(".agents.firms")
+        and hasattr(model, "productivity_growth")
+        and hasattr(model, "productivity_investment_planner")
+        and model.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner"
+    ):
+        growth_phi = model.productivity_growth.parameters.get("investment_effectiveness")
+        if growth_phi is None:
+            raise ValueError(
+                "TargetIntensityTFPInvestmentPlanner requires "
+                "productivity_growth.parameters['investment_effectiveness']; "
+                "realised TFP effectiveness is the canonical phi used by the planner."
+            )
+        model.productivity_investment_planner.parameters["investment_effectiveness"] = growth_phi
+
     for field_name, field_value in model:
         path_name = field_value.path_name
         name = field_value.name

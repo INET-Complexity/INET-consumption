@@ -32,7 +32,7 @@ class TFPLaborSnapshot:
     # TFP and productivity
     avg_tfp_multiplier: float
     tfp_by_industry: np.ndarray  # Average TFP per industry
-    executed_productivity_investment: float  # Total investment in TFP
+    executed_productivity_investment: float  # Executed planned/forced productivity investment
 
     # Production and capacity
     total_production: float

@@ -57,6 +57,31 @@ class TestSimpleTFPGrowth:
 
         assert np.allclose(tfp_growth, expected)
 
+    def test_investment_driven_growth_uses_output_value_when_provided(self):
+        """Investment intensity should use the value denominator, not physical units."""
+        effectiveness = 0.1
+        growth_func = SimpleTFPGrowth(investment_effectiveness=effectiveness)
+        current_tfp = np.ones(2)
+        production = np.array([100.0, 100.0])
+        output_value = np.array([1_000.0, 2_000.0])
+        productivity_investment = np.array([100.0, 100.0])
+        base_growth = 0.0025
+        elasticity = 0.5
+
+        tfp_growth = growth_func.compute_tfp_growth(
+            current_tfp=current_tfp,
+            production=production,
+            productivity_investment=productivity_investment,
+            output_value=output_value,
+            base_growth_rate=base_growth,
+            investment_elasticity=elasticity,
+        )
+
+        investment_intensity = productivity_investment / output_value
+        expected = base_growth + effectiveness * np.power(investment_intensity, elasticity)
+
+        assert np.allclose(tfp_growth, expected)
+
     def test_zero_production_handling(self):
         """Test that zero production doesn't cause division errors."""
         growth_func = SimpleTFPGrowth()

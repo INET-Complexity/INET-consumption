@@ -1292,6 +1292,7 @@ class Firms(Agent):
         wage_obligation_preview: np.ndarray | None = None,
         production_tax_obligation_preview: np.ndarray | None = None,
         interest_obligation_preview: np.ndarray | None = None,
+        loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
     ) -> None:
         """Calculate target borrowing levels for each firm.
@@ -1306,13 +1307,13 @@ class Firms(Agent):
         `target_short_term_credit` remains the total borrower-facing short-term
         credit request. It is decomposed into:
         - `target_debt_rollover_credit`: the part needed to refinance scheduled
-          principal service that expected liquidity cannot cover.
+          loan interest plus principal service that expected liquidity cannot cover.
         - `target_overdraft_refinance_credit`: the part needed to repair existing
           negative deposits after hard obligations and expected sales are budgeted.
         - `ordinary_target_short_term_credit`: the remaining short-term request for
           ordinary working-capital activity.
 
-        The split is used by the credit market so scheduled-principal rollover
+        The split is used by the credit market so scheduled debt-service rollover
         and emergency overdraft refinance cannot determine the ordinary
         short-term/long-term firm lending cap split.
 
@@ -1321,7 +1322,9 @@ class Firms(Agent):
             estimated_inflation (float): Expected inflation rate
             wage_obligation_preview (np.ndarray | None): Non-appending current wage obligation preview.
             production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
-            interest_obligation_preview (np.ndarray | None): Current-period interest cash obligation preview.
+            interest_obligation_preview (np.ndarray | None): Current-period total interest cash obligation preview.
+            loan_interest_obligation_preview (np.ndarray | None): Current-period loan-interest obligation eligible
+                for debt rollover. Deposit/overdraft interest is excluded.
             debt_installment_preview (np.ndarray | None): Current-period scheduled firm principal due preview.
         """
         n_firms = self.ts.current("n_firms")
@@ -1331,6 +1334,8 @@ class Firms(Agent):
             production_tax_obligation_preview = self.ts.current("taxes_paid_on_production")
         if interest_obligation_preview is None:
             interest_obligation_preview = self.ts.current("interest_paid")
+        if loan_interest_obligation_preview is None:
+            loan_interest_obligation_preview = np.zeros(n_firms)
         if debt_installment_preview is None:
             debt_installment_preview = self.ts.current("debt_installments")
 
@@ -1352,7 +1357,8 @@ class Firms(Agent):
             + interest_obligation_preview
             + debt_installment_preview
         )
-        non_principal_hard_obligations = hard_obligations - debt_installment_preview
+        loan_debt_service_preview = loan_interest_obligation_preview + debt_installment_preview
+        non_debt_service_hard_obligations = hard_obligations - loan_debt_service_preview
         planned_technical_investment_costs = (
             self.ts.current("planned_technical_investment").sum(axis=1)
             if len(self.ts.planned_technical_investment) > 0
@@ -1378,16 +1384,18 @@ class Firms(Agent):
             planned_tfp_investment_costs=planned_tfp_investment_costs,
         )
         cash_after_hard_obligations = internal_cash + expected_sales - hard_obligations
-        non_principal_hard_obligation_shortfall = np.maximum(
+        non_debt_service_hard_obligation_shortfall = np.maximum(
             0.0,
-            non_principal_hard_obligations - (internal_cash + expected_sales),
+            non_debt_service_hard_obligations - (internal_cash + expected_sales),
         )
-        cash_after_non_principal_hard_obligations = internal_cash + expected_sales - non_principal_hard_obligations
+        cash_after_non_debt_service_hard_obligations = (
+            internal_cash + expected_sales - non_debt_service_hard_obligations
+        )
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft
         remaining_internal_finance_after_working_capital = available_after_hard_and_overdraft - working_capital_budget
         target_debt_rollover_credit = np.maximum(
             0.0,
-            debt_installment_preview - np.maximum(0.0, cash_after_non_principal_hard_obligations),
+            loan_debt_service_preview - np.maximum(0.0, cash_after_non_debt_service_hard_obligations),
         )
         target_overdraft_refinance_credit = np.maximum(
             0.0,
@@ -1395,7 +1403,7 @@ class Firms(Agent):
         )
         ordinary_target_short_term_credit = np.maximum(
             0.0,
-            ordinary_target_short_term_credit + non_principal_hard_obligation_shortfall,
+            ordinary_target_short_term_credit + non_debt_service_hard_obligation_shortfall,
         )
         target_long_term_credit = np.maximum(0.0, target_long_term_credit)
         target_short_term_credit = (
@@ -1528,6 +1536,7 @@ class Firms(Agent):
         self.ts.firm_settlement_payable_interest.append(np.zeros(n_firms))
         self.ts.firm_settlement_closing_interest_arrears.append(np.zeros(n_firms))
         self.ts.firm_settlement_unpaid_interest.append(np.zeros(n_firms))
+        self.ts.firm_settlement_capitalized_interest.append(np.zeros(n_firms))
         self.ts.firm_settlement_scheduled_principal_due.append(np.asarray(scheduled_principal_due, dtype=float).copy())
         self.ts.firm_settlement_payable_principal.append(np.zeros(n_firms))
         self.ts.firm_settlement_closing_principal_arrears.append(np.zeros(n_firms))
@@ -1535,6 +1544,7 @@ class Firms(Agent):
         self.ts.firm_settlement_debt_rollover_shortfall.append(np.zeros(n_firms))
         self.ts.firm_settlement_overdraft_refinance_shortfall.append(np.zeros(n_firms))
         self.ts.firm_settlement_residual_overdraft_exposure.append(np.zeros(n_firms))
+        self.ts.firm_settlement_illiquid_flag.append(np.full(n_firms, False))
         self.ts.firm_settlement_default_flag.append(np.full(n_firms, False))
         self.ts.total_credit_exposure.append(np.zeros(n_firms))
 
@@ -1554,6 +1564,7 @@ class Firms(Agent):
         corporate_tax_obligation_preview: np.ndarray,
     ) -> dict[str, np.ndarray]:
         """Compute cash-feasible firm debt settlement after goods market outcomes are known."""
+        n_firms = self.ts.current("n_firms")
         opening_interest_arrears = np.maximum(0.0, self.ts.current("firm_settlement_opening_interest_arrears"))
         opening_principal_arrears = np.maximum(0.0, self.ts.current("firm_settlement_opening_principal_arrears"))
         contractual_interest_due = np.maximum(0.0, self.ts.current("firm_settlement_contractual_interest_due"))
@@ -1582,18 +1593,24 @@ class Firms(Agent):
         )
         corporate_tax_reserve = np.maximum(0.0, corporate_tax_obligation_preview)
         cash_after_tax_reserve = available_cash_before_debt_service - corporate_tax_reserve
-        ordinary_cash_after_tax_reserve = np.maximum(0.0, cash_after_tax_reserve)
+        overdraft_refinance_used = np.minimum(
+            received_overdraft_refinance_credit,
+            np.maximum(0.0, -cash_after_tax_reserve),
+        )
+        debt_service_capacity = np.maximum(
+            0.0,
+            cash_after_tax_reserve + overdraft_refinance_used + received_debt_rollover_credit,
+        )
         payable_opening_interest_arrears, remaining_ordinary_cash = self._allocate_debt_service_bucket(
-            ordinary_cash_after_tax_reserve,
+            debt_service_capacity,
             opening_interest_arrears,
         )
         payable_contractual_interest, remaining_ordinary_cash = self._allocate_debt_service_bucket(
             remaining_ordinary_cash,
             contractual_interest_due,
         )
-        principal_service_capacity = remaining_ordinary_cash + received_debt_rollover_credit
         payable_opening_principal_arrears, remaining_principal_capacity = self._allocate_debt_service_bucket(
-            principal_service_capacity,
+            remaining_ordinary_cash,
             opening_principal_arrears,
         )
         payable_contractual_principal, _ = self._allocate_debt_service_bucket(
@@ -1602,8 +1619,10 @@ class Firms(Agent):
         )
         payable_interest = payable_opening_interest_arrears + payable_contractual_interest
         payable_principal = payable_opening_principal_arrears + payable_contractual_principal
-        closing_interest_arrears = np.maximum(0.0, scheduled_interest_due - payable_interest)
+        capitalized_interest = np.maximum(0.0, scheduled_interest_due - payable_interest)
+        closing_interest_arrears = np.zeros_like(capitalized_interest)
         closing_principal_arrears = np.maximum(0.0, scheduled_principal_due - payable_principal)
+        illiquid_flag = np.logical_or(capitalized_interest > 1e-9, closing_principal_arrears > 1e-9)
         debt_rollover_shortfall = np.maximum(
             0.0,
             np.nan_to_num(self.ts.current("target_debt_rollover_credit"), nan=0.0) - received_debt_rollover_credit,
@@ -1612,11 +1631,6 @@ class Firms(Agent):
             0.0,
             np.nan_to_num(self.ts.current("target_overdraft_refinance_credit"), nan=0.0)
             - received_overdraft_refinance_credit,
-        )
-        unresolved_opening_interest_arrears = np.maximum(0.0, opening_interest_arrears - payable_opening_interest_arrears)
-        unresolved_opening_principal_arrears = np.maximum(
-            0.0,
-            opening_principal_arrears - payable_opening_principal_arrears,
         )
         return {
             "available_cash_before_debt_service": available_cash_before_debt_service,
@@ -1628,14 +1642,13 @@ class Firms(Agent):
             "payable_contractual_principal": payable_contractual_principal,
             "payable_interest": payable_interest,
             "closing_interest_arrears": closing_interest_arrears,
+            "capitalized_interest": capitalized_interest,
             "payable_principal": payable_principal,
             "closing_principal_arrears": closing_principal_arrears,
+            "illiquid_flag": illiquid_flag,
             "debt_rollover_shortfall": debt_rollover_shortfall,
             "overdraft_refinance_shortfall": overdraft_refinance_shortfall,
-            "default_flag": np.logical_or(
-                unresolved_opening_interest_arrears > 1e-9,
-                unresolved_opening_principal_arrears > 1e-9,
-            ),
+            "default_flag": np.full(n_firms, False),
         }
 
     def finalize_firm_debt_settlement(
@@ -1650,7 +1663,8 @@ class Firms(Agent):
             "firm_settlement_cash_after_tax_reserve": settlement["cash_after_tax_reserve"],
             "firm_settlement_payable_interest": settlement["payable_interest"],
             "firm_settlement_closing_interest_arrears": settlement["closing_interest_arrears"],
-            "firm_settlement_unpaid_interest": settlement["closing_interest_arrears"],
+            "firm_settlement_unpaid_interest": settlement["capitalized_interest"],
+            "firm_settlement_capitalized_interest": settlement["capitalized_interest"],
             "firm_settlement_payable_principal": settlement["payable_principal"],
             "firm_settlement_closing_principal_arrears": settlement["closing_principal_arrears"],
             "firm_settlement_unpaid_principal": settlement["closing_principal_arrears"],
@@ -1664,6 +1678,10 @@ class Firms(Agent):
         }
         for field, values in fields.items():
             self.ts.override_current(field, np.asarray(values, dtype=float).copy())
+        self.ts.override_current(
+            "firm_settlement_illiquid_flag",
+            np.asarray(settlement["illiquid_flag"], dtype=bool).copy(),
+        )
         self.ts.override_current(
             "firm_settlement_default_flag",
             np.asarray(settlement["default_flag"], dtype=bool).copy(),
@@ -1840,6 +1858,7 @@ class Firms(Agent):
         production_tax_obligation_preview: np.ndarray,
         corporate_tax_obligation_preview: np.ndarray | None = None,
         interest_obligation_preview: np.ndarray | None = None,
+        loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
     ) -> None:
         """Revise current planned purchases after credit clears."""
@@ -1849,8 +1868,20 @@ class Firms(Agent):
             corporate_tax_obligation_preview = np.zeros(n_firms)
         if interest_obligation_preview is None:
             interest_obligation_preview = self.ts.current("interest_paid")
+        if loan_interest_obligation_preview is None:
+            loan_interest_obligation_preview = np.zeros(n_firms)
         if debt_installment_preview is None:
             debt_installment_preview = self.ts.current("debt_installments")
+        loan_debt_service_preview = loan_interest_obligation_preview + debt_installment_preview
+        non_loan_interest_obligation_preview = np.maximum(
+            0.0,
+            interest_obligation_preview - loan_interest_obligation_preview,
+        )
+        received_debt_rollover_credit = np.maximum(
+            0.0,
+            np.nan_to_num(self.ts.current("received_debt_rollover_credit"), nan=0.0),
+        )
+        unfunded_loan_debt_service = np.maximum(0.0, loan_debt_service_preview - received_debt_rollover_credit)
 
         target_intermediate = self.ts.current("target_intermediate_inputs").copy()
         target_capital = self.ts.current("target_capital_inputs").copy()
@@ -1895,8 +1926,8 @@ class Firms(Agent):
             wage_obligation_preview
             + production_tax_obligation_preview
             + corporate_tax_obligation_preview
-            + interest_obligation_preview
-            + debt_installment_preview
+            + non_loan_interest_obligation_preview
+            + unfunded_loan_debt_service
         )
         available_finance = np.maximum(
             0.0,
@@ -1958,6 +1989,7 @@ class Firms(Agent):
         production_tax_obligation_preview: np.ndarray | None = None,
         corporate_tax_obligation_preview: np.ndarray | None = None,
         interest_obligation_preview: np.ndarray | None = None,
+        loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
     ) -> None:
         """Prepare firms' buying plans for goods market.
@@ -1978,6 +2010,7 @@ class Firms(Agent):
             production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
             corporate_tax_obligation_preview (np.ndarray | None): Estimated current corporate-tax obligation.
             interest_obligation_preview (np.ndarray | None): Current-period interest cash obligation preview.
+            loan_interest_obligation_preview (np.ndarray | None): Current-period loan interest eligible for rollover.
             debt_installment_preview (np.ndarray | None): Current-period scheduled firm principal due preview.
         """
         # Target intermediate inputs
@@ -2027,6 +2060,7 @@ class Firms(Agent):
             production_tax_obligation_preview=production_tax_obligation_preview,
             corporate_tax_obligation_preview=corporate_tax_obligation_preview,
             interest_obligation_preview=interest_obligation_preview,
+            loan_interest_obligation_preview=loan_interest_obligation_preview,
             debt_installment_preview=debt_installment_preview,
         )
 
@@ -2068,6 +2102,7 @@ class Firms(Agent):
         production_tax_obligation_preview: np.ndarray | None = None,
         corporate_tax_obligation_preview: np.ndarray | None = None,
         interest_obligation_preview: np.ndarray | None = None,
+        loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
         assume_zero_growth: bool = False,
     ) -> None:
@@ -2086,6 +2121,7 @@ class Firms(Agent):
             production_tax_obligation_preview (np.ndarray | None): Non-appending current production-tax preview.
             corporate_tax_obligation_preview (np.ndarray | None): Estimated current corporate-tax obligation.
             interest_obligation_preview (np.ndarray | None): Current-period interest cash obligation preview.
+            loan_interest_obligation_preview (np.ndarray | None): Current-period loan interest eligible for rollover.
             debt_installment_preview (np.ndarray | None): Current-period scheduled firm principal due preview.
             assume_zero_growth (bool): Whether to use initial buying targets.
         """
@@ -2097,6 +2133,7 @@ class Firms(Agent):
             production_tax_obligation_preview=production_tax_obligation_preview,
             corporate_tax_obligation_preview=corporate_tax_obligation_preview,
             interest_obligation_preview=interest_obligation_preview,
+            loan_interest_obligation_preview=loan_interest_obligation_preview,
             debt_installment_preview=debt_installment_preview,
             assume_zero_growth=assume_zero_growth,
         )
@@ -2566,30 +2603,33 @@ class Firms(Agent):
             - self.ts.current("taxes_paid_on_production")
         )
 
-    def handle_insolvency(self, credit_market: CreditMarket) -> float:
+    def handle_insolvency(
+        self,
+        credit_market: CreditMarket,
+        illiquid_flag: np.ndarray | None = None,
+    ) -> float:
         """Process insolvent firms and compute non-performing loan ratios.
 
         Handles firms that become insolvent by:
-        - Marking them as insolvent based on equity and deposits
+        - Marking them as insolvent when negative equity coincides with liquidity failure
         - Removing their outstanding loans
         - Zeroing their deposits and equity
         - Computing the non-performing loan ratio
 
         Args:
             credit_market (CreditMarket): Credit market for loan processing
+            illiquid_flag (np.ndarray | None): Current-period settlement liquidity-failure flag.
 
         Returns:
             float: Non-performing loan ratio for firm loans
         """
-        self.states["is_insolvent"] = self.functions["demography"].handle_firm_insolvency(
-            current_firm_is_insolvent=self.states["is_insolvent"],
-            current_firm_equity=self.ts.current("equity"),
-            current_firm_deposits=self.ts.current("deposits"),
-        )
-        self.states["is_insolvent"] = np.logical_or(
-            self.states["is_insolvent"],
-            np.asarray(self.ts.current("firm_settlement_default_flag"), dtype=bool),
-        )
+        if illiquid_flag is None:
+            illiquid_flag = np.asarray(self.ts.current("firm_settlement_illiquid_flag"), dtype=bool)
+        else:
+            illiquid_flag = np.asarray(illiquid_flag, dtype=bool)
+        default_flag = np.logical_and(self.ts.current("equity") < 0.0, illiquid_flag)
+        self.states["is_insolvent"] = np.logical_or(self.states["is_insolvent"], default_flag)
+        self.ts.override_current("firm_settlement_default_flag", default_flag.copy())
 
         # Remove loans
         insolvent_firms = np.where(self.states["is_insolvent"])[0]

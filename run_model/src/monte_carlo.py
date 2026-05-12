@@ -8,11 +8,11 @@ from typing import Iterable, Optional
 
 import pandas as pd
 from joblib import Parallel, delayed
+from src.visual_helpers import build_macro_output_df
 
 from macro_data import DataWrapper
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation
-from src.visual_helpers import build_macro_output_df
 
 
 @dataclass(frozen=True)

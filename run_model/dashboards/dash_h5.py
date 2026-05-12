@@ -32,11 +32,12 @@ for path in (REPO_ROOT, RUN_MODEL_PATH):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from config import Config
-from macro_data import DataWrapper
-from macro_data.readers.economic_data.exchange_rates import ExchangeRatesReader
-from src import distribution_validation as dv
-from src.visual_helpers import SECTOR_CODE_TO_NAME, plot_sectoral_prices_over_time
+from config import Config  # noqa: E402
+from src import distribution_validation as dv  # noqa: E402
+from src.visual_helpers import SECTOR_CODE_TO_NAME, plot_sectoral_prices_over_time  # noqa: E402
+
+from macro_data import DataWrapper  # noqa: E402
+from macro_data.readers.economic_data.exchange_rates import ExchangeRatesReader  # noqa: E402
 
 # Set page config
 st.set_page_config(page_title="Macromodel Dashboard - H5 output", page_icon="🌍", layout="wide")

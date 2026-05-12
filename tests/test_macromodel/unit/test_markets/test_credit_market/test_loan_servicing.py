@@ -45,7 +45,9 @@ def test_newly_originated_firm_loan_service_starts_next_quarter():
         cons_loans=_loan_array(),
         mort_loans=_loan_array(),
     )
-    market._serviceable_loans_this_period = {key: market.states[key].copy() for key in market._serviceable_loans_this_period}
+    market._serviceable_loans_this_period = {
+        key: market.states[key].copy() for key in market._serviceable_loans_this_period
+    }
 
     new_st_loan = _loan_array()
     new_st_loan[0, 0, 0] = 100.0

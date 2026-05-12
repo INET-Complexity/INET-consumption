@@ -621,7 +621,9 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         self.adjustment_cost_lambda = float(adjustment_cost_lambda)
         self.reference_effective_cost_rate = float(reference_effective_cost_rate)
         self.tfp_risk_premium = float(tfp_risk_premium)
-        self.private_value_weight = None if private_value_weight is None else self._to_array(private_value_weight, n_firms)
+        self.private_value_weight = (
+            None if private_value_weight is None else self._to_array(private_value_weight, n_firms)
+        )
         self.silence_technical_investment = bool(silence_technical_investment)
         self.bisection_steps = int(bisection_steps)
         self.last_diagnostics: dict[str, np.ndarray] = {}

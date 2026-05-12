@@ -245,9 +245,11 @@ class DefaultSyntheticFirms(SyntheticFirms):
             raise ValueError(
                 "capital_depreciation_accounting_mode='eurostat_cfc' requires Eurostat CFC depreciation data."
             )
-        capital_depreciation_rates = industry_data["industry_vectors"].get(
-            "Capital Depreciation Output Ratio", pd.Series(0.0, index=industry_data["industry_vectors"].index)
-        ).values
+        capital_depreciation_rates = (
+            industry_data["industry_vectors"]
+            .get("Capital Depreciation Output Ratio", pd.Series(0.0, index=industry_data["industry_vectors"].index))
+            .values
+        )
 
         output = industry_data["industry_vectors"]["Output in USD"].values
         labour_productivity = output / n_employees_per_industry
@@ -286,7 +288,9 @@ class DefaultSyntheticFirms(SyntheticFirms):
             where=production_by_industry[firm_industries] != 0.0,
         )
         firm_capital_inputs_lcu = industry_data["industry_vectors"]["Firm Capital Inputs in LCU"].values
-        firm_data["Initial Capital Inputs Bought Costs"] = firm_capital_inputs_lcu[firm_industries] * firm_production_share
+        firm_data["Initial Capital Inputs Bought Costs"] = (
+            firm_capital_inputs_lcu[firm_industries] * firm_production_share
+        )
 
         firm_data["Employees ID"] = [[] for _ in range(n_firms)]
 
@@ -529,9 +533,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
         capital_compensation_accounting_mode = self.firm_data.attrs.get(
             "capital_compensation_accounting_mode", "production_cost"
         )
-        capital_depreciation_accounting_mode = self.firm_data.attrs.get(
-            "capital_depreciation_accounting_mode", "none"
-        )
+        capital_depreciation_accounting_mode = self.firm_data.attrs.get("capital_depreciation_accounting_mode", "none")
 
         self.set_firm_profits(
             initial_good_prices=industry_data["industry_vectors"]["Average Initial Price"].values,

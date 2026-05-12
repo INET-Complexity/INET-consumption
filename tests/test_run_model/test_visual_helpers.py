@@ -23,8 +23,8 @@ from src.visual_helpers import (  # noqa: E402
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
-    plot_production_by_sector,
     plot_ppi_comparison,
+    plot_production_by_sector,
     plot_sector_tfp_investment_desired_mb_mc_ratio,
 )
 

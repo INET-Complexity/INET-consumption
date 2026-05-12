@@ -1549,14 +1549,20 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             st_borrower_cap = np.minimum.reduce((st_collateral_cap, st_roa_cap, st_roe_cap, st_dscr_cap_eff))
             st_borrower_binds = st_unmet & (st_borrower_cap < target_short_term_credit - 1e-9)
 
-            st_collateral_binds = st_borrower_binds & (st_collateral_cap <= st_roa_cap) & (
-                st_collateral_cap <= st_roe_cap
-            ) & (st_collateral_cap <= st_dscr_cap_eff)
+            st_collateral_binds = (
+                st_borrower_binds
+                & (st_collateral_cap <= st_roa_cap)
+                & (st_collateral_cap <= st_roe_cap)
+                & (st_collateral_cap <= st_dscr_cap_eff)
+            )
             st_reason[st_collateral_binds] = _BINDING_COLLATERAL
             st_amount[st_collateral_binds] = st_collateral_cap[st_collateral_binds]
 
-            st_dscr_binds = st_borrower_binds & ~st_collateral_binds & (st_dscr_cap_eff <= st_roa_cap) & (
-                st_dscr_cap_eff <= st_roe_cap
+            st_dscr_binds = (
+                st_borrower_binds
+                & ~st_collateral_binds
+                & (st_dscr_cap_eff <= st_roa_cap)
+                & (st_dscr_cap_eff <= st_roe_cap)
             )
             st_reason[st_dscr_binds] = _BINDING_DSCR
             st_amount[st_dscr_binds] = st_dscr_cap[st_dscr_binds]
@@ -1852,20 +1858,32 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 borrower_binds = unmet & (borrower_min < demand_full - eps)
 
                 # Tie-break: collateral -> dscr -> roa -> roe
-                coll_binds = borrower_binds & (coll_cap < demand_full - eps) & (coll_cap <= dscr_cap_eff) & (
-                    coll_cap <= roa_cap_eff
-                ) & (coll_cap <= roe_cap_eff)
+                coll_binds = (
+                    borrower_binds
+                    & (coll_cap < demand_full - eps)
+                    & (coll_cap <= dscr_cap_eff)
+                    & (coll_cap <= roa_cap_eff)
+                    & (coll_cap <= roe_cap_eff)
+                )
                 reason[coll_binds] = _BINDING_COLLATERAL
                 amount[coll_binds] = coll_cap[coll_binds]
 
-                dscr_binds = borrower_binds & ~coll_binds & (dscr_cap_eff < demand_full - eps) & (
-                    dscr_cap_eff <= roa_cap_eff
-                ) & (dscr_cap_eff <= roe_cap_eff)
+                dscr_binds = (
+                    borrower_binds
+                    & ~coll_binds
+                    & (dscr_cap_eff < demand_full - eps)
+                    & (dscr_cap_eff <= roa_cap_eff)
+                    & (dscr_cap_eff <= roe_cap_eff)
+                )
                 reason[dscr_binds] = _BINDING_DSCR
                 amount[dscr_binds] = dscr_full[dscr_binds]
 
-                roa_binds = borrower_binds & ~coll_binds & ~dscr_binds & (roa_cap_eff < demand_full - eps) & (
-                    roa_cap_eff <= roe_cap_eff
+                roa_binds = (
+                    borrower_binds
+                    & ~coll_binds
+                    & ~dscr_binds
+                    & (roa_cap_eff < demand_full - eps)
+                    & (roa_cap_eff <= roe_cap_eff)
                 )
                 reason[roa_binds] = _BINDING_ROA
                 amount[roa_binds] = 0.0

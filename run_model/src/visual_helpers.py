@@ -759,12 +759,18 @@ def build_macro_output_df(model, country_code):
     add_agent_ts_column("household_credit_received_consumption", households_ts, "total_received_consumption_loans")
     add_agent_ts_column("household_credit_received_mortgage", households_ts, "total_received_mortgages")
 
-    if get_column("firm_credit_demand_short_term") is not None and get_column("firm_credit_received_short_term") is not None:
+    if (
+        get_column("firm_credit_demand_short_term") is not None
+        and get_column("firm_credit_received_short_term") is not None
+    ):
         add_column(
             "firm_credit_rationed_short_term",
             get_column("firm_credit_demand_short_term") - get_column("firm_credit_received_short_term"),
         )
-    if get_column("firm_credit_demand_long_term") is not None and get_column("firm_credit_received_long_term") is not None:
+    if (
+        get_column("firm_credit_demand_long_term") is not None
+        and get_column("firm_credit_received_long_term") is not None
+    ):
         add_column(
             "firm_credit_rationed_long_term",
             get_column("firm_credit_demand_long_term") - get_column("firm_credit_received_long_term"),
@@ -777,15 +783,22 @@ def build_macro_output_df(model, country_code):
             "household_credit_rationed_consumption",
             get_column("household_credit_demand_consumption") - get_column("household_credit_received_consumption"),
         )
-    if get_column("household_credit_demand_mortgage") is not None and get_column("household_credit_received_mortgage") is not None:
+    if (
+        get_column("household_credit_demand_mortgage") is not None
+        and get_column("household_credit_received_mortgage") is not None
+    ):
         add_column(
             "household_credit_rationed_mortgage",
             get_column("household_credit_demand_mortgage") - get_column("household_credit_received_mortgage"),
         )
 
     credit_market_ts = getattr(getattr(country, "credit_market", None), "ts", None)
-    add_agent_ts_column("new_credit_granted_firms_short_term", credit_market_ts, "total_newly_loans_granted_firms_short_term")
-    add_agent_ts_column("new_credit_granted_firms_long_term", credit_market_ts, "total_newly_loans_granted_firms_long_term")
+    add_agent_ts_column(
+        "new_credit_granted_firms_short_term", credit_market_ts, "total_newly_loans_granted_firms_short_term"
+    )
+    add_agent_ts_column(
+        "new_credit_granted_firms_long_term", credit_market_ts, "total_newly_loans_granted_firms_long_term"
+    )
     add_agent_ts_column(
         "new_credit_granted_households_consumption",
         credit_market_ts,
@@ -801,7 +814,9 @@ def build_macro_output_df(model, country_code):
             "bank_credit_supply_cap_households_consumption",
             as_output_series(np.nansum(bank_supply_caps["households_consumption"], axis=1)),
         )
-        add_column("bank_credit_supply_cap_mortgages", as_output_series(np.nansum(bank_supply_caps["mortgages"], axis=1)))
+        add_column(
+            "bank_credit_supply_cap_mortgages", as_output_series(np.nansum(bank_supply_caps["mortgages"], axis=1))
+        )
 
     def add_economy_column(name):
         values = economy_ts_dict.get(name)
@@ -977,7 +992,9 @@ def build_credit_demand_by_agent_df(model, country_code, agent_kind="firms", inc
                     received_st, out_index, width=df_target_st.shape[1]
                 )
             if received_lt is not None:
-                frames["received_long_term_credit"] = _panel_to_frame(received_lt, out_index, width=df_target_st.shape[1])
+                frames["received_long_term_credit"] = _panel_to_frame(
+                    received_lt, out_index, width=df_target_st.shape[1]
+                )
     else:
         ts = getattr(getattr(country, "households", None), "ts", None)
         if ts is None:
@@ -1038,7 +1055,9 @@ def build_bank_credit_supply_by_type_df(model, country_code):
         "supply_cap_households_consumption": pd.DataFrame(
             caps["households_consumption"][:horizon], index=out_index[:horizon], columns=bank_index
         ),
-        "supply_cap_mortgages": pd.DataFrame(caps["mortgages"][:horizon], index=out_index[:horizon], columns=bank_index),
+        "supply_cap_mortgages": pd.DataFrame(
+            caps["mortgages"][:horizon], index=out_index[:horizon], columns=bank_index
+        ),
     }
 
     combined = pd.concat(frames, axis=1)
@@ -1778,7 +1797,11 @@ def plot_agent_timeseries(
             series_by_id: dict[int, list[float]] = {selected_id: [] for selected_id in agent_ids}
             for value in list(values)[:horizon]:
                 unpacked = unpack_cell(value)
-                array = np.asarray(unpacked, dtype=float).reshape(-1) if unpacked is not None else np.asarray([], dtype=float)
+                array = (
+                    np.asarray(unpacked, dtype=float).reshape(-1)
+                    if unpacked is not None
+                    else np.asarray([], dtype=float)
+                )
                 for selected_id in agent_ids:
                     if selected_id < 0 or selected_id >= array.size:
                         series_by_id[selected_id].append(np.nan)
@@ -2068,9 +2091,7 @@ def plot_firm_credit_to_equity_and_capital(
     )
     outstanding_credit_long_term = _safe_ts_values(credit_market_ts, "total_outstanding_loans_granted_firms_long_term")
     if outstanding_credit_short_term is None:
-        raise ValueError(
-            "credit_market.ts has no field 'total_outstanding_loans_granted_firms_short_term'."
-        )
+        raise ValueError("credit_market.ts has no field 'total_outstanding_loans_granted_firms_short_term'.")
     if outstanding_credit_long_term is None:
         raise ValueError("credit_market.ts has no field 'total_outstanding_loans_granted_firms_long_term'.")
 

@@ -972,7 +972,9 @@ class Households(Agent):
             if sells is not None and len(sells) > 0:
                 missing = {"buyer_id", "price_or_rent"} - set(sells.columns)
                 if missing:
-                    raise ValueError(f"current_sales is missing columns required for mortgage targeting: {sorted(missing)}")
+                    raise ValueError(
+                        f"current_sales is missing columns required for mortgage targeting: {sorted(missing)}"
+                    )
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
                 target_house_price[buyer_ids] = sells["price_or_rent"].to_numpy(dtype=float, copy=False)
         self.ts.target_mortgage.append(

@@ -801,14 +801,36 @@ class Country:
 
         Updates loan demands and interest rates before market clearing.
         """
+        self.banks.set_interest_rates(central_bank_policy_rate=self.central_bank.ts.current("policy_rate")[0])
+        firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
+            corresponding_firm=self.individuals.states["Corresponding Firm ID"],
+            individual_wages=self.individuals.ts.current("employee_income"),
+            income_taxes=self.central_government.states["Income Tax"],
+            employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
+            employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+            cpi=self.economy.current_consumer_price_level(),
+        )
+        firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
+            taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
+        )
+        scheduled_firm_installment_preview = self.credit_market.compute_scheduled_firm_installments_preview()
+        firm_interest_on_deposits_preview = self.firms.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
         self.firms.compute_target_credit(
             estimated_growth=self.economy.ts.current("estimated_growth")[0],
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            wage_obligation_preview=firm_wage_obligation_preview,
+            production_tax_obligation_preview=firm_production_tax_obligation_preview,
+            interest_obligation_preview=(
+                scheduled_firm_installment_preview["scheduled_interest_due"] + firm_interest_on_deposits_preview
+            ),
+            debt_installment_preview=scheduled_firm_installment_preview["scheduled_principal_due"],
         )
         self.households.compute_target_credit(
             current_sales=self.housing_market.states["current_sales"],
         )
-        self.banks.set_interest_rates(central_bank_policy_rate=self.central_bank.ts.current("policy_rate")[0])
 
     def clear_credit_market(self) -> None:
         """Execute credit market clearing.
@@ -859,37 +881,20 @@ class Country:
         Updates loan positions, interest payments, and related financial
         positions after market clearing.
         """
-        # Handle debt installments
-        self.firms.ts.debt_installments.append(self.credit_market.pay_firm_installments())
-        self.firms.ts.total_debt_installments.append([self.firms.ts.current("debt_installments").sum()])
-        self.households.ts.debt_installments.append(self.credit_market.pay_household_installments())
-        self.households.ts.total_debt_installments.append([self.households.ts.current("debt_installments").sum()])
-        self.credit_market.remove_repaid_loans()
-
-        # Compute aggregates
-        self.credit_market.compute_aggregates()
-
-        # Calculate firm debt
-        self.firms.ts.short_term_loan_debt.append(self.credit_market.compute_outstanding_short_term_loans_by_firm())
-        self.firms.ts.long_term_loan_debt.append(self.credit_market.compute_outstanding_long_term_loans_by_firm())
-        self.firms.ts.debt.append(self.firms.compute_debt())
-
-        # Calculate the interest on loans paid by firms
-        self.firms.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_firm())
-
-        # Scheduled service used by next-period firm DSCR underwriting.
-        self.firms.ts.scheduled_debt_service.append(self.credit_market.compute_scheduled_debt_service_by_firm())
-
-        # Calculate the interest on deposits received/paid by firms
-        self.firms.ts.interest_paid_on_deposits.append(
-            self.firms.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
-                bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
-            )
+        staged_firm_installments = self.credit_market.schedule_firm_installments()
+        self.firms.begin_firm_debt_settlement(
+            opening_interest_arrears=staged_firm_installments["opening_interest_arrears"],
+            opening_principal_arrears=staged_firm_installments["opening_principal_arrears"],
+            contractual_interest_due=staged_firm_installments["contractual_interest_due"],
+            contractual_principal_due=staged_firm_installments["contractual_principal_due"],
+            scheduled_interest_due=staged_firm_installments["scheduled_interest_due"],
+            scheduled_principal_due=staged_firm_installments["scheduled_principal_due"],
         )
 
-        # Calculate paid interest of firms
-        self.firms.ts.interest_paid.append(self.firms.compute_interest_paid())
+        # Handle household debt installments
+        self.households.ts.debt_installments.append(self.credit_market.pay_household_installments())
+        self.households.ts.total_debt_installments.append([self.households.ts.current("debt_installments").sum()])
+        self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
 
         # Calculate household debt
         self.households.ts.consumption_loan_debt.append(
@@ -913,19 +918,45 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
-        # Calculate the interest on loans received by banks
-        self.banks.ts.interest_received_on_loans.append(self.credit_market.compute_interest_received_by_bank())
-
     def prepare_goods_market_clearing(self) -> None:
         """Prepare for goods market transactions.
 
         Updates production plans, consumption demands, and prices before
         market clearing.
         """
+        firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
+            corresponding_firm=self.individuals.states["Corresponding Firm ID"],
+            individual_wages=self.individuals.ts.current("employee_income"),
+            income_taxes=self.central_government.states["Income Tax"],
+            employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
+            employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+            cpi=self.economy.current_consumer_price_level(),
+        )
+        firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
+            taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
+        )
+        firm_corporate_tax_obligation_preview = self.firms.estimate_corporate_tax_obligation(
+            estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+        )
+        firm_interest_obligation_preview = (
+            self.firms.ts.current("firm_settlement_scheduled_interest_due")
+            + self.firms.compute_interest_paid_on_deposits(
+                bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+                bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+            )
+        )
+        firm_debt_installment_preview = self.firms.ts.current("firm_settlement_scheduled_principal_due")
         self.firms.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            wage_obligation_preview=firm_wage_obligation_preview,
+            production_tax_obligation_preview=firm_production_tax_obligation_preview,
+            corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
+            interest_obligation_preview=firm_interest_obligation_preview,
+            debt_installment_preview=firm_debt_installment_preview,
+            assume_zero_growth=self.assume_zero_growth,
         )
         self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
@@ -1176,13 +1207,43 @@ class Country:
 
         # D1. FIRM FINANCIAL METRICS
         # Update firm financial positions
-        self.firms.ts.total_inventory_change.append(self.firms.compute_total_inventory_change())
-        self.firms.ts.total_sales.append(self.firms.compute_total_sales())
-        self.firms.ts.taxes_paid_on_production.append(
-            self.firms.compute_taxes_paid_on_production(
-                taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
+        firm_interest_paid_on_deposits = self.firms.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        firm_corporate_tax_obligation_preview = self.firms.estimate_corporate_tax_obligation(
+            estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+        )
+        firm_debt_settlement = self.firms.plan_firm_debt_settlement(
+            taxes_paid_on_production=current_taxes_paid_on_production,
+            interest_paid_on_deposits=firm_interest_paid_on_deposits,
+            corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
+        )
+        self.firms.ts.debt_installments.append(
+            self.credit_market.settle_firm_installments(
+                payable_principal_by_firm=firm_debt_settlement["payable_principal"],
+                payable_interest_by_firm=firm_debt_settlement["payable_interest"],
+                payable_opening_interest_arrears_by_firm=firm_debt_settlement["payable_opening_interest_arrears"],
+                payable_contractual_interest_by_firm=firm_debt_settlement["payable_contractual_interest"],
+                payable_opening_principal_arrears_by_firm=firm_debt_settlement["payable_opening_principal_arrears"],
+                payable_contractual_principal_by_firm=firm_debt_settlement["payable_contractual_principal"],
             )
         )
+        self.firms.ts.total_debt_installments.append([self.firms.ts.current("debt_installments").sum()])
+        self.firms.ts.interest_paid_on_deposits.append(firm_interest_paid_on_deposits)
+        self.firms.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_firm())
+        self.firms.ts.interest_paid.append(self.firms.compute_interest_paid())
+        self.banks.ts.interest_received_on_loans.append(self.credit_market.compute_interest_received_by_bank())
+        self.credit_market.remove_repaid_loans(("st_loans", "lt_loans"))
+        self.credit_market.compute_aggregates()
+        self.firms.ts.short_term_loan_debt.append(self.credit_market.compute_outstanding_short_term_loans_by_firm())
+        self.firms.ts.long_term_loan_debt.append(self.credit_market.compute_outstanding_long_term_loans_by_firm())
+        self.firms.ts.debt.append(self.firms.compute_debt())
+        self.firms.ts.scheduled_debt_service.append(self.credit_market.compute_scheduled_debt_service_by_firm())
+        self.firms.ts.total_inventory_change.append(self.firms.compute_total_inventory_change())
+        self.firms.ts.total_sales.append(self.firms.compute_total_sales())
+        self.firms.ts.taxes_paid_on_production.append(current_taxes_paid_on_production)
         self.firms.ts.profits.append(self.firms.compute_profits())
         self.firms.ts.unit_costs.append(self.firms.compute_unit_costs())
         self.firms.ts.corporate_taxes_paid.append(
@@ -1205,6 +1266,15 @@ class Country:
         # D3. FIRM INSOLVENCY
         npl_firm_loans = self.firms.handle_insolvency(credit_market=self.credit_market)
         self.economy.ts.npl_firm_loans.append([npl_firm_loans])
+        self.firms.ts.override_current("short_term_loan_debt", self.credit_market.compute_outstanding_short_term_loans_by_firm())
+        self.firms.ts.override_current("long_term_loan_debt", self.credit_market.compute_outstanding_long_term_loans_by_firm())
+        self.firms.ts.override_current("debt", self.firms.compute_debt())
+        self.firms.ts.override_current("scheduled_debt_service", self.credit_market.compute_scheduled_debt_service_by_firm())
+        self.firms.finalize_firm_debt_settlement(
+            settlement=firm_debt_settlement,
+            residual_overdraft_exposure=np.maximum(0.0, -self.firms.ts.current("deposits")),
+        )
+        self.firms.ts.override_current("total_credit_exposure", self.firms.compute_total_credit_exposure())
 
         firm_insolvency_rate, num_insolvent_firms_by_sector = self.firms.compute_insolvency_rate()
         self.economy.ts.firm_insolvency_rate.append([firm_insolvency_rate])

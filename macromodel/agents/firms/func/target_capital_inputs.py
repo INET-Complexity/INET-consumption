@@ -9,13 +9,13 @@ class TargetCapitalInputsSetter(ABC):
 
     This class defines strategies for calculating optimal capital input
     demand based on:
-    - Production targets and depreciation
+    - Production targets and capital-use/replacement coefficients
     - Current capital stock levels
     - Historical usage patterns
     - Financial constraints
 
     The capital targeting process considers:
-    - Replacement of depreciated capital
+    - Replacement of used capital inputs
     - Capacity expansion needs
     - Credit availability
     - Price expectations
@@ -43,7 +43,7 @@ class TargetCapitalInputsSetter(ABC):
     def compute_unconstrained_target_capital_inputs(
         self,
         current_target_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         prev_capital_inputs_stock: np.ndarray,
         initial_capital_inputs_stock: np.ndarray,
         prev_production: np.ndarray,
@@ -57,14 +57,13 @@ class TargetCapitalInputsSetter(ABC):
         Determines ideal capital input needs before considering
         financial constraints, based on:
         - Production targets
-        - Depreciation rates
+        - Capital-use/replacement coefficients
         - Current stock levels
         - Historical usage patterns
 
         Args:
             current_target_production (np.ndarray): Target production levels
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation
-                rates for different capital types
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             prev_capital_inputs_stock (np.ndarray): Current capital stock
                 by type
             initial_capital_inputs_stock (np.ndarray): Initial capital stock
@@ -116,7 +115,7 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
     """Implementation of capital input targeting with financial considerations.
 
     This class implements a strategy that:
-    1. Calculates base capital needs from production and depreciation
+    1. Calculates base capital needs from production and capital-use coefficients
     2. Adjusts for existing stock levels relative to historical usage
     3. Further adjusts based on credit constraints and price expectations
 
@@ -129,7 +128,7 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
     def compute_unconstrained_target_capital_inputs(
         self,
         current_target_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         prev_capital_inputs_stock: np.ndarray,
         initial_capital_inputs_stock: np.ndarray,
         prev_production: np.ndarray,
@@ -141,13 +140,13 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         """Calculate unconstrained capital input targets with stock adjustment.
 
         The method:
-        1. Calculates base capital needs from production and depreciation
+        1. Calculates base capital needs from production and capital-use coefficients
         2. Adjusts for current stock levels relative to historical usage
         3. Ensures non-negative targets
 
         Args:
             current_target_production (np.ndarray): Target production levels
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation rates
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             prev_capital_inputs_stock (np.ndarray): Current stock levels
             initial_capital_inputs_stock (np.ndarray): Reference stock levels
             prev_production (np.ndarray): Current production levels
@@ -163,8 +162,8 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         """
         target_capital_inputs = np.multiply(
             current_target_production[:, None],
-            capital_inputs_depreciation_matrix,
-            out=np.zeros_like(capital_inputs_depreciation_matrix),
+            capital_input_use_matrix,
+            out=np.zeros_like(capital_input_use_matrix),
         )
 
         # Take current stock of capital inputs into accounts
@@ -232,11 +231,11 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
     This class extends the financial targeting approach by applying weights to the
     unconstrained targets based on:
     - Input prices
-    - Depreciation coefficients
+    - Capital-use/replacement coefficients
     - Substitution bundles
 
     The weighting mechanism allows for substitution between capital inputs within the same bundle
-    based on relative prices and depreciation rates.
+    based on relative prices and capital-use coefficients.
     """
 
     def __init__(
@@ -253,7 +252,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
             credit_gap_fraction (float): How much to reduce capital targets when
                 facing credit constraints (between 0 and 1)
             beta (float, optional): Parameter controlling the sensitivity of weights
-                to price and depreciation differences. Defaults to 1.0.
+                to price and capital-use coefficient differences. Defaults to 1.0.
         """
         super().__init__(target_capital_inputs_fraction, credit_gap_fraction)
         self.beta = beta
@@ -261,7 +260,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
     def compute_unconstrained_target_capital_inputs(
         self,
         current_target_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         prev_capital_inputs_stock: np.ndarray,
         initial_capital_inputs_stock: np.ndarray,
         prev_production: np.ndarray,
@@ -274,12 +273,12 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
 
         The method:
         1. Computes base unconstrained targets using the parent class method
-        2. Calculates weights based on prices, depreciation, and bundles
+        2. Calculates weights based on prices, capital-use coefficients, and bundles
         3. Applies the weights to the unconstrained targets
 
         Args:
             current_target_production (np.ndarray): Target production levels
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation rates
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             prev_capital_inputs_stock (np.ndarray): Current stock levels
             initial_capital_inputs_stock (np.ndarray): Reference stock levels
             prev_production (np.ndarray): Current production levels
@@ -300,7 +299,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
         # Get base unconstrained targets from parent class
         base_targets = super().compute_unconstrained_target_capital_inputs(
             current_target_production,
-            capital_inputs_depreciation_matrix,
+            capital_input_use_matrix,
             prev_capital_inputs_stock,
             initial_capital_inputs_stock,
             prev_production,
@@ -314,7 +313,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
         avg_price = np.nanmean(previous_good_prices)
 
         # Calculate unnormalized weights
-        # exp(-beta / avg_price * price[j] / depreciation_matrix[i,j])
+        # exp(-beta / avg_price * price[j] / capital_use_matrix[i,j])
         unnormalized_weights = np.exp(-self.beta / avg_price * (previous_good_prices + extra_taxes))
         unnormalized_weights = np.outer(np.ones_like(unnormalized_weights), unnormalized_weights)
 

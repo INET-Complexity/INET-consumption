@@ -64,12 +64,12 @@ def compile_industry_data(
                 "CFC Output Ratio"
             ]
         if replacement_source == "capital_compensation":
-            capital_inputs_depreciation_matrix = current_icio_reader.get_capital_inputs_depreciation(
+            capital_input_use_matrix = current_icio_reader.get_capital_inputs_depreciation(
                 country_name=country_name,
                 capital_compensation=sea_reader.get_values_in_usd(country_name, "Capital Compensation"),
             )
         elif replacement_source == "eurostat_cfc_output":
-            capital_inputs_depreciation_matrix = current_icio_reader.get_capital_inputs_depreciation_from_cfc_output(
+            capital_input_use_matrix = current_icio_reader.get_capital_inputs_depreciation_from_cfc_output(
                 country_name=country_name,
                 cfc_output_ratios=capital_depreciation_data["CFC Output Ratio"],
             )
@@ -111,7 +111,8 @@ def compile_industry_data(
         industry_data[country_name] = {
             "intermediate_inputs_productivity_matrix": intermediate_inputs_productivity_matrix,
             "capital_inputs_productivity_matrix": capital_inputs_productivity_matrix,
-            "capital_inputs_depreciation_matrix": capital_inputs_depreciation_matrix,
+            "capital_input_use_matrix": capital_input_use_matrix,
+            "capital_inputs_depreciation_matrix": capital_input_use_matrix,
             "industry_vectors": industry_vectors,
         }
 

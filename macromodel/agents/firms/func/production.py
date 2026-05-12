@@ -196,31 +196,30 @@ class ProductionSetter(ABC):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital inputs consumed (depreciated) in production.
+        """Calculate capital inputs used in production.
 
-        Determines capital depreciation based on:
+        Determines capital input use based on:
         - Realized production levels
-        - Depreciation rates
+        - Capital-use coefficients
         - Available capital stocks
         - Capital good criticality
         - Substitution between goods in the same bundle
 
         Args:
             realised_production (np.ndarray): Actual production achieved
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation
-                rates for capital goods
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             capital_inputs_stock (np.ndarray): Available capital stocks
             goods_criticality_matrix (np.ndarray): Capital good criticality
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution
                 bundles for goods, allowing substitution between goods in the same bundle
 
         Returns:
-            np.ndarray: Capital inputs depreciated in production
+            np.ndarray: Capital inputs used in production
         """
         pass
 
@@ -348,29 +347,28 @@ class PureLeontief(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital depreciation under Leontief technology.
+        """Calculate capital input use under Leontief technology.
 
-        Capital depreciation is proportional to production with fixed
-        depreciation rates.
+        Capital input use is proportional to production with fixed
+        capital-use coefficients.
 
         Args:
             realised_production (np.ndarray): Actual production achieved
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation
-                rates for capital goods
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             capital_inputs_stock (np.ndarray): Available capital stocks
             goods_criticality_matrix (np.ndarray): Capital good criticality
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution
                 bundles for goods, allowing substitution between goods in the same bundle
 
         Returns:
-            np.ndarray: Capital inputs depreciated in production
+            np.ndarray: Capital inputs used in production
         """
-        used_capital_inputs = realised_production[:, None] * capital_inputs_depreciation_matrix
+        used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
         return used_capital_inputs
@@ -473,23 +471,23 @@ class CriticalAndImportantLeontief(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital depreciation with criticality.
+        """Calculate capital input use with criticality.
 
-        Depreciates capital proportionally to production, but only for
+        Uses capital inputs proportionally to production, but only for
         critical and important capital goods.
 
         Args:
             [same as parent class]
 
         Returns:
-            np.ndarray: Critical capital inputs depreciated
+            np.ndarray: Critical capital inputs used
         """
-        used_capital_inputs = realised_production[:, None] * capital_inputs_depreciation_matrix
+        used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
         used_capital_inputs[goods_criticality_matrix == 0.0] = 0.0
@@ -593,23 +591,23 @@ class CriticalLeontief(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate critical capital depreciation.
+        """Calculate critical capital input use.
 
-        Depreciates capital proportionally to production, but only for
+        Uses capital inputs proportionally to production, but only for
         fully critical capital goods.
 
         Args:
             [same as parent class]
 
         Returns:
-            np.ndarray: Critical capital inputs depreciated
+            np.ndarray: Critical capital inputs used
         """
-        used_capital_inputs = realised_production[:, None] * capital_inputs_depreciation_matrix
+        used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
         used_capital_inputs[goods_criticality_matrix < 1.0] = 0.0
@@ -702,23 +700,23 @@ class Linear(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital depreciation under linear technology.
+        """Calculate capital input use under linear technology.
 
-        Capital depreciation scales linearly with production,
-        using depreciation coefficients.
+        Capital input use scales linearly with production using physical
+        capital-use/replacement coefficients.
 
         Args:
             [same as parent class]
 
         Returns:
-            np.ndarray: Capital inputs depreciated in production
+            np.ndarray: Capital inputs used in production
         """
-        used_capital_inputs = realised_production[:, None] * capital_inputs_depreciation_matrix
+        used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
         used_capital_inputs = (
@@ -790,22 +788,22 @@ class UnconstrainedProduction(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital depreciation (unconstrained).
+        """Calculate capital input use (unconstrained).
 
-        Returns zero depreciation as production is unconstrained.
+        Returns zero capital input use as production is unconstrained.
 
         Args:
             [same as parent class, all unused]
 
         Returns:
-            np.ndarray: Zero capital depreciation
+            np.ndarray: Zero capital input use
         """
-        return np.zeros_like(capital_inputs_depreciation_matrix)
+        return np.zeros_like(capital_input_use_matrix)
 
     def compute_production(
         self,
@@ -978,30 +976,29 @@ class BundledLeontief(ProductionSetter):
     def compute_capital_inputs_used(
         self,
         realised_production: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
     ) -> np.ndarray:
-        """Calculate capital depreciation under bundled Leontief technology.
+        """Calculate capital input use under bundled Leontief technology.
 
-        Capital depreciation is proportional to production with fixed
-        depreciation rates, adjusted by the substitution bundle matrix.
+        Capital input use is proportional to production with fixed
+        capital-use coefficients, adjusted by the substitution bundle matrix.
 
         Args:
             realised_production (np.ndarray): Actual production achieved
-            capital_inputs_depreciation_matrix (np.ndarray): Depreciation
-                rates for capital goods
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             capital_inputs_stock (np.ndarray): Available capital stocks
             goods_criticality_matrix (np.ndarray): Capital good criticality
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution
                 bundles for goods (shape: n_goods, n_bundles)
 
         Returns:
-            np.ndarray: Capital inputs depreciated in production
+            np.ndarray: Capital inputs used in production
         """
-        # Calculate base capital depreciation
-        used_capital_inputs = realised_production[:, None] * capital_inputs_depreciation_matrix
+        # Calculate base capital input use
+        used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
 

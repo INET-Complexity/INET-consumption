@@ -58,4 +58,3 @@ def test_zero_firm_debt_zeros_firm_loan_principals():
     )
     assert credit_market_nonzero.longterm_loans.principal.sum() > 0.0
     assert credit_market_nonzero.longterm_loans.installments.sum() > 0.0
-

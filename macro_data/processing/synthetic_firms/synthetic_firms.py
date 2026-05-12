@@ -138,6 +138,17 @@ class SyntheticFirms(ABC):
         self.labour_productivity_by_industry = labour_productivity_by_industry
 
     @property
+    def capital_input_use_matrix(self) -> np.ndarray:
+        """Physical capital-use/replacement matrix, with old-pickle fallback."""
+        if "capital_input_use_matrix" in self.__dict__:
+            return self.__dict__["capital_input_use_matrix"]
+        return self.__dict__["capital_inputs_depreciation_matrix"]
+
+    @capital_input_use_matrix.setter
+    def capital_input_use_matrix(self, value: np.ndarray) -> None:
+        self.__dict__["capital_input_use_matrix"] = value
+
+    @property
     def capital_inputs_depreciation_matrix(self) -> np.ndarray:
         """Deprecated alias for the physical capital-use/replacement matrix."""
         return self.capital_input_use_matrix

@@ -78,15 +78,30 @@ class TestCountry:
         assert np.allclose(captured["wage_obligation_preview"], wage_preview)
         assert np.allclose(captured["production_tax_obligation_preview"], tax_preview)
         assert np.allclose(captured["corporate_tax_obligation_preview"], corporate_tax_preview)
+        assert np.allclose(
+            captured["loan_interest_obligation_preview"],
+            test_country.firms.ts.current("firm_settlement_scheduled_interest_due"),
+        )
 
     def test__prepare_credit_market_clearing_passes_pro_forma_previews(self, test_country, monkeypatch):
         n_firms = test_country.firms.ts.current("n_firms")
         wage_preview = np.full(n_firms, 4.0)
         tax_preview = np.full(n_firms, 5.0)
+        loan_interest_preview = np.full(n_firms, 2.0)
+        deposit_interest_preview = np.full(n_firms, 7.0)
         captured = {}
 
         monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **kwargs: wage_preview)
         monkeypatch.setattr(test_country.firms, "compute_taxes_paid_on_production", lambda **kwargs: tax_preview)
+        monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **kwargs: deposit_interest_preview)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_firm_installments_preview",
+            lambda: {
+                "scheduled_interest_due": loan_interest_preview,
+                "scheduled_principal_due": np.full(n_firms, 3.0),
+            },
+        )
 
         def capture_firm_credit(**kwargs):
             captured.update(kwargs)
@@ -100,3 +115,5 @@ class TestCountry:
 
         assert np.allclose(captured["wage_obligation_preview"], wage_preview)
         assert np.allclose(captured["production_tax_obligation_preview"], tax_preview)
+        assert np.allclose(captured["loan_interest_obligation_preview"], loan_interest_preview)
+        assert np.allclose(captured["interest_obligation_preview"], loan_interest_preview + deposit_interest_preview)

@@ -826,6 +826,7 @@ class Country:
             interest_obligation_preview=(
                 scheduled_firm_installment_preview["scheduled_interest_due"] + firm_interest_on_deposits_preview
             ),
+            loan_interest_obligation_preview=scheduled_firm_installment_preview["scheduled_interest_due"],
             debt_installment_preview=scheduled_firm_installment_preview["scheduled_principal_due"],
         )
         self.households.compute_target_credit(
@@ -946,6 +947,7 @@ class Country:
                 bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
             )
         )
+        firm_loan_interest_obligation_preview = self.firms.ts.current("firm_settlement_scheduled_interest_due")
         firm_debt_installment_preview = self.firms.ts.current("firm_settlement_scheduled_principal_due")
         self.firms.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
@@ -955,6 +957,7 @@ class Country:
             production_tax_obligation_preview=firm_production_tax_obligation_preview,
             corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
             interest_obligation_preview=firm_interest_obligation_preview,
+            loan_interest_obligation_preview=firm_loan_interest_obligation_preview,
             debt_installment_preview=firm_debt_installment_preview,
             assume_zero_growth=self.assume_zero_growth,
         )
@@ -1264,7 +1267,14 @@ class Country:
         )
 
         # D3. FIRM INSOLVENCY
-        npl_firm_loans = self.firms.handle_insolvency(credit_market=self.credit_market)
+        firm_debt_settlement["default_flag"] = np.logical_and(
+            self.firms.ts.current("equity") < 0.0,
+            firm_debt_settlement["illiquid_flag"],
+        )
+        npl_firm_loans = self.firms.handle_insolvency(
+            credit_market=self.credit_market,
+            illiquid_flag=firm_debt_settlement["illiquid_flag"],
+        )
         self.economy.ts.npl_firm_loans.append([npl_firm_loans])
         self.firms.ts.override_current("short_term_loan_debt", self.credit_market.compute_outstanding_short_term_loans_by_firm())
         self.firms.ts.override_current("long_term_loan_debt", self.credit_market.compute_outstanding_long_term_loans_by_firm())

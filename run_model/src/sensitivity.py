@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass
-import re
 from typing import Any, Iterable, Sequence
 
 import pandas as pd
+from src.monte_carlo import MonteCarloResult, run_seeded_monte_carlo
 
 from macro_data import DataWrapper
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
-from src.monte_carlo import MonteCarloResult, run_seeded_monte_carlo
 
 
 @dataclass(frozen=True)

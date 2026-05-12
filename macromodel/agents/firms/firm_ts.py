@@ -105,6 +105,8 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_closing_principal_arrears: Principal arrears carried forward after settlement
         - firm_settlement_unpaid_principal: Backward-compatible alias of closing principal arrears
         - firm_settlement_debt_rollover_shortfall: Scheduled principal not covered by received rollover credit
+        - firm_settlement_overdraft_refinance_used: Overdraft-refinance credit used to close negative ordinary cash
+          before loan debt service
         - firm_settlement_overdraft_refinance_shortfall: Target overdraft repair not met by received refinance credit
         - firm_settlement_residual_overdraft_exposure: End-of-period negative-deposit exposure after settlement
         - firm_settlement_illiquid_flag: Settlement liquidity failure after rollover and cash funding
@@ -410,6 +412,7 @@ class FirmTimeSeries(TimeSeries):
             firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
             firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
             firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+            firm_settlement_overdraft_refinance_used=np.zeros(data.shape[0]),
             firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
             firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
             firm_settlement_illiquid_flag=np.full(data.shape[0], False),
@@ -736,6 +739,7 @@ def create_firms_timeseries(
         firm_settlement_closing_principal_arrears=np.zeros(data.shape[0]),
         firm_settlement_unpaid_principal=np.zeros(data.shape[0]),
         firm_settlement_debt_rollover_shortfall=np.zeros(data.shape[0]),
+        firm_settlement_overdraft_refinance_used=np.zeros(data.shape[0]),
         firm_settlement_overdraft_refinance_shortfall=np.zeros(data.shape[0]),
         firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
         firm_settlement_illiquid_flag=np.full(data.shape[0], False),

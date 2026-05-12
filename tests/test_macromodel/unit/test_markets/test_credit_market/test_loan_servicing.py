@@ -161,6 +161,31 @@ def test_missed_firm_payment_capitalizes_interest_and_carries_principal_arrears(
     assert np.isclose(next_preview["scheduled_principal_due"][0], 39.0)
 
 
+def test_capitalized_firm_interest_is_not_cash_interest_received():
+    st_loans = _loan_array(n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.10
+    st_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_borrowers=1),
+        cons_loans=_loan_array(n_borrowers=1),
+        mort_loans=_loan_array(n_borrowers=1),
+    )
+
+    market.schedule_firm_installments()
+    market.settle_firm_installments(
+        payable_principal_by_firm=np.zeros(1),
+        payable_interest_by_firm=np.zeros(1),
+        overwrite_bank_interest=True,
+    )
+
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 110.0)
+    assert np.isclose(market.compute_interest_paid_by_firm()[0], 0.0)
+    assert np.isclose(market.compute_interest_received_by_bank()[0], 0.0)
+
+
 def test_principal_arrears_do_not_exceed_outstanding_principal_next_period():
     st_loans = _loan_array(n_borrowers=1)
     st_loans[0, 0, 0] = 30.0

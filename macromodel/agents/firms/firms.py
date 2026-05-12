@@ -1545,6 +1545,7 @@ class Firms(Agent):
         self.ts.firm_settlement_closing_principal_arrears.append(np.zeros(n_firms))
         self.ts.firm_settlement_unpaid_principal.append(np.zeros(n_firms))
         self.ts.firm_settlement_debt_rollover_shortfall.append(np.zeros(n_firms))
+        self.ts.firm_settlement_overdraft_refinance_used.append(np.zeros(n_firms))
         self.ts.firm_settlement_overdraft_refinance_shortfall.append(np.zeros(n_firms))
         self.ts.firm_settlement_residual_overdraft_exposure.append(np.zeros(n_firms))
         self.ts.firm_settlement_illiquid_flag.append(np.full(n_firms, False))
@@ -1650,6 +1651,7 @@ class Firms(Agent):
             "closing_principal_arrears": closing_principal_arrears,
             "illiquid_flag": illiquid_flag,
             "debt_rollover_shortfall": debt_rollover_shortfall,
+            "overdraft_refinance_used": overdraft_refinance_used,
             "overdraft_refinance_shortfall": overdraft_refinance_shortfall,
             "default_flag": np.full(n_firms, False),
         }
@@ -1672,6 +1674,7 @@ class Firms(Agent):
             "firm_settlement_closing_principal_arrears": settlement["closing_principal_arrears"],
             "firm_settlement_unpaid_principal": settlement["closing_principal_arrears"],
             "firm_settlement_debt_rollover_shortfall": settlement["debt_rollover_shortfall"],
+            "firm_settlement_overdraft_refinance_used": settlement["overdraft_refinance_used"],
             "firm_settlement_overdraft_refinance_shortfall": settlement["overdraft_refinance_shortfall"],
             "firm_settlement_residual_overdraft_exposure": (
                 self.ts.current("firm_settlement_residual_overdraft_exposure")

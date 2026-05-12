@@ -98,6 +98,7 @@ class TestFirms:
             "firm_settlement_closing_principal_arrears",
             "firm_settlement_unpaid_principal",
             "firm_settlement_debt_rollover_shortfall",
+            "firm_settlement_overdraft_refinance_used",
             "firm_settlement_overdraft_refinance_shortfall",
             "firm_settlement_residual_overdraft_exposure",
             "firm_settlement_illiquid_flag",
@@ -1125,6 +1126,7 @@ class TestFirms:
         assert np.isclose(settlement["closing_interest_arrears"][0], 0.0)
         assert np.isclose(settlement["closing_principal_arrears"][0], 9.0)
         assert np.isclose(settlement["debt_rollover_shortfall"][0], 5.0)
+        assert np.isclose(settlement["overdraft_refinance_used"][0], 4.0)
         assert np.isclose(settlement["overdraft_refinance_shortfall"][0], 2.0)
         assert settlement["illiquid_flag"][0]
         assert not settlement["default_flag"][0]
@@ -1305,6 +1307,7 @@ class TestFirms:
             "closing_principal_arrears": np.r_[6.0, np.zeros(n_firms - 1)],
             "illiquid_flag": np.r_[True, np.full(n_firms - 1, False)],
             "debt_rollover_shortfall": np.zeros(n_firms),
+            "overdraft_refinance_used": np.r_[2.0, np.zeros(n_firms - 1)],
             "overdraft_refinance_shortfall": np.zeros(n_firms),
             "default_flag": np.r_[True, np.full(n_firms - 1, False)],
         }
@@ -1327,6 +1330,7 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("firm_settlement_capitalized_interest")[0], 3.0)
         assert np.isclose(test_firms.ts.current("firm_settlement_closing_principal_arrears")[0], 6.0)
         assert np.isclose(test_firms.ts.current("firm_settlement_unpaid_principal")[0], 6.0)
+        assert np.isclose(test_firms.ts.current("firm_settlement_overdraft_refinance_used")[0], 2.0)
         assert test_firms.ts.current("firm_settlement_illiquid_flag")[0]
         assert np.isclose(test_firms.ts.current("firm_settlement_residual_overdraft_exposure")[0], 7.0)
 

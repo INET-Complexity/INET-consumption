@@ -968,9 +968,6 @@ class SyntheticCountry:
         Returns:
             float: GDP value calculated using the expenditure approach
         """
-        used_capital_inputs = self.firms.used_capital_inputs
-        used_capital_inputs_costs = np.matmul(used_capital_inputs.T, self.firms.firm_data["Price"].values).sum()
-
         investment_rate = self.population.household_data["Investment Rate"].values
         investment_weights = self.industry_data["industry_vectors"]["Household Capital Inputs in LCU"]
         investment_weights = investment_weights.values / investment_weights.values.sum()
@@ -979,7 +976,10 @@ class SyntheticCountry:
 
         gross_hh_investment = np.outer(investment_weights, investment_rate * income).T
 
-        capital_formation = used_capital_inputs_costs + gross_hh_investment.sum()
+        capital_formation = (
+            self.industry_data["industry_vectors"]["Firm Capital Inputs in LCU"].sum()
+            + gross_hh_investment.sum()
+        )
 
         hh_consumption = self.industry_data["industry_vectors"]["Household Consumption in LCU"].sum() * (
             1 + self.tax_data.value_added_tax

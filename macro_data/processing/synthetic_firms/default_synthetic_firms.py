@@ -51,6 +51,32 @@ from macro_data.readers.default_readers import DataReaders
 from macro_data.readers.emissions.emissions_reader import EmissionsData
 
 
+def _capital_compensation_accounting_costs(
+    capital_inputs_costs: np.ndarray, capital_compensation_accounting_mode: str
+) -> np.ndarray:
+    if capital_compensation_accounting_mode == "production_cost":
+        return capital_inputs_costs
+    if capital_compensation_accounting_mode == "surplus_pool":
+        return np.zeros_like(capital_inputs_costs)
+    raise ValueError(
+        "Unknown capital_compensation_accounting_mode "
+        f"{capital_compensation_accounting_mode!r}; expected 'production_cost' or 'surplus_pool'."
+    )
+
+
+def _capital_depreciation_accounting_costs(
+    capital_depreciation_costs: np.ndarray, capital_depreciation_accounting_mode: str
+) -> np.ndarray:
+    if capital_depreciation_accounting_mode == "eurostat_cfc":
+        return capital_depreciation_costs
+    if capital_depreciation_accounting_mode == "none":
+        return np.zeros_like(capital_depreciation_costs)
+    raise ValueError(
+        "Unknown capital_depreciation_accounting_mode "
+        f"{capital_depreciation_accounting_mode!r}; expected 'none' or 'eurostat_cfc'."
+    )
+
+
 class DefaultSyntheticFirms(SyntheticFirms):
     """Container for preprocessed firm data using standard data sources.
 
@@ -112,6 +138,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
         intermediate_inputs_productivity_matrix: np.ndarray,
         capital_inputs_depreciation_matrix: np.ndarray,
         labour_productivity_by_industry: np.ndarray,
+        capital_depreciation_rates: np.ndarray | None = None,
     ):
         super().__init__(
             country_name,
@@ -130,6 +157,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
             intermediate_inputs_productivity_matrix,
             capital_inputs_depreciation_matrix,
             labour_productivity_by_industry,
+            capital_depreciation_rates,
         )
 
     @classmethod
@@ -207,6 +235,16 @@ class DefaultSyntheticFirms(SyntheticFirms):
         capital_inputs_productivity_matrix = industry_data["capital_inputs_productivity_matrix"].values
         intermediate_inputs_productivity_matrix = industry_data["intermediate_inputs_productivity_matrix"].values
         capital_inputs_depreciation_matrix = industry_data["capital_inputs_depreciation_matrix"].values
+        if (
+            firm_configuration.capital_depreciation_accounting_mode == "eurostat_cfc"
+            and "Capital Depreciation Output Ratio" not in industry_data["industry_vectors"]
+        ):
+            raise ValueError(
+                "capital_depreciation_accounting_mode='eurostat_cfc' requires Eurostat CFC depreciation data."
+            )
+        capital_depreciation_rates = industry_data["industry_vectors"].get(
+            "Capital Depreciation Output Ratio", pd.Series(0.0, index=industry_data["industry_vectors"].index)
+        ).values
 
         output = industry_data["industry_vectors"]["Output in USD"].values
         labour_productivity = output / n_employees_per_industry
@@ -231,6 +269,21 @@ class DefaultSyntheticFirms(SyntheticFirms):
             initial_inventory_to_input_fraction=firm_configuration.initial_inventory_to_input_fraction,
             intermediate_inputs_utilisation_rate=firm_configuration.intermediate_inputs_utilisation_rate,
         )
+
+        firm_industries = firm_data["Industry"].values
+        production_by_industry = np.bincount(
+            firm_industries,
+            weights=firm_data["Production"].values,
+            minlength=len(industries),
+        )
+        firm_production_share = np.divide(
+            firm_data["Production"].values,
+            production_by_industry[firm_industries],
+            out=np.zeros(n_firms),
+            where=production_by_industry[firm_industries] != 0.0,
+        )
+        firm_capital_inputs_lcu = industry_data["industry_vectors"]["Firm Capital Inputs in LCU"].values
+        firm_data["Initial Capital Inputs Bought Costs"] = firm_capital_inputs_lcu[firm_industries] * firm_production_share
 
         firm_data["Employees ID"] = [[] for _ in range(n_firms)]
 
@@ -274,6 +327,13 @@ class DefaultSyntheticFirms(SyntheticFirms):
                 zero_columns,
             ] = 0.0
 
+        firm_data.attrs["capital_compensation_accounting_mode"] = (
+            firm_configuration.capital_compensation_accounting_mode
+        )
+        firm_data.attrs["capital_depreciation_accounting_mode"] = (
+            firm_configuration.capital_depreciation_accounting_mode
+        )
+
         return cls(
             country_name=country_name,
             scale=scale,
@@ -291,6 +351,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
             intermediate_inputs_productivity_matrix=intermediate_inputs_productivity_matrix,
             capital_inputs_depreciation_matrix=capital_inputs_depreciation_matrix,
             labour_productivity_by_industry=labour_productivity,
+            capital_depreciation_rates=capital_depreciation_rates,
         )
 
     def reset_function_parameters(
@@ -359,34 +420,33 @@ class DefaultSyntheticFirms(SyntheticFirms):
 
     def set_firm_profits(
         self,
-        intermediate_inputs_productivity_matrix: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
-        tau_sif: float,
+        initial_good_prices: np.ndarray,
+        capital_compensation_accounting_mode: str,
+        capital_depreciation_accounting_mode: str,
     ) -> None:
         # Sales
         sales = self.firm_data["Production"].values * self.firm_data["Price"].values
 
-        # Labour
-        labour_costs = self.firm_data["Total Wages"].values * (1 + tau_sif)
+        labour_costs = self.firm_data["Total Wages Paid"].values
 
-        # Intermediate inputs
-        intermediate_inputs_costs = (
-            self.firm_data["Production"].values
-            / intermediate_inputs_productivity_matrix[:, self.firm_data["Industry"].values]
-        ).T.sum(axis=1) * self.firm_data["Price"].values
+        intermediate_inputs_costs = self.used_intermediate_inputs @ initial_good_prices
+        capital_inputs_costs = self.used_capital_inputs @ initial_good_prices
 
-        # Capital inputs
-        capital_inputs_costs = (
-            self.firm_data["Production"].values
-            * capital_inputs_depreciation_matrix[:, self.firm_data["Industry"].values]
-        ).T.sum(axis=1) * self.firm_data["Price"].values
+        capital_inputs_costs_for_accounting = _capital_compensation_accounting_costs(
+            capital_inputs_costs, capital_compensation_accounting_mode
+        )
+        capital_depreciation_costs = _capital_depreciation_accounting_costs(
+            self.firm_data["Capital Depreciation Costs"].values,
+            capital_depreciation_accounting_mode,
+        )
 
         # Update profits
         self.firm_data["Profits"] = (
             sales
             - labour_costs
             - intermediate_inputs_costs
-            - capital_inputs_costs
+            - capital_inputs_costs_for_accounting
+            - capital_depreciation_costs
             - self.firm_data["Taxes paid on Production"].values
             - self.firm_data["Interest paid"].values
         )
@@ -394,32 +454,38 @@ class DefaultSyntheticFirms(SyntheticFirms):
 
     def set_unit_costs(
         self,
-        intermediate_inputs_productivity_matrix: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
-        tau_sif: float,
+        initial_good_prices: np.ndarray,
+        capital_compensation_accounting_mode: str,
+        capital_depreciation_accounting_mode: str,
     ) -> None:
-        # Labour
-        labour_costs = self.firm_data["Total Wages"].values * (1 + tau_sif)
+        labour_costs = self.firm_data["Total Wages Paid"].values
 
-        # Intermediate inputs
-        intermediate_inputs_costs = (
-            self.firm_data["Production"].values[:, None]
-            / intermediate_inputs_productivity_matrix[:, self.firm_data["Industry"].values].T
-        ).sum(axis=1) * self.firm_data["Price"].values
+        intermediate_inputs_costs = self.used_intermediate_inputs @ initial_good_prices
+        capital_inputs_costs = self.used_capital_inputs @ initial_good_prices
 
-        # Capital inputs
-        capital_inputs_costs = (
-            self.firm_data["Production"].values[:, None]
-            * capital_inputs_depreciation_matrix[:, self.firm_data["Industry"].values].T
-        ).sum(axis=1) * self.firm_data["Price"].values
+        capital_inputs_costs_for_accounting = _capital_compensation_accounting_costs(
+            capital_inputs_costs, capital_compensation_accounting_mode
+        )
+        capital_depreciation_costs = _capital_depreciation_accounting_costs(
+            self.firm_data["Capital Depreciation Costs"].values,
+            capital_depreciation_accounting_mode,
+        )
 
         # Update unit costs
         self.firm_data["Unit Costs"] = (
             labour_costs
             + intermediate_inputs_costs
-            + capital_inputs_costs
+            + capital_inputs_costs_for_accounting
+            + capital_depreciation_costs
             + self.firm_data["Taxes paid on Production"].values
         ) / self.firm_data["Production"].values
+
+    def set_capital_depreciation_costs(self, initial_good_prices: np.ndarray) -> None:
+        rates_by_industry = getattr(self, "capital_depreciation_rates", np.zeros(len(initial_good_prices)))
+        rates = rates_by_industry[self.firm_data["Industry"].values]
+        self.firm_data["Capital Depreciation Costs"] = (
+            rates * self.firm_data["Production"].values * self.firm_data["Price"].values
+        )
 
     def set_corporate_taxes_paid(self, tau_firm: float) -> None:
         self.firm_data["Corporate Taxes Paid"] = tau_firm * np.maximum(0.0, self.firm_data["Profits"])
@@ -453,17 +519,27 @@ class DefaultSyntheticFirms(SyntheticFirms):
             short_term_loan_interest=short_term_loans.interest,
             long_term_loan_interest=long_term_loans.interest,
         )
+        self.set_capital_depreciation_costs(
+            initial_good_prices=industry_data["industry_vectors"]["Average Initial Price"].values
+        )
+
+        capital_compensation_accounting_mode = self.firm_data.attrs.get(
+            "capital_compensation_accounting_mode", "production_cost"
+        )
+        capital_depreciation_accounting_mode = self.firm_data.attrs.get(
+            "capital_depreciation_accounting_mode", "none"
+        )
 
         self.set_firm_profits(
-            intermediate_inputs_productivity_matrix=industry_data["intermediate_inputs_productivity_matrix"].values,
-            capital_inputs_depreciation_matrix=industry_data["capital_inputs_depreciation_matrix"].values,
-            tau_sif=tax_data.employer_social_insurance_tax,
+            initial_good_prices=industry_data["industry_vectors"]["Average Initial Price"].values,
+            capital_compensation_accounting_mode=capital_compensation_accounting_mode,
+            capital_depreciation_accounting_mode=capital_depreciation_accounting_mode,
         )
 
         self.set_unit_costs(
-            intermediate_inputs_productivity_matrix=industry_data["intermediate_inputs_productivity_matrix"].values,
-            capital_inputs_depreciation_matrix=industry_data["capital_inputs_depreciation_matrix"].values,
-            tau_sif=tax_data.employer_social_insurance_tax,
+            initial_good_prices=industry_data["industry_vectors"]["Average Initial Price"].values,
+            capital_compensation_accounting_mode=capital_compensation_accounting_mode,
+            capital_depreciation_accounting_mode=capital_depreciation_accounting_mode,
         )
 
         self.set_corporate_taxes_paid(

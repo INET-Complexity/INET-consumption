@@ -56,6 +56,7 @@ from macro_data.readers.economic_data.exchange_rates import ExchangeRatesReader
 from macro_data.readers.io_tables.industries import AGGREGATED_INDUSTRIES
 from macro_data.readers.io_tables.mappings import ICIO_AGGREGATE, ICIO_ALL
 from macro_data.readers.io_tables.util import aggregate_df
+from macro_data.readers.util.capital_depreciation import build_cfc_output_replacement_matrix
 
 
 class ICIOReader:
@@ -939,6 +940,20 @@ class ICIOReader:
                 columns=pd.Index(self.industries, name="Industries"),
             )
             / self.yearly_factor
+        )
+
+    def get_capital_inputs_depreciation_from_cfc_output(
+        self,
+        country_name: str,
+        cfc_output_ratios: pd.Series | np.ndarray,
+    ) -> pd.DataFrame:
+        """Calculate capital replacement coefficients with CFC/output totals."""
+        gfcf = self.get_firm_capital_inputs(country_name)
+        return build_cfc_output_replacement_matrix(
+            industries=list(self.industries),
+            capital_good_mix=gfcf,
+            cfc_output_ratios=cfc_output_ratios,
+            yearly_factor=self.yearly_factor,
         )
 
     def get_updated_dictionary(self) -> dict:

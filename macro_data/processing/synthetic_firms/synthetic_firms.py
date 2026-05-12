@@ -84,6 +84,7 @@ class SyntheticFirms(ABC):
         capital_inputs_productivity_matrix (np.ndarray): Capital productivity parameters
         intermediate_inputs_productivity_matrix (np.ndarray): Input productivity parameters
         capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation rates
+        capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
         labour_productivity_by_industry (np.ndarray): Labor productivity by industry
     """
 
@@ -106,6 +107,7 @@ class SyntheticFirms(ABC):
         intermediate_inputs_productivity_matrix: np.ndarray,
         capital_inputs_depreciation_matrix: np.ndarray,
         labour_productivity_by_industry: np.ndarray,
+        capital_depreciation_rates: np.ndarray | None = None,
     ):
         self.country_name = country_name
         self.scale = scale
@@ -128,6 +130,9 @@ class SyntheticFirms(ABC):
         self.capital_inputs_productivity_matrix = capital_inputs_productivity_matrix
         self.intermediate_inputs_productivity_matrix = intermediate_inputs_productivity_matrix
         self.capital_inputs_depreciation_matrix = capital_inputs_depreciation_matrix
+        if capital_depreciation_rates is None:
+            capital_depreciation_rates = np.zeros(len(industries))
+        self.capital_depreciation_rates = np.asarray(capital_depreciation_rates, dtype=float)
 
         self.labour_productivity_by_industry = labour_productivity_by_industry
 

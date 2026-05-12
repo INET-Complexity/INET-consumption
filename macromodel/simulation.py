@@ -30,6 +30,14 @@ from macromodel.markets.goods_market import GoodsMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.timestep import Timestep
 
+_CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY = "firms.capital_compensation_accounting_mode"
+_CAPITAL_DEPRECIATION_ACCOUNTING_MODE_KEY = "firms.capital_depreciation_accounting_mode"
+_CAPITAL_REPLACEMENT_MATRIX_SOURCE_KEY = "firms.capital_replacement_matrix_source"
+
+
+def _firm_config_value(config: object, field: str, default: object) -> object:
+    return getattr(config, field, default)
+
 
 @dataclass
 class Simulation:
@@ -98,6 +106,17 @@ class Simulation:
                 )
             if not check_compatibility(data_configuration.country_configs[country], country_sim_conf):  # type: ignore
                 mismatches = get_compatibility_mismatches(data_configuration.country_configs[country], country_sim_conf)
+                accounting_keys = (
+                    _CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY,
+                    _CAPITAL_DEPRECIATION_ACCOUNTING_MODE_KEY,
+                    _CAPITAL_REPLACEMENT_MATRIX_SOURCE_KEY,
+                )
+                if any(mismatch.startswith(accounting_keys) for mismatch in mismatches):
+                    raise ValueError(
+                        f"Configuration mismatch for {country}. "
+                        "capital accounting settings must match between data_config and country_config. "
+                        f"Mismatches: {'; '.join(mismatches)}"
+                    )
                 warning_message = (
                     f"Configuration mismatch for {country}. "
                     "Resetting firm-dependent synthetic data. "
@@ -553,6 +572,33 @@ def get_compatibility_mismatches(
             "firms.intermediate_inputs_utilisation_rate",
             firm_data_conf.intermediate_inputs_utilisation_rate,
             firm_sim_reset_params["intermediate_inputs_utilisation_rate"],
+        ),
+        (
+            _CAPITAL_COMPENSATION_ACCOUNTING_MODE_KEY,
+            _firm_config_value(firm_data_conf, "capital_compensation_accounting_mode", "production_cost"),
+            _firm_config_value(
+                country_sim_configuration.firms.parameters,
+                "capital_compensation_accounting_mode",
+                "production_cost",
+            ),
+        ),
+        (
+            _CAPITAL_DEPRECIATION_ACCOUNTING_MODE_KEY,
+            _firm_config_value(firm_data_conf, "capital_depreciation_accounting_mode", "none"),
+            _firm_config_value(
+                country_sim_configuration.firms.parameters,
+                "capital_depreciation_accounting_mode",
+                "none",
+            ),
+        ),
+        (
+            _CAPITAL_REPLACEMENT_MATRIX_SOURCE_KEY,
+            _firm_config_value(firm_data_conf, "capital_replacement_matrix_source", "capital_compensation"),
+            _firm_config_value(
+                country_sim_configuration.firms.parameters,
+                "capital_replacement_matrix_source",
+                "capital_compensation",
+            ),
         ),
         (
             "banks.long_term_firm_loan_maturity",

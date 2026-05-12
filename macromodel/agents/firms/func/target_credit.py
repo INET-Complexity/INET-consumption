@@ -13,16 +13,12 @@ class TargetCreditSetter(ABC):
     - Unconstrained costs for intermediate inputs (working capital needs)
     - Unconstrained costs for capital inputs (investment needs)
 
-    The credit demand is split into:
-    - Short-term credit: total short-term demand, including scheduled-principal
-      rollover, existing-overdraft repair that cannot be covered by
-      post-obligation cash, and ordinary working-capital needs
-    - Long-term credit: primarily for capital investments
+    The setter returns ordinary activity credit only:
+    - short-term activity credit for intermediate inputs and direct TFP spending
+    - long-term activity credit for capital inputs and technical investment
 
-    The setter returns only total short-term and long-term targets. `Firms.compute_target_credit`
-    records the accounting split between `target_debt_rollover_credit`,
-    `target_overdraft_refinance_credit`, and `ordinary_target_short_term_credit`
-    from the same pro forma cash waterfall.
+    `Firms.compute_target_credit` adds scheduled-principal rollover and
+    existing-overdraft refinance buckets around this activity demand.
     """
 
     @abstractmethod
@@ -52,10 +48,10 @@ class TargetCreditSetter(ABC):
             planned_tfp_investment_costs (np.ndarray): Desired direct-TFP cash spending
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: Target short-term and long-term credit amounts
-                First array is total short-term credit, including principal
-                rollover, overdraft repair, and ordinary working-capital credit.
-                Second array is long-term credit for investments
+            Tuple[np.ndarray, np.ndarray]: Ordinary activity credit amounts.
+                First array is short-term activity credit for intermediate inputs
+                and direct TFP spending. Second array is long-term activity credit
+                for capital inputs and technical investment.
         """
         pass
 
@@ -63,16 +59,12 @@ class TargetCreditSetter(ABC):
 class DefaultTargetCreditSetter(TargetCreditSetter):
     """Default implementation of credit demand calculation.
 
-    This class implements a hierarchical credit demand strategy that:
+    This class implements a pro-rata activity credit demand strategy that:
     1. Applies internal cash plus expected sales to hard obligations.
     2. Treats existing negative deposits as overdraft liabilities that must be
        repaired/refinanced before new spending.
-    3. Requests short-term credit for the remaining working-capital budget.
-    4. Applies remaining internal funds to capital and technical investment.
-    5. Requests long-term credit for the remaining investment budget.
-
-    This approach prioritizes working capital needs over investment financing,
-    reflecting typical business financial management practices.
+    3. Allocates remaining internal funds pro-rata across planned activity.
+    4. Requests activity credit for the uncovered category costs.
     """
 
     def compute_target_credit(
@@ -86,13 +78,13 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
         planned_technical_investment_costs: np.ndarray,
         planned_tfp_investment_costs: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Calculate credit demand using the default hierarchical strategy.
+        """Calculate credit demand using the default pro-rata activity strategy.
 
         The method follows these steps:
         1. Apply internal cash plus expected sales to hard obligations.
-        2. Request short-term credit for the remaining working-capital budget.
-        3. Apply remaining internal funds to capital and technical investment.
-        4. Request long-term credit for the remaining investment budget.
+        2. Reserve enough liquidity to repair existing overdrafts.
+        3. Allocate remaining finance pro-rata across planned activity.
+        4. Request ST/LT credit for uncovered activity costs.
 
         Args:
             internal_cash (np.ndarray): Non-negative liquid funds available before new credit
@@ -107,20 +99,35 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
             planned_tfp_investment_costs (np.ndarray): Desired direct-TFP cash spending
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: Target short-term and long-term credit amounts
-                First array is total short-term credit, including overdraft repair
-                and ordinary working-capital credit.
-                Second array is long-term credit for investments
+            Tuple[np.ndarray, np.ndarray]: Ordinary activity credit amounts.
+                First array is short-term activity credit for intermediate inputs
+                and direct TFP spending. Second array is long-term activity credit
+                for capital inputs and technical investment.
         """
-        available_after_hard_obligations = internal_cash + expected_sales - hard_obligations - existing_overdraft
-        working_capital_budget = (
-            unconstrained_target_intermediate_inputs_costs + planned_tfp_investment_costs
+        available_for_activity = np.maximum(
+            0.0,
+            internal_cash + expected_sales - hard_obligations - existing_overdraft,
         )
-        investment_budget = unconstrained_target_capital_inputs_costs + planned_technical_investment_costs
+        total_activity_budget = (
+            unconstrained_target_intermediate_inputs_costs
+            + planned_tfp_investment_costs
+            + unconstrained_target_capital_inputs_costs
+            + planned_technical_investment_costs
+        )
+        covered_activity_budget = np.minimum(available_for_activity, total_activity_budget)
+        activity_scale = np.divide(
+            covered_activity_budget,
+            total_activity_budget,
+            out=np.ones_like(total_activity_budget),
+            where=total_activity_budget > 0.0,
+        )
 
-        target_short_term_credit = np.maximum(0.0, working_capital_budget - available_after_hard_obligations)
-        remaining_internal_finance = np.maximum(0.0, available_after_hard_obligations - working_capital_budget)
-        target_long_term_credit = np.maximum(0.0, investment_budget - remaining_internal_finance)
+        uncovered_intermediate_costs = unconstrained_target_intermediate_inputs_costs * (1.0 - activity_scale)
+        uncovered_tfp_costs = planned_tfp_investment_costs * (1.0 - activity_scale)
+        uncovered_capital_costs = unconstrained_target_capital_inputs_costs * (1.0 - activity_scale)
+        uncovered_technical_costs = planned_technical_investment_costs * (1.0 - activity_scale)
+        target_short_term_credit = uncovered_intermediate_costs + uncovered_tfp_costs
+        target_long_term_credit = uncovered_capital_costs + uncovered_technical_costs
         return target_short_term_credit, target_long_term_credit
 
 
@@ -128,9 +135,9 @@ class SimpleTargetCreditSetter(TargetCreditSetter):
     """Simplified implementation of credit demand calculation.
 
     This class implements a basic credit demand strategy where:
-    - Short-term credit is requested for hard-obligation cash shortfalls after
-      accounting for existing overdrafts
-    - Long-term credit is requested for the remaining aggregate cash shortfall
+    - Remaining activity finance is allocated pro-rata after hard obligations
+      and existing overdrafts
+    - Short-term and long-term credit are requested for uncovered activity costs
 
     This approach is useful for:
     - Model testing and validation
@@ -151,8 +158,7 @@ class SimpleTargetCreditSetter(TargetCreditSetter):
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Calculate credit demand using the simplified strategy.
 
-        Requests short-term credit for the hard-obligation/overdraft cash shortfall
-        and long-term credit for the remaining aggregate pro forma cash shortfall.
+        Requests activity credit after hard obligations and existing overdrafts.
 
         Args:
             internal_cash (np.ndarray): Non-negative liquid funds available before new credit
@@ -167,18 +173,32 @@ class SimpleTargetCreditSetter(TargetCreditSetter):
             planned_tfp_investment_costs (np.ndarray): Desired direct-TFP cash spending
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: Target short-term and long-term credit amounts
-                First array is short-term overdraft-repair credit.
-                Second array is the remaining aggregate pro forma shortfall.
+            Tuple[np.ndarray, np.ndarray]: Ordinary activity credit amounts.
+                First array is short-term activity credit for intermediate inputs
+                and direct TFP spending. Second array is long-term activity credit
+                for capital inputs and technical investment.
         """
-        available_after_hard_obligations = internal_cash + expected_sales - hard_obligations - existing_overdraft
-        target_short_term_credit = np.maximum(0.0, -available_after_hard_obligations)
-        remaining_internal_finance = np.maximum(0.0, available_after_hard_obligations)
-        total_budget = (
+        available_for_activity = np.maximum(
+            0.0,
+            internal_cash + expected_sales - hard_obligations - existing_overdraft,
+        )
+        total_activity_budget = (
             unconstrained_target_intermediate_inputs_costs
+            + planned_tfp_investment_costs
             + unconstrained_target_capital_inputs_costs
             + planned_technical_investment_costs
-            + planned_tfp_investment_costs
         )
-        target_long_term_credit = np.maximum(0.0, total_budget - remaining_internal_finance)
+        covered_activity_budget = np.minimum(available_for_activity, total_activity_budget)
+        activity_scale = np.divide(
+            covered_activity_budget,
+            total_activity_budget,
+            out=np.ones_like(total_activity_budget),
+            where=total_activity_budget > 0.0,
+        )
+        target_short_term_credit = (
+            unconstrained_target_intermediate_inputs_costs + planned_tfp_investment_costs
+        ) * (1.0 - activity_scale)
+        target_long_term_credit = (
+            unconstrained_target_capital_inputs_costs + planned_technical_investment_costs
+        ) * (1.0 - activity_scale)
         return target_short_term_credit, target_long_term_credit

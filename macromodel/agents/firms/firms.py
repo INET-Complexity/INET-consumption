@@ -43,7 +43,7 @@ class Firms(Agent):
         states (dict[str, np.ndarray]): Current state variables
         base_intermediate_inputs_productivity_matrix (np.ndarray): Input-output coefficients
         base_capital_inputs_productivity_matrix (np.ndarray): Capital productivity coefficients
-        base_capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation rates
+        base_capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
         goods_criticality_matrix (np.ndarray): Critical input requirements
         intermediate_inputs_utilisation_rate (float): Input capacity utilization
         capital_inputs_utilisation_rate (float): Capital capacity utilization
@@ -64,7 +64,7 @@ class Firms(Agent):
         states: dict[str, np.ndarray],
         intermediate_inputs_productivity_matrix: np.ndarray,
         capital_inputs_productivity_matrix: np.ndarray,
-        capital_inputs_depreciation_matrix: np.ndarray,
+        capital_input_use_matrix: np.ndarray,
         capital_depreciation_rates: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         intermediate_inputs_utilisation_rate: float,
@@ -87,7 +87,7 @@ class Firms(Agent):
             states (dict[str, np.ndarray]): Initial state variables
             intermediate_inputs_productivity_matrix (np.ndarray): Input-output coefficients
             capital_inputs_productivity_matrix (np.ndarray): Capital productivity coefficients
-            capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation rates
+            capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
             goods_criticality_matrix (np.ndarray): Critical input requirements
             intermediate_inputs_utilisation_rate (float): Input capacity utilization
@@ -120,7 +120,7 @@ class Firms(Agent):
         self.functions: dict[str, Any] = functions
         self.base_intermediate_inputs_productivity_matrix = intermediate_inputs_productivity_matrix
         self.base_capital_inputs_productivity_matrix = capital_inputs_productivity_matrix
-        self.base_capital_inputs_depreciation_matrix = capital_inputs_depreciation_matrix
+        self.base_capital_input_use_matrix = capital_input_use_matrix
         self.capital_depreciation_rates = capital_depreciation_rates
         self.goods_criticality_matrix = goods_criticality_matrix
         self.intermediate_inputs_utilisation_rate = intermediate_inputs_utilisation_rate
@@ -136,6 +136,15 @@ class Firms(Agent):
         self.industries = industries
 
         self.substitution_bundles = bundle_matrix
+
+    @property
+    def base_capital_inputs_depreciation_matrix(self) -> np.ndarray:
+        """Deprecated alias for the physical capital-use/replacement matrix."""
+        return self.base_capital_input_use_matrix
+
+    @base_capital_inputs_depreciation_matrix.setter
+    def base_capital_inputs_depreciation_matrix(self, value: np.ndarray) -> None:
+        self.base_capital_input_use_matrix = value
 
     def get_effective_intermediate_coefficients(self) -> np.ndarray:
         """Get the effective intermediate input coefficients for each firm.
@@ -163,7 +172,7 @@ class Firms(Agent):
         Returns base coefficients adjusted by firm-specific technical multipliers.
         Shape: [n_industries, n_firms] (transposed for firm-wise operations)
         """
-        # For capital, we use the depreciation matrix
+        # For capital, we use capital productivity coefficients.
         base_coefficients = self.base_capital_inputs_productivity_matrix[:, self.states["Industry"]].T
 
         # Apply firm-specific multipliers if they exist
@@ -215,7 +224,10 @@ class Firms(Agent):
 
         intermediate_inputs_productivity_matrix = synthetic_firms.intermediate_inputs_productivity_matrix
         capital_inputs_productivity_matrix = synthetic_firms.capital_inputs_productivity_matrix
-        capital_inputs_depreciation_matrix = synthetic_firms.capital_inputs_depreciation_matrix
+        if hasattr(synthetic_firms, "capital_input_use_matrix"):
+            capital_input_use_matrix = synthetic_firms.capital_input_use_matrix
+        else:
+            capital_input_use_matrix = synthetic_firms.capital_inputs_depreciation_matrix
         capital_depreciation_rates = getattr(
             synthetic_firms,
             "capital_depreciation_rates",
@@ -310,7 +322,7 @@ class Firms(Agent):
             states,
             intermediate_inputs_productivity_matrix,
             capital_inputs_productivity_matrix,
-            capital_inputs_depreciation_matrix,
+            capital_input_use_matrix,
             capital_depreciation_rates,
             goods_criticality_matrix,
             configuration.parameters.intermediate_inputs_utilisation_rate,
@@ -1227,7 +1239,7 @@ class Firms(Agent):
         """
         return self.functions["target_capital_inputs"].compute_unconstrained_target_capital_inputs(
             current_target_production=self.ts.current("target_capital_inputs_production"),
-            capital_inputs_depreciation_matrix=self.base_capital_inputs_depreciation_matrix[
+            capital_input_use_matrix=self.base_capital_input_use_matrix[
                 :, self.states["Industry"]
             ].T,
             prev_capital_inputs_stock=self.ts.current("capital_inputs_stock"),
@@ -1327,7 +1339,7 @@ class Firms(Agent):
         capital_costs = self.ts.current("unconstrained_target_capital_inputs_costs")
         working_capital_budget = intermediate_costs + planned_tfp_investment_costs
         investment_budget = capital_costs + planned_technical_investment_costs
-        target_short_term_credit, target_long_term_credit = self.functions["target_credit"].compute_target_credit(
+        ordinary_target_short_term_credit, target_long_term_credit = self.functions["target_credit"].compute_target_credit(
             internal_cash=internal_cash,
             existing_overdraft=existing_overdraft,
             expected_sales=expected_sales,
@@ -1338,6 +1350,10 @@ class Firms(Agent):
             planned_tfp_investment_costs=planned_tfp_investment_costs,
         )
         cash_after_hard_obligations = internal_cash + expected_sales - hard_obligations
+        non_principal_hard_obligation_shortfall = np.maximum(
+            0.0,
+            non_principal_hard_obligations - (internal_cash + expected_sales),
+        )
         cash_after_non_principal_hard_obligations = internal_cash + expected_sales - non_principal_hard_obligations
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft
         remaining_internal_finance_after_working_capital = available_after_hard_and_overdraft - working_capital_budget
@@ -1349,13 +1365,15 @@ class Firms(Agent):
             0.0,
             existing_overdraft - np.maximum(0.0, cash_after_hard_obligations),
         )
-        target_debt_rollover_credit = np.minimum(target_debt_rollover_credit, target_short_term_credit)
-        target_short_term_after_rollover = np.maximum(0.0, target_short_term_credit - target_debt_rollover_credit)
-        target_overdraft_refinance_credit = np.minimum(target_overdraft_refinance_credit, target_short_term_credit)
-        target_overdraft_refinance_credit = np.minimum(target_overdraft_refinance_credit, target_short_term_after_rollover)
         ordinary_target_short_term_credit = np.maximum(
             0.0,
-            target_short_term_credit - target_debt_rollover_credit - target_overdraft_refinance_credit,
+            ordinary_target_short_term_credit + non_principal_hard_obligation_shortfall,
+        )
+        target_long_term_credit = np.maximum(0.0, target_long_term_credit)
+        target_short_term_credit = (
+            target_debt_rollover_credit
+            + target_overdraft_refinance_credit
+            + ordinary_target_short_term_credit
         )
         self._append_credit_budget_diagnostics(
             internal_cash=internal_cash,
@@ -1861,14 +1879,17 @@ class Firms(Agent):
         )
         finance_gap = np.maximum(0.0, total_planned_costs - available_finance)
 
-        remaining_finance, intermediate_scale = self._allocate_activity_finance(
-            available_finance, planned_intermediate_costs
+        affordable_activity_costs = np.minimum(available_finance, total_planned_costs)
+        activity_scale = np.divide(
+            affordable_activity_costs,
+            total_planned_costs,
+            out=np.ones_like(total_planned_costs),
+            where=total_planned_costs > 0.0,
         )
-        remaining_finance, capital_scale = self._allocate_activity_finance(remaining_finance, planned_capital_costs)
-        remaining_finance, technical_scale = self._allocate_activity_finance(
-            remaining_finance, planned_technical_costs
-        )
-        _, tfp_scale = self._allocate_activity_finance(remaining_finance, planned_tfp_costs)
+        intermediate_scale = activity_scale.copy()
+        capital_scale = activity_scale.copy()
+        technical_scale = activity_scale.copy()
+        tfp_scale = activity_scale.copy()
 
         feasible_intermediate = target_intermediate * intermediate_scale[:, None]
         feasible_capital = target_capital * capital_scale[:, None]
@@ -2254,7 +2275,7 @@ class Firms(Agent):
         """
         return self.functions["production"].compute_capital_inputs_used(
             realised_production=self.ts.current("production"),
-            capital_inputs_depreciation_matrix=self.base_capital_inputs_depreciation_matrix[
+            capital_input_use_matrix=self.base_capital_input_use_matrix[
                 :, self.states["Industry"]
             ].T,
             capital_inputs_stock=self.ts.current("capital_inputs_stock"),
@@ -2824,10 +2845,10 @@ class Firms(Agent):
         self.base_intermediate_inputs_productivity_matrix[input_index, producing_index] *= 1 + increase_pct
 
     def compute_net_capital_investment_above_replacement(self) -> np.ndarray:
-        """Calculate ordinary capital investment above depreciation replacement.
+        """Calculate ordinary capital investment above capital-use replacement.
 
         Separates total capital investment into:
-        1. Replacement investment: covers depreciation to maintain capacity
+        1. Replacement investment: covers capital-input use to maintain capacity
         2. Net investment: excess capital purchases above replacement
 
         Returns:
@@ -2836,15 +2857,15 @@ class Firms(Agent):
         current_good_prices = self.current_good_prices
         # Calculate replacement investment needed (in monetary terms)
         production = self.ts.current("production")
-        depreciation_matrix = self.base_capital_inputs_depreciation_matrix[:, self.states["Industry"]].T
-        if current_good_prices.shape[0] != depreciation_matrix.shape[1]:
+        capital_use_matrix = self.base_capital_input_use_matrix[:, self.states["Industry"]].T
+        if current_good_prices.shape[0] != capital_use_matrix.shape[1]:
             raise ValueError(
                 "current_good_prices length must match the capital-input industry dimension "
-                f"({current_good_prices.shape[0]} != {depreciation_matrix.shape[1]})."
+                f"({current_good_prices.shape[0]} != {capital_use_matrix.shape[1]})."
             )
 
         # For each firm, calculate total replacement cost across all capital types
-        replacement_needs = production[:, None] * depreciation_matrix
+        replacement_needs = production[:, None] * capital_use_matrix
         total_replacement_cost = (replacement_needs * current_good_prices[None, :]).sum(axis=1)
 
         # Actual total investment
@@ -2860,14 +2881,14 @@ class Firms(Agent):
         """Compute a firm-specific capital-goods price for real productivity investment."""
         current_good_prices = self.current_good_prices
         production = self.ts.current("production")
-        depreciation_matrix = self.base_capital_inputs_depreciation_matrix[:, self.states["Industry"]].T
-        if current_good_prices.shape[0] != depreciation_matrix.shape[1]:
+        capital_use_matrix = self.base_capital_input_use_matrix[:, self.states["Industry"]].T
+        if current_good_prices.shape[0] != capital_use_matrix.shape[1]:
             raise ValueError(
                 "current_good_prices length must match the capital-input industry dimension "
-                f"({current_good_prices.shape[0]} != {depreciation_matrix.shape[1]})."
+                f"({current_good_prices.shape[0]} != {capital_use_matrix.shape[1]})."
             )
 
-        replacement_needs = production[:, None] * depreciation_matrix
+        replacement_needs = production[:, None] * capital_use_matrix
         replacement_totals = replacement_needs.sum(axis=1, keepdims=True)
         weights = np.divide(
             replacement_needs,

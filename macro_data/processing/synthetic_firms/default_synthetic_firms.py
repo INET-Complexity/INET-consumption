@@ -234,7 +234,10 @@ class DefaultSyntheticFirms(SyntheticFirms):
 
         capital_inputs_productivity_matrix = industry_data["capital_inputs_productivity_matrix"].values
         intermediate_inputs_productivity_matrix = industry_data["intermediate_inputs_productivity_matrix"].values
-        capital_inputs_depreciation_matrix = industry_data["capital_inputs_depreciation_matrix"].values
+        if "capital_input_use_matrix" in industry_data:
+            capital_input_use_matrix = industry_data["capital_input_use_matrix"].values
+        else:
+            capital_input_use_matrix = industry_data["capital_inputs_depreciation_matrix"].values
         if (
             firm_configuration.capital_depreciation_accounting_mode == "eurostat_cfc"
             and "Capital Depreciation Output Ratio" not in industry_data["industry_vectors"]
@@ -259,7 +262,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
         ) = function_parameters_dependent_initialisation(
             firm_data,
             intermediate_inputs_productivity_matrix,
-            capital_inputs_depreciation_matrix,
+            capital_input_use_matrix,
             capital_inputs_productivity_matrix,
             total_firm_deposits,
             total_firm_debt,
@@ -349,7 +352,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
             total_firm_debt=total_firm_debt,
             capital_inputs_productivity_matrix=capital_inputs_productivity_matrix,
             intermediate_inputs_productivity_matrix=intermediate_inputs_productivity_matrix,
-            capital_inputs_depreciation_matrix=capital_inputs_depreciation_matrix,
+            capital_inputs_depreciation_matrix=capital_input_use_matrix,
             labour_productivity_by_industry=labour_productivity,
             capital_depreciation_rates=capital_depreciation_rates,
         )
@@ -370,7 +373,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
         ) = function_parameters_dependent_initialisation(
             firm_data=self.firm_data,
             intermediate_inputs_productivity_matrix=self.intermediate_inputs_productivity_matrix,
-            capital_inputs_depreciation_matrix=self.capital_inputs_depreciation_matrix,
+            capital_input_use_matrix=self.capital_input_use_matrix,
             capital_inputs_productivity_matrix=self.capital_inputs_productivity_matrix,
             total_firm_deposits=self.total_firm_deposits,
             total_firm_debt=self.total_firm_debt,

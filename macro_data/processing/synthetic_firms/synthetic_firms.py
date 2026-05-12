@@ -83,7 +83,8 @@ class SyntheticFirms(ABC):
         total_firm_debt (float): Aggregate firm debt
         capital_inputs_productivity_matrix (np.ndarray): Capital productivity parameters
         intermediate_inputs_productivity_matrix (np.ndarray): Input productivity parameters
-        capital_inputs_depreciation_matrix (np.ndarray): Capital depreciation rates
+        capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
+        capital_inputs_depreciation_matrix (np.ndarray): Deprecated alias for capital_input_use_matrix
         capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
         labour_productivity_by_industry (np.ndarray): Labor productivity by industry
     """
@@ -129,12 +130,21 @@ class SyntheticFirms(ABC):
         self.total_firm_debt = total_firm_debt
         self.capital_inputs_productivity_matrix = capital_inputs_productivity_matrix
         self.intermediate_inputs_productivity_matrix = intermediate_inputs_productivity_matrix
-        self.capital_inputs_depreciation_matrix = capital_inputs_depreciation_matrix
+        self.capital_input_use_matrix = capital_inputs_depreciation_matrix
         if capital_depreciation_rates is None:
             capital_depreciation_rates = np.zeros(len(industries))
         self.capital_depreciation_rates = np.asarray(capital_depreciation_rates, dtype=float)
 
         self.labour_productivity_by_industry = labour_productivity_by_industry
+
+    @property
+    def capital_inputs_depreciation_matrix(self) -> np.ndarray:
+        """Deprecated alias for the physical capital-use/replacement matrix."""
+        return self.capital_input_use_matrix
+
+    @capital_inputs_depreciation_matrix.setter
+    def capital_inputs_depreciation_matrix(self, value: np.ndarray) -> None:
+        self.capital_input_use_matrix = value
 
     @property
     def number_of_firms(self) -> int:

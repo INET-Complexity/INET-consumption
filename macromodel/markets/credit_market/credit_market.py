@@ -148,6 +148,38 @@ def _compute_credit_supply_caps_by_type(
     }
 
 
+def _ordinary_short_term_target_for_cap_split(
+    target_short_term_credit: np.ndarray,
+    ordinary_target_short_term_credit: np.ndarray,
+    target_debt_rollover_credit: np.ndarray,
+    target_overdraft_refinance_credit: np.ndarray,
+) -> np.ndarray:
+    """Return ordinary ST demand after excluding emergency ST buckets."""
+    target_short_term_credit = np.asarray(target_short_term_credit, dtype=float)
+    target_debt_rollover_credit = np.minimum(
+        np.maximum(0.0, np.asarray(target_debt_rollover_credit, dtype=float)),
+        np.maximum(0.0, target_short_term_credit),
+    )
+    target_overdraft_refinance_credit = np.minimum(
+        np.maximum(0.0, np.asarray(target_overdraft_refinance_credit, dtype=float)),
+        np.maximum(0.0, target_short_term_credit - target_debt_rollover_credit),
+    )
+    ordinary_target_short_term_credit = np.asarray(ordinary_target_short_term_credit, dtype=float)
+    if (
+        np.nansum(ordinary_target_short_term_credit) == 0.0
+        and np.nansum(target_debt_rollover_credit) == 0.0
+        and np.nansum(target_overdraft_refinance_credit) == 0.0
+    ):
+        ordinary_target_short_term_credit = target_short_term_credit.copy()
+    return np.maximum(
+        0.0,
+        np.minimum(
+            ordinary_target_short_term_credit,
+            target_short_term_credit - target_debt_rollover_credit - target_overdraft_refinance_credit,
+        ),
+    )
+
+
 def _append_credit_supply_caps_to_banks_ts(
     banks: "Banks",
     current_npl_firm_loans: float,
@@ -445,13 +477,14 @@ class CreditMarket:
 
         credit_supply_temperature = float(getattr(self.functions.get("clearing"), "credit_supply_temperature", 0.0) or 0.0)
         target_short_term_credit = firms.ts.current("target_short_term_credit")
+        target_debt_rollover_credit = firms.ts.current("target_debt_rollover_credit")
         target_overdraft_refinance_credit = firms.ts.current("target_overdraft_refinance_credit")
-        ordinary_target_short_term_credit = firms.ts.current("ordinary_target_short_term_credit")
-        if (
-            float(np.nansum(ordinary_target_short_term_credit)) == 0.0
-            and float(np.nansum(target_overdraft_refinance_credit)) == 0.0
-        ):
-            ordinary_target_short_term_credit = target_short_term_credit
+        ordinary_target_short_term_credit = _ordinary_short_term_target_for_cap_split(
+            target_short_term_credit=target_short_term_credit,
+            ordinary_target_short_term_credit=firms.ts.current("ordinary_target_short_term_credit"),
+            target_debt_rollover_credit=target_debt_rollover_credit,
+            target_overdraft_refinance_credit=target_overdraft_refinance_credit,
+        )
         total_target_short_term_credit = float(np.nansum(target_short_term_credit))
         total_ordinary_target_short_term_credit = float(np.nansum(ordinary_target_short_term_credit))
         total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))

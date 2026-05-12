@@ -3,6 +3,7 @@ import numpy as np
 from macromodel.markets.credit_market.credit_market import (
     _append_credit_supply_caps_to_banks_ts,
     _compute_credit_supply_caps_by_type,
+    _ordinary_short_term_target_for_cap_split,
 )
 from macromodel.timeseries import TimeSeries
 
@@ -103,6 +104,28 @@ def test_compute_credit_supply_caps_by_type_excludes_overdraft_refinance_from_st
     assert np.allclose(caps["firms"], np.array([50.0, 100.0]))
     assert np.allclose(caps["firms_short_term"], np.array([5.0, 10.0]))
     assert np.allclose(caps["firms_long_term"], np.array([45.0, 90.0]))
+
+
+def test_ordinary_short_term_cap_split_excludes_rollover_and_refinance():
+    ordinary = _ordinary_short_term_target_for_cap_split(
+        target_short_term_credit=np.array([100.0, 80.0, 40.0]),
+        ordinary_target_short_term_credit=np.array([0.0, 20.0, 100.0]),
+        target_debt_rollover_credit=np.array([100.0, 30.0, 10.0]),
+        target_overdraft_refinance_credit=np.array([0.0, 20.0, 10.0]),
+    )
+
+    assert np.allclose(ordinary, np.array([0.0, 20.0, 20.0]))
+
+
+def test_ordinary_short_term_cap_split_keeps_legacy_total_st_when_no_emergency_buckets():
+    ordinary = _ordinary_short_term_target_for_cap_split(
+        target_short_term_credit=np.array([100.0]),
+        ordinary_target_short_term_credit=np.array([0.0]),
+        target_debt_rollover_credit=np.array([0.0]),
+        target_overdraft_refinance_credit=np.array([0.0]),
+    )
+
+    assert np.allclose(ordinary, np.array([100.0]))
 
 
 def test_compute_credit_supply_caps_by_type_returns_zero_type_caps_when_no_weights():

@@ -208,6 +208,7 @@ class SyntheticPopulation(ABC):
         self.social_transfers_model = social_transfers_model
         self.wealth_distribution_model = wealth_distribution_model
         self.yearly_factor = yearly_factor
+        self._household_wealth_initialized = False
 
     def set_individual_labour_inputs(
         self,
@@ -405,6 +406,28 @@ class SyntheticPopulation(ABC):
                 to use in wealth distribution models. Defaults to None.
         """
         pass
+
+    def ensure_household_wealth(self, independents: Optional[list[str]] = None) -> None:
+        """Compute household wealth if it has not been initialized yet.
+
+        Some concrete SyntheticPopulation implementations (e.g. HFCS-based) apply
+        `scale` to household balance-sheet fields in-place. Re-running those
+        routines can therefore compound scaling and explode household deposits
+        and debt. This helper makes household-wealth initialization idempotent
+        by default.
+        """
+        if getattr(self, "_household_wealth_initialized", False):
+            return
+        self.compute_household_wealth(independents=independents)
+        self._household_wealth_initialized = True
+
+    def mark_household_wealth_uninitialized(self) -> None:
+        """Allow an explicit caller to force re-initialization of household wealth.
+
+        This should be used only when upstream household balance-sheet inputs
+        are intentionally changed and wealth needs to be recomputed.
+        """
+        self._household_wealth_initialized = False
 
     def set_income(self) -> None:
         """Set total individual income by combining employment and unemployment benefits.

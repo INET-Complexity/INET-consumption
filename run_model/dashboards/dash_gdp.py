@@ -18,7 +18,6 @@ import os
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from plotly.subplots import make_subplots
 
 # Set page config
 st.set_page_config(page_title="GDP Analysis Dashboard", page_icon="📊", layout="wide")

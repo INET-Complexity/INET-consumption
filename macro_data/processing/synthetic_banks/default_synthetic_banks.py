@@ -414,6 +414,23 @@ class DefaultSyntheticBanks(SyntheticBanks):
         return index < pd.Timestamp(f"{year}Q{quarter}")
 
     @classmethod
+    def _convert_annual_rate_series_to_period(cls, annual_rates: pd.Series | None, time_unit: int) -> pd.Series | None:
+        """Backward-compatible wrapper around `annual_to_period`."""
+        if annual_rates is None:
+            return None
+        return annual_to_period(annual_rates, time_unit)
+
+    @classmethod
+    def _convert_annual_rate_frame_to_period(
+        cls,
+        annual_rates: pd.DataFrame,
+        time_unit: int,
+        column: str,
+    ) -> pd.DataFrame:
+        """Backward-compatible wrapper around `annual_to_period`."""
+        return annual_to_period(annual_rates, time_unit, column)
+
+    @classmethod
     def _mean_pre_start_spread(
         cls,
         product_rates: Optional[pd.Series],

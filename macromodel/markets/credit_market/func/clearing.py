@@ -75,26 +75,25 @@ def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray
     cfads_components = (
         "nominal_amount_sold_in_lcu",
         "total_wage",
-        "used_intermediate_inputs_costs",
-        "used_capital_inputs_costs",
+        "nominal_amount_spent_in_lcu",
         "taxes_paid_on_production",
+        "corporate_taxes_paid",
     )
     histories = {name: firms.ts.historic(name) for name in cfads_components}
     available_periods = min(window, *(len(history) for history in histories.values()))
     if available_periods <= 0:
         return np.zeros(n_firms)
 
-    include_capital_costs = firms.configuration.parameters.capital_compensation_accounting_mode == "production_cost"
     period_cfads = []
     for period in range(-available_periods, 0):
         cash_sales = np.asarray(histories["nominal_amount_sold_in_lcu"][period], dtype=float)
+        goods_purchases = np.asarray(histories["nominal_amount_spent_in_lcu"][period], dtype=float).sum(axis=1)
         costs = (
             np.asarray(histories["total_wage"][period], dtype=float)
-            + np.asarray(histories["used_intermediate_inputs_costs"][period], dtype=float)
+            + goods_purchases
             + np.asarray(histories["taxes_paid_on_production"][period], dtype=float)
+            + np.asarray(histories["corporate_taxes_paid"][period], dtype=float)
         )
-        if include_capital_costs:
-            costs = costs + np.asarray(histories["used_capital_inputs_costs"][period], dtype=float)
 
         period_value = cash_sales - costs
         valid_period = np.isfinite(cash_sales) & np.isfinite(costs) & np.isfinite(period_value)

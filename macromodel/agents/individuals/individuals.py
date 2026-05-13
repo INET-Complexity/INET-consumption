@@ -160,7 +160,8 @@ class Individuals(Agent):
         ]:
             if state_name not in data.columns:
                 raise ValueError("Missing " + state_name + " from the data for initialising individuals.")
-            states[state_name] = data[state_name].values
+            # Pandas 3.x can return non-writeable numpy views; these states are mutated during simulation.
+            states[state_name] = data[state_name].to_numpy(copy=True)
 
         # Update the activity status
         states["Activity Status"] = np.array(map_to_enum(states["Activity Status"], ActivityStatus))

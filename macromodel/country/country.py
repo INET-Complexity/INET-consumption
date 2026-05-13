@@ -1268,11 +1268,21 @@ class Country:
             self.firms.ts.current("equity") < 0.0,
             firm_debt_settlement["illiquid_flag"],
         )
-        npl_firm_loans = self.firms.handle_insolvency(
+        firm_insolvency_result = self.firms.handle_insolvency(
             credit_market=self.credit_market,
             illiquid_flag=firm_debt_settlement["illiquid_flag"],
         )
-        self.economy.ts.npl_firm_loans.append([npl_firm_loans])
+        self.economy.ts.npl_firm_loans.append([firm_insolvency_result.npl_ratio])
+        self.banks.ts.firm_default_loan_writeoff.append(firm_insolvency_result.loan_writeoff_by_bank)
+        self.banks.ts.total_firm_default_loan_writeoff.append(
+            [firm_insolvency_result.loan_writeoff_by_bank.sum()]
+        )
+        self.banks.ts.firm_default_overdraft_writeoff.append(firm_insolvency_result.overdraft_writeoff_by_bank)
+        self.banks.ts.total_firm_default_overdraft_writeoff.append(
+            [firm_insolvency_result.overdraft_writeoff_by_bank.sum()]
+        )
+        self.banks.ts.firm_default_credit_loss.append(firm_insolvency_result.credit_loss_by_bank)
+        self.banks.ts.total_firm_default_credit_loss.append([firm_insolvency_result.credit_loss_by_bank.sum()])
         self.firms.ts.override_current(
             "short_term_loan_debt", self.credit_market.compute_outstanding_short_term_loans_by_firm()
         )

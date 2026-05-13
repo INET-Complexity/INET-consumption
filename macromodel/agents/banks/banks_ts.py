@@ -109,6 +109,12 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
         interest_received=bank_data["Interest received from Loans"].values
         + bank_data["Interest received from Deposits"].values,
+        firm_default_loan_writeoff=np.zeros(len(bank_data)),
+        total_firm_default_loan_writeoff=[0.0],
+        firm_default_overdraft_writeoff=np.zeros(len(bank_data)),
+        total_firm_default_overdraft_writeoff=[0.0],
+        firm_default_credit_loss=np.zeros(len(bank_data)),
+        total_firm_default_credit_loss=[0.0],
         #
         interest_rates_on_short_term_firm_loans=bank_data["Short-Term Interest Rates on Firm Loans"].values,
         average_interest_rates_on_short_term_firm_loans=[

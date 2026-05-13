@@ -95,6 +95,28 @@ def test_bank_interest_income_matches_borrower_loan_interest():
     assert np.isclose(bank_interest.sum(), firm_interest.sum() + household_interest.sum())
 
 
+def test_defaulted_firm_loan_writeoff_by_bank_is_computed_before_removal():
+    st_loans = _loan_array(n_banks=2, n_borrowers=3)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[0, 1, 0] = 40.0
+    st_loans[0, 0, 1] = 25.0
+    lt_loans = _loan_array(n_banks=2, n_borrowers=3)
+    lt_loans[0, 1, 0] = 60.0
+    lt_loans[0, 1, 2] = 10.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=lt_loans,
+        cons_loans=_loan_array(n_banks=2, n_borrowers=3),
+        mort_loans=_loan_array(n_banks=2, n_borrowers=3),
+    )
+
+    writeoff = market.compute_defaulted_firm_loan_writeoff_by_bank(np.array([True, False, False]))
+
+    assert np.allclose(writeoff, np.array([100.0, 100.0]))
+    assert np.isclose(market.states["st_loans"][0].sum() + market.states["lt_loans"][0].sum(), 235.0)
+
+
 def test_partial_firm_settlement_is_prorated_and_preserves_unpaid_principal():
     st_loans = _loan_array()
     st_loans[0, 0, 0] = 100.0

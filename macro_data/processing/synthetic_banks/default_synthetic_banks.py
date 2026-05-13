@@ -414,6 +414,23 @@ class DefaultSyntheticBanks(SyntheticBanks):
         return index < pd.Timestamp(f"{year}Q{quarter}")
 
     @classmethod
+    def _convert_annual_rate_series_to_period(cls, annual_rates: pd.Series | None, time_unit: int) -> pd.Series | None:
+        """Backward-compatible wrapper around `annual_to_period`."""
+        if annual_rates is None:
+            return None
+        return annual_to_period(annual_rates, time_unit)
+
+    @classmethod
+    def _convert_annual_rate_frame_to_period(
+        cls,
+        annual_rates: pd.DataFrame,
+        time_unit: int,
+        column: str,
+    ) -> pd.DataFrame:
+        """Backward-compatible wrapper around `annual_to_period`."""
+        return annual_to_period(annual_rates, time_unit, column)
+
+    @classmethod
     def _mean_pre_start_spread(
         cls,
         product_rates: Optional[pd.Series],
@@ -486,8 +503,17 @@ class DefaultSyntheticBanks(SyntheticBanks):
             readers.ecb_reader.get_household_consumption_rates(data_country),
             time_unit,
         )
-        household_mortgage_rates = annual_to_period(readers.ecb_reader.get_household_mortgage_rates(data_country), time_unit)
+        household_mortgage_rates = annual_to_period(
+            readers.ecb_reader.get_household_mortgage_rates(data_country),
+            time_unit,
+        )
         policy_rates = annual_to_period(readers.policy_rates.get_policy_rates(data_country), time_unit, "Policy Rate")
+        firm_short_spread = cls._mean_pre_start_spread(firm_rate, policy_rates, year, quarter)
+        firm_long_spread = firm_short_spread
+        household_consumption_spread = cls._mean_pre_start_spread(
+            household_consumption_rate, policy_rates, year, quarter
+        )
+        mortgage_spread = cls._mean_pre_start_spread(household_mortgage_rates, policy_rates, year, quarter)
         npl_rates = readers.world_bank.get_npl_ratios(data_country)
         if any(
             [
@@ -533,8 +559,8 @@ class DefaultSyntheticBanks(SyntheticBanks):
             household_mortgages_ect,
             hh_mortgage_passthrough,
             household_mortgages_rate,
-            firm_spread,
-            firm_spread,
+            firm_short_spread,
+            firm_long_spread,
             household_consumption_spread,
             mortgage_spread,
         )

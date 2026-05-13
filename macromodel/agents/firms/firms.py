@@ -2457,6 +2457,12 @@ class Firms(Agent):
     def compute_profits(self) -> np.ndarray:
         """Calculate profits for each firm.
 
+        In ``production_cost`` accounting mode, the capital-compensation-derived
+        ``used_capital_inputs_costs`` are charged as a period production cost.
+        In ``surplus_pool`` mode, they remain available as a separate capital
+        allocation / replacement-demand diagnostic and are not deducted from
+        firm profits.
+
         Computes:
         Revenue
         - Wages

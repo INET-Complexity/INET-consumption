@@ -22,7 +22,7 @@ from numba import njit
 
 from macro_data import DataWrapper
 from macro_data.configuration import CountryDataConfiguration
-from macromodel.configurations import CountryConfiguration, SimulationConfiguration
+from macromodel.configurations import CountryConfiguration, GoodsMarketConfiguration, SimulationConfiguration
 from macromodel.country import Country
 from macromodel.country.regional_aggregator import RegionalAggregator
 from macromodel.exchange_rates import ExchangeRates
@@ -37,6 +37,66 @@ _CAPITAL_REPLACEMENT_MATRIX_SOURCE_KEY = "firms.capital_replacement_matrix_sourc
 
 def _firm_config_value(config: object, field: str, default: object) -> object:
     return getattr(config, field, default)
+
+
+def _configuration_data(configuration: object) -> dict:
+    if hasattr(configuration, "model_dump"):
+        return configuration.model_dump()
+    return configuration.dict()
+
+
+def resolve_goods_market_configuration(configuration: SimulationConfiguration) -> GoodsMarketConfiguration:
+    simulation_configuration = configuration.goods_market_configuration
+    default_configuration = GoodsMarketConfiguration()
+    simulation_configuration_data = _configuration_data(simulation_configuration)
+    default_configuration_data = _configuration_data(default_configuration)
+
+    non_default_country_configurations: list[GoodsMarketConfiguration] = []
+    non_default_country_configuration_data: list[dict] = []
+    for country_configuration in configuration.country_configurations.values():
+        goods_market_configuration = country_configuration.goods_market
+        goods_market_configuration_data = _configuration_data(goods_market_configuration)
+        if goods_market_configuration_data == default_configuration_data:
+            continue
+        if goods_market_configuration_data not in non_default_country_configuration_data:
+            non_default_country_configurations.append(goods_market_configuration)
+            non_default_country_configuration_data.append(goods_market_configuration_data)
+
+    if len(non_default_country_configurations) > 1:
+        raise ValueError(
+            "Goods market configuration is global; non-default country-level goods_market configurations must match."
+        )
+
+    simulation_configuration_is_default = simulation_configuration_data == default_configuration_data
+    country_configuration = (
+        non_default_country_configurations[0] if len(non_default_country_configurations) == 1 else None
+    )
+    country_configuration_data = (
+        non_default_country_configuration_data[0] if len(non_default_country_configuration_data) == 1 else None
+    )
+
+    if (
+        not simulation_configuration_is_default
+        and country_configuration is not None
+        and simulation_configuration_data != country_configuration_data
+    ):
+        raise ValueError(
+            "Goods market configuration is global; set it at either the simulation level or the country level."
+        )
+
+    if not simulation_configuration_is_default:
+        return simulation_configuration
+    if country_configuration is not None:
+        return country_configuration
+    return simulation_configuration
+
+
+def simulation_configuration_with_effective_goods_market(
+    configuration: SimulationConfiguration,
+) -> SimulationConfiguration:
+    effective_configuration = deepcopy(configuration)
+    effective_configuration.goods_market_configuration = deepcopy(resolve_goods_market_configuration(configuration))
+    return effective_configuration
 
 
 @dataclass
@@ -98,6 +158,7 @@ class Simulation:
             ValueError: If a country in the simulation configuration is not found in the data
         """
 
+        simulation_configuration = simulation_configuration_with_effective_goods_market(simulation_configuration)
         data_configuration = datawrapper.configuration
         for country, country_sim_conf in simulation_configuration.country_configurations.items():
             if country not in data_configuration.country_configs:
@@ -244,6 +305,7 @@ class Simulation:
         if configuration is None:
             configuration = self.configuration
 
+        configuration = simulation_configuration_with_effective_goods_market(configuration)
         self.timestep = Timestep(year=self.initial_year, month=1)
 
         self.rest_of_the_world.reset(configuration.row_configuration)

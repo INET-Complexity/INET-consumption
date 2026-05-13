@@ -9,6 +9,7 @@ from .credit_market_configuration import CreditMarketConfiguration
 from .economy_configuration import EconomyConfiguration
 from .exchange_rates_configuration import ExchangeRatesConfiguration
 from .firms_configuration import FirmsConfiguration
+from .goods_market_configuration import GoodsMarketConfiguration
 from .government_entities_configuration import GovernmentEntitiesConfiguration
 from .households_configuration import HouseholdsConfiguration
 from .housing_market_configuration import HousingMarketConfiguration
@@ -33,6 +34,7 @@ class CountryConfiguration(BaseModel):
     labour_market: LabourMarketConfiguration = LabourMarketConfiguration()
     housing_market: HousingMarketConfiguration = HousingMarketConfiguration()
     credit_market: CreditMarketConfiguration = CreditMarketConfiguration()
+    goods_market: GoodsMarketConfiguration = GoodsMarketConfiguration()
 
     forecasting_window: int = 60
     assume_zero_growth: bool = False

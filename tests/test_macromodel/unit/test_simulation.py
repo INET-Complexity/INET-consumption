@@ -7,9 +7,146 @@ import pytest
 
 from macro_data.configuration.countries import Country as CountryName
 from macromodel.agents.firms.func.productivity_investment_planner import SimpleProductivityInvestmentPlanner
-from macromodel.configurations import CountryConfiguration, SimulationConfiguration
-from macromodel.simulation import Simulation, check_compatibility, get_compatibility_mismatches
+from macromodel.configurations import CountryConfiguration, GoodsMarketConfiguration, SimulationConfiguration
+from macromodel.simulation import (
+    Simulation,
+    check_compatibility,
+    get_compatibility_mismatches,
+    resolve_goods_market_configuration,
+)
 from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
+
+
+def _goods_market_with_buyer_minimum_fill_micro(value: float) -> GoodsMarketConfiguration:
+    configuration = GoodsMarketConfiguration()
+    configuration.functions.clearing.parameters["buyer_minimum_fill_micro"] = value
+    return configuration
+
+
+def test_country_configuration_accepts_goods_market():
+    configuration = CountryConfiguration(
+        goods_market={
+            "functions": {
+                "clearing": {
+                    "parameters": {
+                        "buyer_minimum_fill_micro": 0.75,
+                    },
+                },
+            },
+        },
+    )
+
+    assert configuration.goods_market.functions.clearing.parameters["buyer_minimum_fill_micro"] == 0.75
+
+
+def test_goods_market_configuration_can_be_set_from_country_config():
+    country_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    simulation_configuration = SimulationConfiguration(country_configurations={"FRA": country_configuration})
+
+    resolved_configuration = resolve_goods_market_configuration(simulation_configuration)
+
+    assert resolved_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"] == 0.25
+
+
+def test_simulation_goods_market_configuration_remains_supported():
+    simulation_goods_market = _goods_market_with_buyer_minimum_fill_micro(0.4)
+    simulation_configuration = SimulationConfiguration(
+        country_configurations={"FRA": CountryConfiguration()},
+        goods_market_configuration=simulation_goods_market,
+    )
+
+    resolved_configuration = resolve_goods_market_configuration(simulation_configuration)
+
+    assert resolved_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"] == 0.4
+
+
+def test_default_country_goods_market_configurations_do_not_conflict_with_one_override():
+    default_country_configuration = CountryConfiguration()
+    france_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    simulation_configuration = SimulationConfiguration(
+        country_configurations={
+            "FRA": france_configuration,
+            "ESP": default_country_configuration,
+        },
+    )
+
+    resolved_configuration = resolve_goods_market_configuration(simulation_configuration)
+
+    assert resolved_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"] == 0.25
+
+
+def test_different_non_default_country_goods_market_configurations_raise():
+    france_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    spain_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.5),
+    )
+    simulation_configuration = SimulationConfiguration(
+        country_configurations={
+            "FRA": france_configuration,
+            "ESP": spain_configuration,
+        },
+    )
+
+    with pytest.raises(ValueError, match="non-default country-level goods_market configurations must match"):
+        resolve_goods_market_configuration(simulation_configuration)
+
+
+def test_conflicting_simulation_and_country_goods_market_configurations_raise():
+    country_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    simulation_configuration = SimulationConfiguration(
+        country_configurations={"FRA": country_configuration},
+        goods_market_configuration=_goods_market_with_buyer_minimum_fill_micro(0.5),
+    )
+
+    with pytest.raises(ValueError, match="set it at either the simulation level or the country level"):
+        resolve_goods_market_configuration(simulation_configuration)
+
+
+def test_from_datawrapper_uses_country_goods_market_configuration(datawrapper):
+    country_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    simulation_configuration = SimulationConfiguration(country_configurations={"FRA": country_configuration})
+
+    simulation = Simulation.from_datawrapper(
+        datawrapper=datawrapper,
+        simulation_configuration=simulation_configuration,
+    )
+
+    assert simulation.goods_market.functions["clearing"].buyer_minimum_fill_micro == 0.25
+    assert (
+        simulation.configuration.goods_market_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"]
+        == 0.25
+    )
+
+
+def test_reset_uses_country_goods_market_configuration(datawrapper):
+    simulation_configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    simulation = Simulation.from_datawrapper(
+        datawrapper=datawrapper,
+        simulation_configuration=simulation_configuration,
+    )
+
+    reset_country_configuration = CountryConfiguration(
+        goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),
+    )
+    reset_configuration = SimulationConfiguration(country_configurations={"FRA": reset_country_configuration})
+
+    simulation.reset(reset_configuration)
+
+    assert simulation.goods_market.functions["clearing"].buyer_minimum_fill_micro == 0.25
+    assert (
+        simulation.configuration.goods_market_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"]
+        == 0.25
+    )
 
 
 @pytest.mark.parametrize("seed", [0, 100, 150, 200, 145])

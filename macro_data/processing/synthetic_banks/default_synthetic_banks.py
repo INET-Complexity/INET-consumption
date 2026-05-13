@@ -486,8 +486,17 @@ class DefaultSyntheticBanks(SyntheticBanks):
             readers.ecb_reader.get_household_consumption_rates(data_country),
             time_unit,
         )
-        household_mortgage_rates = annual_to_period(readers.ecb_reader.get_household_mortgage_rates(data_country), time_unit)
+        household_mortgage_rates = annual_to_period(
+            readers.ecb_reader.get_household_mortgage_rates(data_country),
+            time_unit,
+        )
         policy_rates = annual_to_period(readers.policy_rates.get_policy_rates(data_country), time_unit, "Policy Rate")
+        firm_short_spread = cls._mean_pre_start_spread(firm_rate, policy_rates, year, quarter)
+        firm_long_spread = firm_short_spread
+        household_consumption_spread = cls._mean_pre_start_spread(
+            household_consumption_rate, policy_rates, year, quarter
+        )
+        mortgage_spread = cls._mean_pre_start_spread(household_mortgage_rates, policy_rates, year, quarter)
         npl_rates = readers.world_bank.get_npl_ratios(data_country)
         if any(
             [
@@ -533,8 +542,8 @@ class DefaultSyntheticBanks(SyntheticBanks):
             household_mortgages_ect,
             hh_mortgage_passthrough,
             household_mortgages_rate,
-            firm_spread,
-            firm_spread,
+            firm_short_spread,
+            firm_long_spread,
             household_consumption_spread,
             mortgage_spread,
         )

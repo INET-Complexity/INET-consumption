@@ -213,13 +213,13 @@ FRA:
         name: SimpleTFPGrowth
         path_name: productivity_growth
         parameters:
-          investment_effectiveness: 0.003  # revised direct-TFP calibration; previous bounded Simple-planner phi: 0.1
+          investment_effectiveness: 0.005  # revised direct-TFP calibration; seed-16 phi grid gives ~0.52% annual TFP
       productivity_investment_planner:
         name: TargetIntensityTFPInvestmentPlanner
         path_name: productivity_investment_planner
         parameters:
           adjustment_cost_lambda: 1.0
-          cap_multiplier: 1.5
+          cap_multiplier: 2.5
           investment_elasticity: 0.3
           n_firms: 18
           private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate
@@ -414,7 +414,7 @@ FRA:
         name: DefaultBankDemography
         path_name: demography
         parameters:
-          solvency_ratio: 0.1  # 0.05
+          solvency_ratio: 0.05
       interest_rates:
         name: MarkUpInterestRatesSetter
         path_name: interest_rates
@@ -436,19 +436,19 @@ FRA:
       firm_loans_return_on_assets_ratio: 0.05
       enable_firm_loans_return_on_equity_restriction: false
       firm_loans_return_on_equity_ratio: 0.15  # 0.05
-      enable_firm_loans_dscr_restriction: true
+      enable_firm_loans_dscr_restriction: false
       firm_loans_min_dscr: 1.25
       firm_loans_cfads_window: 4
       firm_loans_cfads_haircut: 1.0
       firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       household_consumption_loan_maturity: 2
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
-      long_term_firm_loan_maturity: 20 # 60
+      long_term_firm_loan_maturity: 60 # 60
+      short_term_firm_loan_maturity: 12 # 20
       mortgage_debt_service_to_income_ratio: 0.35  # 0.05
       mortgage_loan_to_income_ratio: 21  # 0.05
       mortgage_loan_to_value_ratio: 0.8  # 0.05
       mortgage_maturity: 100 #  120
-      short_term_firm_loan_maturity: 4 # 20
 
   exchange_rates:
     exchange_rate_type: constant

@@ -1174,6 +1174,15 @@ class CreditMarket:
         """
         return self._last_interest_by_bank
 
+    def compute_defaulted_firm_loan_writeoff_by_bank(self, default_flag: np.ndarray) -> np.ndarray:
+        """Return firm loan principal to write off by bank before mutating loan books."""
+        default_flag = np.asarray(default_flag, dtype=bool)
+        if default_flag.size == 0 or not np.any(default_flag):
+            return np.zeros(self.states["st_loans"].shape[1])
+        return self.states["st_loans"][0][:, default_flag].sum(axis=1) + self.states["lt_loans"][0][
+            :, default_flag
+        ].sum(axis=1)
+
     def remove_loans_to_firm(self, firm_id: int | np.ndarray) -> float:
         """Remove all loans associated with specified firm(s).
 

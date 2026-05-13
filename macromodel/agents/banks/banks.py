@@ -368,11 +368,16 @@ class Banks(Agent):
         Combines:
         - Interest received on loans
         - Net interest received on deposits
+        - Credit losses from firm defaults
 
         Returns:
             np.ndarray: Total profits by bank
         """
-        return self.ts.current("interest_received_on_loans") + self.ts.current("interest_received_on_deposits")
+        return (
+            self.ts.current("interest_received_on_loans")
+            + self.ts.current("interest_received_on_deposits")
+            - self.ts.current("firm_default_credit_loss")
+        )
 
     def update_deposits(
         self,

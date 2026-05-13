@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 import h5py
@@ -13,6 +14,15 @@ from macromodel.configurations import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.goods_market.value_type import ValueType
 from macromodel.util.function_mapping import functions_from_model, update_functions
+
+
+@dataclass
+class FirmInsolvencyResult:
+    npl_ratio: float
+    default_flag: np.ndarray
+    loan_writeoff_by_bank: np.ndarray
+    overdraft_writeoff_by_bank: np.ndarray
+    credit_loss_by_bank: np.ndarray
 
 
 class Firms(Agent):
@@ -2606,7 +2616,7 @@ class Firms(Agent):
         self,
         credit_market: CreditMarket,
         illiquid_flag: np.ndarray | None = None,
-    ) -> float:
+    ) -> FirmInsolvencyResult:
         """Process insolvent firms and compute non-performing loan ratios.
 
         Handles firms that become insolvent by:
@@ -2620,29 +2630,36 @@ class Firms(Agent):
             illiquid_flag (np.ndarray | None): Current-period settlement liquidity-failure flag.
 
         Returns:
-            float: Non-performing loan ratio for firm loans
+            FirmInsolvencyResult: Default flags, bank credit losses, and firm-loan NPL ratio.
         """
         if illiquid_flag is None:
             illiquid_flag = np.asarray(self.ts.current("firm_settlement_illiquid_flag"), dtype=bool)
         else:
             illiquid_flag = np.asarray(illiquid_flag, dtype=bool)
         default_flag = np.logical_and(self.ts.current("equity") < 0.0, illiquid_flag)
+        loan_writeoff_by_bank = credit_market.compute_defaulted_firm_loan_writeoff_by_bank(default_flag)
+        overdraft_writeoff_by_bank = np.bincount(
+            self.states["Corresponding Bank ID"],
+            weights=np.maximum(0.0, -self.ts.current("deposits")) * default_flag,
+            minlength=loan_writeoff_by_bank.shape[0],
+        )
+        credit_loss_by_bank = loan_writeoff_by_bank + overdraft_writeoff_by_bank
         self.states["is_insolvent"] = np.logical_or(self.states["is_insolvent"], default_flag)
         self.ts.override_current("firm_settlement_default_flag", default_flag.copy())
 
         # Remove loans
-        insolvent_firms = np.where(self.states["is_insolvent"])[0]
+        insolvent_firms = np.where(default_flag)[0]
         bad_firm_loans = credit_market.remove_loans_to_firm(insolvent_firms)
 
         # Update deposits
         new_firm_deposits = self.ts.current("deposits")
-        new_firm_deposits[self.states["is_insolvent"]] = 0.0
+        new_firm_deposits[default_flag] = 0.0
         self.ts.deposits.pop()
         self.ts.deposits.append(new_firm_deposits)
 
         # Update equity
         new_firm_equity = self.ts.current("equity")
-        new_firm_equity[self.states["is_insolvent"]] = 0.0
+        new_firm_equity[default_flag] = 0.0
         self.ts.equity.pop()
         self.ts.equity.append(new_firm_equity)
 
@@ -2652,9 +2669,16 @@ class Firms(Agent):
             + credit_market.ts.current("total_outstanding_loans_granted_firms_long_term")[0]
         )
         if total_loans_granted == 0.0:
-            return 0.0
+            npl_ratio = 0.0
         else:
-            return bad_firm_loans / total_loans_granted
+            npl_ratio = bad_firm_loans / total_loans_granted
+        return FirmInsolvencyResult(
+            npl_ratio=npl_ratio,
+            default_flag=default_flag.copy(),
+            loan_writeoff_by_bank=loan_writeoff_by_bank,
+            overdraft_writeoff_by_bank=overdraft_writeoff_by_bank,
+            credit_loss_by_bank=credit_loss_by_bank,
+        )
 
     def compute_equity(self, current_good_prices: np.ndarray) -> np.ndarray:
         """Calculate equity value for each firm.

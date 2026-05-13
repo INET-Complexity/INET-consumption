@@ -3,6 +3,7 @@ import pytest
 
 from macromodel.agents.firms.firms import Firms
 from macromodel.configurations.firms_configuration import FirmsConfiguration
+from macromodel.markets.credit_market.credit_market import CreditMarket
 
 
 class TestFirms:
@@ -1408,6 +1409,67 @@ class TestFirms:
         assert test_firms.states["is_insolvent"][0]
         assert np.isclose(test_firms.ts.current("equity")[0], 0.0)
         assert np.isclose(test_firms.ts.current("deposits")[0], 0.0)
+
+    def test__handle_insolvency_returns_current_default_bank_credit_losses(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_banks = 2
+        st_loans = np.zeros((3, n_banks, n_firms))
+        lt_loans = np.zeros((3, n_banks, n_firms))
+        st_loans[0, 0, 0] = 100.0
+        lt_loans[0, 1, 0] = 25.0
+        st_loans[0, 0, 1] = 50.0
+        credit_market = CreditMarket.from_data(
+            country_name="TST",
+            st_loans=st_loans,
+            lt_loans=lt_loans,
+            cons_loans=np.zeros((3, n_banks, 1)),
+            mort_loans=np.zeros((3, n_banks, 1)),
+        )
+        corresponding_bank = test_firms.states["Corresponding Bank ID"].copy()
+        corresponding_bank[:2] = np.array([1, 0])
+        test_firms.states["Corresponding Bank ID"] = corresponding_bank
+        test_firms.states["is_insolvent"] = np.full(n_firms, False)
+        test_firms.ts.override_current("equity", np.r_[-1.0, np.full(n_firms - 1, 10.0)])
+        test_firms.ts.override_current("deposits", np.r_[-20.0, -30.0, np.zeros(n_firms - 2)])
+        illiquid_flag = np.full(n_firms, False)
+        illiquid_flag[0] = True
+
+        result = test_firms.handle_insolvency(credit_market=credit_market, illiquid_flag=illiquid_flag)
+
+        assert result.default_flag[0]
+        assert not result.default_flag[1]
+        assert np.allclose(result.loan_writeoff_by_bank, np.array([100.0, 25.0]))
+        assert np.allclose(result.overdraft_writeoff_by_bank, np.array([0.0, 20.0]))
+        assert np.allclose(result.credit_loss_by_bank, np.array([100.0, 45.0]))
+        assert np.isclose(result.npl_ratio, 125.0 / 175.0)
+        assert np.isclose(test_firms.ts.current("deposits")[0], 0.0)
+        assert np.isclose(test_firms.ts.current("equity")[0], 0.0)
+
+    def test__handle_insolvency_does_not_double_count_previous_insolvent_state(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_banks = 2
+        st_loans = np.zeros((3, n_banks, n_firms))
+        st_loans[0, 0, 1] = 50.0
+        credit_market = CreditMarket.from_data(
+            country_name="TST",
+            st_loans=st_loans,
+            lt_loans=np.zeros((3, n_banks, n_firms)),
+            cons_loans=np.zeros((3, n_banks, 1)),
+            mort_loans=np.zeros((3, n_banks, 1)),
+        )
+        test_firms.states["is_insolvent"] = np.r_[False, True, np.full(n_firms - 2, False)]
+        test_firms.ts.override_current("equity", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("deposits", np.r_[0.0, -30.0, np.zeros(n_firms - 2)])
+
+        result = test_firms.handle_insolvency(
+            credit_market=credit_market,
+            illiquid_flag=np.full(n_firms, False),
+        )
+
+        assert not result.default_flag.any()
+        assert np.allclose(result.credit_loss_by_bank, np.zeros(n_banks))
+        assert np.isclose(credit_market.states["st_loans"][0, 0, 1], 50.0)
+        assert np.isclose(test_firms.ts.current("deposits")[1], -30.0)
 
     def test__post_credit_mode_does_not_pre_cut_inputs_with_full_budget_credit_gap(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

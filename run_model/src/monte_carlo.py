@@ -50,6 +50,19 @@ def _chunked(values: list[int], chunk_size: int) -> list[list[int]]:
     return chunks
 
 
+def _dump_country_configurations(
+    country_configurations: dict[str, CountryConfiguration],
+) -> dict[str, dict]:
+    """Serialize pydantic country configurations into plain dicts.
+
+    Joblib workers (loky) can end up with multiple copies of the same module on
+    sys.path (editable installs + repo checkout), so passing pydantic model
+    instances across processes may fail validation due to class identity
+    mismatches. Dumping to plain dicts avoids that.
+    """
+    return {code: config.model_dump() for code, config in country_configurations.items()}
+
+
 def _run_single_seed(
     *,
     seed: int,
@@ -61,17 +74,25 @@ def _run_single_seed(
     save_h5_dir: str | Path | None = None,
 ) -> tuple[int, pd.DataFrame]:
     """Run one seeded simulation and extract macro output time series."""
+    country_payload = _dump_country_configurations(country_configurations)
     if simulation_configuration is None:
-        configuration = SimulationConfiguration(
-            country_configurations=deepcopy(country_configurations),
-            t_max=t_max,
-            seed=int(seed),
+        configuration = SimulationConfiguration.model_validate(
+            {
+                "country_configurations": country_payload,
+                "t_max": t_max,
+                "seed": int(seed),
+            }
         )
     else:
-        configuration = deepcopy(simulation_configuration)
-        configuration.country_configurations = deepcopy(country_configurations)
-        configuration.t_max = t_max
-        configuration.seed = int(seed)
+        payload = simulation_configuration.model_dump()
+        payload.update(
+            {
+                "country_configurations": country_payload,
+                "t_max": t_max,
+                "seed": int(seed),
+            }
+        )
+        configuration = SimulationConfiguration.model_validate(payload)
 
     model = Simulation.from_datawrapper(
         datawrapper=datawrapper,

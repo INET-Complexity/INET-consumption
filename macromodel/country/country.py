@@ -1274,9 +1274,7 @@ class Country:
         )
         self.economy.ts.npl_firm_loans.append([firm_insolvency_result.npl_ratio])
         self.banks.ts.firm_default_loan_writeoff.append(firm_insolvency_result.loan_writeoff_by_bank)
-        self.banks.ts.total_firm_default_loan_writeoff.append(
-            [firm_insolvency_result.loan_writeoff_by_bank.sum()]
-        )
+        self.banks.ts.total_firm_default_loan_writeoff.append([firm_insolvency_result.loan_writeoff_by_bank.sum()])
         self.banks.ts.firm_default_overdraft_writeoff.append(firm_insolvency_result.overdraft_writeoff_by_bank)
         self.banks.ts.total_firm_default_overdraft_writeoff.append(
             [firm_insolvency_result.overdraft_writeoff_by_bank.sum()]

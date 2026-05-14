@@ -43,6 +43,174 @@ def _print_sector_code_names(sector_codes):
     print("\n".join(rows))
 
 
+def firm_sector_by_index(
+    model,
+    country_code: str,
+    firm_id: int | list[int] | tuple[int, ...] | np.ndarray,
+    *,
+    with_name: bool = False,
+):
+    """Return firm sector code (and optional label) for one or more firm indices.
+
+    Notes
+    -----
+    - Firms store their sector as an integer index in ``firms.states['Industry']``.
+    - The corresponding sector codes live in ``firms.industries`` (e.g. "A", "C", "G", ...).
+    """
+    country = model.countries[country_code]
+    firms = country.firms
+
+    industry_idx_by_firm = np.asarray(firms.states.get("Industry", []), dtype=int).reshape(-1)
+    sector_codes = list(getattr(firms, "industries", []))
+
+    def _one(idx: int):
+        if idx < 0 or idx >= industry_idx_by_firm.size:
+            raise IndexError(f"firm_id out of bounds: {idx} (n_firms={industry_idx_by_firm.size})")
+        sector_idx = int(industry_idx_by_firm[idx])
+        code = sector_codes[sector_idx] if 0 <= sector_idx < len(sector_codes) else str(sector_idx)
+        if with_name:
+            return (code, SECTOR_CODE_TO_NAME.get(code, code))
+        return code
+
+    if isinstance(firm_id, (list, tuple, np.ndarray)):
+        return [_one(int(i)) for i in list(firm_id)]
+    return _one(int(firm_id))
+
+
+def sector_by_index(
+    model,
+    country_code: str,
+    sector_index: int | list[int] | tuple[int, ...] | np.ndarray,
+    *,
+    with_name: bool = False,
+):
+    """Return sector code (and optional label) for one or more sector indices.
+
+    Examples
+    --------
+    - ``sector_by_index(model, "FRA", 0)`` -> "A"
+    - ``sector_by_index(model, "FRA", 0, with_name=True)`` -> ("A", "Agriculture, forestry and fishing")
+    """
+    country = model.countries[country_code]
+    sector_codes = list(getattr(country.firms, "industries", []))
+
+    def _one(idx: int):
+        if idx < 0 or idx >= len(sector_codes):
+            raise IndexError(f"sector_index out of bounds: {idx} (n_sectors={len(sector_codes)})")
+        code = str(sector_codes[idx])
+        if with_name:
+            return (code, SECTOR_CODE_TO_NAME.get(code, code))
+        return code
+
+    if isinstance(sector_index, (list, tuple, np.ndarray)):
+        return [_one(int(i)) for i in list(sector_index)]
+    return _one(int(sector_index))
+
+
+def firms_by_sector(
+    model,
+    country_code: str,
+    *,
+    with_name: bool = False,
+) -> dict:
+    """Return a mapping of sector -> list of firm ids (indices).
+
+    This answers: "which firms belong to what sector?"
+
+    Returns
+    -------
+    dict
+        Keys are sector codes (e.g. "A") or (code, label) tuples when
+        ``with_name=True``. Values are lists of firm indices.
+    """
+    country = model.countries[country_code]
+    firms = country.firms
+
+    industry_idx_by_firm = np.asarray(firms.states.get("Industry", []), dtype=int).reshape(-1)
+    sector_codes = list(getattr(firms, "industries", []))
+
+    out: dict = {}
+    for firm_id, sector_idx in enumerate(industry_idx_by_firm.tolist()):
+        if 0 <= sector_idx < len(sector_codes):
+            code = str(sector_codes[sector_idx])
+        else:
+            code = str(sector_idx)
+        key = (code, SECTOR_CODE_TO_NAME.get(code, code)) if with_name else code
+        out.setdefault(key, []).append(int(firm_id))
+    return out
+
+
+def firm_sector_table(model, country_code: str) -> pd.DataFrame:
+    """Return a table with firm_id -> sector index/code/name."""
+    country = model.countries[country_code]
+    firms = country.firms
+
+    industry_idx_by_firm = np.asarray(firms.states.get("Industry", []), dtype=int).reshape(-1)
+    sector_codes = list(getattr(firms, "industries", []))
+
+    codes = []
+    names = []
+    for idx in industry_idx_by_firm.tolist():
+        if 0 <= idx < len(sector_codes):
+            code = str(sector_codes[idx])
+        else:
+            code = str(idx)
+        codes.append(code)
+        names.append(SECTOR_CODE_TO_NAME.get(code, code))
+
+    return pd.DataFrame(
+        {
+            "firm_id": np.arange(industry_idx_by_firm.size, dtype=int),
+            "sector_index": industry_idx_by_firm.astype(int, copy=False),
+            "sector_code": np.asarray(codes, dtype=object),
+            "sector_name": np.asarray(names, dtype=object),
+        }
+    )
+
+
+def firm_sector_groups_table(model, country_code: str) -> pd.DataFrame:
+    """Return a sector-level table listing which firm indices belong to each sector.
+
+    Output columns:
+    - sector_code
+    - sector_name
+    - firms (compressed ranges string, e.g. "0-12, 17, 20-25")
+    - n_firms
+    """
+
+    def _format_ranges(ids: list[int]) -> str:
+        if not ids:
+            return ""
+        ids_sorted = sorted(set(int(i) for i in ids))
+        ranges: list[tuple[int, int]] = []
+        start = prev = ids_sorted[0]
+        for x in ids_sorted[1:]:
+            if x == prev + 1:
+                prev = x
+                continue
+            ranges.append((start, prev))
+            start = prev = x
+        ranges.append((start, prev))
+
+        parts = []
+        for a, b in ranges:
+            parts.append(str(a) if a == b else f"{a}-{b}")
+        return ", ".join(parts)
+
+    mapping = firms_by_sector(model, country_code, with_name=True)
+    rows = []
+    for (code, name), firm_ids in sorted(mapping.items(), key=lambda x: str(x[0][0])):
+        rows.append(
+            {
+                "sector_code": code,
+                "sector_name": name,
+                "firms": _format_ranges(firm_ids),
+                "n_firms": int(len(firm_ids)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _sectoral_prices_from_model(model, country_code):
     country = model.countries[country_code]
     prices = np.asarray(country.economy.ts.historic("good_prices"), dtype=float)
@@ -1681,6 +1849,7 @@ def plot_agent_timeseries(
     *,
     agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
     agg: str = "sum",
+    by_sector: bool = False,
     no_cols: int | None = None,
     base_height: int = 220,
     base_width: int = 380,
@@ -1704,6 +1873,9 @@ def plot_agent_timeseries(
 
     Plot firm-level credit demand for a specific firm:
         plot_agent_timeseries(model, "FRA", "firms", ["target_short_term_credit"], agent_id=0)
+
+    Plot firm-level series aggregated by sector (industry):
+        plot_agent_timeseries(model, "FRA", "firms", ["tfp_multiplier", "deposits"], by_sector=True, agg="mean")
     """
     if isinstance(variables, str):
         variables = [variables]
@@ -1722,6 +1894,25 @@ def plot_agent_timeseries(
 
     out_index = model.shallow_df_dict()[country_code].index
 
+    if by_sector:
+        if agent_type != "firms":
+            raise ValueError("by_sector=True is only supported for agent_type='firms'.")
+        if agent_id is not None:
+            raise ValueError("by_sector=True is incompatible with agent_id. Omit agent_id to plot sector aggregates.")
+        firm_industry_idx = np.asarray(getattr(agent, "states", {}).get("Industry", []), dtype=int).reshape(-1)
+        sector_codes = list(getattr(agent, "industries", []))
+        n_sectors = int(getattr(agent, "n_industries", len(sector_codes)))
+        if len(sector_codes) != n_sectors:
+            sector_codes = [f"sector {idx}" for idx in range(n_sectors)]
+
+        palette = _categorical_colors(n_sectors)
+        sector_color_map = {sector_codes[idx]: palette[idx] for idx in range(n_sectors)}
+    else:
+        firm_industry_idx = None
+        sector_codes = None
+        n_sectors = None
+        sector_color_map = None
+
     agent_ids: list[int] | None
     if agent_id is None:
         agent_ids = None
@@ -1731,6 +1922,13 @@ def plot_agent_timeseries(
             agent_ids = None
     else:
         agent_ids = [int(agent_id)]
+
+    agent_color_map: dict[int, str] | None = None
+    if agent_ids is not None and len(agent_ids) > 1:
+        # Keep the provided ordering so a user can pass [5, 0, 2] and consistently
+        # get the same colors across variables/subplots.
+        palette = _categorical_colors(len(agent_ids))
+        agent_color_map = {selected_id: palette[idx] for idx, selected_id in enumerate(agent_ids)}
 
     def _reduce(value):
         value = unpack_cell(value)
@@ -1766,7 +1964,7 @@ def plot_agent_timeseries(
     subplot_titles = variables + [""] * (no_rows * no_cols - len(variables))
 
     if show_legend is None:
-        show_legend = agent_ids is not None and len(agent_ids) > 1
+        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector
 
     fig = make_subplots(
         rows=no_rows,
@@ -1793,7 +1991,59 @@ def plot_agent_timeseries(
                 break
         is_vector = not isinstance(sample, (type(None), float, int, np.floating, np.integer))
 
-        if is_vector and agent_ids is not None and len(agent_ids) > 1:
+        if by_sector and is_vector:
+            def _sector_reduce(vec: np.ndarray) -> np.ndarray:
+                vec = np.asarray(vec, dtype=float).reshape(-1)
+                if firm_industry_idx is None or n_sectors is None:
+                    return np.full(0, np.nan, dtype=float)
+                if firm_industry_idx.size != vec.size:
+                    # Fall back to NaNs if we cannot align the firm vector to industries.
+                    return np.full(n_sectors, np.nan, dtype=float)
+                reducer = agg.lower()
+                if reducer == "median":
+                    out = np.full(n_sectors, np.nan, dtype=float)
+                    for sector in range(n_sectors):
+                        vals = vec[firm_industry_idx == sector]
+                        if vals.size:
+                            out[sector] = float(np.nanmedian(vals))
+                    return out
+
+                ok = np.isfinite(vec)
+                sums = np.bincount(firm_industry_idx[ok], weights=vec[ok], minlength=n_sectors).astype(float)
+                cnts = np.bincount(firm_industry_idx[ok], minlength=n_sectors).astype(float)
+                if reducer == "sum":
+                    return sums
+                if reducer == "mean":
+                    return np.divide(sums, cnts, out=np.full(n_sectors, np.nan, dtype=float), where=cnts > 0.0)
+                raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
+
+            series_by_sector: dict[str, list[float]] = {str(code): [] for code in sector_codes}
+            for value in list(values)[:horizon]:
+                unpacked = unpack_cell(value)
+                vec = np.asarray(unpacked, dtype=float).reshape(-1) if unpacked is not None else np.asarray([], float)
+                reduced = _sector_reduce(vec)
+                for sector_idx, code in enumerate(sector_codes):
+                    y = float(reduced[sector_idx]) if sector_idx < reduced.size else np.nan
+                    series_by_sector[str(code)].append(y)
+
+            for sector_idx, code in enumerate(sector_codes):
+                code = str(code)
+                fig.add_trace(
+                    go.Scatter(
+                        x=out_index[:horizon],
+                        y=series_by_sector[code],
+                        mode="lines",
+                        name=code,
+                        showlegend=(show_legend and idx == 0),
+                        line={
+                            "width": line_width,
+                            "color": sector_color_map.get(code) if sector_color_map is not None else None,
+                        },
+                    ),
+                    row=row,
+                    col=col,
+                )
+        elif is_vector and agent_ids is not None and len(agent_ids) > 1:
             series_by_id: dict[int, list[float]] = {selected_id: [] for selected_id in agent_ids}
             for value in list(values)[:horizon]:
                 unpacked = unpack_cell(value)
@@ -1816,7 +2066,10 @@ def plot_agent_timeseries(
                         mode="lines",
                         name=f"id={selected_id}",
                         showlegend=(show_legend and idx == 0),
-                        line={"width": line_width},
+                        line={
+                            "width": line_width,
+                            "color": agent_color_map.get(selected_id) if agent_color_map is not None else None,
+                        },
                     ),
                     row=row,
                     col=col,
@@ -1841,6 +2094,8 @@ def plot_agent_timeseries(
             suffix = f" (agent_id={agent_ids})"
         elif agent_ids is not None and len(agent_ids) == 1:
             suffix = f" (agent_id={agent_ids[0]})"
+        elif by_sector:
+            suffix = f" (by_sector, agg={agg})"
         else:
             suffix = f" (agg={agg})"
         title = f"{country_code} {agent_type} ts{suffix}"

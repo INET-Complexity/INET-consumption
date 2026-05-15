@@ -268,7 +268,7 @@ FRA:
         path_name: target_intermediate_inputs
         parameters:
           credit_gap_fraction: 0.5
-          target_intermediate_inputs_fraction: 0.0
+          target_intermediate_inputs_fraction: 0.2
       target_production:
         name: DefaultTargetProductionSetter
         path_name: target_production
@@ -276,13 +276,12 @@ FRA:
           capital_inputs_target_considers_capital_inputs: 0.18  # 1.0
           capital_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
           capital_inputs_target_considers_labour_inputs: 0.53  # 0.0
-          existing_inventory_fraction: 0.0
           financial_constrains_fraction: 0.0
           intermediate_inputs_target_considers_capital_inputs: 0.18  # 1.0
           intermediate_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
           intermediate_inputs_target_considers_labour_inputs: 0.53  # 0.0
           maximum_debt_to_equity_ratio: 2.0
-          target_inventory_to_production_fraction: 0.1 # 0.0
+          target_inventory_to_demand_fraction: 0.1 # 0.0
       technical_coefficients_growth:
         name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth

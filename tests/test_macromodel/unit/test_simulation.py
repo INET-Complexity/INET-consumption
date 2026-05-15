@@ -15,6 +15,7 @@ from macromodel.simulation import (
     get_compatibility_mismatches,
     resolve_goods_market_configuration,
 )
+from macromodel.util.function_mapping import functions_from_model, update_functions
 from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
 
 
@@ -751,12 +752,52 @@ def test_reset_firm_params(datawrapper):
         simulation.iterate()
 
 
-def test_target_production_inventory_fraction_does_not_reset_initial_inventory(datawrapper):
+def test_stale_existing_inventory_fraction_fails_on_function_load():
     country_sim_configuration = CountryConfiguration()
     country_sim_configuration.firms.functions.target_production.parameters["existing_inventory_fraction"] = 0.75
 
-    assert country_sim_configuration.firms.reset_params["initial_inventory_to_input_fraction"] == 0.0
-    assert check_compatibility(datawrapper.configuration.country_configs["FRA"], country_sim_configuration)
+    with pytest.raises(ValueError, match="existing_inventory_fraction"):
+        functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
+
+
+def test_stale_target_inventory_to_production_fraction_fails_on_function_load():
+    country_sim_configuration = CountryConfiguration()
+    params = country_sim_configuration.firms.functions.target_production.parameters
+    params["target_inventory_to_production_fraction"] = params.pop("target_inventory_to_demand_fraction")
+
+    with pytest.raises(ValueError, match="target_inventory_to_production_fraction"):
+        functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
+
+
+def test_stale_target_inventory_to_production_fraction_fails_on_function_update():
+    country_sim_configuration = CountryConfiguration()
+    functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
+
+    stale_country_sim_configuration = CountryConfiguration()
+    params = stale_country_sim_configuration.firms.functions.target_production.parameters
+    params["target_inventory_to_production_fraction"] = params.pop("target_inventory_to_demand_fraction")
+
+    with pytest.raises(ValueError, match="target_inventory_to_production_fraction"):
+        update_functions(
+            model=stale_country_sim_configuration.firms.functions,
+            loc="macromodel.agents.firms",
+            functions=functions,
+        )
+
+
+def test_stale_existing_inventory_fraction_fails_on_function_update():
+    country_sim_configuration = CountryConfiguration()
+    functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
+
+    stale_country_sim_configuration = CountryConfiguration()
+    stale_country_sim_configuration.firms.functions.target_production.parameters["existing_inventory_fraction"] = 0.75
+
+    with pytest.raises(ValueError, match="existing_inventory_fraction"):
+        update_functions(
+            model=stale_country_sim_configuration.firms.functions,
+            loc="macromodel.agents.firms",
+            functions=functions,
+        )
 
 
 def test_alternative_labour(datawrapper):

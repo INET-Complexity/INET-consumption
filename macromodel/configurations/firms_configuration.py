@@ -270,9 +270,8 @@ class TargetProduction(BaseModel):
     name: Literal["DefaultTargetProductionSetter"] = "DefaultTargetProductionSetter"
     path_name: str = "target_production"
     parameters: dict[str, Any] = {
-        "existing_inventory_fraction": 0.0,
         "maximum_debt_to_equity_ratio": 2.0,
-        "target_inventory_to_production_fraction": 0.0,
+        "target_inventory_to_demand_fraction": 0.0,
         "financial_constrains_fraction": 0.0,
         "intermediate_inputs_target_considers_labour_inputs": 0.0,
         "intermediate_inputs_target_considers_intermediate_inputs": 0.0,

@@ -287,14 +287,8 @@ FRA:
           type: str
           value: DefaultTargetProductionSetter
         parameters:
-          existing_inventory_fraction:
-            desc: How much existing inventory of the finalised good is taken into
-              account when setting production targets.
-            options: ''
-            type: float
-            value: 0.0
-          target_inventory_to_production_fraction:
-            desc: The target fraction between inventory and production.
+          target_inventory_to_demand_fraction:
+            desc: The target fraction between inventory and expected demand.
             options: ''
             type: float
             value: 0.0

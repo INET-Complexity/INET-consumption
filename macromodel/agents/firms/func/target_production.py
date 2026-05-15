@@ -30,8 +30,7 @@ class TargetProductionSetter(ABC):
     - Input considerations (how much each input type affects targets)
 
     Attributes:
-        existing_inventory_fraction (float): Weight given to current inventory in target calculation
-        target_inventory_to_production_fraction (float): Desired inventory-to-production ratio
+        target_inventory_to_demand_fraction (float): Desired inventory-to-expected-demand ratio
         financial_constrains_fraction (float): Weight of financial constraints on targets
         maximum_debt_to_equity_ratio (float): Maximum allowed debt/equity ratio
         intermediate_inputs_target_considers_labour_inputs (float): Weight of labor constraints on intermediate inputs
@@ -44,8 +43,7 @@ class TargetProductionSetter(ABC):
 
     def __init__(
         self,
-        existing_inventory_fraction: float,
-        target_inventory_to_production_fraction: float,
+        target_inventory_to_demand_fraction: float,
         financial_constrains_fraction: float,
         maximum_debt_to_equity_ratio: float,
         intermediate_inputs_target_considers_labour_inputs: float,
@@ -58,8 +56,7 @@ class TargetProductionSetter(ABC):
         """Initialize the target production setter with configuration parameters.
 
         Args:
-            existing_inventory_fraction (float): Weight of current inventory
-            target_inventory_to_production_fraction (float): Desired inventory ratio
+            target_inventory_to_demand_fraction (float): Desired inventory ratio
             financial_constrains_fraction (float): Weight of financial constraints
             maximum_debt_to_equity_ratio (float): Maximum debt/equity ratio
             intermediate_inputs_target_considers_labour_inputs (float): Labor weight for intermediates
@@ -69,8 +66,7 @@ class TargetProductionSetter(ABC):
             capital_inputs_target_considers_intermediate_inputs (float): Input weight for capital
             capital_inputs_target_considers_capital_inputs (float): Capital weight for capital
         """
-        self.existing_inventory_fraction = existing_inventory_fraction
-        self.target_inventory_to_production_fraction = target_inventory_to_production_fraction
+        self.target_inventory_to_demand_fraction = target_inventory_to_demand_fraction
         self.financial_constrains_fraction = financial_constrains_fraction
         self.maximum_debt_to_equity_ratio = maximum_debt_to_equity_ratio
 
@@ -224,8 +220,8 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         """Calculate target production levels using the default strategy.
 
         Computes targets based on:
-        1. Expected demand minus a fraction of existing inventory
-        2. Plus a target buffer stock of inventory
+        1. Expected demand plus a desired inventory buffer linked to expected demand
+        2. Minus opening finished-goods inventory
         3. Adjusted for financial constraints if enabled
 
         Args:
@@ -234,37 +230,33 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         Returns:
             np.ndarray: Target production quantities for each firm
         """
-        if self.financial_constrains_fraction == 0.0:
-            return np.maximum(
-                1e-12,
-                current_estimated_demand
-                - self.existing_inventory_fraction * previous_inventory
-                + self.target_inventory_to_production_fraction * previous_production,
+        target_production = (
+            current_estimated_demand
+            + self.target_inventory_to_demand_fraction * current_estimated_demand
+            - previous_inventory
+        )
+
+        if self.financial_constrains_fraction != 0.0:
+            borrowing_room = (
+                self.maximum_debt_to_equity_ratio * current_firm_equity
+                - current_firm_debt
+                + np.minimum(0.0, current_firm_deposits)
+                - interest_on_overdraft_rates
+                - interest_paid_on_loans
             )
-        else:
-            return np.maximum(
-                1e-12,
-                current_estimated_demand
-                - self.existing_inventory_fraction * previous_inventory
-                + self.target_inventory_to_production_fraction * previous_production
+            target_production = (
+                target_production
                 - self.financial_constrains_fraction
                 * previous_production
                 * np.divide(
                     previous_loans_applied_for,
-                    self.maximum_debt_to_equity_ratio * current_firm_equity
-                    - current_firm_debt
-                    + np.minimum(0.0, current_firm_deposits)
-                    - interest_on_overdraft_rates
-                    - interest_paid_on_loans,
+                    borrowing_room,
                     out=np.zeros_like(previous_loans_applied_for),
-                    where=self.maximum_debt_to_equity_ratio * current_firm_equity
-                    - current_firm_debt
-                    + np.minimum(0.0, current_firm_deposits)
-                    - interest_on_overdraft_rates
-                    - interest_paid_on_loans
-                    != 0.0,
-                ),
+                    where=borrowing_room != 0.0,
+                )
             )
+
+        return np.maximum(1e-12, target_production)
 
     def compute_constrained_intermediate_inputs_target_production(
         self,

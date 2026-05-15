@@ -129,6 +129,8 @@ class FirmTimeSeries(TimeSeries):
     - activity_finance_feasible_target_production: Feasible activity scale implied by post-credit finance
     - activity_finance_feasible_desired_labour_inputs: Diagnostic labour demand implied by feasible activity
     - activity_finance_feasibility_residual: Finance left after feasible planned labour and activity costs
+    - activity_finance_realised_feasible_target_production: Activity scale after labour rationing
+    - activity_finance_realised_labour_scale: Realised labour relative to post-credit feasible labour demand
     - executed_productivity_investment: Executed planned/forced productivity investment (total)
     - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
     - planned_tfp_investment: TFP portion of planned productivity investment (n_firms)
@@ -283,6 +285,8 @@ class FirmTimeSeries(TimeSeries):
             activity_finance_feasible_target_production=np.zeros(data.shape[0]),
             activity_finance_feasible_desired_labour_inputs=np.zeros(data.shape[0]),
             activity_finance_feasibility_residual=np.zeros(data.shape[0]),
+            activity_finance_realised_feasible_target_production=np.zeros(data.shape[0]),
+            activity_finance_realised_labour_scale=np.ones(data.shape[0]),
             intermediate_purchase_finance_scale=np.ones(data.shape[0]),
             capital_purchase_finance_scale=np.ones(data.shape[0]),
             technical_investment_finance_scale=np.ones(data.shape[0]),
@@ -615,6 +619,8 @@ def create_firms_timeseries(
         activity_finance_feasible_target_production=np.zeros(data.shape[0]),
         activity_finance_feasible_desired_labour_inputs=np.zeros(data.shape[0]),
         activity_finance_feasibility_residual=np.zeros(data.shape[0]),
+        activity_finance_realised_feasible_target_production=np.zeros(data.shape[0]),
+        activity_finance_realised_labour_scale=np.ones(data.shape[0]),
         intermediate_purchase_finance_scale=np.ones(data.shape[0]),
         capital_purchase_finance_scale=np.ones(data.shape[0]),
         technical_investment_finance_scale=np.ones(data.shape[0]),

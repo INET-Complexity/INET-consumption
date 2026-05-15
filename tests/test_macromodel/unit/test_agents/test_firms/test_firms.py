@@ -577,7 +577,9 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("planned_technical_investment")[0, 0], expected_intermediate * 0.25)
         assert np.isclose(test_firms.ts.current("planned_tfp_investment")[0], expected_intermediate * 0.25)
         assert test_firms.ts.current("activity_finance_feasibility_residual")[0] >= -1e-6
-        assert np.isclose(test_firms.ts.current("activity_finance_feasible_target_production")[0], expected_intermediate)
+        assert np.isclose(
+            test_firms.ts.current("activity_finance_feasible_target_production")[0], expected_intermediate
+        )
         assert np.isclose(test_firms.ts.current("intermediate_purchase_finance_scale")[0], 0.5, atol=1e-6)
         assert np.allclose(test_firms.ts.current("unconstrained_target_intermediate_inputs"), unconstrained)
 

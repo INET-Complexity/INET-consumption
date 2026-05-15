@@ -1849,9 +1849,7 @@ class Firms(Agent):
         self.ts.activity_finance_hard_obligations.append(activity_finance_hard_obligations)
         self.ts.activity_finance_gap_before_revision.append(activity_finance_gap_before_revision)
         self.ts.activity_finance_feasible_target_production.append(activity_finance_feasible_target_production)
-        self.ts.activity_finance_feasible_desired_labour_inputs.append(
-            activity_finance_feasible_desired_labour_inputs
-        )
+        self.ts.activity_finance_feasible_desired_labour_inputs.append(activity_finance_feasible_desired_labour_inputs)
         self.ts.activity_finance_feasibility_residual.append(activity_finance_feasibility_residual)
         self.ts.intermediate_purchase_finance_scale.append(intermediate_scale)
         self.ts.capital_purchase_finance_scale.append(capital_scale)

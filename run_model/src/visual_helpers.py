@@ -1992,6 +1992,7 @@ def plot_agent_timeseries(
         is_vector = not isinstance(sample, (type(None), float, int, np.floating, np.integer))
 
         if by_sector and is_vector:
+
             def _sector_reduce(vec: np.ndarray) -> np.ndarray:
                 vec = np.asarray(vec, dtype=float).reshape(-1)
                 if firm_industry_idx is None or n_sectors is None:

@@ -1824,9 +1824,13 @@ class Firms(Agent):
 
     def _append_activity_finance_diagnostics(
         self,
+        activity_finance_opening_deposits: np.ndarray,
         activity_finance_available: np.ndarray,
         activity_finance_hard_obligations: np.ndarray,
         activity_finance_gap_before_revision: np.ndarray,
+        activity_finance_feasible_target_production: np.ndarray,
+        activity_finance_feasible_desired_labour_inputs: np.ndarray,
+        activity_finance_feasibility_residual: np.ndarray,
         intermediate_scale: np.ndarray,
         capital_scale: np.ndarray,
         technical_scale: np.ndarray,
@@ -1840,9 +1844,13 @@ class Firms(Agent):
         planned_tfp_costs: np.ndarray,
         feasible_tfp_costs: np.ndarray,
     ) -> None:
+        self.ts.activity_finance_opening_deposits.append(activity_finance_opening_deposits)
         self.ts.activity_finance_available.append(activity_finance_available)
         self.ts.activity_finance_hard_obligations.append(activity_finance_hard_obligations)
         self.ts.activity_finance_gap_before_revision.append(activity_finance_gap_before_revision)
+        self.ts.activity_finance_feasible_target_production.append(activity_finance_feasible_target_production)
+        self.ts.activity_finance_feasible_desired_labour_inputs.append(activity_finance_feasible_desired_labour_inputs)
+        self.ts.activity_finance_feasibility_residual.append(activity_finance_feasibility_residual)
         self.ts.intermediate_purchase_finance_scale.append(intermediate_scale)
         self.ts.capital_purchase_finance_scale.append(capital_scale)
         self.ts.technical_investment_finance_scale.append(technical_scale)
@@ -1869,6 +1877,93 @@ class Firms(Agent):
             where=planned_costs > 0.0,
         )
         return np.maximum(0.0, remaining_finance - affordable_costs), scale
+
+    def _activity_finance_tfp_for_feasible_labour(self) -> np.ndarray:
+        tfp_multiplier = np.asarray(self.ts.current("tfp_multiplier"), dtype=float).copy()
+        valid_tfp = np.isfinite(tfp_multiplier) & (tfp_multiplier > 1e-12)
+        economy_positive_tfp = tfp_multiplier[valid_tfp]
+        economy_fallback = np.median(economy_positive_tfp) if economy_positive_tfp.size > 0 else 1.0
+        for industry in range(self.n_industries):
+            industry_mask = self.states["Industry"] == industry
+            industry_positive_tfp = tfp_multiplier[industry_mask & valid_tfp]
+            if industry_positive_tfp.size > 0:
+                tfp_multiplier[industry_mask & ~valid_tfp] = np.median(industry_positive_tfp)
+        tfp_multiplier[~np.isfinite(tfp_multiplier) | (tfp_multiplier <= 1e-12)] = economy_fallback
+        return tfp_multiplier
+
+    def _activity_finance_feasible_labour(
+        self,
+        target_production: np.ndarray,
+        tfp_multiplier: np.ndarray,
+    ) -> np.ndarray:
+        base_labour = np.divide(
+            target_production,
+            tfp_multiplier,
+            out=target_production.copy(),
+            where=tfp_multiplier > 0.0,
+        )
+        limiting_intermediate_inputs = np.asarray(self.ts.current("limiting_intermediate_inputs"), dtype=float).copy()
+        invalid_intermediate = ~np.isfinite(limiting_intermediate_inputs)
+        limiting_intermediate_inputs[invalid_intermediate] = base_labour[invalid_intermediate]
+        limiting_intermediate_inputs = np.maximum(0.0, limiting_intermediate_inputs)
+        limiting_capital_inputs = np.asarray(self.ts.current("limiting_capital_inputs"), dtype=float).copy()
+        invalid_capital = ~np.isfinite(limiting_capital_inputs)
+        limiting_capital_inputs[invalid_capital] = base_labour[invalid_capital]
+        limiting_capital_inputs = np.maximum(0.0, limiting_capital_inputs)
+        return self.functions["desired_labour"].compute_desired_labour(
+            current_target_production=target_production,
+            current_limiting_intermediate_inputs=limiting_intermediate_inputs,
+            current_limiting_capital_inputs=limiting_capital_inputs,
+            current_tfp_multiplier=tfp_multiplier,
+        )
+
+    def _activity_finance_wage_cost_rate(self, wage_obligation_preview: np.ndarray) -> np.ndarray:
+        labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
+        wage_preview = np.asarray(wage_obligation_preview, dtype=float)
+        wage_rate = np.full_like(wage_preview, np.nan, dtype=float)
+        valid = np.isfinite(wage_preview) & np.isfinite(labour_inputs) & (labour_inputs > 1e-12)
+        wage_rate[valid] = wage_preview[valid] / labour_inputs[valid]
+        economy_labour = labour_inputs[valid].sum()
+        economy_fallback = wage_preview[valid].sum() / economy_labour if economy_labour > 0.0 else 0.0
+        for industry in range(self.n_industries):
+            industry_mask = self.states["Industry"] == industry
+            industry_valid = industry_mask & valid
+            industry_labour = labour_inputs[industry_valid].sum()
+            if industry_labour > 0.0:
+                wage_rate[industry_mask & ~valid] = wage_preview[industry_valid].sum() / industry_labour
+        wage_rate[~np.isfinite(wage_rate)] = economy_fallback
+        return np.maximum(0.0, wage_rate)
+
+    def _activity_finance_candidate_inputs(
+        self,
+        target_production: np.ndarray,
+        expected_lcu_prices: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        target_intermediate = self.functions[
+            "target_intermediate_inputs"
+        ].compute_unconstrained_target_intermediate_inputs(
+            current_target_production=target_production,
+            intermediate_inputs_productivity_matrix=self.get_effective_intermediate_coefficients(),
+            prev_intermediate_inputs_stock=self.ts.current("intermediate_inputs_stock"),
+            initial_intermediate_inputs_stock=self.ts.initial("intermediate_inputs_stock"),
+            prev_production=target_production,
+            initial_production=self.ts.initial("production"),
+            previous_good_prices=expected_lcu_prices,
+            substitution_bundle_matrix=self.substitution_bundles,
+        )
+        target_capital = self.functions["target_capital_inputs"].compute_unconstrained_target_capital_inputs(
+            current_target_production=target_production,
+            capital_input_use_matrix=self.base_capital_input_use_matrix[:, self.states["Industry"]].T,
+            prev_capital_inputs_stock=self.ts.current("capital_inputs_stock"),
+            initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
+            prev_production=target_production,
+            initial_production=self.ts.initial("production"),
+            previous_good_prices=expected_lcu_prices,
+            substitution_bundle_matrix=self.substitution_bundles,
+        )
+        intermediate_costs = (target_intermediate * expected_lcu_prices[None, :]).sum(axis=1)
+        capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
+        return target_intermediate, target_capital, intermediate_costs, capital_costs
 
     def revise_activity_against_available_finance(
         self,
@@ -1917,9 +2012,13 @@ class Firms(Agent):
 
         if mode == "none":
             self._append_activity_finance_diagnostics(
+                activity_finance_opening_deposits=self.ts.current("deposits"),
                 activity_finance_available=np.zeros(n_firms),
                 activity_finance_hard_obligations=np.zeros(n_firms),
                 activity_finance_gap_before_revision=np.zeros(n_firms),
+                activity_finance_feasible_target_production=self.ts.current("target_production"),
+                activity_finance_feasible_desired_labour_inputs=self.ts.current("desired_labour_inputs"),
+                activity_finance_feasibility_residual=np.zeros(n_firms),
                 intermediate_scale=np.ones(n_firms),
                 capital_scale=np.ones(n_firms),
                 technical_scale=np.ones(n_firms),
@@ -1940,39 +2039,132 @@ class Firms(Agent):
                 f"Unknown firm_activity_finance_revision_mode {mode!r}; expected 'none' or 'post_credit_cash_budget'."
             )
 
-        hard_obligations = (
-            wage_obligation_preview
-            + production_tax_obligation_preview
-            + corporate_tax_obligation_preview
-            + non_loan_interest_obligation_preview
-            + unfunded_loan_debt_service
-        )
+        opening_deposits = self.ts.current("deposits").copy()
+        hard_obligations = non_loan_interest_obligation_preview + unfunded_loan_debt_service
         available_finance = np.maximum(
             0.0,
-            self.ts.current("deposits")
+            opening_deposits
             + self._current_received_ordinary_short_term_credit()
             + np.nan_to_num(self.ts.current("received_long_term_credit"), nan=0.0)
             - hard_obligations,
         )
-        finance_gap = np.maximum(0.0, total_planned_costs - available_finance)
+        y_high = np.maximum(0.0, np.nan_to_num(self.ts.current("target_production"), nan=0.0))
+        tfp_for_labour = self._activity_finance_tfp_for_feasible_labour()
+        wage_cost_rate = self._activity_finance_wage_cost_rate(wage_obligation_preview)
+        full_bound_labour = self._activity_finance_feasible_labour(y_high, tfp_for_labour)
+        full_bound_wage_costs = wage_cost_rate * full_bound_labour
+        full_bound_costs = full_bound_wage_costs + total_planned_costs
+        finance_gap = np.maximum(0.0, full_bound_costs - available_finance)
 
-        affordable_activity_costs = np.minimum(available_finance, total_planned_costs)
-        activity_scale = np.divide(
-            affordable_activity_costs,
-            total_planned_costs,
-            out=np.ones_like(total_planned_costs),
-            where=total_planned_costs > 0.0,
+        constrained = full_bound_costs > available_finance + 1e-8
+        feasible_y = y_high.copy()
+        feasible_labour = full_bound_labour.copy()
+        feasible_intermediate = target_intermediate.copy()
+        feasible_capital = target_capital.copy()
+        feasible_intermediate_costs = planned_intermediate_costs.copy()
+        feasible_capital_costs = planned_capital_costs.copy()
+        feasible_technical = planned_technical.copy()
+        feasible_technical_costs = planned_technical_costs.copy()
+        feasible_tfp = planned_tfp.copy()
+        feasible_tfp_costs = planned_tfp_costs.copy()
+
+        if np.any(constrained):
+            tfp_ratio = np.divide(
+                planned_tfp_costs,
+                planned_intermediate_costs,
+                out=np.zeros_like(planned_tfp_costs),
+                where=planned_intermediate_costs > 0.0,
+            )
+            technical_ratio = np.divide(
+                planned_technical_costs,
+                planned_intermediate_costs,
+                out=np.zeros_like(planned_technical_costs),
+                where=planned_intermediate_costs > 0.0,
+            )
+            low = np.zeros(n_firms)
+            high = y_high.copy()
+            for _ in range(25):
+                candidate = 0.5 * (low + high)
+                _, _, candidate_intermediate_costs, candidate_capital_costs = self._activity_finance_candidate_inputs(
+                    candidate,
+                    expected_lcu_prices,
+                )
+                candidate_labour = self._activity_finance_feasible_labour(candidate, tfp_for_labour)
+                candidate_costs = (
+                    wage_cost_rate * candidate_labour
+                    + (1.0 + tfp_ratio + technical_ratio) * candidate_intermediate_costs
+                    + candidate_capital_costs
+                )
+                candidate_feasible = candidate_costs <= available_finance + 1e-8
+                update_low = constrained & candidate_feasible
+                update_high = constrained & ~candidate_feasible
+                low = np.where(update_low, candidate, low)
+                high = np.where(update_high, candidate, high)
+
+            (
+                candidate_intermediate,
+                candidate_capital,
+                candidate_intermediate_costs,
+                candidate_capital_costs,
+            ) = self._activity_finance_candidate_inputs(low, expected_lcu_prices)
+            candidate_labour = self._activity_finance_feasible_labour(low, tfp_for_labour)
+            candidate_tfp = tfp_ratio * candidate_intermediate_costs
+            candidate_technical_costs = technical_ratio * candidate_intermediate_costs
+            candidate_technical_scale = np.divide(
+                candidate_technical_costs,
+                planned_technical_costs,
+                out=np.zeros_like(planned_technical_costs),
+                where=planned_technical_costs > 0.0,
+            )
+            candidate_technical = planned_technical * candidate_technical_scale[:, None]
+
+            feasible_y = np.where(constrained, low, feasible_y)
+            feasible_labour = np.where(constrained, candidate_labour, feasible_labour)
+            feasible_intermediate = np.where(constrained[:, None], candidate_intermediate, feasible_intermediate)
+            feasible_capital = np.where(constrained[:, None], candidate_capital, feasible_capital)
+            feasible_intermediate_costs = np.where(
+                constrained,
+                candidate_intermediate_costs,
+                feasible_intermediate_costs,
+            )
+            feasible_capital_costs = np.where(constrained, candidate_capital_costs, feasible_capital_costs)
+            feasible_technical = np.where(constrained[:, None], candidate_technical, feasible_technical)
+            feasible_technical_costs = np.where(constrained, candidate_technical_costs, feasible_technical_costs)
+            feasible_tfp = np.where(constrained, candidate_tfp, feasible_tfp)
+            feasible_tfp_costs = feasible_tfp.copy()
+
+        feasible_activity_costs = (
+            wage_cost_rate * feasible_labour
+            + feasible_intermediate_costs
+            + feasible_capital_costs
+            + feasible_technical_costs
+            + feasible_tfp_costs
         )
-        intermediate_scale = activity_scale.copy()
-        capital_scale = activity_scale.copy()
-        technical_scale = activity_scale.copy()
-        tfp_scale = activity_scale.copy()
-
-        feasible_intermediate = target_intermediate * intermediate_scale[:, None]
-        feasible_capital = target_capital * capital_scale[:, None]
-        feasible_technical = planned_technical * technical_scale[:, None]
-        feasible_tfp = planned_tfp * tfp_scale
-        feasible_technical_costs = feasible_technical.sum(axis=1)
+        feasibility_residual = available_finance - feasible_activity_costs
+        intermediate_scale = np.divide(
+            feasible_intermediate_costs,
+            planned_intermediate_costs,
+            out=np.ones_like(planned_intermediate_costs),
+            where=planned_intermediate_costs > 0.0,
+        )
+        capital_scale = np.divide(
+            feasible_capital_costs,
+            planned_capital_costs,
+            out=np.ones_like(planned_capital_costs),
+            where=planned_capital_costs > 0.0,
+        )
+        technical_scale = np.divide(
+            feasible_technical_costs,
+            planned_technical_costs,
+            out=np.ones_like(planned_technical_costs),
+            where=planned_technical_costs > 0.0,
+        )
+        tfp_scale = np.divide(
+            feasible_tfp_costs,
+            planned_tfp_costs,
+            out=np.ones_like(planned_tfp_costs),
+            where=planned_tfp_costs > 0.0,
+        )
 
         self.ts.override_current("target_intermediate_inputs", feasible_intermediate)
         self.ts.override_current("target_capital_inputs", feasible_capital)
@@ -1981,21 +2173,25 @@ class Firms(Agent):
         self.ts.override_current("planned_productivity_investment", feasible_tfp + feasible_technical.sum(axis=1))
 
         self._append_activity_finance_diagnostics(
+            activity_finance_opening_deposits=opening_deposits,
             activity_finance_available=available_finance,
             activity_finance_hard_obligations=hard_obligations,
             activity_finance_gap_before_revision=finance_gap,
+            activity_finance_feasible_target_production=feasible_y,
+            activity_finance_feasible_desired_labour_inputs=feasible_labour,
+            activity_finance_feasibility_residual=feasibility_residual,
             intermediate_scale=intermediate_scale,
             capital_scale=capital_scale,
             technical_scale=technical_scale,
             tfp_scale=tfp_scale,
             planned_intermediate_costs=planned_intermediate_costs,
-            feasible_intermediate_costs=planned_intermediate_costs * intermediate_scale,
+            feasible_intermediate_costs=feasible_intermediate_costs,
             planned_capital_costs=planned_capital_costs,
-            feasible_capital_costs=planned_capital_costs * capital_scale,
+            feasible_capital_costs=feasible_capital_costs,
             planned_technical_costs=planned_technical_costs,
             feasible_technical_costs=feasible_technical_costs,
             planned_tfp_costs=planned_tfp_costs,
-            feasible_tfp_costs=feasible_tfp,
+            feasible_tfp_costs=feasible_tfp_costs,
         )
 
     def prepare_buying_goods(

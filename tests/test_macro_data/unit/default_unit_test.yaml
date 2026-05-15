@@ -822,12 +822,6 @@ init:
               options: ''
               type: bool
               value: false
-            existing_inventory_fraction:
-              desc: How much existing inventory of the finalised good is taken into
-                account when setting production targets.
-              options: ''
-              type: float
-              value: 0.0
             maximum_debt_to_equity_ratio:
               desc: The maximum debt to equity ratio when setting firm target production.
               options: ''
@@ -838,8 +832,8 @@ init:
               options: ''
               type: float
               value: 0.1
-            target_inventory_to_production_fraction:
-              desc: The target fraction between inventory and production.
+            target_inventory_to_demand_fraction:
+              desc: The target fraction between inventory and expected demand.
               options: ''
               type: float
               value: 0.0

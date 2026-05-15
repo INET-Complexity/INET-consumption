@@ -414,7 +414,7 @@ class Firms(Agent):
 
         current_inv = (
             self.ts.current("production")
-            * configuration.functions.target_production.parameters["target_inventory_to_production_fraction"]
+            * configuration.functions.target_production.parameters["target_inventory_to_demand_fraction"]
         )
 
         industries = self.states["Industry"]

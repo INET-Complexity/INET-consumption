@@ -32,6 +32,27 @@ from typing import Any, Optional
 
 from pydantic import BaseModel
 
+_STALE_FUNCTION_PARAMETERS = {
+    "target_production": {
+        "existing_inventory_fraction": None,
+        "target_inventory_to_production_fraction": "target_inventory_to_demand_fraction",
+    },
+}
+
+
+def _reject_stale_function_parameters(path_name: str, parameters: dict[str, Any]) -> None:
+    stale_parameters = _STALE_FUNCTION_PARAMETERS.get(path_name, {})
+    for stale_key, replacement_key in stale_parameters.items():
+        if stale_key in parameters:
+            if replacement_key is None:
+                raise ValueError(
+                    f"{path_name} parameter '{stale_key}' is no longer supported; "
+                    "opening finished-goods inventory is fully netted from target production."
+                )
+            raise ValueError(
+                f"{path_name} parameter '{stale_key}' is no longer supported; use '{replacement_key}' instead."
+            )
+
 
 def get_functions(
     functions_desc: Any,
@@ -86,6 +107,7 @@ def get_functions(
                 k: functions_desc[function_desc]["parameters"][k]["value"]
                 for k in functions_desc[function_desc]["parameters"].keys()
             }
+            _reject_stale_function_parameters(function_desc, func_parameters)
             functions[function_desc] = cls(**func_parameters)
 
     return functions
@@ -130,6 +152,7 @@ def functions_from_model(model: BaseModel, loc: str) -> dict[str, Any]:
         path_name = field_value.path_name
         name = field_value.name
         parameters = field_value.parameters
+        _reject_stale_function_parameters(path_name, parameters)
 
         module = __import__(f"{loc}.func.{path_name}", fromlist=[name])
         cls = getattr(module, name)
@@ -170,6 +193,7 @@ def update_functions(
         existing_func = functions.get(func_name, None)
         if existing_func is None:
             raise ValueError(f"Function {func_name} not found in functions dictionary")
+        _reject_stale_function_parameters(new_func_config.path_name, new_func_config.parameters)
 
         # Check if function needs to be reinstantiated
         if (

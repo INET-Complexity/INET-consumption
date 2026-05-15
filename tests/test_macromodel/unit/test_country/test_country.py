@@ -75,7 +75,16 @@ class TestCountry:
             lambda **kwargs: corporate_tax_preview,
         )
         monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **kwargs: interest_preview)
-        monkeypatch.setattr(test_country.firms, "compute_wages_markup", lambda: refreshed_wage_markup)
+
+        def assert_feasible_labour_is_applied_before_wage_refresh():
+            assert np.allclose(test_country.firms.ts.current("desired_labour_inputs"), feasible_labour)
+            return refreshed_wage_markup
+
+        monkeypatch.setattr(
+            test_country.firms,
+            "compute_wages_markup",
+            assert_feasible_labour_is_applied_before_wage_refresh,
+        )
         monkeypatch.setattr(
             test_country.firms,
             "compute_offered_wage_function",

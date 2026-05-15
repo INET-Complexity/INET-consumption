@@ -1056,10 +1056,7 @@ class Country:
 
     def prepare_post_labour_realised_feasible_activity_plan(self) -> None:
         """Revise feasible activity after labour clearing, before production is computed."""
-        if (
-            self.assume_zero_growth
-            or self.firms.configuration.parameters.firm_activity_finance_revision_mode == "none"
-        ):
+        if self.assume_zero_growth or self.firms.configuration.parameters.firm_activity_finance_revision_mode == "none":
             self.firms.ts.activity_finance_realised_feasible_target_production.append(
                 self.firms.ts.current("target_production").copy()
             )

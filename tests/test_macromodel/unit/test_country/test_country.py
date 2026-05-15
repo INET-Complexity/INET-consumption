@@ -149,7 +149,9 @@ class TestCountry:
         test_country.firms.ts.override_current("price", prices)
         test_country.economy.ts.override_current("estimated_ppi_inflation", [0.5])
         test_country.central_government.states["Taxes Less Subsidies Rates"] = tax_rates
-        test_country.firms.ts.override_current("activity_finance_realised_feasible_target_production", realised_feasible_y)
+        test_country.firms.ts.override_current(
+            "activity_finance_realised_feasible_target_production", realised_feasible_y
+        )
         monkeypatch.setattr(
             test_country.firms,
             "estimate_corporate_tax_obligation",

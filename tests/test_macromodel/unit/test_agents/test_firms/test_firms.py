@@ -1071,7 +1071,9 @@ class TestFirms:
         planned_tfp[0] = 5.0
 
         self._set_simple_activity_solver_inputs(test_firms, target_production=20.0, include_capital=True)
-        test_firms.ts.override_current("activity_finance_feasible_target_production", np.r_[20.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current(
+            "activity_finance_feasible_target_production", np.r_[20.0, np.zeros(n_firms - 1)]
+        )
         test_firms.ts.override_current(
             "activity_finance_feasible_desired_labour_inputs", np.r_[20.0, np.ones(n_firms - 1)]
         )

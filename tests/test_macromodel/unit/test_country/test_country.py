@@ -59,10 +59,13 @@ class TestCountry:
         target_y = np.full(n_firms, 10.0)
         feasible_labour = np.full(n_firms, 3.0)
         interest_preview = np.full(n_firms, 6.0)
+        refreshed_wage_markup = np.full(n_firms, 0.25)
+        offered_wage_function = object()
         captured = {}
 
         test_country.assume_zero_growth = True
         test_country.firms.ts.override_current("target_production", target_y)
+        test_country.firms.ts.override_current("wage_tightness_markup", np.zeros(n_firms))
         test_country.firms.ts.override_current("activity_finance_feasible_target_production", feasible_y)
         test_country.firms.ts.override_current("activity_finance_feasible_desired_labour_inputs", feasible_labour)
         monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **kwargs: wage_preview)
@@ -72,6 +75,12 @@ class TestCountry:
             lambda **kwargs: corporate_tax_preview,
         )
         monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **kwargs: interest_preview)
+        monkeypatch.setattr(test_country.firms, "compute_wages_markup", lambda: refreshed_wage_markup)
+        monkeypatch.setattr(
+            test_country.firms,
+            "compute_offered_wage_function",
+            lambda **kwargs: offered_wage_function,
+        )
 
         def capture_firm_prepare(**kwargs):
             captured.update(kwargs)
@@ -85,6 +94,8 @@ class TestCountry:
         assert np.allclose(captured["production_tax_obligation_preview"], 0.0)
         assert np.allclose(captured["corporate_tax_obligation_preview"], 0.0)
         assert np.allclose(test_country.firms.ts.current("desired_labour_inputs"), feasible_labour)
+        assert np.allclose(test_country.firms.ts.current("wage_tightness_markup"), refreshed_wage_markup)
+        assert test_country.firms.states["offered_wage_function"] is offered_wage_function
         assert np.allclose(test_country._post_credit_corporate_tax_obligation_preview, corporate_tax_preview * 0.5)
         assert np.allclose(
             captured["loan_interest_obligation_preview"],

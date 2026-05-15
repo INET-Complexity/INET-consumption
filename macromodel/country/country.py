@@ -492,10 +492,25 @@ class Country:
             current_good_prices=self.economy.ts.current("good_prices"),
         )
 
-        # Changes in labour productivity
-        self.firms.ts.wage_tightness_markup.append(self.firms.compute_wages_markup())
+        self.update_firm_wage_offers(replace_current=False)
 
-        # Firms determine the wages they're willing to pay new employees
+        # Individuals set reservation wages
+        self.individuals.ts.reservation_wages.append(
+            self.individuals.compute_reservation_wages(
+                unemployment_benefits_by_individual=self.central_government.ts.current(
+                    "unemployment_benefits_by_individual"
+                )[0],
+            )
+        )
+
+    def update_firm_wage_offers(self, *, replace_current: bool) -> None:
+        """Set firm wage markup/offers from the current operative labour demand."""
+        wage_tightness_markup = self.firms.compute_wages_markup()
+        if replace_current:
+            self.firms.ts.override_current("wage_tightness_markup", wage_tightness_markup)
+        else:
+            self.firms.ts.wage_tightness_markup.append(wage_tightness_markup)
+
         self.firms.states["offered_wage_function"] = self.firms.compute_offered_wage_function(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             current_individual_labour_inputs=self.individuals.ts.current("labour_inputs"),
@@ -506,15 +521,6 @@ class Country:
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
-        )
-
-        # Individuals set reservation wages
-        self.individuals.ts.reservation_wages.append(
-            self.individuals.compute_reservation_wages(
-                unemployment_benefits_by_individual=self.central_government.ts.current(
-                    "unemployment_benefits_by_individual"
-                )[0],
-            )
         )
 
     def clear_labour_market(self) -> None:
@@ -1032,6 +1038,7 @@ class Country:
             assume_zero_growth=self.assume_zero_growth,
         )
         self.firms.apply_feasible_labour_demand()
+        self.update_firm_wage_offers(replace_current=True)
         (
             self._post_credit_production_tax_obligation_preview,
             self._post_credit_corporate_tax_obligation_preview,

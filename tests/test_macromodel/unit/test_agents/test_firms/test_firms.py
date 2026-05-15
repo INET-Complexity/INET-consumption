@@ -124,6 +124,8 @@ class TestFirms:
             "activity_finance_feasible_target_production",
             "activity_finance_feasible_desired_labour_inputs",
             "activity_finance_feasibility_residual",
+            "activity_finance_realised_feasible_target_production",
+            "activity_finance_realised_labour_scale",
             "intermediate_purchase_finance_scale",
             "capital_purchase_finance_scale",
             "technical_investment_finance_scale",
@@ -1017,6 +1019,125 @@ class TestFirms:
 
         assert np.isclose(test_firms.ts.current("activity_finance_hard_obligations")[0], 0.0)
         assert np.isclose(test_firms.ts.current("activity_finance_available")[0], 20.0)
+
+    def test__realised_labour_revision_no_rationing_uses_post_credit_feasible_activity(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        target_intermediate = np.full((n_firms, n_industries), 99.0)
+        target_capital = np.full((n_firms, n_industries), 77.0)
+        planned_technical = np.full((n_firms, n_industries), 4.0)
+        planned_tfp = np.full(n_firms, 5.0)
+        target_production = np.full(n_firms, 20.0)
+        feasible_y = np.linspace(1.0, float(n_firms), n_firms)
+        feasible_labour = np.full(n_firms, 3.0)
+        test_firms.base_intermediate_inputs_productivity_matrix = np.ones((n_industries, n_industries))
+        test_firms.base_capital_input_use_matrix = np.ones((n_industries, n_industries))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+
+        test_firms.ts.override_current("target_production", target_production.copy())
+        test_firms.ts.override_current("target_intermediate_inputs", target_intermediate.copy())
+        test_firms.ts.override_current("target_capital_inputs", target_capital.copy())
+        test_firms.ts.override_current("planned_technical_investment", planned_technical.copy())
+        test_firms.ts.override_current("planned_tfp_investment", planned_tfp.copy())
+        test_firms.ts.override_current("activity_finance_feasible_target_production", feasible_y)
+        test_firms.ts.override_current("activity_finance_feasible_desired_labour_inputs", feasible_labour)
+        test_firms.ts.override_current("labour_inputs", feasible_labour.copy())
+
+        test_firms.revise_activity_against_realised_labour(expected_lcu_prices=np.ones(n_industries))
+
+        assert np.allclose(test_firms.ts.current("target_production"), feasible_y)
+        assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), feasible_y[:, None])
+        assert np.allclose(test_firms.ts.current("target_capital_inputs"), feasible_y[:, None])
+        assert np.allclose(test_firms.ts.current("planned_technical_investment"), planned_technical)
+        assert np.allclose(test_firms.ts.current("planned_tfp_investment"), planned_tfp)
+        assert np.allclose(
+            test_firms.ts.current("planned_productivity_investment"),
+            planned_tfp + planned_technical.sum(axis=1),
+        )
+        assert np.allclose(test_firms.ts.current("activity_finance_realised_feasible_target_production"), feasible_y)
+        assert np.allclose(test_firms.ts.current("activity_finance_realised_labour_scale"), 1.0)
+
+    def test__realised_labour_revision_rationing_recomputes_activity_goods_only(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        target_intermediate = np.zeros((n_firms, n_industries))
+        target_capital = np.zeros((n_firms, n_industries))
+        planned_technical = np.zeros((n_firms, n_industries))
+        planned_tfp = np.zeros(n_firms)
+        target_intermediate[0, 0] = 20.0
+        target_capital[0, 0] = 20.0
+        planned_technical[0, 0] = 5.0
+        planned_tfp[0] = 5.0
+
+        self._set_simple_activity_solver_inputs(test_firms, target_production=20.0, include_capital=True)
+        test_firms.ts.override_current("activity_finance_feasible_target_production", np.r_[20.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current(
+            "activity_finance_feasible_desired_labour_inputs", np.r_[20.0, np.ones(n_firms - 1)]
+        )
+        test_firms.ts.override_current("labour_inputs", np.r_[10.0, np.ones(n_firms - 1)])
+        test_firms.ts.override_current("target_intermediate_inputs", target_intermediate.copy())
+        test_firms.ts.override_current("target_capital_inputs", target_capital.copy())
+        test_firms.ts.override_current("planned_technical_investment", planned_technical.copy())
+        test_firms.ts.override_current("planned_tfp_investment", planned_tfp.copy())
+
+        test_firms.revise_activity_against_realised_labour(expected_lcu_prices=np.ones(n_industries))
+
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_labour_scale")[0], 0.5)
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_feasible_target_production")[0], 10.0)
+        assert np.isclose(test_firms.ts.current("target_production")[0], 10.0)
+        assert np.isclose(test_firms.ts.current("target_intermediate_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("target_capital_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("planned_technical_investment")[0, 0], 5.0)
+        assert np.isclose(test_firms.ts.current("planned_tfp_investment")[0], 5.0)
+        assert np.isclose(test_firms.ts.current("planned_productivity_investment")[0], 10.0)
+
+    def test__realised_labour_revision_mixed_firms_resets_all_from_post_credit_feasible(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        target_production = np.full(n_firms, 50.0)
+        feasible_y = np.r_[20.0, 12.0, np.zeros(n_firms - 2)]
+        feasible_labour = np.r_[20.0, 12.0, np.ones(n_firms - 2)]
+        realised_labour = np.r_[10.0, 12.0, np.ones(n_firms - 2)]
+        planned_technical = np.full((n_firms, n_industries), 2.0)
+        planned_tfp = np.full(n_firms, 3.0)
+        test_firms.base_intermediate_inputs_productivity_matrix = np.ones((n_industries, n_industries))
+        test_firms.base_capital_input_use_matrix = np.ones((n_industries, n_industries))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("target_production", target_production)
+        test_firms.ts.override_current("target_intermediate_inputs", np.full((n_firms, n_industries), 99.0))
+        test_firms.ts.override_current("target_capital_inputs", np.full((n_firms, n_industries), 88.0))
+        test_firms.ts.override_current("planned_technical_investment", planned_technical.copy())
+        test_firms.ts.override_current("planned_tfp_investment", planned_tfp.copy())
+        test_firms.ts.override_current("activity_finance_feasible_target_production", feasible_y)
+        test_firms.ts.override_current("activity_finance_feasible_desired_labour_inputs", feasible_labour)
+        test_firms.ts.override_current("labour_inputs", realised_labour)
+
+        test_firms.revise_activity_against_realised_labour(expected_lcu_prices=np.ones(n_industries))
+
+        expected_y = np.r_[10.0, 12.0, np.zeros(n_firms - 2)]
+        assert np.allclose(test_firms.ts.current("target_production"), expected_y)
+        assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), expected_y[:, None])
+        assert np.allclose(test_firms.ts.current("target_capital_inputs"), expected_y[:, None])
+        assert np.allclose(test_firms.ts.current("planned_technical_investment"), planned_technical)
+        assert np.allclose(test_firms.ts.current("planned_tfp_investment"), planned_tfp)
+        assert np.allclose(test_firms.ts.current("activity_finance_realised_labour_scale")[:2], [0.5, 1.0])
+
+    def test__realised_labour_revision_zero_feasible_labour_uses_unit_scale(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        target_production = np.full(n_firms, 7.0)
+
+        test_firms.ts.override_current("target_production", target_production.copy())
+        test_firms.ts.override_current("activity_finance_feasible_target_production", target_production.copy())
+        test_firms.ts.override_current("activity_finance_feasible_desired_labour_inputs", np.zeros(n_firms))
+        test_firms.ts.override_current("labour_inputs", np.zeros(n_firms))
+
+        test_firms.revise_activity_against_realised_labour(expected_lcu_prices=np.ones(n_industries))
+
+        assert np.allclose(test_firms.ts.current("activity_finance_realised_labour_scale"), 1.0)
+        assert np.allclose(test_firms.ts.current("target_production"), target_production)
 
     def test__wage_and_tax_previews_do_not_append_time_series(self, test_firms):
         wage_len = len(test_firms.ts.total_wage)

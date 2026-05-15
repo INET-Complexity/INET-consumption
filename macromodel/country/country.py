@@ -636,6 +636,7 @@ class Country:
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             current_labour_inputs=self.individuals.ts.current("labour_inputs"),
         )
+        self.prepare_post_labour_realised_feasible_activity_plan()
 
         # Firm wages
         self.individuals.ts.employee_income.append(
@@ -961,16 +962,18 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
-    def compute_post_credit_activity_tax_previews(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return tax previews implied by the post-credit feasible activity plan."""
-        feasible_production = self.firms.ts.current("activity_finance_feasible_target_production")
-        target_production = self.firms.ts.current("target_production")
+    def compute_activity_tax_previews(
+        self,
+        activity_production: np.ndarray,
+        reference_target_production: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return tax previews implied by an activity-consistent production plan."""
         expected_output_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.firms.ts.current(
             "price"
         )
         production_tax_preview = (
             self.central_government.states["Taxes Less Subsidies Rates"][self.firms.states["Industry"]]
-            * feasible_production
+            * activity_production
             * expected_output_prices
         )
         pre_credit_corporate_tax_preview = self.firms.estimate_corporate_tax_obligation(
@@ -978,13 +981,20 @@ class Country:
             estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
         feasible_scale = np.divide(
-            feasible_production,
-            target_production,
-            out=np.zeros_like(feasible_production),
-            where=target_production > 0.0,
+            activity_production,
+            reference_target_production,
+            out=np.zeros_like(activity_production),
+            where=reference_target_production > 0.0,
         )
         corporate_tax_preview = pre_credit_corporate_tax_preview * np.maximum(0.0, feasible_scale)
         return production_tax_preview, corporate_tax_preview
+
+    def compute_post_credit_activity_tax_previews(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return tax previews implied by the post-credit feasible activity plan."""
+        return self.compute_activity_tax_previews(
+            activity_production=self.firms.ts.current("activity_finance_feasible_target_production"),
+            reference_target_production=self.firms.ts.current("target_production"),
+        )
 
     def compute_pre_credit_production_tax_obligation_preview(self) -> np.ndarray:
         """Return production-tax preview from the pre-credit target plan."""
@@ -1043,6 +1053,31 @@ class Country:
             self._post_credit_production_tax_obligation_preview,
             self._post_credit_corporate_tax_obligation_preview,
         ) = self.compute_post_credit_activity_tax_previews()
+
+    def prepare_post_labour_realised_feasible_activity_plan(self) -> None:
+        """Revise feasible activity after labour clearing, before production is computed."""
+        if (
+            self.assume_zero_growth
+            or self.firms.configuration.parameters.firm_activity_finance_revision_mode == "none"
+        ):
+            self.firms.ts.activity_finance_realised_feasible_target_production.append(
+                self.firms.ts.current("target_production").copy()
+            )
+            self.firms.ts.activity_finance_realised_labour_scale.append(np.ones(self.firms.ts.current("n_firms")))
+            return
+
+        reference_target_production = self.firms.ts.current("target_production").copy()
+        expected_lcu_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.economy.ts.current(
+            "good_prices"
+        )
+        self.firms.revise_activity_against_realised_labour(expected_lcu_prices=expected_lcu_prices)
+        (
+            self._post_credit_production_tax_obligation_preview,
+            self._post_credit_corporate_tax_obligation_preview,
+        ) = self.compute_activity_tax_previews(
+            activity_production=self.firms.ts.current("activity_finance_realised_feasible_target_production"),
+            reference_target_production=reference_target_production,
+        )
 
     def prepare_goods_market_clearing(self) -> None:
         """Prepare for goods market transactions.

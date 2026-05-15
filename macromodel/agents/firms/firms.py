@@ -1965,6 +1965,26 @@ class Firms(Agent):
         capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
         return target_intermediate, target_capital, intermediate_costs, capital_costs
 
+    @staticmethod
+    def _activity_finance_investment_ratios(
+        planned_tfp_costs: np.ndarray,
+        planned_technical_costs: np.ndarray,
+        planned_intermediate_costs: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        tfp_ratio = np.divide(
+            planned_tfp_costs,
+            planned_intermediate_costs,
+            out=np.zeros_like(planned_tfp_costs),
+            where=planned_intermediate_costs > 0.0,
+        )
+        technical_ratio = np.divide(
+            planned_technical_costs,
+            planned_intermediate_costs,
+            out=np.zeros_like(planned_technical_costs),
+            where=planned_intermediate_costs > 0.0,
+        )
+        return tfp_ratio, technical_ratio
+
     def revise_activity_against_available_finance(
         self,
         expected_lcu_prices: np.ndarray,
@@ -2069,17 +2089,10 @@ class Firms(Agent):
         feasible_tfp_costs = planned_tfp_costs.copy()
 
         if np.any(constrained):
-            tfp_ratio = np.divide(
-                planned_tfp_costs,
-                planned_intermediate_costs,
-                out=np.zeros_like(planned_tfp_costs),
-                where=planned_intermediate_costs > 0.0,
-            )
-            technical_ratio = np.divide(
-                planned_technical_costs,
-                planned_intermediate_costs,
-                out=np.zeros_like(planned_technical_costs),
-                where=planned_intermediate_costs > 0.0,
+            tfp_ratio, technical_ratio = self._activity_finance_investment_ratios(
+                planned_tfp_costs=planned_tfp_costs,
+                planned_technical_costs=planned_technical_costs,
+                planned_intermediate_costs=planned_intermediate_costs,
             )
             low = np.zeros(n_firms)
             high = y_high.copy()
@@ -2193,6 +2206,54 @@ class Firms(Agent):
             planned_tfp_costs=planned_tfp_costs,
             feasible_tfp_costs=feasible_tfp_costs,
         )
+
+    @staticmethod
+    def _post_labour_output_from_realised_labour(
+        feasible_y: np.ndarray,
+        feasible_labour: np.ndarray,
+        realised_labour: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return proportional output scale implied by realised effective labour."""
+        labour_scale = np.divide(
+            realised_labour,
+            feasible_labour,
+            out=np.ones_like(feasible_labour),
+            where=feasible_labour > 0.0,
+        )
+        labour_scale = np.clip(labour_scale, 0.0, 1.0)
+        return feasible_y * labour_scale, labour_scale
+
+    def revise_activity_against_realised_labour(self, expected_lcu_prices: np.ndarray) -> None:
+        """Revise current activity plans after labour clearing with effective labour inputs."""
+        feasible_y = np.maximum(
+            0.0,
+            np.nan_to_num(self.ts.current("activity_finance_feasible_target_production"), nan=0.0),
+        )
+        feasible_labour = np.maximum(
+            0.0,
+            np.nan_to_num(self.ts.current("activity_finance_feasible_desired_labour_inputs"), nan=0.0),
+        )
+        realised_labour = np.maximum(0.0, np.nan_to_num(self.ts.current("labour_inputs"), nan=0.0))
+        realised_feasible_y, labour_scale = self._post_labour_output_from_realised_labour(
+            feasible_y=feasible_y,
+            feasible_labour=feasible_labour,
+            realised_labour=realised_labour,
+        )
+        candidate_intermediate, candidate_capital, _, _ = self._activity_finance_candidate_inputs(
+            realised_feasible_y,
+            expected_lcu_prices,
+        )
+
+        self.ts.override_current("target_production", realised_feasible_y)
+        self.ts.override_current("target_intermediate_inputs", candidate_intermediate)
+        self.ts.override_current("target_capital_inputs", candidate_capital)
+        self.ts.override_current(
+            "planned_productivity_investment",
+            self.ts.current("planned_tfp_investment") + self.ts.current("planned_technical_investment").sum(axis=1),
+        )
+
+        self.ts.activity_finance_realised_feasible_target_production.append(realised_feasible_y)
+        self.ts.activity_finance_realised_labour_scale.append(labour_scale)
 
     def prepare_feasible_activity_plan(
         self,

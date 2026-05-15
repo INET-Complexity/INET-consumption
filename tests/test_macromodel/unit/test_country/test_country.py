@@ -135,6 +135,109 @@ class TestCountry:
 
         assert np.allclose(test_country.current_firm_corporate_tax_obligation_preview(), feasible_preview)
 
+    def test__post_labour_realised_feasible_plan_refreshes_activity_tax_previews(self, test_country, monkeypatch):
+        n_firms = test_country.firms.ts.current("n_firms")
+        target_production = np.full(n_firms, 10.0)
+        realised_feasible_y = np.full(n_firms, 4.0)
+        tax_rates = np.full_like(test_country.central_government.states["Taxes Less Subsidies Rates"], 0.25)
+        prices = np.full(n_firms, 2.0)
+        corporate_tax_preview = np.full(n_firms, 5.0)
+
+        test_country.firms.configuration.parameters.firm_activity_finance_revision_mode = "post_credit_cash_budget"
+        test_country.assume_zero_growth = False
+        test_country.firms.ts.override_current("target_production", target_production)
+        test_country.firms.ts.override_current("price", prices)
+        test_country.economy.ts.override_current("estimated_ppi_inflation", [0.5])
+        test_country.central_government.states["Taxes Less Subsidies Rates"] = tax_rates
+        test_country.firms.ts.override_current("activity_finance_realised_feasible_target_production", realised_feasible_y)
+        monkeypatch.setattr(
+            test_country.firms,
+            "estimate_corporate_tax_obligation",
+            lambda **kwargs: corporate_tax_preview,
+        )
+
+        def revise_against_labour(**_kwargs):
+            test_country.firms.ts.activity_finance_realised_feasible_target_production.append(realised_feasible_y)
+            test_country.firms.ts.activity_finance_realised_labour_scale.append(np.full(n_firms, 0.4))
+            test_country.firms.ts.override_current("target_production", realised_feasible_y)
+
+        monkeypatch.setattr(test_country.firms, "revise_activity_against_realised_labour", revise_against_labour)
+
+        test_country.prepare_post_labour_realised_feasible_activity_plan()
+
+        assert np.allclose(
+            test_country._post_credit_production_tax_obligation_preview,
+            0.25 * realised_feasible_y * prices * 1.5,
+        )
+        assert np.allclose(test_country._post_credit_corporate_tax_obligation_preview, corporate_tax_preview * 0.4)
+
+    def test__post_labour_realised_feasible_plan_skips_none_mode_with_neutral_diagnostics(self, test_country):
+        n_firms = test_country.firms.ts.current("n_firms")
+        target_production = np.full(n_firms, 8.0)
+
+        test_country.firms.configuration.parameters.firm_activity_finance_revision_mode = "none"
+        test_country.firms.ts.override_current("target_production", target_production)
+
+        test_country.prepare_post_labour_realised_feasible_activity_plan()
+
+        assert np.allclose(
+            test_country.firms.ts.current("activity_finance_realised_feasible_target_production"),
+            target_production,
+        )
+        assert np.allclose(test_country.firms.ts.current("activity_finance_realised_labour_scale"), 1.0)
+
+    def test__post_labour_metrics_revises_after_effective_firm_labour_and_before_production(
+        self, test_country, monkeypatch
+    ):
+        events = []
+        n_firms = test_country.firms.ts.current("n_firms")
+        n_individuals = len(test_country.individuals.states["Corresponding Firm ID"])
+        realised_effective_labour = np.full(n_firms, 4.0)
+
+        monkeypatch.setattr(
+            test_country.individuals,
+            "compute_labour_inputs",
+            lambda: np.ones(n_individuals),
+        )
+        monkeypatch.setattr(
+            test_country.firms,
+            "compute_n_employees",
+            lambda **_kwargs: np.ones(n_firms),
+        )
+
+        def compute_firm_labour(**_kwargs):
+            events.append("firm_labour")
+            test_country.firms.ts.labour_productivity_factor.append(np.ones(n_firms))
+            test_country.firms.ts.labour_productivity.append(np.ones(n_firms))
+            test_country.firms.ts.labour_inputs.append(realised_effective_labour)
+            test_country.firms.ts.normalised_labour_inputs.append(realised_effective_labour)
+            return np.ones(n_firms)
+
+        def prepare_post_labour():
+            events.append("post_labour_revision")
+            assert np.allclose(test_country.firms.ts.current("labour_inputs"), realised_effective_labour)
+
+        def compute_production():
+            events.append("production")
+            return np.full(n_firms, 2.0)
+
+        monkeypatch.setattr(test_country.firms, "compute_labour_inputs", compute_firm_labour)
+        monkeypatch.setattr(test_country, "prepare_post_labour_realised_feasible_activity_plan", prepare_post_labour)
+        monkeypatch.setattr(test_country.firms, "compute_production", compute_production)
+        monkeypatch.setattr(
+            test_country.firms,
+            "set_employee_income",
+            lambda **_kwargs: np.zeros(n_individuals),
+        )
+        monkeypatch.setattr(test_country.firms, "compute_price", lambda **_kwargs: np.ones(n_firms))
+        monkeypatch.setattr(test_country, "_set_household_income_expectations", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country, "_set_household_target_demand", lambda **_kwargs: None)
+
+        test_country.assume_zero_growth = False
+        test_country.update_post_labour_planning_metrics()
+
+        assert events == ["firm_labour", "post_labour_revision", "production"]
+
     def test__household_finance_metrics_are_available_pre_credit_and_replaced_post_labour(
         self, test_country, monkeypatch
     ):

@@ -1752,6 +1752,32 @@ class TestFirms:
         expected_goods[0, :2] += [2.0, 1.0]
         assert np.allclose(test_firms.transactor_buyer_states["Initial Goods"], expected_goods)
 
+    def test__set_goods_to_buy_from_current_targets_does_not_append_targets_or_rerun_solver(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        previous_prices = np.full(n_industries, 2.0)
+        planned_technical = np.zeros((n_firms, n_industries))
+        planned_technical[0, 0] = 6.0
+        intermediate_len = len(test_firms.ts.target_intermediate_inputs)
+        capital_len = len(test_firms.ts.target_capital_inputs)
+        diagnostics_len = len(test_firms.ts.activity_finance_available)
+
+        test_firms.ts.override_current("target_intermediate_inputs", np.ones((n_firms, n_industries)))
+        test_firms.ts.override_current("target_capital_inputs", np.full((n_firms, n_industries), 2.0))
+        test_firms.ts.override_current("planned_technical_investment", planned_technical)
+
+        test_firms.set_goods_to_buy_from_current_targets(
+            previous_good_prices=previous_prices,
+            expected_inflation=0.5,
+        )
+
+        assert len(test_firms.ts.target_intermediate_inputs) == intermediate_len
+        assert len(test_firms.ts.target_capital_inputs) == capital_len
+        assert len(test_firms.ts.activity_finance_available) == diagnostics_len
+        expected_goods = np.full((n_firms, n_industries), 3.0)
+        expected_goods[0, 0] += 2.0
+        assert np.allclose(test_firms.transactor_buyer_states["Initial Goods"], expected_goods)
+
     def test__compute_tfp_growth_uses_nominal_tfp_investment_over_nominal_output(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         production = np.full(n_firms, 10.0)

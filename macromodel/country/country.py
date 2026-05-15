@@ -535,12 +535,8 @@ class Country:
         )
         self.individuals.ts.started_new_job.append(self.individuals.states["Started New Job"].astype(float).copy())
 
-    def update_planning_metrics(self) -> None:
-        """Update forward-looking economic indicators.
-
-        Computes expected profits, asset values, benefits, and other metrics
-        used by agents in their planning decisions.
-        """
+    def update_pre_credit_planning_metrics(self) -> None:
+        """Update planning metrics needed before credit-market clearing."""
         # Firms estimate profits
         self.firms.ts.expected_profits.append(
             self.firms.compute_estimated_profits(
@@ -565,25 +561,6 @@ class Country:
             )
         )
 
-        # The central government updates unemployment benefits paid to individuals and social transfers to households
-        self.central_government.update_benefits(
-            historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
-            exogenous_benefit_indexation_inflation=self.exogenous.inflation_before["CPI Inflation"].values,
-            current_estimated_benefit_indexation_inflation=(self.economy.current_expected_consumer_period_inflation()),
-            current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
-            current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
-        )
-
-        # Individuals update their income from unemployment benefits
-        self.individuals.ts.income_from_unemployment_benefits.append(
-            self.central_government.distribute_unemployment_benefits_to_individuals(
-                current_individual_activity_status=self.individuals.states["Activity Status"],
-            )
-        )
-
-        # Individual labour inputs
-        self.individuals.ts.labour_inputs.append(self.individuals.compute_labour_inputs())
-
         # Central bank policy rate
         self.central_bank.ts.policy_rate.append(
             [
@@ -596,6 +573,41 @@ class Country:
                 )
             ]
         )
+
+        # Firm demand for goods, before realised credit is known.
+        self.firms.ts.unconstrained_target_intermediate_inputs.append(
+            self.firms.compute_unconstrained_demand_for_intermediate_inputs(
+                good_prices=self.economy.ts.current("good_prices")
+            )
+        )
+        self.firms.ts.unconstrained_target_intermediate_inputs_costs.append(
+            self.firms.compute_unconstrained_demand_for_intermediate_inputs_value(
+                current_good_prices=self.economy.ts.current("good_prices"),
+            )
+        )
+        self.firms.ts.unconstrained_target_capital_inputs.append(
+            self.firms.compute_unconstrained_demand_for_capital_inputs(
+                good_prices=self.economy.ts.current("good_prices")
+            )
+        )
+        self.firms.ts.unconstrained_target_capital_inputs_costs.append(
+            self.firms.compute_unconstrained_demand_for_capital_inputs_value(
+                current_good_prices=self.economy.ts.current("good_prices"),
+            )
+        )
+
+        self.update_pre_credit_household_finance_metrics()
+
+    def update_pre_credit_household_finance_metrics(self) -> None:
+        """Update household finance inputs needed before housing and credit clearing."""
+        self._update_benefit_planning_metrics()
+        self._set_household_income_expectations(replace_current=False)
+        self._set_household_target_demand(replace_current=False)
+
+    def update_post_labour_planning_metrics(self) -> None:
+        """Update planning metrics that depend on labour clearing."""
+        # Individual labour inputs
+        self.individuals.ts.labour_inputs.append(self.individuals.compute_labour_inputs())
 
         # Number of employees for each firm
         self.firms.ts.number_of_employees.append(
@@ -655,66 +667,80 @@ class Country:
                 )
             )
 
-        # Firm demand for goods
-        self.firms.ts.unconstrained_target_intermediate_inputs.append(
-            self.firms.compute_unconstrained_demand_for_intermediate_inputs(
-                good_prices=self.economy.ts.current("good_prices")
-            )
+        self._set_household_income_expectations(replace_current=True)
+        self._set_household_target_demand(replace_current=True)
+
+    def _update_benefit_planning_metrics(self) -> None:
+        # The central government updates unemployment benefits paid to individuals and social transfers to households
+        self.central_government.update_benefits(
+            historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
+            exogenous_benefit_indexation_inflation=self.exogenous.inflation_before["CPI Inflation"].values,
+            current_estimated_benefit_indexation_inflation=(self.economy.current_expected_consumer_period_inflation()),
+            current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
+            current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
         )
-        self.firms.ts.unconstrained_target_intermediate_inputs_costs.append(
-            self.firms.compute_unconstrained_demand_for_intermediate_inputs_value(
-                current_good_prices=self.economy.ts.current("good_prices"),
-            )
-        )
-        self.firms.ts.unconstrained_target_capital_inputs.append(
-            self.firms.compute_unconstrained_demand_for_capital_inputs(
-                good_prices=self.economy.ts.current("good_prices")
-            )
-        )
-        self.firms.ts.unconstrained_target_capital_inputs_costs.append(
-            self.firms.compute_unconstrained_demand_for_capital_inputs_value(
-                current_good_prices=self.economy.ts.current("good_prices"),
+
+        # Individuals update their income from unemployment benefits
+        self.individuals.ts.income_from_unemployment_benefits.append(
+            self.central_government.distribute_unemployment_benefits_to_individuals(
+                current_individual_activity_status=self.individuals.states["Activity Status"],
             )
         )
 
+    def _set_household_income_expectations(self, *, replace_current: bool) -> None:
         # Individual income
-        self.individuals.ts.expected_income.append(
-            self.individuals.compute_expected_income(
-                expected_firm_profits=self.firms.ts.current("expected_profits"),
-                expected_bank_profits=self.banks.ts.current("expected_profits"),
-                cpi=self.economy.current_consumer_price_level(),
-                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-                income_taxes=self.central_government.states["Income Tax"],
-                tau_firm=self.central_government.states["Profit Tax"],
-            )
+        expected_individual_income = self.individuals.compute_expected_income(
+            expected_firm_profits=self.firms.ts.current("expected_profits"),
+            expected_bank_profits=self.banks.ts.current("expected_profits"),
+            cpi=self.economy.current_consumer_price_level(),
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            income_taxes=self.central_government.states["Income Tax"],
+            tau_firm=self.central_government.states["Profit Tax"],
         )
+        if replace_current:
+            self.individuals.ts.override_current("expected_income", expected_individual_income)
+        else:
+            self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        self.households.ts.expected_income_employee.append(
-            self.households.compute_employee_income(
-                individual_income=self.individuals.ts.current("expected_income"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
+        expected_income_employee = self.households.compute_employee_income(
+            individual_income=self.individuals.ts.current("expected_income"),
+            corr_households=self.individuals.states["Corresponding Household ID"],
         )
-        self.households.ts.expected_income_social_transfers.append(
-            self.households.compute_expected_social_transfer_income(
-                total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-                cpi=self.economy.current_consumer_price_level(),
-                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-            )
+        expected_income_social_transfers = self.households.compute_expected_social_transfer_income(
+            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
+            cpi=self.economy.current_consumer_price_level(),
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
         )
-        self.households.ts.income_rental.append(
-            self.households.compute_rental_income(
-                housing_data=self.housing_market.states["properties"],
-                income_taxes=self.central_government.states["Income Tax"],
-            )
+        income_rental = self.households.compute_rental_income(
+            housing_data=self.housing_market.states["properties"],
+            income_taxes=self.central_government.states["Income Tax"],
         )
-        self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
-        self.households.ts.expected_income_financial_assets.append(
-            self.households.compute_expected_income_from_financial_assets()
-        )
-        self.households.ts.expected_income.append(self.households.compute_expected_income())
+        expected_income_financial_assets = self.households.compute_expected_income_from_financial_assets()
 
+        if replace_current:
+            self.households.ts.override_current("expected_income_employee", expected_income_employee)
+            self.households.ts.override_current("expected_income_social_transfers", expected_income_social_transfers)
+            self.households.ts.override_current("income_rental", income_rental)
+            self.households.ts.override_current("total_income_rental", [income_rental.sum()])
+            self.households.ts.override_current(
+                "expected_income_financial_assets",
+                expected_income_financial_assets,
+            )
+        else:
+            self.households.ts.expected_income_employee.append(expected_income_employee)
+            self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
+            self.households.ts.income_rental.append(income_rental)
+            self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
+            self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
+
+        expected_household_income = self.households.compute_expected_income()
+        if replace_current:
+            self.households.ts.override_current("expected_income", expected_household_income)
+        else:
+            self.households.ts.expected_income.append(expected_household_income)
+
+    def _set_household_target_demand(self, *, replace_current: bool) -> None:
         # Household target consumption
         # Note: For CES substitution, we track additional taxes (like carbon tax) similar to firms
         # Currently no additional taxes are implemented, so both initial and current are zero
@@ -722,39 +748,53 @@ class Country:
         current_additional_taxes = np.zeros(len(self.firms.ts.current("price")))
         initial_additional_taxes = np.zeros(len(self.firms.ts.current("price")))
 
-        self.households.ts.target_consumption.append(
-            self.households.compute_target_consumption(
-                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-                current_cpi=self.economy.current_consumer_price_level(),
-                initial_cpi=self.economy.initial_consumer_price_level(),
-                exogenous_total_consumption=self.exogenous.national_accounts_during[
-                    "Real Household Consumption (Value)"
-                ].values.flatten(),
-                per_capita_unemployment_benefits=self.central_government.ts.current(
-                    "unemployment_benefits_by_individual"
-                )[0],
-                tau_vat=self.central_government.states["Value-added Tax"],
-                assume_zero_growth=self.assume_zero_growth,
-                prices=self.firms.ts.current("price"),
-                initial_prices=self.firms.ts.initial("price"),
-                taxes=current_additional_taxes,
-                initial_taxes=initial_additional_taxes,
-            )
+        saving_rates_histogram_len = len(self.households.ts.saving_rates_histogram)
+        target_consumption = self.households.compute_target_consumption(
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            current_cpi=self.economy.current_consumer_price_level(),
+            initial_cpi=self.economy.initial_consumer_price_level(),
+            exogenous_total_consumption=self.exogenous.national_accounts_during[
+                "Real Household Consumption (Value)"
+            ].values.flatten(),
+            per_capita_unemployment_benefits=self.central_government.ts.current("unemployment_benefits_by_individual")[
+                0
+            ],
+            tau_vat=self.central_government.states["Value-added Tax"],
+            assume_zero_growth=self.assume_zero_growth,
+            prices=self.firms.ts.current("price"),
+            initial_prices=self.firms.ts.initial("price"),
+            taxes=current_additional_taxes,
+            initial_taxes=initial_additional_taxes,
         )
 
-        # Household target investment
-        self.households.ts.target_investment.append(
-            self.households.compute_target_investment(
-                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-                current_cpi=self.economy.current_consumer_price_level(),
-                initial_cpi=self.economy.initial_consumer_price_level(),
-                exogenous_total_investment=self.exogenous.national_accounts_during[
-                    "Real Household Investment (Value)"
-                ].values.flatten(),
-                tau_cf=self.central_government.states["Capital Formation Tax"],
-                assume_zero_growth=self.assume_zero_growth,
-            )
+        if replace_current:
+            self.households.ts.override_current("target_consumption", target_consumption)
+            if len(self.households.ts.saving_rates_histogram) > saving_rates_histogram_len:
+                saving_rates_histogram = self.households.ts.saving_rates_histogram.pop()
+                self.households.ts.override_current("saving_rates_histogram", saving_rates_histogram)
+        else:
+            self.households.ts.target_consumption.append(target_consumption)
+
+        target_investment = self.households.compute_target_investment(
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            current_cpi=self.economy.current_consumer_price_level(),
+            initial_cpi=self.economy.initial_consumer_price_level(),
+            exogenous_total_investment=self.exogenous.national_accounts_during[
+                "Real Household Investment (Value)"
+            ].values.flatten(),
+            tau_cf=self.central_government.states["Capital Formation Tax"],
+            assume_zero_growth=self.assume_zero_growth,
         )
+
+        if replace_current:
+            self.households.ts.override_current("target_investment", target_investment)
+        else:
+            self.households.ts.target_investment.append(target_investment)
+
+    def update_planning_metrics(self) -> None:
+        """Compatibility wrapper for callers that still use the old phase name."""
+        self.update_pre_credit_planning_metrics()
+        self.update_post_labour_planning_metrics()
 
     def prepare_housing_market_clearing(self) -> None:
         """Prepare for housing market transactions.
@@ -808,9 +848,7 @@ class Country:
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
         )
-        firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
-            taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
-        )
+        firm_production_tax_obligation_preview = self.compute_pre_credit_production_tax_obligation_preview()
         scheduled_firm_installment_preview = self.credit_market.compute_scheduled_firm_installments_preview()
         firm_interest_on_deposits_preview = self.firms.compute_interest_paid_on_deposits(
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
@@ -917,12 +955,57 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
-    def prepare_goods_market_clearing(self) -> None:
-        """Prepare for goods market transactions.
+    def compute_post_credit_activity_tax_previews(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return tax previews implied by the post-credit feasible activity plan."""
+        feasible_production = self.firms.ts.current("activity_finance_feasible_target_production")
+        target_production = self.firms.ts.current("target_production")
+        expected_output_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.firms.ts.current(
+            "price"
+        )
+        production_tax_preview = (
+            self.central_government.states["Taxes Less Subsidies Rates"][self.firms.states["Industry"]]
+            * feasible_production
+            * expected_output_prices
+        )
+        pre_credit_corporate_tax_preview = self.firms.estimate_corporate_tax_obligation(
+            estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+        )
+        feasible_scale = np.divide(
+            feasible_production,
+            target_production,
+            out=np.zeros_like(feasible_production),
+            where=target_production > 0.0,
+        )
+        corporate_tax_preview = pre_credit_corporate_tax_preview * np.maximum(0.0, feasible_scale)
+        return production_tax_preview, corporate_tax_preview
 
-        Updates production plans, consumption demands, and prices before
-        market clearing.
-        """
+    def compute_pre_credit_production_tax_obligation_preview(self) -> np.ndarray:
+        """Return production-tax preview from the pre-credit target plan."""
+        target_production = np.maximum(0.0, self.firms.ts.current("target_production"))
+        expected_output_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.firms.ts.current(
+            "price"
+        )
+        return (
+            self.central_government.states["Taxes Less Subsidies Rates"][self.firms.states["Industry"]]
+            * target_production
+            * expected_output_prices
+        )
+
+    def current_firm_corporate_tax_obligation_preview(self) -> np.ndarray:
+        """Return the corporate-tax preview to reserve during firm settlement."""
+        return getattr(
+            self,
+            "_post_credit_corporate_tax_obligation_preview",
+            self.firms.estimate_corporate_tax_obligation(
+                estimated_growth=self.economy.ts.current("estimated_growth")[0],
+                estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            ),
+        )
+
+    def prepare_post_credit_feasible_activity_plan(self) -> None:
+        """Revise firm activity after credit clears and before labour clearing."""
+        n_firms = self.firms.ts.current("n_firms")
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             individual_wages=self.individuals.ts.current("employee_income"),
@@ -931,32 +1014,39 @@ class Country:
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
         )
-        firm_production_tax_obligation_preview = self.firms.compute_taxes_paid_on_production(
-            taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
-        )
-        firm_corporate_tax_obligation_preview = self.firms.estimate_corporate_tax_obligation(
-            estimated_growth=self.economy.ts.current("estimated_growth")[0],
-            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
-        )
         firm_interest_obligation_preview = self.firms.ts.current(
             "firm_settlement_scheduled_interest_due"
         ) + self.firms.compute_interest_paid_on_deposits(
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
         )
-        firm_loan_interest_obligation_preview = self.firms.ts.current("firm_settlement_scheduled_interest_due")
-        firm_debt_installment_preview = self.firms.ts.current("firm_settlement_scheduled_principal_due")
-        self.firms.prepare_goods_market_clearing(
-            exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
+        self.firms.prepare_feasible_activity_plan(
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             wage_obligation_preview=firm_wage_obligation_preview,
-            production_tax_obligation_preview=firm_production_tax_obligation_preview,
-            corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
+            production_tax_obligation_preview=np.zeros(n_firms),
+            corporate_tax_obligation_preview=np.zeros(n_firms),
             interest_obligation_preview=firm_interest_obligation_preview,
-            loan_interest_obligation_preview=firm_loan_interest_obligation_preview,
-            debt_installment_preview=firm_debt_installment_preview,
+            loan_interest_obligation_preview=self.firms.ts.current("firm_settlement_scheduled_interest_due"),
+            debt_installment_preview=self.firms.ts.current("firm_settlement_scheduled_principal_due"),
             assume_zero_growth=self.assume_zero_growth,
+        )
+        self.firms.apply_feasible_labour_demand()
+        (
+            self._post_credit_production_tax_obligation_preview,
+            self._post_credit_corporate_tax_obligation_preview,
+        ) = self.compute_post_credit_activity_tax_previews()
+
+    def prepare_goods_market_clearing(self) -> None:
+        """Prepare for goods market transactions.
+
+        Updates production plans, consumption demands, and prices before
+        market clearing.
+        """
+        self.firms.prepare_goods_market_orders(
+            exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
+            previous_good_prices=self.economy.ts.current("good_prices"),
+            expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
         self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
@@ -1211,10 +1301,7 @@ class Country:
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
         )
-        firm_corporate_tax_obligation_preview = self.firms.estimate_corporate_tax_obligation(
-            estimated_growth=self.economy.ts.current("estimated_growth")[0],
-            estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
-        )
+        firm_corporate_tax_obligation_preview = self.current_firm_corporate_tax_obligation_preview()
         firm_debt_settlement = self.firms.plan_firm_debt_settlement(
             taxes_paid_on_production=current_taxes_paid_on_production,
             interest_paid_on_deposits=firm_interest_paid_on_deposits,

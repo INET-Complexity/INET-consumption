@@ -1,6 +1,7 @@
 import tempfile
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -77,6 +78,92 @@ def test_default_country_goods_market_configurations_do_not_conflict_with_one_ov
     resolved_configuration = resolve_goods_market_configuration(simulation_configuration)
 
     assert resolved_configuration.functions.clearing.parameters["buyer_minimum_fill_micro"] == 0.25
+
+
+def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypatch):
+    events = []
+
+    class _TS:
+        def current(self, _key):
+            return [0.0]
+
+    class _Country:
+        country_name = "FRA"
+        economy = SimpleNamespace(ts=_TS())
+
+        def __getattr__(self, name):
+            if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):
+
+                def _method(**_kwargs):
+                    events.append(f"country.{name}")
+
+                return _method
+            raise AttributeError(name)
+
+    class _ExchangeRates:
+        def get_current_exchange_rates_from_usd_to_lcu(self, **_kwargs):
+            events.append("exchange_rates.get")
+            return 1.0
+
+    class _RegionalAggregator:
+        def sync_central_banks(self, _countries):
+            events.append("regional.sync")
+
+    class _GoodsMarket:
+        def prepare(self):
+            events.append("goods.prepare")
+
+        def clear(self):
+            events.append("goods.clear")
+
+        def record(self):
+            events.append("goods.record")
+
+    class _RestOfWorld:
+        def update_planning_metrics(self, **_kwargs):
+            events.append("row.update_planning_metrics")
+
+        def record_bought_goods(self):
+            events.append("row.record_bought_goods")
+
+    class _Timestep:
+        year = 2014
+        month = 1
+
+        def step(self):
+            events.append("timestep.step")
+
+    monkeypatch.setattr(Simulation, "production_price_index", property(lambda _self: 1.0))
+    monkeypatch.setattr(Simulation, "total_real_production", property(lambda _self: 1.0))
+    monkeypatch.setattr(Simulation, "aggregate_nominal_production", property(lambda _self: 1.0))
+
+    country = _Country()
+    simulation = Simulation(
+        countries={"FRA": country},
+        rest_of_the_world=_RestOfWorld(),
+        goods_market=_GoodsMarket(),
+        exchange_rates=_ExchangeRates(),
+        timestep=_Timestep(),
+        configuration=SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()}),
+        initial_year=2014,
+        regional_aggregator=_RegionalAggregator(),
+    )
+
+    simulation.iterate()
+
+    assert events.count("country.clear_labour_market") == 1
+    assert events.index("regional.sync") < events.index("country.prepare_credit_market_clearing")
+    assert events.index("country.clear_credit_market") < events.index("country.process_housing_market_clearing")
+    assert events.index("country.process_credit_market_clearing") < events.index(
+        "country.prepare_post_credit_feasible_activity_plan"
+    )
+    assert events.index("country.prepare_post_credit_feasible_activity_plan") < events.index(
+        "country.clear_labour_market"
+    )
+    assert events.index("country.clear_labour_market") < events.index("country.update_post_labour_planning_metrics")
+    assert events.index("country.update_post_labour_planning_metrics") < events.index(
+        "country.prepare_goods_market_clearing"
+    )
 
 
 def test_different_non_default_country_goods_market_configurations_raise():
@@ -937,7 +1024,7 @@ def test_technical_only_investment_allocation(datawrapper, seed=42):
     )
 
 
-def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
+def test_technical_growth_uses_executed_investment(datawrapper, monkeypatch, seed=42):
     """Technical coefficient growth should consume realised, not merely planned, investment."""
 
     class TechnicalGrowthSpy:
@@ -985,6 +1072,25 @@ def test_technical_growth_uses_executed_investment(datawrapper, seed=42):
     tfp_spy = TFPGrowthSpy()
     firms.functions["technical_coefficients_growth"] = technical_spy
     firms.functions["productivity_growth"] = tfp_spy
+    original_execute_productivity_investment = firms.execute_productivity_investment
+
+    def constrained_execute_productivity_investment():
+        original_execute_productivity_investment()
+        planned_total = firms.ts.current("planned_productivity_investment")
+        planned_tfp = firms.ts.current("planned_tfp_investment")
+        planned_technical = firms.ts.current("planned_technical_investment")
+        execution_ratio = np.full_like(planned_total, 0.5)
+        executed_total = planned_total * execution_ratio
+        firms.ts.override_current("executed_productivity_investment", executed_total)
+        firms.ts.override_current("executed_tfp_investment", planned_tfp * execution_ratio)
+        firms.ts.override_current("direct_tfp_investment_cash_expense", planned_tfp * execution_ratio)
+        firms.ts.override_current("executed_technical_investment", planned_technical * execution_ratio[:, np.newaxis])
+        firms.ts.override_current(
+            "real_executed_productivity_investment",
+            firms.compute_real_productivity_investment(executed_total),
+        )
+
+    monkeypatch.setattr(firms, "execute_productivity_investment", constrained_execute_productivity_investment)
 
     simulation.iterate()
 

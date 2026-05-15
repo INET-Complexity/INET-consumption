@@ -369,10 +369,11 @@ class Simulation:
         Performs a complete iteration of the economic model, including:
         1. Pre-hook execution
         2. Exchange rate updates
-        3. Country-level economic processes
-        4. Labor market clearing
-        5. Housing and credit market clearing
-        6. Goods market clearing
+        3. Country-level target setting and pre-credit planning
+        4. Housing and credit market clearing
+        5. Post-credit firm feasibility revision
+        6. Labor market clearing
+        7. Goods market clearing
         7. Metric updates and recording
         8. Post-hook execution
 
@@ -395,8 +396,7 @@ class Simulation:
             country.initialisation_phase(exchange_rate_usd_to_lcu=exchange_rate)
             country.estimation_phase()
             country.target_setting_phase()
-            country.clear_labour_market()
-            country.update_planning_metrics()
+            country.update_pre_credit_planning_metrics()
 
         if self.regional_aggregator:
             logging.info("Synchronising central banks across regions")
@@ -411,6 +411,9 @@ class Simulation:
             country.clear_credit_market()
             country.process_housing_market_clearing()
             country.process_credit_market_clearing()
+            country.prepare_post_credit_feasible_activity_plan()
+            country.clear_labour_market()
+            country.update_post_labour_planning_metrics()
 
             # Prepare goods market clearing
             logging.info("Prepare goods market clearing")

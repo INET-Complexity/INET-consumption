@@ -2194,7 +2194,7 @@ class Firms(Agent):
             feasible_tfp_costs=feasible_tfp_costs,
         )
 
-    def prepare_buying_goods(
+    def prepare_feasible_activity_plan(
         self,
         previous_good_prices: np.ndarray,
         expected_inflation: float,
@@ -2206,15 +2206,11 @@ class Firms(Agent):
         loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
     ) -> None:
-        """Prepare firms' buying plans for goods market.
+        """Append target purchases and revise them against post-credit finance.
 
-        Sets targets for:
-        - Intermediate input purchases
-        - Capital input purchases
-        Considers:
-        - Previous prices
-        - Expected inflation
-        - Growth assumptions
+        This is the activity-planning part of goods preparation. Stage 2 runs it
+        after credit clears and before labour clearing so feasible labour demand
+        can become the operative labour-market demand.
 
         Args:
             previous_good_prices (np.ndarray): Previous period prices
@@ -2278,9 +2274,23 @@ class Firms(Agent):
             debt_installment_preview=debt_installment_preview,
         )
 
+    def apply_feasible_labour_demand(self) -> None:
+        """Use post-credit feasible labour demand as the operative labour target."""
+        self.ts.override_current(
+            "desired_labour_inputs",
+            self.ts.current("activity_finance_feasible_desired_labour_inputs").copy(),
+        )
+
+    def set_goods_to_buy_from_current_targets(
+        self,
+        previous_good_prices: np.ndarray,
+        expected_inflation: float,
+    ) -> None:
+        """Set goods orders from already-prepared current activity targets."""
         # Setting total real amount of goods to buy
         total_goods = self.ts.current("target_intermediate_inputs") + self.ts.current("target_capital_inputs")
         # Include planned technical investment if it exists
+        expected_lcu_prices = (1 + expected_inflation) * previous_good_prices
         if hasattr(self.ts, "planned_technical_investment") and len(self.ts.planned_technical_investment) > 0:
             technical_goods = np.divide(
                 self.ts.current("planned_technical_investment"),
@@ -2290,6 +2300,35 @@ class Firms(Agent):
             )
             total_goods = total_goods + technical_goods
         self.set_goods_to_buy(total_goods)
+
+    def prepare_buying_goods(
+        self,
+        previous_good_prices: np.ndarray,
+        expected_inflation: float,
+        assume_zero_growth: bool = False,
+        wage_obligation_preview: np.ndarray | None = None,
+        production_tax_obligation_preview: np.ndarray | None = None,
+        corporate_tax_obligation_preview: np.ndarray | None = None,
+        interest_obligation_preview: np.ndarray | None = None,
+        loan_interest_obligation_preview: np.ndarray | None = None,
+        debt_installment_preview: np.ndarray | None = None,
+    ) -> None:
+        """Prepare firms' buying plans for goods market."""
+        self.prepare_feasible_activity_plan(
+            previous_good_prices=previous_good_prices,
+            expected_inflation=expected_inflation,
+            assume_zero_growth=assume_zero_growth,
+            wage_obligation_preview=wage_obligation_preview,
+            production_tax_obligation_preview=production_tax_obligation_preview,
+            corporate_tax_obligation_preview=corporate_tax_obligation_preview,
+            interest_obligation_preview=interest_obligation_preview,
+            loan_interest_obligation_preview=loan_interest_obligation_preview,
+            debt_installment_preview=debt_installment_preview,
+        )
+        self.set_goods_to_buy_from_current_targets(
+            previous_good_prices=previous_good_prices,
+            expected_inflation=expected_inflation,
+        )
 
     def prepare_selling_goods(self) -> None:
         """Prepare firms' selling plans for goods market.
@@ -2350,6 +2389,20 @@ class Firms(Agent):
             loan_interest_obligation_preview=loan_interest_obligation_preview,
             debt_installment_preview=debt_installment_preview,
             assume_zero_growth=assume_zero_growth,
+        )
+        self.prepare_selling_goods()
+
+    def prepare_goods_market_orders(
+        self,
+        exchange_rate_usd_to_lcu: float,
+        previous_good_prices: np.ndarray,
+        expected_inflation: float,
+    ) -> None:
+        """Prepare goods-market orders from the already revised activity plan."""
+        self.set_exchange_rate(exchange_rate_usd_to_lcu)
+        self.set_goods_to_buy_from_current_targets(
+            previous_good_prices=previous_good_prices,
+            expected_inflation=expected_inflation,
         )
         self.prepare_selling_goods()
 

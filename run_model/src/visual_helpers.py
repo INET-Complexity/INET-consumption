@@ -1850,6 +1850,7 @@ def plot_agent_timeseries(
     agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
     agg: str = "sum",
     by_sector: bool = False,
+    panel_titles: list[str] | None = None,
     no_cols: int | None = None,
     base_height: int = 220,
     base_width: int = 380,
@@ -1876,6 +1877,23 @@ def plot_agent_timeseries(
 
     Plot firm-level series aggregated by sector (industry):
         plot_agent_timeseries(model, "FRA", "firms", ["tfp_multiplier", "deposits"], by_sector=True, agg="mean")
+
+    Plot multiple series per panel (supports cross-agent overlays via "agent.var" strings):
+        plot_agent_timeseries(
+            model,
+            "FRA",
+            "banks",
+            [
+                ["average_overdraft_rate_on_household_deposits", "central_bank.policy_rate"],
+                [
+                    "average_overdraft_rate_on_firm_deposits",
+                    "average_interest_rates_on_short_term_firm_loans",
+                    "central_bank.policy_rate",
+                ],
+            ],
+            panel_titles=["France: household rates", "France: firm rates"],
+            no_cols=2,
+        )
     """
     if isinstance(variables, str):
         variables = [variables]
@@ -1893,6 +1911,25 @@ def plot_agent_timeseries(
         raise ValueError(f"{agent_type}.ts is missing for country {country_code!r}.")
 
     out_index = model.shallow_df_dict()[country_code].index
+
+    panel_mode = any(isinstance(v, (list, tuple)) for v in variables)
+    panels: list[list[str]] | None
+    if panel_mode:
+        if by_sector:
+            raise ValueError("by_sector=True is not supported when variables are provided as panels.")
+        panels = []
+        for entry in variables:
+            if isinstance(entry, (list, tuple)):
+                panel = [str(x) for x in entry]
+            else:
+                panel = [str(entry)]
+            if not panel:
+                raise ValueError("Panel variables must be non-empty.")
+            panels.append(panel)
+        if panel_titles is not None and len(panel_titles) != len(panels):
+            raise ValueError("panel_titles length must match the number of panels.")
+    else:
+        panels = None
 
     if by_sector:
         if agent_type != "firms":
@@ -1956,15 +1993,20 @@ def plot_agent_timeseries(
             return float(np.nanmedian(array))
         raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
 
+    n_subplots = len(panels) if panel_mode and panels is not None else len(variables)
     if no_cols is None:
-        no_cols = 1 if len(variables) == 1 else 3
+        no_cols = 1 if n_subplots == 1 else 3
     if no_cols <= 0:
         raise ValueError("no_cols must be a positive integer.")
-    no_rows = int(np.ceil(len(variables) / no_cols))
-    subplot_titles = variables + [""] * (no_rows * no_cols - len(variables))
+    no_rows = int(np.ceil(n_subplots / no_cols))
+    if panel_mode and panels is not None:
+        base_titles = list(panel_titles) if panel_titles is not None else [" + ".join(panel) for panel in panels]
+    else:
+        base_titles = [str(v) for v in variables]
+    subplot_titles = base_titles + [""] * (no_rows * no_cols - len(base_titles))
 
     if show_legend is None:
-        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector
+        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
 
     fig = make_subplots(
         rows=no_rows,
@@ -1975,120 +2017,200 @@ def plot_agent_timeseries(
         vertical_spacing=0.09 if no_rows <= 3 else 0.05,
     )
 
-    for idx, var in enumerate(variables):
-        values = _safe_ts_values(ts, var)
-        if values is None:
-            raise ValueError(f"{agent_type}.ts has no field {var!r}.")
-        horizon = min(len(out_index), len(values))
-        row = (idx // no_cols) + 1
-        col = (idx % no_cols) + 1
-
-        sample = None
-        for value in list(values)[:horizon]:
-            unpacked = unpack_cell(value)
-            if unpacked is not None:
-                sample = unpacked
-                break
-        is_vector = not isinstance(sample, (type(None), float, int, np.floating, np.integer))
-
-        if by_sector and is_vector:
-
-            def _sector_reduce(vec: np.ndarray) -> np.ndarray:
-                vec = np.asarray(vec, dtype=float).reshape(-1)
-                if firm_industry_idx is None or n_sectors is None:
-                    return np.full(0, np.nan, dtype=float)
-                if firm_industry_idx.size != vec.size:
-                    # Fall back to NaNs if we cannot align the firm vector to industries.
-                    return np.full(n_sectors, np.nan, dtype=float)
-                reducer = agg.lower()
-                if reducer == "median":
-                    out = np.full(n_sectors, np.nan, dtype=float)
-                    for sector in range(n_sectors):
-                        vals = vec[firm_industry_idx == sector]
-                        if vals.size:
-                            out[sector] = float(np.nanmedian(vals))
-                    return out
-
-                ok = np.isfinite(vec)
-                sums = np.bincount(firm_industry_idx[ok], weights=vec[ok], minlength=n_sectors).astype(float)
-                cnts = np.bincount(firm_industry_idx[ok], minlength=n_sectors).astype(float)
-                if reducer == "sum":
-                    return sums
-                if reducer == "mean":
-                    return np.divide(sums, cnts, out=np.full(n_sectors, np.nan, dtype=float), where=cnts > 0.0)
-                raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
-
-            series_by_sector: dict[str, list[float]] = {str(code): [] for code in sector_codes}
-            for value in list(values)[:horizon]:
-                unpacked = unpack_cell(value)
-                vec = np.asarray(unpacked, dtype=float).reshape(-1) if unpacked is not None else np.asarray([], float)
-                reduced = _sector_reduce(vec)
-                for sector_idx, code in enumerate(sector_codes):
-                    y = float(reduced[sector_idx]) if sector_idx < reduced.size else np.nan
-                    series_by_sector[str(code)].append(y)
-
-            for sector_idx, code in enumerate(sector_codes):
-                code = str(code)
-                fig.add_trace(
-                    go.Scatter(
-                        x=out_index[:horizon],
-                        y=series_by_sector[code],
-                        mode="lines",
-                        name=code,
-                        showlegend=(show_legend and idx == 0),
-                        line={
-                            "width": line_width,
-                            "color": sector_color_map.get(code) if sector_color_map is not None else None,
-                        },
-                    ),
-                    row=row,
-                    col=col,
-                )
-        elif is_vector and agent_ids is not None and len(agent_ids) > 1:
-            series_by_id: dict[int, list[float]] = {selected_id: [] for selected_id in agent_ids}
-            for value in list(values)[:horizon]:
-                unpacked = unpack_cell(value)
-                array = (
-                    np.asarray(unpacked, dtype=float).reshape(-1)
-                    if unpacked is not None
-                    else np.asarray([], dtype=float)
-                )
-                for selected_id in agent_ids:
-                    if selected_id < 0 or selected_id >= array.size:
-                        series_by_id[selected_id].append(np.nan)
-                    else:
-                        series_by_id[selected_id].append(float(array[selected_id]))
-
-            for j, selected_id in enumerate(agent_ids):
-                fig.add_trace(
-                    go.Scatter(
-                        x=out_index[:horizon],
-                        y=series_by_id[selected_id],
-                        mode="lines",
-                        name=f"id={selected_id}",
-                        showlegend=(show_legend and idx == 0),
-                        line={
-                            "width": line_width,
-                            "color": agent_color_map.get(selected_id) if agent_color_map is not None else None,
-                        },
-                    ),
-                    row=row,
-                    col=col,
-                )
+    def _resolve_series(spec: str):
+        spec = str(spec)
+        if "." in spec:
+            agent_key, var_name = spec.split(".", 1)
+            agent_key = agent_key.strip().lower()
+            var_name = var_name.strip()
         else:
-            series = [_reduce(v) for v in list(values)[:horizon]]
-            fig.add_trace(
-                go.Scatter(
-                    x=out_index[:horizon],
-                    y=series,
-                    mode="lines",
-                    name=str(var),
-                    showlegend=show_legend,
-                    line={"width": line_width},
-                ),
-                row=row,
-                col=col,
-            )
+            agent_key = agent_type
+            var_name = spec.strip()
+
+        agent_obj = getattr(country, agent_key, None)
+        if agent_obj is None:
+            raise ValueError(f"Unknown agent {agent_key!r} for country {country_code!r}.")
+        ts_obj = getattr(agent_obj, "ts", None)
+        if ts_obj is None:
+            raise ValueError(f"{agent_key}.ts is missing for country {country_code!r}.")
+        values_obj = _safe_ts_values(ts_obj, var_name)
+        if values_obj is None:
+            raise ValueError(f"{agent_key}.ts has no field {var_name!r}.")
+        return agent_key, var_name, values_obj
+
+    if panel_mode and panels is not None:
+        # Stable color per (agent,var) across panels/subplots.
+        unique_keys: list[str] = []
+        seen: set[str] = set()
+        for panel in panels:
+            for spec in panel:
+                agent_key, var_name, _ = _resolve_series(spec)
+                key = f"{agent_key}.{var_name}"
+                if key not in seen:
+                    seen.add(key)
+                    unique_keys.append(key)
+        palette = _categorical_colors(len(unique_keys))
+        series_color_map = {key: palette[idx] for idx, key in enumerate(unique_keys)}
+
+        legend_keys_added: set[str] = set()
+        for idx, panel in enumerate(panels):
+            row = (idx // no_cols) + 1
+            col = (idx % no_cols) + 1
+            for spec in panel:
+                agent_key, var_name, values = _resolve_series(spec)
+                key = f"{agent_key}.{var_name}"
+                horizon = min(len(out_index), len(values))
+
+                sample = None
+                for value in list(values)[:horizon]:
+                    unpacked = unpack_cell(value)
+                    if unpacked is not None:
+                        sample = unpacked
+                        break
+                is_vector = not isinstance(sample, (type(None), float, int, np.floating, np.integer))
+                if is_vector and agent_ids is not None and len(agent_ids) > 1:
+                    raise ValueError(
+                        "Panel mode does not support plotting multiple agent_id lines for vector series. "
+                        f"Got agent_id={agent_ids} for {key!r}. "
+                        "Either omit agent_id to aggregate vectors via agg, pass a single agent_id, "
+                        "or use non-panel mode."
+                    )
+
+                series = [_reduce(v) for v in list(values)[:horizon]]
+                showlegend = bool(show_legend and key not in legend_keys_added)
+                if showlegend:
+                    legend_keys_added.add(key)
+                fig.add_trace(
+                    go.Scatter(
+                        x=out_index[:horizon],
+                        y=series,
+                        mode="lines",
+                        name=key,
+                        showlegend=showlegend,
+                        line={"width": line_width, "color": series_color_map.get(key)},
+                    ),
+                    row=row,
+                    col=col,
+                )
+    else:
+        for idx, var in enumerate(variables):
+            values = _safe_ts_values(ts, var)
+            if values is None:
+                raise ValueError(f"{agent_type}.ts has no field {var!r}.")
+            horizon = min(len(out_index), len(values))
+            row = (idx // no_cols) + 1
+            col = (idx % no_cols) + 1
+
+            sample = None
+            for value in list(values)[:horizon]:
+                unpacked = unpack_cell(value)
+                if unpacked is not None:
+                    sample = unpacked
+                    break
+            is_vector = not isinstance(sample, (type(None), float, int, np.floating, np.integer))
+
+            if by_sector and is_vector:
+
+                def _sector_reduce(vec: np.ndarray) -> np.ndarray:
+                    vec = np.asarray(vec, dtype=float).reshape(-1)
+                    if firm_industry_idx is None or n_sectors is None:
+                        return np.full(0, np.nan, dtype=float)
+                    if firm_industry_idx.size != vec.size:
+                        # Fall back to NaNs if we cannot align the firm vector to industries.
+                        return np.full(n_sectors, np.nan, dtype=float)
+                    reducer = agg.lower()
+                    if reducer == "median":
+                        out = np.full(n_sectors, np.nan, dtype=float)
+                        for sector in range(n_sectors):
+                            vals = vec[firm_industry_idx == sector]
+                            if vals.size:
+                                out[sector] = float(np.nanmedian(vals))
+                        return out
+
+                    ok = np.isfinite(vec)
+                    sums = np.bincount(firm_industry_idx[ok], weights=vec[ok], minlength=n_sectors).astype(float)
+                    cnts = np.bincount(firm_industry_idx[ok], minlength=n_sectors).astype(float)
+                    if reducer == "sum":
+                        return sums
+                    if reducer == "mean":
+                        return np.divide(sums, cnts, out=np.full(n_sectors, np.nan, dtype=float), where=cnts > 0.0)
+                    raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
+
+                series_by_sector: dict[str, list[float]] = {str(code): [] for code in sector_codes}
+                for value in list(values)[:horizon]:
+                    unpacked = unpack_cell(value)
+                    vec = (
+                        np.asarray(unpacked, dtype=float).reshape(-1)
+                        if unpacked is not None
+                        else np.asarray([], float)
+                    )
+                    reduced = _sector_reduce(vec)
+                    for sector_idx, code in enumerate(sector_codes):
+                        y = float(reduced[sector_idx]) if sector_idx < reduced.size else np.nan
+                        series_by_sector[str(code)].append(y)
+
+                for sector_idx, code in enumerate(sector_codes):
+                    code = str(code)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=out_index[:horizon],
+                            y=series_by_sector[code],
+                            mode="lines",
+                            name=code,
+                            showlegend=(show_legend and idx == 0),
+                            line={
+                                "width": line_width,
+                                "color": sector_color_map.get(code) if sector_color_map is not None else None,
+                            },
+                        ),
+                        row=row,
+                        col=col,
+                    )
+            elif is_vector and agent_ids is not None and len(agent_ids) > 1:
+                series_by_id: dict[int, list[float]] = {selected_id: [] for selected_id in agent_ids}
+                for value in list(values)[:horizon]:
+                    unpacked = unpack_cell(value)
+                    array = (
+                        np.asarray(unpacked, dtype=float).reshape(-1)
+                        if unpacked is not None
+                        else np.asarray([], dtype=float)
+                    )
+                    for selected_id in agent_ids:
+                        if selected_id < 0 or selected_id >= array.size:
+                            series_by_id[selected_id].append(np.nan)
+                        else:
+                            series_by_id[selected_id].append(float(array[selected_id]))
+
+                for j, selected_id in enumerate(agent_ids):
+                    fig.add_trace(
+                        go.Scatter(
+                            x=out_index[:horizon],
+                            y=series_by_id[selected_id],
+                            mode="lines",
+                            name=f"id={selected_id}",
+                            showlegend=(show_legend and idx == 0),
+                            line={
+                                "width": line_width,
+                                "color": agent_color_map.get(selected_id) if agent_color_map is not None else None,
+                            },
+                        ),
+                        row=row,
+                        col=col,
+                    )
+            else:
+                series = [_reduce(v) for v in list(values)[:horizon]]
+                fig.add_trace(
+                    go.Scatter(
+                        x=out_index[:horizon],
+                        y=series,
+                        mode="lines",
+                        name=str(var),
+                        showlegend=show_legend,
+                        line={"width": line_width},
+                    ),
+                    row=row,
+                    col=col,
+                )
 
     if title is None:
         if agent_ids is not None and len(agent_ids) > 1:

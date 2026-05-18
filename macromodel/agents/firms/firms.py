@@ -1475,7 +1475,7 @@ class Firms(Agent):
         diagnostics = {
             "credit_budget_internal_cash": internal_cash,
             "credit_budget_existing_overdraft": existing_overdraft,
-            "credit_budget_expected_sales": expected_sales,
+            "expected_sales": expected_sales,
             "credit_budget_wage_obligations": wage_obligations,
             "credit_budget_production_tax_obligations": production_tax_obligations,
             "credit_budget_corporate_tax_obligations": corporate_tax_obligations,

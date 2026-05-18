@@ -55,7 +55,7 @@ class TestFirms:
             "total_sales",
             "credit_budget_internal_cash",
             "credit_budget_existing_overdraft",
-            "credit_budget_expected_sales",
+            "expected_sales",
             "credit_budget_wage_obligations",
             "credit_budget_production_tax_obligations",
             "credit_budget_corporate_tax_obligations",
@@ -1348,14 +1348,14 @@ class TestFirms:
             production_tax_obligation_preview=np.r_[5.0, np.zeros(n_firms - 1)],
         )
 
-        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 12.0)
+        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 15.0)
         assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 0.0)
         assert np.isclose(test_firms.ts.current("target_overdraft_refinance_credit")[0], 0.0)
-        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 12.0)
-        assert np.isclose(test_firms.ts.current("target_long_term_credit")[0], 8.0)
+        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 15.0)
+        assert np.isclose(test_firms.ts.current("target_long_term_credit")[0], 10.0)
         assert np.isclose(test_firms.ts.current("credit_budget_internal_cash")[0], 10.0)
         assert np.isclose(test_firms.ts.current("credit_budget_existing_overdraft")[0], 0.0)
-        assert np.isclose(test_firms.ts.current("credit_budget_expected_sales")[0], 20.0)
+        assert np.isclose(test_firms.ts.current("expected_sales")[0], 20.0)
         assert np.isclose(test_firms.ts.current("credit_budget_wage_obligations")[0], 15.0)
         assert np.isclose(test_firms.ts.current("credit_budget_production_tax_obligations")[0], 5.0)
         assert np.isclose(test_firms.ts.current("credit_budget_corporate_tax_obligations")[0], 0.0)
@@ -1381,7 +1381,7 @@ class TestFirms:
         assert np.allclose(
             cash_after_hard,
             test_firms.ts.current("credit_budget_internal_cash")
-            + test_firms.ts.current("credit_budget_expected_sales")
+            + test_firms.ts.current("expected_sales")
             - test_firms.ts.current("credit_budget_hard_obligations"),
         )
         assert np.allclose(
@@ -1423,7 +1423,7 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("target_long_term_credit")[0], 0.0)
         assert np.isclose(test_firms.ts.current("credit_budget_internal_cash")[0], 0.0)
         assert np.isclose(test_firms.ts.current("credit_budget_existing_overdraft")[0], 100.0)
-        assert np.isclose(test_firms.ts.current("credit_budget_expected_sales")[0], 0.0)
+        assert np.isclose(test_firms.ts.current("expected_sales")[0], 0.0)
         assert np.isclose(test_firms.ts.current("credit_budget_hard_obligations")[0], 0.0)
         assert np.isclose(test_firms.ts.current("credit_budget_cash_after_hard_obligations")[0], 0.0)
         assert np.isclose(test_firms.ts.current("credit_budget_available_after_hard_and_overdraft")[0], -100.0)

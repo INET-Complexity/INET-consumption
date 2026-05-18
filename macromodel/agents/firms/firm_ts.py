@@ -369,7 +369,7 @@ class FirmTimeSeries(TimeSeries):
             #
             credit_budget_internal_cash=np.zeros(data.shape[0]),
             credit_budget_existing_overdraft=np.zeros(data.shape[0]),
-            credit_budget_expected_sales=np.zeros(data.shape[0]),
+            expected_sales=np.zeros(data.shape[0]),
             credit_budget_wage_obligations=np.zeros(data.shape[0]),
             credit_budget_production_tax_obligations=np.zeros(data.shape[0]),
             credit_budget_corporate_tax_obligations=np.zeros(data.shape[0]),
@@ -702,7 +702,7 @@ def create_firms_timeseries(
         #
         credit_budget_internal_cash=np.zeros(data.shape[0]),
         credit_budget_existing_overdraft=np.zeros(data.shape[0]),
-        credit_budget_expected_sales=np.zeros(data.shape[0]),
+        expected_sales=np.zeros(data.shape[0]),
         credit_budget_wage_obligations=np.zeros(data.shape[0]),
         credit_budget_production_tax_obligations=np.zeros(data.shape[0]),
         credit_budget_corporate_tax_obligations=np.zeros(data.shape[0]),

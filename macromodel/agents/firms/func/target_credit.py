@@ -104,10 +104,9 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
                 and direct TFP spending. Second array is long-term activity credit
                 for capital inputs and technical investment.
         """
-        available_for_activity = np.maximum(
-            0.0,
-            internal_cash + expected_sales - hard_obligations - existing_overdraft,
-        )
+        # Expected sales remain a planning preview, but the current activity budget
+        # should only use cash that is actually available before the goods market.
+        available_for_activity = np.maximum(0.0, internal_cash - hard_obligations - existing_overdraft)
         total_activity_budget = (
             unconstrained_target_intermediate_inputs_costs
             + planned_tfp_investment_costs
@@ -178,10 +177,9 @@ class SimpleTargetCreditSetter(TargetCreditSetter):
                 and direct TFP spending. Second array is long-term activity credit
                 for capital inputs and technical investment.
         """
-        available_for_activity = np.maximum(
-            0.0,
-            internal_cash + expected_sales - hard_obligations - existing_overdraft,
-        )
+        # Expected sales are not treated as spendable finance for the current
+        # activity budget because they arrive after the goods market clears.
+        available_for_activity = np.maximum(0.0, internal_cash - hard_obligations - existing_overdraft)
         total_activity_budget = (
             unconstrained_target_intermediate_inputs_costs
             + planned_tfp_investment_costs

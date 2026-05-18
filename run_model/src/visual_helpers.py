@@ -2038,6 +2038,10 @@ def plot_agent_timeseries(
             raise ValueError(f"{agent_key}.ts has no field {var_name!r}.")
         return agent_key, var_name, values_obj
 
+    def _legend_label(spec: str) -> str:
+        spec = str(spec).strip()
+        return spec.split(".", 1)[1] if "." in spec else spec
+
     if panel_mode and panels is not None:
         # Stable color per (agent,var) across panels/subplots.
         unique_keys: list[str] = []
@@ -2085,7 +2089,7 @@ def plot_agent_timeseries(
                         x=out_index[:horizon],
                         y=series,
                         mode="lines",
-                        name=key,
+                        name=_legend_label(key),
                         showlegend=showlegend,
                         line={"width": line_width, "color": series_color_map.get(key)},
                     ),
@@ -2094,9 +2098,7 @@ def plot_agent_timeseries(
                 )
     else:
         for idx, var in enumerate(variables):
-            values = _safe_ts_values(ts, var)
-            if values is None:
-                raise ValueError(f"{agent_type}.ts has no field {var!r}.")
+            agent_key, var_name, values = _resolve_series(var)
             horizon = min(len(out_index), len(values))
             row = (idx // no_cols) + 1
             col = (idx % no_cols) + 1
@@ -2160,7 +2162,9 @@ def plot_agent_timeseries(
                             showlegend=(show_legend and idx == 0),
                             line={
                                 "width": line_width,
-                                "color": sector_color_map.get(code) if sector_color_map is not None else None,
+                                "color": sector_color_map.get(code)
+                                if sector_color_map is not None
+                                else None,
                             },
                         ),
                         row=row,
@@ -2191,7 +2195,9 @@ def plot_agent_timeseries(
                             showlegend=(show_legend and idx == 0),
                             line={
                                 "width": line_width,
-                                "color": agent_color_map.get(selected_id) if agent_color_map is not None else None,
+                                "color": agent_color_map.get(selected_id)
+                                if agent_color_map is not None
+                                else None,
                             },
                         ),
                         row=row,
@@ -2204,7 +2210,7 @@ def plot_agent_timeseries(
                         x=out_index[:horizon],
                         y=series,
                         mode="lines",
-                        name=str(var),
+                        name=_legend_label(f"{agent_key}.{var_name}"),
                         showlegend=show_legend,
                         line={"width": line_width},
                     ),
@@ -2229,10 +2235,38 @@ def plot_agent_timeseries(
         title_text=title,
         template="plotly_white",
         hovermode="x unified" if shared_xaxes else "closest",
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "left", "x": 0.0}
-        if show_legend
+        legend={"orientation": "v", "yanchor": "top", "y": 1.0, "xanchor": "left", "x": 1.02}
+        if show_legend and not panel_mode
         else None,
+        margin={"t": 90, "r": 280} if show_legend else None,
     )
+    if panel_mode and show_legend:
+        for idx, panel in enumerate(panels or []):
+            row = (idx // no_cols) + 1
+            col = (idx % no_cols) + 1
+            subplot = fig.get_subplot(row, col)
+            labels = []
+            for spec in panel:
+                _, var_name, _ = _resolve_series(spec)
+                labels.append(_legend_label(var_name))
+            if not labels:
+                continue
+            legend_text = "<br>".join(labels)
+            fig.add_annotation(
+                x=min(float(subplot.xaxis.domain[1]) + 0.015, 0.995),
+                y=float(subplot.yaxis.domain[1]),
+                xref="paper",
+                yref="paper",
+                xanchor="left",
+                yanchor="top",
+                showarrow=False,
+                text=legend_text,
+                font={"size": 11},
+                align="left",
+                bgcolor="rgba(255,255,255,0.85)",
+                bordercolor="rgba(0,0,0,0.15)",
+                borderwidth=1,
+            )
     for col in range(1, no_cols + 1):
         fig.update_xaxes(title_text="t", row=no_rows, col=col)
 

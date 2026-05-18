@@ -297,6 +297,91 @@ def test_plot_agent_timeseries_aggregates_vector_series_and_can_select_agent_id(
     assert list(fig_multi.data[1].y) == pytest.approx([2.0, 4.0, 6.0])
 
 
+def test_plot_agent_timeseries_uses_bare_variable_names_and_side_legend():
+    index = pd.RangeIndex(3, name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [1.0, 1.0, 1.0]}, index=index)
+    country = SimpleNamespace(
+        firms=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_sales": [10.0, 11.0, 12.0],
+                }
+            )
+        ),
+        households=SimpleNamespace(
+            ts=_ts(
+                {
+                    "target_consumption": [4.0, 5.0, 6.0],
+                }
+            )
+        ),
+    )
+    model = SimpleNamespace(
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+    )
+
+    fig = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["households.target_consumption", "firms.total_sales"],
+        show_legend=True,
+        show=False,
+    )
+
+    assert [trace.name for trace in fig.data] == ["target_consumption", "total_sales"]
+    assert fig.layout.legend.orientation == "v"
+    assert fig.layout.legend.x == pytest.approx(1.02)
+    assert fig.layout.legend.y == pytest.approx(1.0)
+
+
+def test_plot_agent_timeseries_uses_panel_annotations_without_agent_prefixes():
+    index = pd.RangeIndex(3, name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [1.0, 1.0, 1.0]}, index=index)
+    country = SimpleNamespace(
+        firms=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_sales": [10.0, 11.0, 12.0],
+                }
+            )
+        ),
+        households=SimpleNamespace(
+            ts=_ts(
+                {
+                    "target_consumption": [4.0, 5.0, 6.0],
+                }
+            )
+        ),
+    )
+    model = SimpleNamespace(
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+    )
+
+    fig = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=[
+            ["households.target_consumption", "firms.total_sales"],
+            ["firms.total_sales"],
+        ],
+        panel_titles=["household panel", "firm panel"],
+        no_cols=1,
+        show_legend=True,
+        show=False,
+    )
+
+    legend_annotations = [annotation for annotation in fig.layout.annotations if annotation.bgcolor]
+    assert len(legend_annotations) == 2
+    assert all("." not in annotation.text for annotation in legend_annotations)
+    assert any("target_consumption" in annotation.text for annotation in legend_annotations)
+    assert all(annotation.x > 0.9 for annotation in legend_annotations)
+    assert fig.layout.legend.orientation is None
+
+
 def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():
     df = pd.DataFrame(
         {

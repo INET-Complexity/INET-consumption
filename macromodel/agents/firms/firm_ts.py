@@ -252,7 +252,7 @@ class FirmTimeSeries(TimeSeries):
             output_by_employee_histogram=get_histogram(
                 data["Production"].values / data["Number of Employees"].values, None
             ),
-            target_production=np.full(data.shape[0], np.nan),
+            target_production=data["Production"].values.copy(),
             constrained_intermediate_inputs_target_production=np.full(len(data), np.nan),
             constrained_capital_inputs_target_production=np.full(len(data), np.nan),
             #
@@ -586,7 +586,7 @@ def create_firms_timeseries(
         output_by_employee_histogram=get_histogram(
             data["Production"].values / data["Number of Employees"].values, None
         ),
-        target_production=np.full(data.shape[0], np.nan),
+        target_production=data["Production"].values.copy(),
         constrained_intermediate_inputs_target_production=np.full(len(data), np.nan),
         constrained_capital_inputs_target_production=np.full(len(data), np.nan),
         #

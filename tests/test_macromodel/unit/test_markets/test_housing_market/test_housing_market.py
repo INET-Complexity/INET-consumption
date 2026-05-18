@@ -25,6 +25,26 @@ def _mixed_property_data() -> pd.DataFrame:
     )
 
 
+def _moving_owner_property_data() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "House ID": [10.0, 20.0, 30.0],
+            "Value": [100.0, 200.0, 0.0],
+            "Rent": [1.0, 2.0, 0.0],
+            "Corresponding Owner Household ID": [0.0, 1.0, np.nan],
+            "Corresponding Inhabitant Household ID": [0.0, np.nan, np.nan],
+            "Is Owner-Occupied": [1.0, 0.0, 1.0],
+        }
+    )
+
+
+def _owner_occupied_flags(properties: pd.DataFrame) -> np.ndarray:
+    return (
+        (properties["Corresponding Owner Household ID"] >= 0)
+        & (properties["Corresponding Owner Household ID"] == properties["Corresponding Inhabitant Household ID"])
+    ).astype(int)
+
+
 def _assert_mixed_property_state(market: HousingMarket) -> None:
     properties = market.states["properties"]
     np.testing.assert_array_equal(properties.index.values, np.array([10, 11, 12]))
@@ -35,6 +55,34 @@ def _assert_mixed_property_state(market: HousingMarket) -> None:
     assert market.ts.current("total_number_of_houses_owner_occupied")[0] == 1
     assert market.ts.current("total_number_of_houses_rented")[0] == 1
     assert market.ts.current("total_number_of_houses_unoccupied")[0] == 1
+
+
+def _process_owner_move(market: HousingMarket, sales_type: str) -> None:
+    price_or_rent = 250.0 if sales_type == "Sell" else 2.0
+    market.states["current_sales"] = pd.DataFrame(
+        {
+            "sales_types": [sales_type],
+            "property_id": [20],
+            "property_value": [200.0],
+            "price_or_rent": [price_or_rent],
+            "seller_id": [1],
+            "buyer_id": [0],
+        }
+    )
+    household_states = {
+        "Corresponding Inhabited House ID": np.array([10, 20]),
+        "Tenure Status of the Main Residence": np.array([1, 1]),
+        "Corresponding Property Owner": np.array([0, 1]),
+        "corr_renters": [[], []],
+    }
+    received_mortgages = np.array([price_or_rent, 0.0])
+    financial_wealth = np.array([0.0, 0.0])
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=received_mortgages,
+        household_financial_wealth=financial_wealth,
+    )
 
 
 def test_households_prepare_housing_market_marks_missing_inhabitants_for_rent(test_households, test_config):
@@ -108,6 +156,32 @@ def test_main_residence_wealth_uses_house_id_index(test_households, test_config)
     assert np.count_nonzero(wealth_main_residence) == 1
 
 
+def test_owned_vacant_previous_residence_counts_as_other_property_wealth(test_households, test_config):
+    market = HousingMarket.from_data(
+        country_name="FRA",
+        scale=1,
+        data=_moving_owner_property_data(),
+        config=test_config["FRA"]["housing_market"],
+    )
+    _process_owner_move(market, "Sell")
+
+    test_households.states["Tenure Status of the Main Residence"][:] = 0
+    test_households.states["Corresponding Inhabited House ID"][:] = -1
+    test_households.states["Tenure Status of the Main Residence"][0] = 1
+    test_households.states["Corresponding Inhabited House ID"][0] = 20
+
+    wealth_main_residence = test_households.compute_wealth_of_the_main_residence(
+        housing_data=market.states["properties"]
+    )
+    wealth_other_properties = test_households.compute_wealth_of_other_properties(
+        housing_data=market.states["properties"]
+    )
+
+    assert wealth_main_residence[0] == 250.0
+    assert wealth_other_properties[0] == 100.0
+    assert wealth_other_properties.sum() == 100.0
+
+
 @pytest.mark.parametrize(
     "clearer",
     [
@@ -158,6 +232,39 @@ def test_clearers_use_house_id_labels_for_open_properties(
     assert not bool(housing_data.loc[property_id, status_field])
 
 
+@pytest.mark.parametrize(
+    ("sales_type", "expected_new_property_flag", "expected_owner_occupied_count", "expected_rented_count"),
+    [
+        ("Sell", 1, 1, 0),
+        ("Rental", 0, 0, 1),
+    ],
+)
+def test_process_clearing_refreshes_owner_occupied_flags_after_owner_move(
+    sales_type,
+    expected_new_property_flag,
+    expected_owner_occupied_count,
+    expected_rented_count,
+    test_config,
+):
+    market = HousingMarket.from_data(
+        country_name="FRA",
+        scale=1,
+        data=_moving_owner_property_data(),
+        config=test_config["FRA"]["housing_market"],
+    )
+
+    _process_owner_move(market, sales_type)
+    properties = market.states["properties"]
+
+    assert properties.loc[10, "Corresponding Inhabitant Household ID"] == -1
+    assert properties.loc[10, "Is Owner-Occupied"] == 0
+    assert properties.loc[20, "Is Owner-Occupied"] == expected_new_property_flag
+    np.testing.assert_array_equal(properties["Is Owner-Occupied"].values, _owner_occupied_flags(properties).values)
+    assert market.ts.current("total_number_of_houses_owner_occupied")[0] == expected_owner_occupied_count
+    assert market.ts.current("total_number_of_houses_rented")[0] == expected_rented_count
+    assert market.ts.current("total_number_of_houses_unoccupied")[0] == 2
+
+
 def test_from_data_preserves_property_identifiers_and_initial_counts(test_config):
     market = HousingMarket.from_data(
         country_name="FRA",
@@ -167,6 +274,22 @@ def test_from_data_preserves_property_identifiers_and_initial_counts(test_config
     )
 
     _assert_mixed_property_state(market)
+
+
+def test_from_data_uses_guarded_owner_occupied_rule(test_config):
+    market = HousingMarket.from_data(
+        country_name="FRA",
+        scale=1,
+        data=_moving_owner_property_data(),
+        config=test_config["FRA"]["housing_market"],
+    )
+
+    properties = market.states["properties"]
+
+    assert properties.loc[30, "Corresponding Owner Household ID"] == -1
+    assert properties.loc[30, "Corresponding Inhabitant Household ID"] == -1
+    assert properties.loc[30, "Is Owner-Occupied"] == 0
+    np.testing.assert_array_equal(properties["Is Owner-Occupied"].values, _owner_occupied_flags(properties).values)
 
 
 def test_from_pickled_market_preserves_property_identifiers_and_initial_counts():

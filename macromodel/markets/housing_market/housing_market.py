@@ -267,8 +267,8 @@ class HousingMarket:
         property_data["Temporarily for Sale"] = False
         return property_data
 
-    @staticmethod
-    def _normalise_property_identifiers(property_data: pd.DataFrame) -> pd.DataFrame:
+    @classmethod
+    def _normalise_property_identifiers(cls, property_data: pd.DataFrame) -> pd.DataFrame:
         """Clean property ID columns without dropping valid mapping data."""
         property_data = property_data.copy()
         id_columns = [
@@ -289,12 +289,20 @@ class HousingMarket:
             bad_rows = property_data.index[missing_owner].tolist()
             raise ValueError(f"Missing owner household ID for valued properties: {bad_rows}")
 
-        property_data["Is Owner-Occupied"] = (
-            property_data["Corresponding Owner Household ID"] == property_data["Corresponding Inhabitant Household ID"]
-        ).astype(int)
+        cls._refresh_owner_occupied_flags(property_data)
         property_data = property_data.set_index("House ID", drop=False)
         property_data.rename_axis("Properties", inplace=True)
         return property_data
+
+    @staticmethod
+    def _refresh_owner_occupied_flags(property_data: pd.DataFrame) -> None:
+        property_data["Is Owner-Occupied"] = (
+            (property_data["Corresponding Owner Household ID"] >= 0)
+            & (
+                property_data["Corresponding Owner Household ID"]
+                == property_data["Corresponding Inhabitant Household ID"]
+            )
+        ).astype(int)
 
     def update_property_value(self) -> None:
         """Update the values of all properties in the market.
@@ -527,14 +535,7 @@ class HousingMarket:
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
 
-            # General stuff
-            if (
-                self.states["properties"].at[property_id, "Corresponding Owner Household ID"]
-                == self.states["properties"].at[property_id, "Corresponding Inhabitant Household ID"]
-            ):
-                self.states["properties"].at[property_id, "Is Owner-Occupied"] = 1
-            else:
-                self.states["properties"].at[property_id, "Is Owner-Occupied"] = 0
+        self._refresh_owner_occupied_flags(self.states["properties"])
 
         # Update aggregates
         self.ts.total_number_of_houses_rented.append(
@@ -549,12 +550,7 @@ class HousingMarket:
             ]
         )
         self.ts.total_number_of_houses_owner_occupied.append(
-            [
-                np.sum(
-                    self.states["properties"]["Corresponding Inhabitant Household ID"]
-                    == self.states["properties"]["Corresponding Owner Household ID"]
-                )
-            ]
+            [np.sum(self.states["properties"]["Is Owner-Occupied"] == 1)]
         )
         self.ts.total_number_of_houses_unoccupied.append(
             [np.sum(self.states["properties"]["Corresponding Inhabitant Household ID"] == -1)]

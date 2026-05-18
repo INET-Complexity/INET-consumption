@@ -37,6 +37,13 @@ This ensures you capture the **realized state** of the economy, not intermediate
 
 ## Available Loggers
 
+### Housing Market Diagnostics (`housing_market_diagnostics.md`)
+
+Documents the owner-occupancy flag invariant used to debug
+`wealth_other_properties` accounting. Use it when checking whether owned vacant
+properties are correctly classified as other-property wealth rather than stale
+owner-occupied housing.
+
 ### H1: Labor Substitution Logger (`tfp_labor_logger.py`)
 
 **Hypothesis**: TFP growth causes unemployment by allowing firms to produce same output with fewer workers, while demand expectations remain flat.

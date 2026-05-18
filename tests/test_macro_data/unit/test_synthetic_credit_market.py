@@ -26,6 +26,7 @@ def test_zero_firm_debt_zeros_firm_loan_principals():
         {
             "Outstanding Balance of other Non-Mortgage Loans": [10.0, 0.0, 5.0, 20.0],
             "Outstanding Balance of HMR Mortgages": [50.0, 100.0, 0.0, 25.0],
+            "Outstanding Balance of Mortgages on other Properties": [5.0, 0.0, 40.0, 10.0],
             "Corresponding Bank ID": [0, 0, 1, 1],
         }
     )
@@ -58,3 +59,45 @@ def test_zero_firm_debt_zeros_firm_loan_principals():
     )
     assert credit_market_nonzero.longterm_loans.principal.sum() > 0.0
     assert credit_market_nonzero.longterm_loans.installments.sum() > 0.0
+    expected_mortgage_debt = (
+        household_data["Outstanding Balance of HMR Mortgages"]
+        + household_data["Outstanding Balance of Mortgages on other Properties"]
+    )
+    np.testing.assert_allclose(credit_market_nonzero.mortgage_loans.principal.sum(axis=0), expected_mortgage_debt)
+
+
+def test_mortgage_loan_principals_include_other_property_mortgages():
+    bank_data = pd.DataFrame(
+        {
+            "Long-Term Interest Rates on Firm Loans": [0.05, 0.06],
+            "Interest Rates on Household Consumption Loans": [0.10, 0.12],
+            "Interest Rates on Mortgages": [0.03, 0.035],
+        }
+    )
+    firm_data = pd.DataFrame({"Debt": [0.0], "Corresponding Bank ID": [0]})
+    household_data = pd.DataFrame(
+        {
+            "Outstanding Balance of other Non-Mortgage Loans": [0.0, 0.0, 0.0],
+            "Outstanding Balance of HMR Mortgages": [50.0, 0.0, 25.0],
+            "Outstanding Balance of Mortgages on other Properties": [5.0, 40.0, 10.0],
+            "Corresponding Bank ID": [0, 1, 1],
+        }
+    )
+
+    credit_market = SyntheticCreditMarket.create_from_agents(
+        firms=SimpleNamespace(country_name="FRA", year=2014, firm_data=firm_data),
+        population=SimpleNamespace(household_data=household_data),
+        banks=SimpleNamespace(bank_data=bank_data),
+        zero_firm_debt=True,
+        firm_loan_maturity=60,
+        hh_consumption_maturity=12,
+        mortgage_maturity=120,
+    )
+
+    expected_mortgage_debt = (
+        household_data["Outstanding Balance of HMR Mortgages"]
+        + household_data["Outstanding Balance of Mortgages on other Properties"]
+    )
+    np.testing.assert_allclose(credit_market.mortgage_loans.principal.sum(axis=0), expected_mortgage_debt)
+    assert np.isclose(credit_market.mortgage_loans.principal.sum(), expected_mortgage_debt.sum())
+    assert np.all(credit_market.mortgage_loans.installments.sum(axis=0)[expected_mortgage_debt > 0.0] > 0.0)

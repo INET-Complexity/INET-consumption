@@ -22,6 +22,27 @@ class TestHouseholds:
         ]:
             assert state in test_households.states.keys()
 
+    def test__initial_main_residence_wealth_matches_owner_tenure_state(self, test_households):
+        owns_main_residence = np.isin(test_households.states["Tenure Status of the Main Residence"], [1, 2, 4]) & (
+            test_households.states["Corresponding Inhabited House ID"] != -1
+        )
+
+        assert np.all(test_households.ts.initial("wealth_main_residence")[~owns_main_residence] == 0.0)
+        np.testing.assert_allclose(
+            test_households.ts.initial("wealth_real_assets"),
+            test_households.ts.initial("wealth_main_residence")
+            + test_households.ts.initial("wealth_other_properties")
+            + test_households.ts.initial("wealth_other_real_assets"),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.initial("wealth"),
+            test_households.ts.initial("wealth_real_assets") + test_households.ts.initial("wealth_financial_assets"),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.initial("net_wealth"),
+            test_households.ts.initial("wealth") - test_households.ts.initial("debt"),
+        )
+
     def test__mortgage_target_ignores_rentals(self, test_households):
         n_households = test_households.ts.current("n_households")
 

@@ -299,7 +299,8 @@ class MortgageLoans(LoanData):
         Returns:
             MortgageLoans: Container with preprocessed loan data
         """
-        household_mortgage_debt = household_data["Outstanding Balance of HMR Mortgages"].values
+        debt_columns = ["Outstanding Balance of HMR Mortgages", "Outstanding Balance of Mortgages on other Properties"]
+        household_mortgage_debt = household_data[debt_columns].sum(axis=1).values
         households_corresponding_bank = household_data["Corresponding Bank ID"].values
 
         principal = np.zeros((bank_data.shape[0], household_mortgage_debt.shape[0]))

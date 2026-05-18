@@ -10,7 +10,8 @@ def test__prepare_housing_market_clearing_uses_configured_period_inflation_for_r
     test_country.economy.consumer_price_index_source = "fixed_basket_cpi"
     test_country.economy.ts.dicts["cpi_fixed_basket_pop_change"] = [[0.11], [0.12]]
     captured = {}
-    test_country.housing_market.states = {"properties": test_country.housing_market.states}
+    if "properties" not in test_country.housing_market.states:
+        test_country.housing_market.states = {"properties": test_country.housing_market.states}
 
     monkeypatch.setattr(test_country.housing_market, "update_property_value", lambda: None)
     monkeypatch.setattr(test_country.households, "prepare_housing_market_clearing", lambda **kwargs: None)

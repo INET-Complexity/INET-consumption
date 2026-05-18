@@ -15,7 +15,6 @@ import h5py
 import numpy as np
 import pandas as pd
 
-import macromodel.util.get_histogram
 from macro_data import SyntheticHousingMarket
 from macromodel.configurations import HousingMarketConfiguration
 from macromodel.markets.housing_market.housing_market_ts import (
@@ -153,21 +152,9 @@ class HousingMarket:
         data = synthetic_housing_market.housing_market_data.astype(float)
         property_data = data.copy()
         property_data.rename_axis("Properties", inplace=True)
-        property_data["Sale Price"] = property_data["Value"]
-        property_data["Newly on the Rental Market"] = False
-        property_data["Up for Rent"] = None
-        property_data["Temporarily for Sale"] = False
+        property_data = cls._initialise_runtime_property_columns(property_data)
 
-        # property_data["Corresponding Inhabitant Household ID"].loc[
-        #     :, np.isnan(property_data["Corresponding Inhabitant Household ID"])
-        # ] = -1
-        property_data["Corresponding Inhabitant Household ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        property_data["House ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        property_data["Is Owner-Occupied"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        property_data["Corresponding Owner Household ID"] = property_data["Corresponding Owner Household ID"].astype(
-            int
-        )
-        property_data["Corresponding Inhabitant Household ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
+        property_data = cls._normalise_property_identifiers(property_data)
 
         ts = create_housing_market_timeseries(
             data=property_data,
@@ -248,11 +235,8 @@ class HousingMarket:
 
         # Recording the states of all homes
         states = data.copy()
-        states["Corresponding Inhabitant Household ID"][np.isnan(states["Corresponding Inhabitant Household ID"])] = -1
-        states["House ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        states["Is Owner-Occupied"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        states["Corresponding Owner Household ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
-        states["Corresponding Inhabitant Household ID"] = macromodel.util.get_histogram.fillna(-1).astype(int)
+        states = cls._initialise_runtime_property_columns(states)
+        states = cls._normalise_property_identifiers(states)
 
         # Create the corresponding time series object
         ts = create_housing_market_timeseries(
@@ -271,8 +255,54 @@ class HousingMarket:
             scale,
             functions,
             ts,
-            states,
+            {"properties": states, "current_sales": pd.DataFrame()},
         )
+
+    @staticmethod
+    def _initialise_runtime_property_columns(property_data: pd.DataFrame) -> pd.DataFrame:
+        property_data = property_data.copy()
+        property_data["Sale Price"] = property_data["Value"]
+        property_data["Newly on the Rental Market"] = False
+        property_data["Up for Rent"] = False
+        property_data["Temporarily for Sale"] = False
+        return property_data
+
+    @classmethod
+    def _normalise_property_identifiers(cls, property_data: pd.DataFrame) -> pd.DataFrame:
+        """Clean property ID columns without dropping valid mapping data."""
+        property_data = property_data.copy()
+        id_columns = [
+            "House ID",
+            "Corresponding Owner Household ID",
+            "Corresponding Inhabitant Household ID",
+        ]
+        for column in id_columns:
+            property_data[column] = pd.to_numeric(property_data[column], errors="coerce").fillna(-1).astype(int)
+
+        if property_data["House ID"].duplicated().any():
+            duplicated = property_data.loc[property_data["House ID"].duplicated(), "House ID"].tolist()
+            raise ValueError(f"Duplicate property House ID values: {duplicated}")
+
+        valued_properties = property_data["Value"].fillna(0.0) > 0.0
+        missing_owner = valued_properties & (property_data["Corresponding Owner Household ID"] < 0)
+        if missing_owner.any():
+            bad_rows = property_data.index[missing_owner].tolist()
+            raise ValueError(f"Missing owner household ID for valued properties: {bad_rows}")
+
+        cls._refresh_owner_occupied_flags(property_data)
+        property_data = property_data.set_index("House ID", drop=False)
+        property_data.rename_axis("Properties", inplace=True)
+        return property_data
+
+    @staticmethod
+    def _refresh_owner_occupied_flags(property_data: pd.DataFrame) -> None:
+        property_data["Is Owner-Occupied"] = (
+            (property_data["Corresponding Owner Household ID"] >= 0)
+            & (
+                property_data["Corresponding Owner Household ID"]
+                == property_data["Corresponding Inhabitant Household ID"]
+            )
+        ).astype(int)
 
     def update_property_value(self) -> None:
         """Update the values of all properties in the market.
@@ -505,14 +535,7 @@ class HousingMarket:
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
 
-            # General stuff
-            if (
-                self.states["properties"].at[property_id, "Corresponding Owner Household ID"]
-                == self.states["properties"].at[property_id, "Corresponding Inhabitant Household ID"]
-            ):
-                self.states["properties"].at[property_id, "Is Owner-Occupied"] = 1
-            else:
-                self.states["properties"].at[property_id, "Is Owner-Occupied"] = 0
+        self._refresh_owner_occupied_flags(self.states["properties"])
 
         # Update aggregates
         self.ts.total_number_of_houses_rented.append(
@@ -527,12 +550,7 @@ class HousingMarket:
             ]
         )
         self.ts.total_number_of_houses_owner_occupied.append(
-            [
-                np.sum(
-                    self.states["properties"]["Corresponding Inhabitant Household ID"]
-                    == self.states["properties"]["Corresponding Owner Household ID"]
-                )
-            ]
+            [np.sum(self.states["properties"]["Is Owner-Occupied"] == 1)]
         )
         self.ts.total_number_of_houses_unoccupied.append(
             [np.sum(self.states["properties"]["Corresponding Inhabitant Household ID"] == -1)]

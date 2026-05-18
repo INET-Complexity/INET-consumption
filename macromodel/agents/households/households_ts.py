@@ -83,6 +83,29 @@ def create_households_timeseries(
     Returns:
         TimeSeries: Initialized time series for household variables
     """
+    inhabited_house_id = pd.to_numeric(data["Corresponding Inhabited House ID"], errors="coerce").fillna(-1).values
+    owns_main_residence = np.isin(data["Tenure Status of the Main Residence"].values, [1, 2, 4]) & (
+        inhabited_house_id >= 0
+    )
+    initial_wealth_main_residence = np.where(
+        owns_main_residence,
+        data["Value of the Main Residence"].values,
+        0.0,
+    )
+    initial_wealth_other_properties = data["Value of other Properties"].values
+    initial_wealth_other_real_assets = data["Wealth Other Real Assets"].values
+    initial_wealth_real_assets = (
+        initial_wealth_main_residence + initial_wealth_other_properties + initial_wealth_other_real_assets
+    )
+    initial_wealth_financial_assets = data["Wealth in Financial Assets"].values
+    initial_mortgage_debt = (
+        data["Outstanding Balance of HMR Mortgages"].values
+        + data["Outstanding Balance of Mortgages on other Properties"].values
+    )
+    initial_consumption_loan_debt = data["Outstanding Balance of other Non-Mortgage Loans"].values
+    initial_debt = initial_mortgage_debt + initial_consumption_loan_debt
+    initial_wealth = initial_wealth_real_assets + initial_wealth_financial_assets
+
     return TimeSeries(
         n_households=len(data),
         #
@@ -123,37 +146,31 @@ def create_households_timeseries(
         max_rent_willing_to_pay=np.full(len(data), np.nan),
         rent_div_income_histogram=get_histogram(data["Rent Paid"].values / data["Income"].values, None),
         #
-        wealth=data["Wealth"].values,
-        wealth_histogram=get_histogram(data["Wealth"].values, scale),
-        wealth_real_assets=data["Wealth in Real Assets"].values,
-        wealth_main_residence=data["Value of the Main Residence"].values,
-        total_wealth_main_residence=[np.sum(data["Value of the Main Residence"].values)],
-        wealth_other_properties=data["Value of other Properties"].values,
-        total_wealth_other_properties=[np.sum(data["Value of other Properties"].values)],
-        wealth_other_real_assets=data["Wealth Other Real Assets"].values,
-        total_wealth_other_real_assets=[np.sum(data["Wealth Other Real Assets"].values)],
+        wealth=initial_wealth,
+        wealth_histogram=get_histogram(initial_wealth, scale),
+        wealth_real_assets=initial_wealth_real_assets,
+        wealth_main_residence=initial_wealth_main_residence,
+        total_wealth_main_residence=[np.sum(initial_wealth_main_residence)],
+        wealth_other_properties=initial_wealth_other_properties,
+        total_wealth_other_properties=[np.sum(initial_wealth_other_properties)],
+        wealth_other_real_assets=initial_wealth_other_real_assets,
+        total_wealth_other_real_assets=[np.sum(initial_wealth_other_real_assets)],
         wealth_deposits=data["Wealth in Deposits"].values,
         total_wealth_deposits=[np.sum(data["Wealth in Deposits"].values)],
         wealth_other_financial_assets=data["Wealth in Other Financial Assets"].values,
         total_wealth_other_financial_assets=[np.sum(data["Wealth in Other Financial Assets"].values)],
         wealth_financial_assets=data["Wealth in Financial Assets"].values,
         #
-        mortgage_debt=data["Outstanding Balance of HMR Mortgages"].values
-        + data["Outstanding Balance of Mortgages on other Properties"].values,
-        total_mortgage_debt=[
-            np.sum(
-                data["Outstanding Balance of HMR Mortgages"].values
-                + data["Outstanding Balance of Mortgages on other Properties"].values
-            )
-        ],
-        consumption_loan_debt=data["Outstanding Balance of other Non-Mortgage Loans"].values,
+        mortgage_debt=initial_mortgage_debt,
+        total_mortgage_debt=[np.sum(initial_mortgage_debt)],
+        consumption_loan_debt=initial_consumption_loan_debt,
         received_consumption_loans=np.full(len(data), np.nan),
-        total_consumption_loan_debt=[np.sum(data["Outstanding Balance of other Non-Mortgage Loans"].values)],
-        debt=data["Debt"].values,
+        total_consumption_loan_debt=[np.sum(initial_consumption_loan_debt)],
+        debt=initial_debt,
         total_received_consumption_loans=[0.0],
-        debt_histogram=get_histogram(data["Debt"].values, scale),
+        debt_histogram=get_histogram(initial_debt, scale),
         #
-        net_wealth=data["Net Wealth"].values,
+        net_wealth=initial_wealth - initial_debt,
         #
         target_mortgage=np.full(len(data), np.nan),
         total_target_mortgage=[0.0],

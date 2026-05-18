@@ -1993,30 +1993,6 @@ def plot_agent_timeseries(
             return float(np.nanmedian(array))
         raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
 
-    n_subplots = len(panels) if panel_mode and panels is not None else len(variables)
-    if no_cols is None:
-        no_cols = 1 if n_subplots == 1 else 3
-    if no_cols <= 0:
-        raise ValueError("no_cols must be a positive integer.")
-    no_rows = int(np.ceil(n_subplots / no_cols))
-    if panel_mode and panels is not None:
-        base_titles = list(panel_titles) if panel_titles is not None else [" + ".join(panel) for panel in panels]
-    else:
-        base_titles = [str(v) for v in variables]
-    subplot_titles = base_titles + [""] * (no_rows * no_cols - len(base_titles))
-
-    if show_legend is None:
-        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
-
-    fig = make_subplots(
-        rows=no_rows,
-        cols=no_cols,
-        subplot_titles=subplot_titles,
-        shared_xaxes=shared_xaxes,
-        horizontal_spacing=0.06,
-        vertical_spacing=0.09 if no_rows <= 3 else 0.05,
-    )
-
     def _resolve_series(spec: str):
         spec = str(spec)
         if "." in spec:
@@ -2042,6 +2018,39 @@ def plot_agent_timeseries(
         spec = str(spec).strip()
         return spec.split(".", 1)[1] if "." in spec else spec
 
+    def _legend_swatch(color: str | None) -> str:
+        if color is None:
+            return "•"
+        return f'<span style="color:{color};">■</span>'
+
+    def _panel_title(panel: list[str]) -> str:
+        return " + ".join(_legend_label(spec) for spec in panel)
+
+    n_subplots = len(panels) if panel_mode and panels is not None else len(variables)
+    if no_cols is None:
+        no_cols = 1 if n_subplots == 1 else 3
+    if no_cols <= 0:
+        raise ValueError("no_cols must be a positive integer.")
+    no_rows = int(np.ceil(n_subplots / no_cols))
+
+    if panel_mode and panels is not None:
+        base_titles = list(panel_titles) if panel_titles is not None else [_panel_title(panel) for panel in panels]
+    else:
+        base_titles = [_legend_label(str(v)) for v in variables]
+    subplot_titles = base_titles + [""] * (no_rows * no_cols - len(base_titles))
+
+    if show_legend is None:
+        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
+
+    fig = make_subplots(
+        rows=no_rows,
+        cols=no_cols,
+        subplot_titles=subplot_titles,
+        shared_xaxes=shared_xaxes,
+        horizontal_spacing=0.06,
+        vertical_spacing=0.09 if no_rows <= 3 else 0.05,
+    )
+
     if panel_mode and panels is not None:
         # Stable color per (agent,var) across panels/subplots.
         unique_keys: list[str] = []
@@ -2056,7 +2065,6 @@ def plot_agent_timeseries(
         palette = _categorical_colors(len(unique_keys))
         series_color_map = {key: palette[idx] for idx, key in enumerate(unique_keys)}
 
-        legend_keys_added: set[str] = set()
         for idx, panel in enumerate(panels):
             row = (idx // no_cols) + 1
             col = (idx % no_cols) + 1
@@ -2081,16 +2089,13 @@ def plot_agent_timeseries(
                     )
 
                 series = [_reduce(v) for v in list(values)[:horizon]]
-                showlegend = bool(show_legend and key not in legend_keys_added)
-                if showlegend:
-                    legend_keys_added.add(key)
                 fig.add_trace(
                     go.Scatter(
                         x=out_index[:horizon],
                         y=series,
                         mode="lines",
                         name=_legend_label(key),
-                        showlegend=showlegend,
+                        showlegend=False,
                         line={"width": line_width, "color": series_color_map.get(key)},
                     ),
                     row=row,
@@ -2142,9 +2147,7 @@ def plot_agent_timeseries(
                 for value in list(values)[:horizon]:
                     unpacked = unpack_cell(value)
                     vec = (
-                        np.asarray(unpacked, dtype=float).reshape(-1)
-                        if unpacked is not None
-                        else np.asarray([], float)
+                        np.asarray(unpacked, dtype=float).reshape(-1) if unpacked is not None else np.asarray([], float)
                     )
                     reduced = _sector_reduce(vec)
                     for sector_idx, code in enumerate(sector_codes):
@@ -2162,9 +2165,7 @@ def plot_agent_timeseries(
                             showlegend=(show_legend and idx == 0),
                             line={
                                 "width": line_width,
-                                "color": sector_color_map.get(code)
-                                if sector_color_map is not None
-                                else None,
+                                "color": sector_color_map.get(code) if sector_color_map is not None else None,
                             },
                         ),
                         row=row,
@@ -2195,9 +2196,7 @@ def plot_agent_timeseries(
                             showlegend=(show_legend and idx == 0),
                             line={
                                 "width": line_width,
-                                "color": agent_color_map.get(selected_id)
-                                if agent_color_map is not None
-                                else None,
+                                "color": agent_color_map.get(selected_id) if agent_color_map is not None else None,
                             },
                         ),
                         row=row,
@@ -2227,7 +2226,7 @@ def plot_agent_timeseries(
             suffix = f" (by_sector, agg={agg})"
         else:
             suffix = f" (agg={agg})"
-        title = f"{country_code} {agent_type} ts{suffix}"
+        title = f"{country_code} {agent_type} time series{suffix}"
 
     fig.update_layout(
         height=(base_height * no_rows if height is None else height),
@@ -2235,6 +2234,7 @@ def plot_agent_timeseries(
         title_text=title,
         template="plotly_white",
         hovermode="x unified" if shared_xaxes else "closest",
+        legend_title_text="Series" if show_legend else None,
         legend={"orientation": "v", "yanchor": "top", "y": 1.0, "xanchor": "left", "x": 1.02}
         if show_legend and not panel_mode
         else None,
@@ -2246,12 +2246,17 @@ def plot_agent_timeseries(
             col = (idx % no_cols) + 1
             subplot = fig.get_subplot(row, col)
             labels = []
+            seen_panel_keys: set[str] = set()
             for spec in panel:
-                _, var_name, _ = _resolve_series(spec)
-                labels.append(_legend_label(var_name))
+                agent_key, var_name, _ = _resolve_series(spec)
+                key = f"{agent_key}.{var_name}"
+                if key in seen_panel_keys:
+                    continue
+                seen_panel_keys.add(key)
+                labels.append(f"{_legend_swatch(series_color_map.get(key))} {_legend_label(var_name)}")
             if not labels:
                 continue
-            legend_text = "<br>".join(labels)
+            legend_text = "<b>Series</b><br>" + "<br>".join(labels)
             fig.add_annotation(
                 x=min(float(subplot.xaxis.domain[1]) + 0.015, 0.995),
                 y=float(subplot.yaxis.domain[1]),

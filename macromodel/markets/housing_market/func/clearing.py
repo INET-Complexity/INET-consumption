@@ -220,10 +220,10 @@ class DefaultHousingMarketClearer(HousingMarketClearer):
 
             # Pick a property with a price/rent close to what the household wants
             if is_rental_market:
-                property_open_ind = np.where(housing_data["Up for Rent"])[0]
+                property_open_ind = housing_data.index[housing_data["Up for Rent"].values]
                 property_prices = housing_data.loc[property_open_ind, "Rent"]
             else:
-                property_open_ind = np.where(housing_data["Temporarily for Sale"])[0]
+                property_open_ind = housing_data.index[housing_data["Temporarily for Sale"].values]
                 property_prices = housing_data.loc[property_open_ind, "Sale Price"]
             price_diff = max_willing_to_pay[household_id] - property_prices
             price_diff[price_diff < 0] = np.inf
@@ -370,7 +370,7 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
         )
 
         # Collect properties
-        property_open_ind = np.where(housing_data[status_field])[0]
+        property_open_ind = housing_data.index[housing_data[status_field].values]
         property_prices = housing_data.loc[property_open_ind, price_field].values
 
         # Create a cost matrix

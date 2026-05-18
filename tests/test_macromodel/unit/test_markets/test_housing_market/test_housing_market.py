@@ -290,6 +290,8 @@ def test_from_data_uses_guarded_owner_occupied_rule(test_config):
     assert properties.loc[30, "Corresponding Inhabitant Household ID"] == -1
     assert properties.loc[30, "Is Owner-Occupied"] == 0
     np.testing.assert_array_equal(properties["Is Owner-Occupied"].values, _owner_occupied_flags(properties).values)
+    assert market.ts.current("total_number_of_houses_owner_occupied")[0] == 1
+    assert market.ts.current("total_number_of_houses_unoccupied")[0] == 2
 
 
 def test_from_pickled_market_preserves_property_identifiers_and_initial_counts():

@@ -378,6 +378,8 @@ def test_plot_agent_timeseries_uses_panel_annotations_without_agent_prefixes():
     assert len(legend_annotations) == 2
     assert all("." not in annotation.text for annotation in legend_annotations)
     assert any("target_consumption" in annotation.text for annotation in legend_annotations)
+    assert all("Series" in annotation.text for annotation in legend_annotations)
+    assert any("■" in annotation.text for annotation in legend_annotations)
     assert all(annotation.x > 0.9 for annotation in legend_annotations)
     assert fig.layout.legend.orientation is None
 

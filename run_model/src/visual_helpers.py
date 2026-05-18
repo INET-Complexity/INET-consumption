@@ -1993,30 +1993,6 @@ def plot_agent_timeseries(
             return float(np.nanmedian(array))
         raise ValueError("agg must be one of {'sum', 'mean', 'median'}.")
 
-    n_subplots = len(panels) if panel_mode and panels is not None else len(variables)
-    if no_cols is None:
-        no_cols = 1 if n_subplots == 1 else 3
-    if no_cols <= 0:
-        raise ValueError("no_cols must be a positive integer.")
-    no_rows = int(np.ceil(n_subplots / no_cols))
-    if panel_mode and panels is not None:
-        base_titles = list(panel_titles) if panel_titles is not None else [" + ".join(panel) for panel in panels]
-    else:
-        base_titles = [str(v) for v in variables]
-    subplot_titles = base_titles + [""] * (no_rows * no_cols - len(base_titles))
-
-    if show_legend is None:
-        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
-
-    fig = make_subplots(
-        rows=no_rows,
-        cols=no_cols,
-        subplot_titles=subplot_titles,
-        shared_xaxes=shared_xaxes,
-        horizontal_spacing=0.06,
-        vertical_spacing=0.09 if no_rows <= 3 else 0.05,
-    )
-
     def _resolve_series(spec: str):
         spec = str(spec)
         if "." in spec:
@@ -2041,6 +2017,34 @@ def plot_agent_timeseries(
     def _legend_label(spec: str) -> str:
         spec = str(spec).strip()
         return spec.split(".", 1)[1] if "." in spec else spec
+
+    def _panel_title(panel: list[str]) -> str:
+        return " + ".join(_legend_label(spec) for spec in panel)
+
+    n_subplots = len(panels) if panel_mode and panels is not None else len(variables)
+    if no_cols is None:
+        no_cols = 1 if n_subplots == 1 else 3
+    if no_cols <= 0:
+        raise ValueError("no_cols must be a positive integer.")
+    no_rows = int(np.ceil(n_subplots / no_cols))
+
+    if panel_mode and panels is not None:
+        base_titles = list(panel_titles) if panel_titles is not None else [_panel_title(panel) for panel in panels]
+    else:
+        base_titles = [_legend_label(str(v)) for v in variables]
+    subplot_titles = base_titles + [""] * (no_rows * no_cols - len(base_titles))
+
+    if show_legend is None:
+        show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
+
+    fig = make_subplots(
+        rows=no_rows,
+        cols=no_cols,
+        subplot_titles=subplot_titles,
+        shared_xaxes=shared_xaxes,
+        horizontal_spacing=0.06,
+        vertical_spacing=0.09 if no_rows <= 3 else 0.05,
+    )
 
     if panel_mode and panels is not None:
         # Stable color per (agent,var) across panels/subplots.
@@ -2227,7 +2231,7 @@ def plot_agent_timeseries(
             suffix = f" (by_sector, agg={agg})"
         else:
             suffix = f" (agg={agg})"
-        title = f"{country_code} {agent_type} ts{suffix}"
+        title = f"{country_code} {agent_type} time series{suffix}"
 
     fig.update_layout(
         height=(base_height * no_rows if height is None else height),
@@ -2235,6 +2239,7 @@ def plot_agent_timeseries(
         title_text=title,
         template="plotly_white",
         hovermode="x unified" if shared_xaxes else "closest",
+        legend_title_text="Series" if show_legend else None,
         legend={"orientation": "v", "yanchor": "top", "y": 1.0, "xanchor": "left", "x": 1.02}
         if show_legend and not panel_mode
         else None,

@@ -1,8 +1,9 @@
+from typing import Literal, overload
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from typing import Literal, overload
 from src.helpers import unpack_cell
 
 

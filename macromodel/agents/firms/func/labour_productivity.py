@@ -19,9 +19,9 @@ class LabourProductivitySetter(ABC):
     - Speed of productivity adjustments
 
     Attributes:
-        min_labour_productivity_factor (float): Minimum allowed labour
+        min_labour_utilisation_factor (float): Minimum allowed labour
             productivity factor after work-effort adjustment
-        max_increase_in_work_effort (float): Maximum allowed increase in
+        max_labour_utilisation_factor (float): Maximum allowed increase in
             productivity through work effort
         consider_intermediate_inputs (float): Weight given to intermediate
             input constraints (deprecated, retained for config compatibility)
@@ -33,16 +33,16 @@ class LabourProductivitySetter(ABC):
 
     def __init__(
         self,
-        max_increase_in_work_effort: float,
+        max_labour_utilisation_factor: float,
         consider_intermediate_inputs: float,
         consider_capital_inputs: float,
         work_effort_increase_speed: float,
-        min_labour_productivity_factor: float = 0.0,
+        min_labour_utilisation_factor: float = 0.0,
     ) -> None:
         """Initialize the labor productivity setter with adjustment parameters.
 
         Args:
-            max_increase_in_work_effort (float): Maximum allowed increase in
+            max_labour_utilisation_factor (float): Maximum allowed increase in
                 productivity through work effort
             consider_intermediate_inputs (float): Deprecated compatibility
                 parameter; input constraints are handled by desired labour and
@@ -51,18 +51,18 @@ class LabourProductivitySetter(ABC):
                 input constraints are handled by desired labour and production.
             work_effort_increase_speed (float): Rate of work effort adjustment
                 implementation
-            min_labour_productivity_factor (float): Minimum allowed labour
+            min_labour_utilisation_factor (float): Minimum allowed labour
                 productivity factor after work-effort adjustment
         """
-        if min_labour_productivity_factor < 0.0 or max_increase_in_work_effort < 0.0:
+        if min_labour_utilisation_factor < 0.0 or max_labour_utilisation_factor < 0.0:
             raise ValueError("Labour productivity bounds must be non-negative.")
-        if min_labour_productivity_factor > 1.0:
-            raise ValueError("min_labour_productivity_factor cannot exceed 1.0.")
-        if min_labour_productivity_factor > max_increase_in_work_effort:
-            raise ValueError("min_labour_productivity_factor cannot exceed max_increase_in_work_effort.")
+        if min_labour_utilisation_factor > 1.0:
+            raise ValueError("min_labour_utilisation_factor cannot exceed 1.0.")
+        if min_labour_utilisation_factor > max_labour_utilisation_factor:
+            raise ValueError("min_labour_utilisation_factor cannot exceed max_labour_utilisation_factor.")
 
-        self.min_labour_productivity_factor = min_labour_productivity_factor
-        self.max_increase_in_work_effort = max_increase_in_work_effort
+        self.min_labour_utilisation_factor = min_labour_utilisation_factor
+        self.max_labour_utilisation_factor = max_labour_utilisation_factor
         self.consider_intermediate_inputs = max(0.0, min(1.0, consider_intermediate_inputs))
         self.consider_capital_inputs = max(0.0, min(1.0, consider_capital_inputs))
         self.work_effort_increase_speed = work_effort_increase_speed
@@ -172,6 +172,6 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
         labour_productivity_factor = 1.0 + self.work_effort_increase_speed * (required_productivity_factor - 1.0)
         return np.clip(
             labour_productivity_factor,
-            self.min_labour_productivity_factor,
-            self.max_increase_in_work_effort,
+            self.min_labour_utilisation_factor,
+            self.max_labour_utilisation_factor,
         )

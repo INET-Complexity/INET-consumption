@@ -400,7 +400,7 @@ FRA:
             options: ''
             type: int
             value: 4
-          max_increase_in_work_effort:
+          max_labour_utilisation_factor:
             desc: The maximum increase in firm labour productivity.
             options: ''
             type: float
@@ -412,12 +412,12 @@ FRA:
           type: str
           value: WorkEffortLabourProductivitySetter
         parameters:
-          min_labour_productivity_factor:
+          min_labour_utilisation_factor:
             desc: The minimum firm labour productivity factor.
             options: ''
             type: float
             value: 0.0
-          max_increase_in_work_effort:
+          max_labour_utilisation_factor:
             desc: The maximum increase in firm labour productivity.
             options: ''
             type: float

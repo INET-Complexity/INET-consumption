@@ -9,13 +9,13 @@ DEFAULT_SPEED = 1.0
 
 
 def make_setter(
-    min_labour_productivity_factor: float = DEFAULT_MIN,
-    max_increase_in_work_effort: float = DEFAULT_MAX,
+    min_labour_utilisation_factor: float = DEFAULT_MIN,
+    max_labour_utilisation_factor: float = DEFAULT_MAX,
     work_effort_increase_speed: float = DEFAULT_SPEED,
 ):
     return WorkEffortLabourProductivitySetter(
-        min_labour_productivity_factor=min_labour_productivity_factor,
-        max_increase_in_work_effort=max_increase_in_work_effort,
+        min_labour_utilisation_factor=min_labour_utilisation_factor,
+        max_labour_utilisation_factor=max_labour_utilisation_factor,
         consider_intermediate_inputs=True,
         consider_capital_inputs=True,
         work_effort_increase_speed=work_effort_increase_speed,
@@ -80,7 +80,7 @@ class TestWorkEffortLabourProductivitySetter:
         assert np.allclose(labour_productivity_factor, np.array([0.9]))
 
     def test__zero_floor_preserves_previous_behavior(self):
-        labour_productivity_factor = make_setter(min_labour_productivity_factor=0.0, max_increase_in_work_effort=1.5).compute_labour_productivity_factor(
+        labour_productivity_factor = make_setter(min_labour_utilisation_factor=0.0, max_labour_utilisation_factor=1.5).compute_labour_productivity_factor(
             current_target_production=np.array([70.0]),
             current_limiting_intermediate_inputs=np.array([70.0]),
             current_limiting_capital_inputs=np.array([70.0]),
@@ -114,7 +114,7 @@ class TestWorkEffortLabourProductivitySetter:
         assert np.allclose(labour_productivity_factor, np.array([1.0]))
 
     @pytest.mark.parametrize(
-        "min_labour_productivity_factor,max_increase_in_work_effort",
+        "min_labour_utilisation_factor,max_labour_utilisation_factor",
         [
             (-0.1, 1.1),
             (0.0, -0.1),
@@ -122,9 +122,9 @@ class TestWorkEffortLabourProductivitySetter:
             (1.2, 1.1),
         ],
     )
-    def test__invalid_bounds_raise_value_error(self, min_labour_productivity_factor, max_increase_in_work_effort):
+    def test__invalid_bounds_raise_value_error(self, min_labour_utilisation_factor, max_labour_utilisation_factor):
         with pytest.raises(ValueError):
             make_setter(
-                min_labour_productivity_factor=min_labour_productivity_factor,
-                max_increase_in_work_effort=max_increase_in_work_effort,
+                min_labour_utilisation_factor=min_labour_utilisation_factor,
+                max_labour_utilisation_factor=max_labour_utilisation_factor,
             )

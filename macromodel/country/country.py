@@ -1388,6 +1388,10 @@ class Country:
                 current_good_prices=self.economy.ts.current("good_prices"),
             )
         )
+        self.firms.check_firm_accounting_controls(
+            current_good_prices=self.economy.ts.current("good_prices"),
+            enforce=True,
+        )
 
         # D3. FIRM INSOLVENCY
         firm_debt_settlement["default_flag"] = np.logical_and(

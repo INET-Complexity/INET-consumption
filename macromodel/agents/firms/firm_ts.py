@@ -111,6 +111,9 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_residual_overdraft_exposure: End-of-period negative-deposit exposure after settlement
         - firm_settlement_illiquid_flag: Settlement liquidity failure after rollover and cash funding
         - firm_settlement_default_flag: Settlement-triggered default after illiquidity and negative equity coincide
+        - firm_settlement_balance_sheet_residual: Residual of the balance-sheet identity at settlement close
+        - firm_settlement_transaction_flow_residual: Residual of the cash-flow identity at settlement close
+        - firm_settlement_accounting_control_passed: Per-firm pass flag for the settlement accounting controls
         - total_credit_exposure: Explicit firm debt plus end-of-period residual overdraft exposure
 
     Planning & Targets:
@@ -429,6 +432,9 @@ class FirmTimeSeries(TimeSeries):
             firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
             firm_settlement_illiquid_flag=np.full(data.shape[0], False),
             firm_settlement_default_flag=np.full(data.shape[0], False),
+            firm_settlement_balance_sheet_residual=np.zeros(data.shape[0]),
+            firm_settlement_transaction_flow_residual=np.zeros(data.shape[0]),
+            firm_settlement_accounting_control_passed=np.full(data.shape[0], False),
             #
             # Credit-market (WaterBucket) binding diagnostics
             credit_market_firm_cfads=np.full(data.shape[0], np.nan),
@@ -551,6 +557,13 @@ class FirmTimeSeries(TimeSeries):
         )
 
         self.dicts["gross_operating_surplus_mixed_income"] = [gross_operating_surplus]
+        self.dicts["firm_settlement_balance_sheet_residual"] = [np.zeros_like(self.current("deposits"), dtype=float)]
+        self.dicts["firm_settlement_transaction_flow_residual"] = [
+            np.zeros_like(self.current("deposits"), dtype=float)
+        ]
+        self.dicts["firm_settlement_accounting_control_passed"] = [
+            np.full(self.current("deposits").shape, False)
+        ]
 
 
 def create_firms_timeseries(
@@ -762,6 +775,9 @@ def create_firms_timeseries(
         firm_settlement_residual_overdraft_exposure=np.maximum(0.0, -data["Deposits"].values),
         firm_settlement_illiquid_flag=np.full(data.shape[0], False),
         firm_settlement_default_flag=np.full(data.shape[0], False),
+        firm_settlement_balance_sheet_residual=np.zeros(data.shape[0]),
+        firm_settlement_transaction_flow_residual=np.zeros(data.shape[0]),
+        firm_settlement_accounting_control_passed=np.full(data.shape[0], False),
         #
         # Credit-market (WaterBucket) binding diagnostics
         credit_market_firm_cfads=np.full(data.shape[0], np.nan),

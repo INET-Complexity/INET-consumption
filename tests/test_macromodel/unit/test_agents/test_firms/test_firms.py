@@ -104,6 +104,9 @@ class TestFirms:
             "firm_settlement_residual_overdraft_exposure",
             "firm_settlement_illiquid_flag",
             "firm_settlement_default_flag",
+            "firm_settlement_balance_sheet_residual",
+            "firm_settlement_transaction_flow_residual",
+            "firm_settlement_accounting_control_passed",
             "total_credit_exposure",
             "short_term_loan_debt",
             "long_term_loan_debt",
@@ -408,6 +411,91 @@ class TestFirms:
         test_firms.ts.override_current("capital_inputs_stock", depleted_capital_stock)
 
         assert np.allclose(test_firms.compute_equity(prices), expected - prices[0])
+
+    def test__check_firm_accounting_controls_passes_on_consistent_settlement_state(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+
+        opening_deposits = np.full(n_firms, 100.0)
+        nominal_amount_sold_in_lcu = np.full(n_firms, 20.0)
+        received_credit = np.full(n_firms, 10.0)
+        total_wage = np.full(n_firms, 5.0)
+        nominal_amount_spent_in_lcu = np.zeros((n_firms, n_industries))
+        direct_tfp_investment_cash_expense = np.zeros(n_firms)
+        taxes_paid_on_production = np.full(n_firms, 2.0)
+        corporate_taxes_paid = np.full(n_firms, 3.0)
+        interest_paid = np.full(n_firms, 4.0)
+        debt_installments = np.full(n_firms, 6.0)
+        closing_deposits = (
+            opening_deposits
+            + nominal_amount_sold_in_lcu
+            + received_credit
+            - total_wage
+            - nominal_amount_spent_in_lcu.sum(axis=1)
+            - direct_tfp_investment_cash_expense
+            - taxes_paid_on_production
+            - corporate_taxes_paid
+            - interest_paid
+            - debt_installments
+        )
+        current_good_prices = np.ones(n_industries)
+
+        test_firms.ts.override_current("activity_finance_opening_deposits", opening_deposits)
+        test_firms.ts.override_current("deposits", closing_deposits)
+        test_firms.ts.override_current("nominal_amount_sold_in_lcu", nominal_amount_sold_in_lcu)
+        test_firms.ts.override_current("received_credit", received_credit)
+        test_firms.ts.override_current("total_wage", total_wage)
+        test_firms.ts.override_current("nominal_amount_spent_in_lcu", nominal_amount_spent_in_lcu)
+        test_firms.ts.override_current("direct_tfp_investment_cash_expense", direct_tfp_investment_cash_expense)
+        test_firms.ts.override_current("taxes_paid_on_production", taxes_paid_on_production)
+        test_firms.ts.override_current("corporate_taxes_paid", corporate_taxes_paid)
+        test_firms.ts.override_current("interest_paid", interest_paid)
+        test_firms.ts.override_current("debt_installments", debt_installments)
+        test_firms.ts.override_current("inventory", np.ones(n_firms))
+        test_firms.ts.override_current("price", np.full(n_firms, 2.0))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("debt", np.full(n_firms, 5.0))
+        test_firms.ts.override_current("equity", np.full(n_firms, 107.0))
+
+        result = test_firms.check_firm_accounting_controls(
+            current_good_prices=current_good_prices,
+            enforce=True,
+        )
+
+        assert np.allclose(result["balance_sheet_residual"], 0.0)
+        assert np.allclose(result["transaction_flow_residual"], 0.0)
+        assert np.all(result["control_passed"])
+        assert np.allclose(test_firms.ts.current("firm_settlement_balance_sheet_residual"), 0.0)
+        assert np.allclose(test_firms.ts.current("firm_settlement_transaction_flow_residual"), 0.0)
+        assert np.all(test_firms.ts.current("firm_settlement_accounting_control_passed"))
+
+    def test__check_firm_accounting_controls_raises_on_mismatch(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        test_firms.ts.override_current("activity_finance_opening_deposits", np.full(n_firms, 100.0))
+        test_firms.ts.override_current("deposits", np.full(n_firms, 110.0))
+        test_firms.ts.override_current("nominal_amount_sold_in_lcu", np.full(n_firms, 20.0))
+        test_firms.ts.override_current("received_credit", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("total_wage", np.full(n_firms, 5.0))
+        test_firms.ts.override_current("nominal_amount_spent_in_lcu", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("direct_tfp_investment_cash_expense", np.zeros(n_firms))
+        test_firms.ts.override_current("taxes_paid_on_production", np.full(n_firms, 2.0))
+        test_firms.ts.override_current("corporate_taxes_paid", np.full(n_firms, 3.0))
+        test_firms.ts.override_current("interest_paid", np.full(n_firms, 4.0))
+        test_firms.ts.override_current("debt_installments", np.full(n_firms, 6.0))
+        test_firms.ts.override_current("inventory", np.ones(n_firms))
+        test_firms.ts.override_current("price", np.full(n_firms, 2.0))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("debt", np.full(n_firms, 5.0))
+        test_firms.ts.override_current("equity", np.full(n_firms, 108.0))
+
+        with pytest.raises(ValueError, match="Firm accounting control violation"):
+            test_firms.check_firm_accounting_controls(
+                current_good_prices=np.ones(n_industries),
+                enforce=True,
+            )
 
     def test__compute_debt(self, test_firms):
         test_firms.ts.debt.append(np.full(18, 10.0))

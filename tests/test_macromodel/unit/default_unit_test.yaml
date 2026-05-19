@@ -412,6 +412,11 @@ FRA:
           type: str
           value: WorkEffortLabourProductivitySetter
         parameters:
+          min_labour_productivity_factor:
+            desc: The minimum firm labour productivity factor.
+            options: ''
+            type: float
+            value: 0.0
           max_increase_in_work_effort:
             desc: The maximum increase in firm labour productivity.
             options: ''

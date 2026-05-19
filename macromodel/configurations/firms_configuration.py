@@ -90,6 +90,7 @@ class LabourProductivity(BaseModel):
     name: Literal["WorkEffortLabourProductivitySetter"] = "WorkEffortLabourProductivitySetter"
     path_name: str = "labour_productivity"
     parameters: dict[str, Any] = {
+        "min_labour_productivity_factor": 0.0,
         "max_increase_in_work_effort": 1.5,
         "consider_intermediate_inputs": True,
         "consider_capital_inputs": True,

@@ -189,7 +189,8 @@ FRA:
         parameters:
           consider_capital_inputs: true
           consider_intermediate_inputs: true
-          max_increase_in_work_effort: 1.5
+          min_labour_productivity_factor: 0.9
+          max_increase_in_work_effort: 1.1
           work_effort_increase_speed: 1.0
       offered_wage_setter:  # DEPRECATED: determines wage offers used during labour-market matching. This should affect whether unemployed workers accept jobs and which firms can hire.
         name: DefaultOfferedWageSetter

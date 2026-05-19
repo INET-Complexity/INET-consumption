@@ -80,7 +80,9 @@ class TestWorkEffortLabourProductivitySetter:
         assert np.allclose(labour_productivity_factor, np.array([0.9]))
 
     def test__zero_floor_preserves_previous_behavior(self):
-        labour_productivity_factor = make_setter(min_labour_utilisation_factor=0.0, max_labour_utilisation_factor=1.5).compute_labour_productivity_factor(
+        labour_productivity_factor = make_setter(
+            min_labour_utilisation_factor=0.0, max_labour_utilisation_factor=1.5
+        ).compute_labour_productivity_factor(
             current_target_production=np.array([70.0]),
             current_limiting_intermediate_inputs=np.array([70.0]),
             current_limiting_capital_inputs=np.array([70.0]),

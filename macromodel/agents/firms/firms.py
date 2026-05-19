@@ -1728,7 +1728,9 @@ class Firms(Agent):
         closing_deposits = np.nan_to_num(np.asarray(self.ts.current("deposits"), dtype=float))
         received_credit = np.nan_to_num(np.asarray(self.ts.current("received_credit"), dtype=float))
         debt_installments = np.nan_to_num(np.asarray(self.ts.current("debt_installments"), dtype=float))
-        nominal_amount_sold_in_lcu = np.nan_to_num(np.asarray(self.ts.current("nominal_amount_sold_in_lcu"), dtype=float))
+        nominal_amount_sold_in_lcu = np.nan_to_num(
+            np.asarray(self.ts.current("nominal_amount_sold_in_lcu"), dtype=float)
+        )
         nominal_amount_spent_in_lcu = np.nan_to_num(
             np.asarray(self.ts.current("nominal_amount_spent_in_lcu"), dtype=float),
             nan=0.0,

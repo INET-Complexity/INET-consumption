@@ -558,12 +558,8 @@ class FirmTimeSeries(TimeSeries):
 
         self.dicts["gross_operating_surplus_mixed_income"] = [gross_operating_surplus]
         self.dicts["firm_settlement_balance_sheet_residual"] = [np.zeros_like(self.current("deposits"), dtype=float)]
-        self.dicts["firm_settlement_transaction_flow_residual"] = [
-            np.zeros_like(self.current("deposits"), dtype=float)
-        ]
-        self.dicts["firm_settlement_accounting_control_passed"] = [
-            np.full(self.current("deposits").shape, False)
-        ]
+        self.dicts["firm_settlement_transaction_flow_residual"] = [np.zeros_like(self.current("deposits"), dtype=float)]
+        self.dicts["firm_settlement_accounting_control_passed"] = [np.full(self.current("deposits").shape, False)]
 
 
 def create_firms_timeseries(

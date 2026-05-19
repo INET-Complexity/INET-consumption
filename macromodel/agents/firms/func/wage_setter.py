@@ -23,15 +23,12 @@ class FirmWageSetter(ABC):
             adjustments based on labor market tightness
         markup_time_span (int): Number of periods to consider when calculating
             labor market tightness markup
-        max_increase_in_work_effort (float): Maximum allowed increase in
-            work effort-based wage adjustments
     """
 
     def __init__(
         self,
         labour_market_tightness_markup_scale: float,
         markup_time_span: int,
-        max_increase_in_work_effort: float,
     ):
         """Initialize the wage setter with markup parameters.
 
@@ -40,12 +37,9 @@ class FirmWageSetter(ABC):
                 wage adjustments based on labor market tightness
             markup_time_span (int): Number of periods to consider when
                 calculating labor market tightness markup
-            max_increase_in_work_effort (float): Maximum allowed increase
-                in work effort-based wage adjustments
         """
         self.labour_market_tightness_markup_scale = labour_market_tightness_markup_scale
         self.markup_time_span = markup_time_span
-        self.max_increase_in_work_effort = max_increase_in_work_effort
 
     @abstractmethod
     def compute_wage_tightness_markup(

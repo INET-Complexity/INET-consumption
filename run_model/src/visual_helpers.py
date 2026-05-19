@@ -2038,8 +2038,7 @@ def plot_agent_timeseries(
     line_width: float = 2.0,
     show: Literal[True] = True,
     return_df: Literal[False] = False,
-):
-    ...
+): ...
 
 
 @overload
@@ -2064,8 +2063,7 @@ def plot_agent_timeseries(
     line_width: float = 2.0,
     show: Literal[False],
     return_df: Literal[False] = False,
-) -> go.Figure:
-    ...
+) -> go.Figure: ...
 
 
 @overload
@@ -2090,8 +2088,7 @@ def plot_agent_timeseries(
     line_width: float = 2.0,
     show: Literal[True] = True,
     return_df: Literal[True],
-) -> tuple[None, pd.DataFrame]:
-    ...
+) -> tuple[None, pd.DataFrame]: ...
 
 
 @overload
@@ -2116,8 +2113,7 @@ def plot_agent_timeseries(
     line_width: float = 2.0,
     show: Literal[False],
     return_df: Literal[True],
-) -> tuple[go.Figure, pd.DataFrame]:
-    ...
+) -> tuple[go.Figure, pd.DataFrame]: ...
 
 
 def plot_agent_timeseries(

@@ -1689,6 +1689,146 @@ def build_production_by_sector_df(model, country_code):
     return pd.DataFrame(by_sector, columns=sectors)
 
 
+def build_wage_rate_by_sector_df(model, country_code, *, real: bool = False, cpi_source: str = "cpi_fixed_basket"):
+    """Return nominal or real wage rates by sector plus an economy-wide aggregate.
+
+    The sector wage rate is computed as:
+
+        sector wage bill / sector employment
+
+    The economy wage rate is computed as:
+
+        total wage bill / total employment
+
+    If ``real=True``, both are deflated by the requested CPI series.
+    """
+    country = model.countries[country_code]
+
+    wage_bills = np.asarray(country.firms.ts.historic("total_wage"), dtype=float)
+    if wage_bills.ndim != 2:
+        raise ValueError("total_wage must be a 2D time x firm series.")
+
+    sector_employment = np.asarray(country.labour_market.ts.historic("num_employed_individuals_by_sector"), dtype=float)
+    if sector_employment.ndim != 2:
+        raise ValueError("num_employed_individuals_by_sector must be a 2D time x sector series.")
+
+    firm_industries = np.asarray(country.firms.states["Industry"], dtype=int)
+    n_sectors = len(getattr(country.firms, "industries", [])) or int(firm_industries.max() + 1)
+    if wage_bills.shape[1] != firm_industries.size:
+        raise ValueError("total_wage time series is not aligned with the firm industry map.")
+    if sector_employment.shape[1] != n_sectors:
+        raise ValueError("sector employment time series is not aligned with the firm industry map.")
+
+    sector_wage_bills = np.zeros((wage_bills.shape[0], n_sectors), dtype=float)
+    for t in range(wage_bills.shape[0]):
+        sector_wage_bills[t] = np.bincount(
+            firm_industries,
+            weights=wage_bills[t],
+            minlength=n_sectors,
+        )
+
+    sector_wage_rate = np.divide(
+        sector_wage_bills,
+        sector_employment,
+        out=np.full_like(sector_wage_bills, np.nan),
+        where=sector_employment > 0.0,
+    )
+
+    total_wage_bills = sector_wage_bills.sum(axis=1)
+    total_employment = sector_employment.sum(axis=1)
+    economy_wage_rate = np.divide(
+        total_wage_bills,
+        total_employment,
+        out=np.full(total_wage_bills.shape, np.nan, dtype=float),
+        where=total_employment > 0.0,
+    )
+
+    if real:
+        cpi = np.asarray(country.economy.ts.historic(cpi_source), dtype=float).reshape(-1)
+        if cpi.ndim != 1:
+            raise ValueError(f"{cpi_source} must be a 1D time series.")
+        if cpi.size != sector_wage_rate.shape[0]:
+            raise ValueError(f"{cpi_source} is not aligned with the wage-rate time series.")
+        sector_wage_rate = np.divide(
+            sector_wage_rate,
+            cpi[:, None],
+            out=np.full_like(sector_wage_rate, np.nan),
+            where=cpi[:, None] > 0.0,
+        )
+        economy_wage_rate = np.divide(
+            economy_wage_rate,
+            cpi,
+            out=np.full_like(economy_wage_rate, np.nan),
+            where=cpi > 0.0,
+        )
+
+    sectors = [str(sector) for sector in getattr(country.firms, "industries", [])]
+    if len(sectors) != sector_wage_rate.shape[1]:
+        sectors = [str(idx) for idx in range(sector_wage_rate.shape[1])]
+
+    out = pd.DataFrame(sector_wage_rate, columns=sectors)
+    out["economy"] = economy_wage_rate
+    return out
+
+
+def plot_wage_rate_by_sector(
+    model,
+    country_code,
+    *,
+    real: bool = False,
+    cpi_source: str = "cpi_fixed_basket",
+    title: str | None = None,
+    height=650,
+    width=1000,
+    show=True,
+):
+    """Plot wage rates by sector together with the economy-wide wage rate."""
+    wage_rate = build_wage_rate_by_sector_df(model, country_code, real=real, cpi_source=cpi_source)
+    colors = _categorical_colors(max(0, len(wage_rate.columns) - 1))
+
+    fig = go.Figure()
+    sector_columns = [col for col in wage_rate.columns if col != "economy"]
+    for idx, sector_code in enumerate(sector_columns):
+        sector_label = SECTOR_CODE_TO_NAME.get(str(sector_code), str(sector_code))
+        fig.add_trace(
+            go.Scatter(
+                x=wage_rate.index,
+                y=wage_rate[sector_code],
+                mode="lines",
+                name=f"{sector_code}: {sector_label}",
+                line={"color": colors[idx], "width": 2},
+            )
+        )
+
+    fig.add_trace(
+        go.Scatter(
+            x=wage_rate.index,
+            y=wage_rate["economy"],
+            mode="lines",
+            name="economy",
+            line={"color": "black", "width": 3, "dash": "dash"},
+        )
+    )
+
+    if title is None:
+        title = "Real wage rate by sector and economy" if real else "Nominal wage rate by sector and economy"
+
+    fig.update_layout(
+        height=height,
+        width=width,
+        title_text=title,
+        template="plotly_white",
+        xaxis_title="Time Period",
+        yaxis_title="Real wage rate" if real else "Nominal wage rate",
+        legend_title_text="Sector",
+    )
+
+    if show:
+        fig.show()
+        return None
+    return fig
+
+
 def plot_production_by_sector(
     model,
     country_code,

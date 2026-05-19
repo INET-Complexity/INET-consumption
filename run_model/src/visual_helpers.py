@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from typing import Literal, overload
 from src.helpers import unpack_cell
 
 
@@ -1125,6 +1126,180 @@ def _panel_to_frame(values, index, width=None):
     return pd.DataFrame(data, index=index[:horizon], columns=range(width))
 
 
+FIRM_BALANCE_SHEET_COLUMNS = [
+    "inventory",
+    "inventory_nominal",
+    "intermediate_inputs_stock",
+    "intermediate_inputs_stock_value",
+    "intermediate_inputs_stock_industry",
+    "capital_inputs_stock",
+    "capital_inputs_stock_value",
+    "capital_inputs_stock_industry",
+    "short_term_loan_debt",
+    "long_term_loan_debt",
+    "debt",
+    "total_credit_exposure",
+    "deposits",
+    "total_deposits",
+    "equity",
+]
+
+
+FIRM_TRANSACTION_ACCOUNT_COLUMNS = [
+    "production",
+    "production_nominal",
+    "price",
+    "price_offered",
+    "price_in_usd",
+    "profits",
+    "total_wage",
+    "unit_costs",
+    "taxes_paid_on_production",
+    "corporate_taxes_paid",
+    "activity_finance_available",
+    "activity_finance_hard_obligations",
+    "activity_finance_gap_before_revision",
+    "activity_finance_opening_deposits",
+    "activity_finance_feasibility_residual",
+    "activity_finance_realised_feasible_target_production",
+    "activity_finance_realised_labour_scale",
+    "intermediate_purchase_finance_scale",
+    "capital_purchase_finance_scale",
+    "technical_investment_finance_scale",
+    "tfp_investment_finance_scale",
+    "executed_productivity_investment",
+    "executed_tfp_investment",
+    "direct_tfp_investment_cash_expense",
+    "technical_investment_by_input",
+    "total_inventory_change",
+    "used_intermediate_inputs",
+    "used_intermediate_inputs_costs",
+    "total_intermediate_inputs_bought_costs",
+    "used_capital_inputs",
+    "used_capital_inputs_costs",
+    "capital_depreciation_costs",
+    "total_capital_inputs_bought_costs",
+    "gross_fixed_capital_formation",
+    "total_sales",
+    "credit_budget_internal_cash",
+    "credit_budget_existing_overdraft",
+    "credit_budget_wage_obligations",
+    "credit_budget_production_tax_obligations",
+    "credit_budget_corporate_tax_obligations",
+    "credit_budget_interest_obligations",
+    "credit_budget_debt_installments",
+    "credit_budget_hard_obligations",
+    "credit_budget_cash_after_hard_obligations",
+    "credit_budget_available_after_hard_and_overdraft",
+    "credit_budget_intermediate_costs",
+    "credit_budget_tfp_costs",
+    "credit_budget_working_capital_budget",
+    "credit_budget_capital_costs",
+    "credit_budget_technical_investment_costs",
+    "credit_budget_investment_budget",
+    "credit_budget_remaining_internal_finance_after_working_capital",
+    "received_short_term_credit",
+    "total_received_short_term_credit",
+    "received_debt_rollover_credit",
+    "total_received_debt_rollover_credit",
+    "received_overdraft_refinance_credit",
+    "total_received_overdraft_refinance_credit",
+    "received_ordinary_short_term_credit",
+    "total_received_ordinary_short_term_credit",
+    "received_long_term_credit",
+    "total_received_long_term_credit",
+    "received_credit",
+    "firm_settlement_available_cash_before_debt_service",
+    "firm_settlement_corporate_tax_reserve",
+    "firm_settlement_cash_after_tax_reserve",
+    "firm_settlement_opening_interest_arrears",
+    "firm_settlement_scheduled_interest_due",
+    "firm_settlement_contractual_interest_due",
+    "firm_settlement_payable_interest",
+    "firm_settlement_closing_interest_arrears",
+    "firm_settlement_unpaid_interest",
+    "firm_settlement_capitalized_interest",
+    "firm_settlement_opening_principal_arrears",
+    "firm_settlement_scheduled_principal_due",
+    "firm_settlement_contractual_principal_due",
+    "firm_settlement_payable_principal",
+    "firm_settlement_closing_principal_arrears",
+    "firm_settlement_unpaid_principal",
+    "firm_settlement_debt_rollover_shortfall",
+    "firm_settlement_overdraft_refinance_used",
+    "firm_settlement_overdraft_refinance_shortfall",
+    "firm_settlement_residual_overdraft_exposure",
+    "firm_settlement_illiquid_flag",
+    "firm_settlement_default_flag",
+    "credit_market_firm_cfads",
+    "credit_market_firm_st_capacity",
+    "credit_market_firm_st_collateral_cap",
+    "credit_market_firm_st_dscr_cap",
+    "credit_market_firm_st_binding_reason",
+    "credit_market_firm_st_binding_amount",
+    "credit_market_firm_lt_capacity",
+    "credit_market_firm_lt_collateral_cap",
+    "credit_market_firm_lt_dscr_cap",
+    "credit_market_firm_lt_binding_reason",
+    "credit_market_firm_lt_binding_amount",
+    "debt_installments",
+    "scheduled_debt_service",
+    "total_debt_installments",
+    "interest_paid_on_deposits",
+    "interest_paid_on_loans",
+    "interest_paid",
+    "labour_inputs",
+    "labour_costs",
+    "gross_operating_surplus_mixed_income",
+    "nominal_amount_sold_in_lcu",
+    "nominal_amount_sold_in_lcu_to_FRA",
+    "nominal_amount_sold_in_lcu_to_ROW",
+    "nominal_amount_spent_in_usd",
+    "nominal_amount_spent_in_usd_to_FRA",
+    "nominal_amount_spent_in_usd_to_ROW",
+    "nominal_amount_spent_in_lcu",
+    "nominal_amount_spent_in_lcu_to_FRA",
+    "nominal_amount_spent_in_lcu_to_ROW",
+]
+
+
+def split_firm_ts_balance_sheet_and_transaction_account_df(
+    model,
+    country_code: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split ``firms.ts`` into balance sheet and transaction account views.
+
+    The split is intentionally notebook-friendly: columns that are unavailable in
+    ``firms.ts`` are ignored, and only nominal realized firm series are included.
+
+    Returns
+    -------
+    tuple[pd.DataFrame, pd.DataFrame]
+        ``(balance_sheet_df, transaction_account_df)``.
+    """
+    country = model.countries[country_code]
+    firms_ts = getattr(getattr(country, "firms", None), "ts", None)
+    if firms_ts is None:
+        raise ValueError(f"firms.ts is missing for country {country_code!r}.")
+
+    out_index = model.shallow_df_dict()[country_code].index
+
+    def _build_frame(columns: list[str]) -> pd.DataFrame:
+        data: dict[str, pd.Series] = {}
+        for col in columns:
+            values = _safe_ts_values(firms_ts, col)
+            if values is None:
+                continue
+            values = list(values)
+            horizon = min(len(out_index), len(values))
+            data[col] = pd.Series(values[:horizon], index=out_index[:horizon]).reindex(out_index)
+        return pd.DataFrame(data, index=out_index)
+
+    balance_sheet_df = _build_frame(FIRM_BALANCE_SHEET_COLUMNS)
+    transaction_account_df = _build_frame(FIRM_TRANSACTION_ACCOUNT_COLUMNS)
+    return balance_sheet_df, transaction_account_df
+
+
 def build_credit_demand_by_agent_df(model, country_code, agent_kind="firms", include_received=True):
     """Return credit demand (and optionally received credit) by agent and type.
 
@@ -1841,6 +2016,110 @@ def plot_output(
     fig.show()
 
 
+@overload
+def plot_agent_timeseries(
+    model,
+    country_code: str,
+    agent_type: str,
+    variables,
+    *,
+    agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    agg: str = "sum",
+    by_sector: bool = False,
+    panel_titles: list[str] | None = None,
+    no_cols: int | None = None,
+    base_height: int = 220,
+    base_width: int = 380,
+    title: str | None = None,
+    height: int | None = None,
+    width: int | None = None,
+    shared_xaxes: bool = True,
+    show_legend: bool | None = None,
+    line_width: float = 2.0,
+    show: Literal[True] = True,
+    return_df: Literal[False] = False,
+):
+    ...
+
+
+@overload
+def plot_agent_timeseries(
+    model,
+    country_code: str,
+    agent_type: str,
+    variables,
+    *,
+    agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    agg: str = "sum",
+    by_sector: bool = False,
+    panel_titles: list[str] | None = None,
+    no_cols: int | None = None,
+    base_height: int = 220,
+    base_width: int = 380,
+    title: str | None = None,
+    height: int | None = None,
+    width: int | None = None,
+    shared_xaxes: bool = True,
+    show_legend: bool | None = None,
+    line_width: float = 2.0,
+    show: Literal[False],
+    return_df: Literal[False] = False,
+) -> go.Figure:
+    ...
+
+
+@overload
+def plot_agent_timeseries(
+    model,
+    country_code: str,
+    agent_type: str,
+    variables,
+    *,
+    agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    agg: str = "sum",
+    by_sector: bool = False,
+    panel_titles: list[str] | None = None,
+    no_cols: int | None = None,
+    base_height: int = 220,
+    base_width: int = 380,
+    title: str | None = None,
+    height: int | None = None,
+    width: int | None = None,
+    shared_xaxes: bool = True,
+    show_legend: bool | None = None,
+    line_width: float = 2.0,
+    show: Literal[True] = True,
+    return_df: Literal[True],
+) -> tuple[None, pd.DataFrame]:
+    ...
+
+
+@overload
+def plot_agent_timeseries(
+    model,
+    country_code: str,
+    agent_type: str,
+    variables,
+    *,
+    agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    agg: str = "sum",
+    by_sector: bool = False,
+    panel_titles: list[str] | None = None,
+    no_cols: int | None = None,
+    base_height: int = 220,
+    base_width: int = 380,
+    title: str | None = None,
+    height: int | None = None,
+    width: int | None = None,
+    shared_xaxes: bool = True,
+    show_legend: bool | None = None,
+    line_width: float = 2.0,
+    show: Literal[False],
+    return_df: Literal[True],
+) -> tuple[go.Figure, pd.DataFrame]:
+    ...
+
+
 def plot_agent_timeseries(
     model,
     country_code: str,
@@ -1861,6 +2140,7 @@ def plot_agent_timeseries(
     show_legend: bool | None = None,
     line_width: float = 2.0,
     show: bool = True,
+    return_df: bool = False,
 ):
     """Plot one or more time-series from an agent's ``.ts`` container.
 
@@ -1894,6 +2174,8 @@ def plot_agent_timeseries(
             panel_titles=["France: household rates", "France: firm rates"],
             no_cols=2,
         )
+
+    Set ``return_df=True`` to also return a DataFrame with the plotted series.
     """
     if isinstance(variables, str):
         variables = [variables]
@@ -2042,6 +2324,20 @@ def plot_agent_timeseries(
     if show_legend is None:
         show_legend = (agent_ids is not None and len(agent_ids) > 1) or by_sector or panel_mode
 
+    plotted_series: list[tuple[str, pd.Series]] = []
+
+    def _store_series(name: str, values: list[float] | np.ndarray | pd.Series) -> None:
+        series = pd.Series(values, index=out_index[: len(values)], dtype=float).reindex(out_index)
+        if name in {existing_name for existing_name, _ in plotted_series}:
+            suffix = 2
+            candidate = f"{name}__{suffix}"
+            existing_names = {existing_name for existing_name, _ in plotted_series}
+            while candidate in existing_names:
+                suffix += 1
+                candidate = f"{name}__{suffix}"
+            name = candidate
+        plotted_series.append((name, series))
+
     fig = make_subplots(
         rows=no_rows,
         cols=no_cols,
@@ -2089,6 +2385,7 @@ def plot_agent_timeseries(
                     )
 
                 series = [_reduce(v) for v in list(values)[:horizon]]
+                _store_series(f"panel{idx + 1}:{key}", series)
                 fig.add_trace(
                     go.Scatter(
                         x=out_index[:horizon],
@@ -2156,6 +2453,7 @@ def plot_agent_timeseries(
 
                 for sector_idx, code in enumerate(sector_codes):
                     code = str(code)
+                    _store_series(f"{agent_key}.{var_name}[{code}]", series_by_sector[code])
                     fig.add_trace(
                         go.Scatter(
                             x=out_index[:horizon],
@@ -2187,6 +2485,7 @@ def plot_agent_timeseries(
                             series_by_id[selected_id].append(float(array[selected_id]))
 
                 for j, selected_id in enumerate(agent_ids):
+                    _store_series(f"{agent_key}.{var_name}[id={selected_id}]", series_by_id[selected_id])
                     fig.add_trace(
                         go.Scatter(
                             x=out_index[:horizon],
@@ -2204,6 +2503,7 @@ def plot_agent_timeseries(
                     )
             else:
                 series = [_reduce(v) for v in list(values)[:horizon]]
+                _store_series(f"{agent_key}.{var_name}", series)
                 fig.add_trace(
                     go.Scatter(
                         x=out_index[:horizon],
@@ -2277,7 +2577,12 @@ def plot_agent_timeseries(
 
     if show:
         fig.show()
+        if return_df:
+            return None, pd.DataFrame({name: series for name, series in plotted_series}, index=out_index)
         return None
+
+    if return_df:
+        return fig, pd.DataFrame({name: series for name, series in plotted_series}, index=out_index)
     return fig
 
 

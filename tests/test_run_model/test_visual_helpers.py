@@ -26,6 +26,7 @@ from src.visual_helpers import (  # noqa: E402
     plot_ppi_comparison,
     plot_production_by_sector,
     plot_sector_tfp_investment_desired_mb_mc_ratio,
+    split_firm_ts_balance_sheet_and_transaction_account_df,
 )
 
 
@@ -295,6 +296,86 @@ def test_plot_agent_timeseries_aggregates_vector_series_and_can_select_agent_id(
     assert [trace.name for trace in fig_multi.data][:2] == ["id=0", "id=1"]
     assert list(fig_multi.data[0].y) == pytest.approx([1.0, 3.0, 5.0])
     assert list(fig_multi.data[1].y) == pytest.approx([2.0, 4.0, 6.0])
+
+
+def test_plot_agent_timeseries_can_return_the_plotted_dataframe():
+    index = pd.RangeIndex(3, name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [1.0, 1.0, 1.0]}, index=index)
+    country = SimpleNamespace(
+        firms=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_sales": [10.0, 11.0, 12.0],
+                    "target_short_term_credit": [
+                        np.array([1.0, 2.0]),
+                        np.array([3.0, 4.0]),
+                        np.array([5.0, 6.0]),
+                    ],
+                }
+            )
+        )
+    )
+    model = SimpleNamespace(
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+    )
+
+    fig, df = plot_agent_timeseries(
+        model=model,
+        country_code="FRA",
+        agent_type="firms",
+        variables=["target_short_term_credit", "total_sales"],
+        agent_id=[0, 1],
+        show=False,
+        return_df=True,
+    )
+
+    assert len(fig.data) == 3
+    assert df.index.equals(index)
+    assert df.columns.tolist() == [
+        "firms.target_short_term_credit[id=0]",
+        "firms.target_short_term_credit[id=1]",
+        "firms.total_sales",
+    ]
+    assert df.iloc[:, 0].tolist() == pytest.approx([1.0, 3.0, 5.0])
+    assert df.iloc[:, 1].tolist() == pytest.approx([2.0, 4.0, 6.0])
+    assert df.iloc[:, 2].tolist() == pytest.approx([10.0, 11.0, 12.0])
+
+
+def test_split_firm_ts_balance_sheet_and_transaction_account_df_uses_curated_columns():
+    index = pd.RangeIndex(2, name="t")
+    model = SimpleNamespace(
+        countries={
+            "FRA": SimpleNamespace(
+                firms=SimpleNamespace(
+                    ts=_ts(
+                        {
+                            "inventory": [1.0, 2.0],
+                            "deposits": [3.0, 4.0],
+                            "equity": [5.0, 6.0],
+                            "production": [7.0, 8.0],
+                            "total_sales": [9.0, 10.0],
+                            "received_short_term_credit": [11.0, 12.0],
+                            "target_short_term_credit": [13.0, 14.0],
+                            "expected_profits": [15.0, 16.0],
+                        }
+                    )
+                )
+            )
+        },
+        shallow_df_dict=lambda: {"FRA": pd.DataFrame(index=index)},
+    )
+
+    balance_sheet_df, transaction_account_df = split_firm_ts_balance_sheet_and_transaction_account_df(model, "FRA")
+
+    assert balance_sheet_df.columns.tolist() == ["inventory", "deposits", "equity"]
+    assert transaction_account_df.columns.tolist() == [
+        "production",
+        "total_sales",
+        "received_short_term_credit",
+    ]
+    assert "target_short_term_credit" not in transaction_account_df.columns
+    assert "expected_profits" not in transaction_account_df.columns
 
 
 def test_plot_agent_timeseries_uses_bare_variable_names_and_side_legend():

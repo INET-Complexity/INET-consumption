@@ -1563,6 +1563,9 @@ class Firms(Agent):
         self.ts.firm_settlement_residual_overdraft_exposure.append(np.zeros(n_firms))
         self.ts.firm_settlement_illiquid_flag.append(np.full(n_firms, False))
         self.ts.firm_settlement_default_flag.append(np.full(n_firms, False))
+        self.ts.firm_settlement_balance_sheet_residual.append(np.zeros(n_firms))
+        self.ts.firm_settlement_transaction_flow_residual.append(np.zeros(n_firms))
+        self.ts.firm_settlement_accounting_control_passed.append(np.full(n_firms, False))
         self.ts.total_credit_exposure.append(np.zeros(n_firms))
 
     @staticmethod
@@ -1705,6 +1708,92 @@ class Firms(Agent):
             "firm_settlement_default_flag",
             np.asarray(settlement["default_flag"], dtype=bool).copy(),
         )
+
+    def check_firm_accounting_controls(
+        self,
+        current_good_prices: np.ndarray,
+        tolerance: float = 1e-8,
+        enforce: bool = True,
+    ) -> dict[str, np.ndarray]:
+        """Check the firm balance-sheet and settlement cash-flow identities.
+
+        The control is evaluated on the pre-default settlement state. It uses the
+        opening-deposits snapshot stored during activity-finance planning, the
+        closing deposits written during settlement, and the current balance-sheet
+        stocks. Principal arrears remain separate from explicit debt and are not
+        capitalised by this check.
+        """
+        current_good_prices = np.asarray(current_good_prices, dtype=float)
+        opening_deposits = np.nan_to_num(np.asarray(self.ts.current("activity_finance_opening_deposits"), dtype=float))
+        closing_deposits = np.nan_to_num(np.asarray(self.ts.current("deposits"), dtype=float))
+        received_credit = np.nan_to_num(np.asarray(self.ts.current("received_credit"), dtype=float))
+        debt_installments = np.nan_to_num(np.asarray(self.ts.current("debt_installments"), dtype=float))
+        nominal_amount_sold_in_lcu = np.nan_to_num(
+            np.asarray(self.ts.current("nominal_amount_sold_in_lcu"), dtype=float)
+        )
+        nominal_amount_spent_in_lcu = np.nan_to_num(
+            np.asarray(self.ts.current("nominal_amount_spent_in_lcu"), dtype=float),
+            nan=0.0,
+        )
+        total_wage = np.nan_to_num(np.asarray(self.ts.current("total_wage"), dtype=float))
+        direct_tfp_investment_cash_expense = np.nan_to_num(
+            np.asarray(self.ts.current("direct_tfp_investment_cash_expense"), dtype=float)
+        )
+        taxes_paid_on_production = np.nan_to_num(np.asarray(self.ts.current("taxes_paid_on_production"), dtype=float))
+        corporate_taxes_paid = np.nan_to_num(np.asarray(self.ts.current("corporate_taxes_paid"), dtype=float))
+        interest_paid = np.nan_to_num(np.asarray(self.ts.current("interest_paid"), dtype=float))
+
+        expected_closing_deposits = (
+            opening_deposits
+            + nominal_amount_sold_in_lcu
+            + received_credit
+            - total_wage
+            - nominal_amount_spent_in_lcu.sum(axis=1)
+            - direct_tfp_investment_cash_expense
+            - taxes_paid_on_production
+            - corporate_taxes_paid
+            - interest_paid
+            - debt_installments
+        )
+        transaction_flow_residual = expected_closing_deposits - closing_deposits
+
+        material = np.dot(self.ts.current("intermediate_inputs_stock"), current_good_prices)
+        capital = np.dot(self.ts.current("capital_inputs_stock"), current_good_prices)
+        expected_equity = (
+            np.nan_to_num(np.asarray(self.ts.current("inventory"), dtype=float))
+            * np.asarray(self.ts.current("price"), dtype=float)
+            + material
+            + capital
+            + closing_deposits
+            - np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))
+        )
+        balance_sheet_residual = expected_equity - np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))
+
+        control_passed = (np.abs(balance_sheet_residual) <= tolerance) & (
+            np.abs(transaction_flow_residual) <= tolerance
+        )
+
+        self.ts.override_current("firm_settlement_balance_sheet_residual", balance_sheet_residual.copy())
+        self.ts.override_current("firm_settlement_transaction_flow_residual", transaction_flow_residual.copy())
+        self.ts.override_current("firm_settlement_accounting_control_passed", control_passed.copy())
+
+        if enforce and not np.all(control_passed):
+            failing_firms = np.where(~control_passed)[0]
+            max_bs_residual = float(np.max(np.abs(balance_sheet_residual[~control_passed])))
+            max_cf_residual = float(np.max(np.abs(transaction_flow_residual[~control_passed])))
+            raise ValueError(
+                "Firm accounting control violation: "
+                f"failing_firms={failing_firms.tolist()}, "
+                f"max_balance_sheet_residual={max_bs_residual:.6g}, "
+                f"max_transaction_flow_residual={max_cf_residual:.6g}, "
+                f"tolerance={tolerance:.6g}"
+            )
+
+        return {
+            "balance_sheet_residual": balance_sheet_residual,
+            "transaction_flow_residual": transaction_flow_residual,
+            "control_passed": control_passed,
+        }
 
     def compute_profits_given_interest_paid(
         self,

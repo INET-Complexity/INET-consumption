@@ -10,7 +10,6 @@ class TestFirmWageSetter:
         WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.1,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         ).set_employee_income(
             corresponding_firm=np.array([0, 1]),
             current_individual_labour_inputs=np.array([1.0, 2.0]),
@@ -37,7 +36,6 @@ class TestFirmWageSetter:
         wage_setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.1,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
 
         with warnings.catch_warnings(record=True) as recorded_warnings:
@@ -70,7 +68,6 @@ class TestFirmWageSetter:
         setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.0,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
         common_kwargs = dict(
             corresponding_firm=np.array([0, 0]),
@@ -102,7 +99,6 @@ class TestFirmWageSetter:
         setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.0,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
         common_kwargs = dict(
             corresponding_firm=np.array([0]),
@@ -134,7 +130,6 @@ class TestFirmWageSetter:
         setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.0,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
 
         offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(
@@ -164,7 +159,6 @@ class TestFirmWageSetter:
         setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.0,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
 
         offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(
@@ -194,7 +188,6 @@ class TestFirmWageSetter:
         setter = WorkEffortFirmWageSetter(
             labour_market_tightness_markup_scale=0.0,
             markup_time_span=12,
-            max_increase_in_work_effort=1.5,
         )
 
         offered_wage_function = setter.get_offered_wage_given_labour_inputs_function(

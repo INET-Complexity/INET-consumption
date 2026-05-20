@@ -2296,7 +2296,9 @@ def plot_agent_timeseries(
     return_info: bool = False,
     show: bool = True,
     return_df: bool = False,
-) -> go.Figure | tuple[go.Figure, pd.DataFrame] | tuple[None, pd.DataFrame] | tuple[go.Figure, dict] | tuple[None, dict]: ...
+) -> (
+    go.Figure | tuple[go.Figure, pd.DataFrame] | tuple[None, pd.DataFrame] | tuple[go.Figure, dict] | tuple[None, dict]
+): ...
 
 
 def plot_agent_timeseries(
@@ -2433,9 +2435,7 @@ def plot_agent_timeseries(
             elif var_name in transaction_account_df.columns:
                 values = _to_matrix(transaction_account_df, var_name)
             else:
-                raise KeyError(
-                    f"{var_name!r} not found in either balance_sheet_df or transaction_account_df."
-                )
+                raise KeyError(f"{var_name!r} not found in either balance_sheet_df or transaction_account_df.")
 
             op_map = {
                 "<": np.less,

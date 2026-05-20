@@ -1,3 +1,5 @@
+import re
+from ast import literal_eval
 from typing import Literal, overload
 
 import numpy as np
@@ -2177,6 +2179,9 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: Literal[False] = False,
     show: Literal[True] = True,
     return_df: Literal[False] = False,
 ): ...
@@ -2202,6 +2207,9 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: Literal[False] = False,
     show: Literal[False],
     return_df: Literal[False] = False,
 ) -> go.Figure: ...
@@ -2227,6 +2235,9 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: Literal[False] = False,
     show: Literal[True] = True,
     return_df: Literal[True],
 ) -> tuple[None, pd.DataFrame]: ...
@@ -2252,6 +2263,9 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: Literal[False] = False,
     show: Literal[False],
     return_df: Literal[True],
 ) -> tuple[go.Figure, pd.DataFrame]: ...
@@ -2277,9 +2291,12 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: bool = False,
     show: bool = True,
     return_df: bool = False,
-) -> go.Figure | tuple[go.Figure, pd.DataFrame] | tuple[None, pd.DataFrame]: ...
+) -> go.Figure | tuple[go.Figure, pd.DataFrame] | tuple[None, pd.DataFrame] | tuple[go.Figure, dict] | tuple[None, dict]: ...
 
 
 def plot_agent_timeseries(
@@ -2301,6 +2318,9 @@ def plot_agent_timeseries(
     shared_xaxes: bool = True,
     show_legend: bool | None = None,
     line_width: float = 2.0,
+    firm_ids: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    condition: str | None = None,
+    return_info: bool = False,
     show: bool = True,
     return_df: bool = False,
 ):
@@ -2355,6 +2375,107 @@ def plot_agent_timeseries(
         raise ValueError(f"{agent_type}.ts is missing for country {country_code!r}.")
 
     out_index = model.shallow_df_dict()[country_code].index
+
+    info: dict | None = {} if return_info else None
+    if firm_ids is not None or condition is not None:
+        if agent_type != "firms":
+            raise ValueError("firm_ids/condition are only supported for agent_type='firms'.")
+
+        balance_sheet_df, transaction_account_df = split_firm_ts_balance_sheet_and_transaction_account_df(
+            model,
+            country_code,
+        )
+
+        def _to_matrix(df: pd.DataFrame, var_name: str) -> np.ndarray:
+            if var_name not in df.columns:
+                raise KeyError(f"{var_name!r} not found in dataframe columns.")
+            return np.asarray(list(df[var_name].to_dict().values()))
+
+        def _reference_n_firms() -> int:
+            for df in (balance_sheet_df, transaction_account_df):
+                for col in df.columns:
+                    values = _to_matrix(df, col)
+                    if values.ndim == 2:
+                        return values.shape[1]
+            raise ValueError("Could not infer the number of firms from the provided dataframes.")
+
+        def _normalize_firm_ids(ids):
+            if ids is None:
+                return None
+            if isinstance(ids, (int, np.integer)):
+                ids = [int(ids)]
+            ids = [int(i) for i in ids]
+            n_firms = _reference_n_firms()
+            for firm_id in ids:
+                if firm_id < 0 or firm_id >= n_firms:
+                    raise IndexError(f"firm_id out of bounds: {firm_id} (n_firms={n_firms})")
+            return ids
+
+        def _condition_mask(expr: str) -> np.ndarray:
+            match = re.fullmatch(
+                r"\s*(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<op><=|>=|==|!=|<|>)\s*(?P<value>.+?)\s*",
+                expr,
+            )
+            if match is None:
+                raise ValueError(
+                    "condition must be an expression like 'equity < 0', 'deposits < 0', or 'production == 0'."
+                )
+
+            var_name = match.group("var")
+            op = match.group("op")
+            try:
+                value = literal_eval(match.group("value"))
+            except Exception as exc:  # pragma: no cover - defensive parser guard
+                raise ValueError(f"Could not parse condition value in {expr!r}.") from exc
+
+            if var_name in balance_sheet_df.columns:
+                values = _to_matrix(balance_sheet_df, var_name)
+            elif var_name in transaction_account_df.columns:
+                values = _to_matrix(transaction_account_df, var_name)
+            else:
+                raise KeyError(
+                    f"{var_name!r} not found in either balance_sheet_df or transaction_account_df."
+                )
+
+            op_map = {
+                "<": np.less,
+                "<=": np.less_equal,
+                ">": np.greater,
+                ">=": np.greater_equal,
+                "==": np.equal,
+                "!=": np.not_equal,
+            }
+            return np.any(op_map[op](values, value), axis=0)
+
+        n_firms = _reference_n_firms()
+        selected_mask = np.ones(n_firms, dtype=bool)
+
+        normalized_firm_ids = _normalize_firm_ids(firm_ids)
+        if normalized_firm_ids is not None:
+            firm_mask = np.zeros(n_firms, dtype=bool)
+            firm_mask[normalized_firm_ids] = True
+            selected_mask &= firm_mask
+
+        if condition is not None:
+            selected_mask &= _condition_mask(condition)
+
+        selected_firms = np.flatnonzero(selected_mask).tolist()
+        if not selected_firms:
+            raise ValueError("No firms matched the requested firm_ids/condition filters.")
+
+        agent_ids = selected_firms
+        info = {
+            "balance_sheet_columns": list(balance_sheet_df.columns),
+            "transaction_account_columns": list(transaction_account_df.columns),
+            "selected_firms": selected_firms,
+            "first_negative_at": {},
+        }
+        if "equity" in balance_sheet_df.columns:
+            equity_values = _to_matrix(balance_sheet_df, "equity")
+            for firm_idx in selected_firms:
+                neg_mask = equity_values[:, firm_idx] < 0
+                if np.any(neg_mask):
+                    info["first_negative_at"][firm_idx] = out_index[int(np.argmax(neg_mask))]
 
     panel_mode = any(isinstance(v, (list, tuple)) for v in variables)
     panels: list[list[str]] | None
@@ -2744,7 +2865,18 @@ def plot_agent_timeseries(
         return None
 
     if return_df:
-        return fig, pd.DataFrame({name: series for name, series in plotted_series}, index=out_index)
+        result_df = pd.DataFrame({name: series for name, series in plotted_series}, index=out_index)
+        if info is not None:
+            if show:
+                return None, result_df
+            return fig, result_df
+        if show:
+            return None, result_df
+        return fig, result_df
+    if info is not None:
+        if show:
+            return None, info
+        return fig, info
     return fig
 
 

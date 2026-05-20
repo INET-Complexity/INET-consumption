@@ -2257,6 +2257,31 @@ def plot_agent_timeseries(
 ) -> tuple[go.Figure, pd.DataFrame]: ...
 
 
+@overload
+def plot_agent_timeseries(
+    model,
+    country_code: str,
+    agent_type: str,
+    variables,
+    *,
+    agent_id: int | list[int] | tuple[int, ...] | np.ndarray | None = None,
+    agg: str = "sum",
+    by_sector: bool = False,
+    panel_titles: list[str] | None = None,
+    no_cols: int | None = None,
+    base_height: int = 220,
+    base_width: int = 380,
+    title: str | None = None,
+    height: int | None = None,
+    width: int | None = None,
+    shared_xaxes: bool = True,
+    show_legend: bool | None = None,
+    line_width: float = 2.0,
+    show: bool = True,
+    return_df: bool = False,
+) -> go.Figure | tuple[go.Figure, pd.DataFrame] | tuple[None, pd.DataFrame]: ...
+
+
 def plot_agent_timeseries(
     model,
     country_code: str,

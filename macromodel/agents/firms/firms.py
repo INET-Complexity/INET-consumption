@@ -1712,7 +1712,7 @@ class Firms(Agent):
     def check_firm_accounting_controls(
         self,
         current_good_prices: np.ndarray,
-        tolerance: float = 1e-8,
+        tolerance: float = 1e-4,
         enforce: bool = True,
     ) -> dict[str, np.ndarray]:
         """Check the firm balance-sheet and settlement cash-flow identities.

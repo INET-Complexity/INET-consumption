@@ -4,7 +4,6 @@ from copy import deepcopy
 
 import numpy as np
 import pandas as pd
-import statsmodels.api as sm
 
 from macro_data.readers.default_readers import DataReaders
 from macromodel.configurations import CountryConfiguration
@@ -65,103 +64,6 @@ def unpack_cell(x):
     if isinstance(x, list) and len(x) == 1:
         return x[0]
     return x
-
-
-def _prepare_social_benefits_arx_regression_data(
-    benefits_inflation_data: pd.DataFrame,
-    gdp_growth: pd.Series,
-    target_column: str,
-    regression_window: int = 48,
-    log_floor: float = 1e-8,
-) -> pd.DataFrame:
-    data = benefits_inflation_data[[target_column, "Data CPI Inflation", "Unemployment Rate"]].copy()
-    data["Log Benefits"] = np.log(data[target_column].clip(lower=log_floor))
-    data["Delta Log Benefits"] = data["Log Benefits"].diff()
-    data["Lagged Inflation"] = data["Data CPI Inflation"].shift(1)
-    data["Unemployment Change"] = data["Unemployment Rate"].diff()
-    gdp_growth_frame = pd.DataFrame({"GDP Growth": gdp_growth}).sort_index()
-    data = pd.merge_asof(data.sort_index(), gdp_growth_frame, left_index=True, right_index=True)
-    return data.iloc[-regression_window:].dropna()
-
-
-def fit_social_benefits_arx_diagnostics(
-    readers: DataReaders,
-    country_name,
-    year: int,
-    year_range: int = 10,
-    regression_window: int = 48,
-    log_floor: float = 1e-8,
-) -> dict[str, dict[str, object]]:
-    """Fit statsmodels OLS diagnostics for the social-benefits ARX specification.
-
-    Returns a dictionary keyed by target name. Each target contains:
-    - ``results``: fitted statsmodels OLS results object
-    - ``data``: regression dataframe used for estimation
-
-    Example
-    -------
-    diagnostics = fit_social_benefits_arx_diagnostics(...)
-    diagnostics["unemployment_benefits"]["results"].summary()
-    diagnostics["other_benefits"]["data"].head()
-    """
-    country_exogenous_data = readers.get_exogenous_data(country_name)
-    if country_exogenous_data is None:
-        return {}
-
-    benefits_inflation_data = readers.get_benefits_inflation_data(
-        country_name=country_name,
-        year_min=year - year_range,
-        year_max=year,
-        exogenous_data=country_exogenous_data,
-    )
-    national_accounts_growth = readers.get_national_accounts_growth(country_name)
-    gdp_growth = (
-        national_accounts_growth["GDP"] if "GDP" in national_accounts_growth.columns else pd.Series(dtype=float)
-    )
-
-    diagnostics: dict[str, dict[str, object]] = {}
-
-    unemployment_regression_data = _prepare_social_benefits_arx_regression_data(
-        benefits_inflation_data=benefits_inflation_data,
-        gdp_growth=gdp_growth,
-        target_column="Unemployment Benefits",
-        regression_window=regression_window,
-        log_floor=log_floor,
-    )
-    if not unemployment_regression_data.empty:
-        unemployment_exog = sm.add_constant(
-            unemployment_regression_data[["Lagged Inflation", "Unemployment Change", "GDP Growth"]],
-            has_constant="add",
-        )
-        unemployment_endog = unemployment_regression_data["Delta Log Benefits"].rename(
-            "Delta Log Unemployment Benefits"
-        )
-        unemployment_results = sm.OLS(unemployment_endog, unemployment_exog).fit()
-        diagnostics["unemployment_benefits"] = {
-            "results": unemployment_results,
-            "data": unemployment_regression_data,
-        }
-
-    other_benefits_regression_data = _prepare_social_benefits_arx_regression_data(
-        benefits_inflation_data=benefits_inflation_data,
-        gdp_growth=gdp_growth,
-        target_column="Other Total Benefits",
-        regression_window=regression_window,
-        log_floor=log_floor,
-    )
-    if not other_benefits_regression_data.empty:
-        other_benefits_exog = sm.add_constant(
-            other_benefits_regression_data[["Lagged Inflation", "Unemployment Change", "GDP Growth"]],
-            has_constant="add",
-        )
-        other_benefits_endog = other_benefits_regression_data["Delta Log Benefits"].rename("Delta Log Other Benefits")
-        other_benefits_results = sm.OLS(other_benefits_endog, other_benefits_exog).fit()
-        diagnostics["other_benefits"] = {
-            "results": other_benefits_results,
-            "data": other_benefits_regression_data,
-        }
-
-    return diagnostics
 
 
 def build_social_benefits_reader_df(

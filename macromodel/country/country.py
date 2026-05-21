@@ -1114,8 +1114,8 @@ class Country:
             assume_zero_noise=self.assume_zero_noise,
         )
 
-    def append_excess_demand_finance_potential_diagnostics(self) -> None:
-        """Append borrower-side finance-potential diagnostics after goods clearing."""
+    def _excess_demand_finance_potential_inputs(self) -> dict[str, np.ndarray]:
+        """Return country-level inputs for excess-demand finance-potential calculations."""
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             individual_wages=self.individuals.ts.current("employee_income"),
@@ -1142,16 +1142,43 @@ class Country:
         expected_lcu_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.economy.ts.current(
             "good_prices"
         )
-        self.firms.append_excess_demand_finance_potential_diagnostics(
-            expected_lcu_prices=expected_lcu_prices,
-            wage_obligation_preview=firm_wage_obligation_preview,
-            non_loan_interest_obligation_preview=non_loan_interest_obligation_preview,
-            borrower_st_credit_room=borrower_credit_room["short_term"],
-            borrower_lt_credit_room=borrower_credit_room["long_term"],
-            borrower_total_credit_room=borrower_credit_room["total"],
+        return {
+            "expected_lcu_prices": expected_lcu_prices,
+            "wage_obligation_preview": firm_wage_obligation_preview,
+            "non_loan_interest_obligation_preview": non_loan_interest_obligation_preview,
+            "borrower_st_credit_room": borrower_credit_room["short_term"],
+            "borrower_lt_credit_room": borrower_credit_room["long_term"],
+            "borrower_total_credit_room": borrower_credit_room["total"],
+        }
+
+    def compute_excess_demand_finance_potential_capacities(self, ordinary_bank_supply: float) -> None:
+        """Compute supply-adjusted finance-potential capacities before excess-demand assignment."""
+        self.firms.reset_excess_demand_finance_potential_transients()
+        inputs = self._excess_demand_finance_potential_inputs()
+        self.firms.compute_excess_demand_finance_potential_capacities(
+            **inputs,
             q_sold=self.firms.transactor_seller_states["Real Amount sold"],
+            ordinary_bank_supply=ordinary_bank_supply,
+        )
+
+    def append_excess_demand_finance_potential_diagnostics(self) -> None:
+        """Append borrower-side finance-potential diagnostics after goods clearing."""
+        if getattr(self.firms, "_last_excess_demand_finance_potential", None) is None:
+            inputs = self._excess_demand_finance_potential_inputs()
+            self.firms.append_excess_demand_finance_potential_diagnostics(
+                **inputs,
+                q_sold=self.firms.transactor_seller_states["Real Amount sold"],
+                q_excess=self.firms.transactor_seller_states["Real Excess Demand"],
+            )
+            return
+
+        self.firms.append_cached_excess_demand_finance_potential_diagnostics(
             q_excess=self.firms.transactor_seller_states["Real Excess Demand"],
         )
+
+    def supply_adjusted_excess_demand_capacity(self) -> np.ndarray:
+        """Return supply-adjusted firm-level excess-demand capacity for this country."""
+        return self.firms.get_supply_adjusted_excess_demand_capacity()
 
     def update_realised_metrics(self) -> None:
         """Update realized economic outcomes after market clearing.

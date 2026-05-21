@@ -418,6 +418,24 @@ def compute_firm_borrower_credit_room(
     }
 
 
+def compute_available_bank_supply_for_credit_tranche(
+    banks: Banks,
+    new_credit_by_bank: np.ndarray,
+    max_supply_based_on_preferences: np.ndarray,
+    new_preference_credit_by_bank: np.ndarray,
+) -> np.ndarray:
+    """Return bank supply available to the current credit-clearing tranche."""
+    return np.maximum(
+        0.0,
+        np.minimum(
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
+            - banks.ts.current("total_outstanding_loans")
+            - new_credit_by_bank,
+            max_supply_based_on_preferences - new_preference_credit_by_bank,
+        ),
+    )
+
+
 class CreditMarketClearer(ABC):
     """Abstract base class for credit market clearing mechanisms.
 
@@ -1401,6 +1419,8 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             - Index 1: Period interest rate
             - Index 2: Scheduled annuity payment
         """
+        self._last_available_bank_supply_for_ordinary_firm_credit = None
+
         # Keeping track of new credit
         new_credit_by_bank = np.zeros(banks.ts.current("n_banks"))
         new_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
@@ -1480,6 +1500,14 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
 
         # Ordinary firm loans clear before rollover/refinance so legacy-liability repair cannot
         # reallocate ordinary long-term capacity.
+        self._last_available_bank_supply_for_ordinary_firm_credit = float(
+            compute_available_bank_supply_for_credit_tranche(
+                banks=banks,
+                new_credit_by_bank=np.zeros_like(new_credit_by_bank),
+                max_supply_based_on_preferences=max_supply_based_on_preferences_firms,
+                new_preference_credit_by_bank=np.zeros_like(new_firm_preference_credit_by_bank),
+            ).sum()
+        )
         new_ordinary_st_loans = self.clear_loans(
             banks=banks,
             firms=firms,
@@ -2050,14 +2078,11 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         capacities_weights = capacities / capacities_sum
 
         # Determine total supply and priorities
-        supply = np.maximum(
-            0.0,
-            np.minimum(
-                banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-                - banks.ts.current("total_outstanding_loans")
-                - new_credit_by_bank,
-                max_supply_based_on_preferences - new_preference_credit_by_bank,
-            ),
+        supply = compute_available_bank_supply_for_credit_tranche(
+            banks=banks,
+            new_credit_by_bank=new_credit_by_bank,
+            max_supply_based_on_preferences=max_supply_based_on_preferences,
+            new_preference_credit_by_bank=new_preference_credit_by_bank,
         )
         supply_sum = supply.sum()
         if supply_sum == 0.0:

@@ -2485,7 +2485,11 @@ class Firms(Agent):
 
         return np.maximum(0.0, low)
 
-    def append_excess_demand_finance_potential_diagnostics(
+    def reset_excess_demand_finance_potential_transients(self) -> None:
+        """Clear current-period excess-demand capacity values used by the replacement allocator."""
+        self._last_excess_demand_finance_potential = None
+
+    def compute_excess_demand_finance_potential_capacities(
         self,
         expected_lcu_prices: np.ndarray,
         wage_obligation_preview: np.ndarray,
@@ -2494,9 +2498,9 @@ class Firms(Agent):
         borrower_lt_credit_room: np.ndarray,
         borrower_total_credit_room: np.ndarray,
         q_sold: np.ndarray,
-        q_excess: np.ndarray,
+        ordinary_bank_supply: float | None = None,
     ) -> None:
-        """Append Increment 1 borrower-side excess-demand finance diagnostics."""
+        """Compute current-period finance-potential capacities for excess-demand assignment."""
         n_firms = self.ts.current("n_firms")
         opening_deposits = np.nan_to_num(
             np.asarray(self.ts.current("activity_finance_opening_deposits"), dtype=float),
@@ -2525,32 +2529,110 @@ class Firms(Agent):
         )
         borrower_max_credit = np.maximum(0.0, borrower_total_credit_room - residual_repair_credit_need)
         activity_finance_borrower = finance_cash + borrower_max_credit
-        finance_potential_output = self.compute_excess_demand_finance_potential_output(
+        finance_potential_output_borrower = self.compute_excess_demand_finance_potential_output(
             activity_finance_borrower=activity_finance_borrower,
             expected_lcu_prices=expected_lcu_prices,
             wage_obligation_preview=wage_obligation_preview,
         )
         q_sold = np.maximum(0.0, np.nan_to_num(np.asarray(q_sold, dtype=float), nan=0.0))
+        potential_capacity_borrower = np.maximum(0.0, finance_potential_output_borrower - q_sold)
+
+        supply_max_credit = None
+        finance_potential_output_supply = None
+        potential_capacity_supply = None
+        if ordinary_bank_supply is not None:
+            ordinary_bank_supply = float(ordinary_bank_supply)
+            if not np.isfinite(ordinary_bank_supply) or ordinary_bank_supply < 0.0:
+                raise ValueError("ordinary_bank_supply must be finite and non-negative")
+            borrower_total = float(borrower_max_credit.sum())
+            if borrower_total <= 0.0:
+                supply_max_credit = np.zeros(n_firms)
+            else:
+                supply_ratio = min(1.0, ordinary_bank_supply / borrower_total)
+                supply_max_credit = borrower_max_credit * supply_ratio
+            finance_potential_output_supply = self.compute_excess_demand_finance_potential_output(
+                activity_finance_borrower=finance_cash + supply_max_credit,
+                expected_lcu_prices=expected_lcu_prices,
+                wage_obligation_preview=wage_obligation_preview,
+            )
+            potential_capacity_supply = np.maximum(0.0, finance_potential_output_supply - q_sold)
+
+        self._last_excess_demand_finance_potential = {
+            "finance_cash": finance_cash,
+            "borrower_st_credit_room": borrower_st_credit_room,
+            "borrower_lt_credit_room": borrower_lt_credit_room,
+            "borrower_total_credit_room": borrower_total_credit_room,
+            "repair_cash_used": repair_cash_used,
+            "residual_repair_credit_need": residual_repair_credit_need,
+            "borrower_max_credit": borrower_max_credit,
+            "activity_finance_borrower": activity_finance_borrower,
+            "finance_potential_output_borrower": finance_potential_output_borrower,
+            "potential_capacity_borrower": potential_capacity_borrower,
+            "supply_max_credit": supply_max_credit,
+            "finance_potential_output_supply": finance_potential_output_supply,
+            "potential_capacity_supply": potential_capacity_supply,
+        }
+
+    def get_supply_adjusted_excess_demand_capacity(self) -> np.ndarray:
+        """Return the current-period supply-adjusted capacity for the replacement allocator."""
+        cache = getattr(self, "_last_excess_demand_finance_potential", None)
+        if cache is None or cache.get("potential_capacity_supply") is None:
+            raise ValueError("Supply-adjusted excess-demand capacity has not been computed")
+        capacity = np.asarray(cache["potential_capacity_supply"], dtype=float)
+        if capacity.shape != (self.ts.current("n_firms"),):
+            raise ValueError("Supply-adjusted excess-demand capacity has the wrong shape")
+        if np.any(~np.isfinite(capacity)) or np.any(capacity < 0.0):
+            raise ValueError("Supply-adjusted excess-demand capacity must be finite and non-negative")
+        return capacity
+
+    def append_cached_excess_demand_finance_potential_diagnostics(self, q_excess: np.ndarray) -> None:
+        """Append Increment 1 diagnostics using current-period cached capacity inputs."""
+        cache = getattr(self, "_last_excess_demand_finance_potential", None)
+        if cache is None:
+            raise ValueError("Excess-demand finance-potential diagnostics have not been computed")
+        n_firms = self.ts.current("n_firms")
         q_excess = np.maximum(0.0, np.nan_to_num(np.asarray(q_excess, dtype=float), nan=0.0))
-        potential_capacity = np.maximum(0.0, finance_potential_output - q_sold)
         above_cap_share = np.divide(
-            np.maximum(0.0, q_excess - potential_capacity),
+            np.maximum(0.0, q_excess - cache["potential_capacity_borrower"]),
             q_excess,
             out=np.full(n_firms, np.nan),
             where=q_excess > 0.0,
         )
 
-        self.ts.excess_demand_finance_cash.append(finance_cash)
-        self.ts.excess_demand_borrower_st_credit_room.append(borrower_st_credit_room)
-        self.ts.excess_demand_borrower_lt_credit_room.append(borrower_lt_credit_room)
-        self.ts.excess_demand_borrower_total_credit_room.append(borrower_total_credit_room)
-        self.ts.excess_demand_repair_cash_used.append(repair_cash_used)
-        self.ts.excess_demand_residual_repair_credit_need.append(residual_repair_credit_need)
-        self.ts.excess_demand_borrower_max_credit.append(borrower_max_credit)
-        self.ts.excess_demand_activity_finance_borrower.append(activity_finance_borrower)
-        self.ts.excess_demand_finance_potential_output_borrower.append(finance_potential_output)
-        self.ts.excess_demand_potential_capacity_borrower.append(potential_capacity)
+        self.ts.excess_demand_finance_cash.append(cache["finance_cash"])
+        self.ts.excess_demand_borrower_st_credit_room.append(cache["borrower_st_credit_room"])
+        self.ts.excess_demand_borrower_lt_credit_room.append(cache["borrower_lt_credit_room"])
+        self.ts.excess_demand_borrower_total_credit_room.append(cache["borrower_total_credit_room"])
+        self.ts.excess_demand_repair_cash_used.append(cache["repair_cash_used"])
+        self.ts.excess_demand_residual_repair_credit_need.append(cache["residual_repair_credit_need"])
+        self.ts.excess_demand_borrower_max_credit.append(cache["borrower_max_credit"])
+        self.ts.excess_demand_activity_finance_borrower.append(cache["activity_finance_borrower"])
+        self.ts.excess_demand_finance_potential_output_borrower.append(cache["finance_potential_output_borrower"])
+        self.ts.excess_demand_potential_capacity_borrower.append(cache["potential_capacity_borrower"])
         self.ts.excess_demand_above_borrower_cap_share.append(above_cap_share)
+
+    def append_excess_demand_finance_potential_diagnostics(
+        self,
+        expected_lcu_prices: np.ndarray,
+        wage_obligation_preview: np.ndarray,
+        non_loan_interest_obligation_preview: np.ndarray,
+        borrower_st_credit_room: np.ndarray,
+        borrower_lt_credit_room: np.ndarray,
+        borrower_total_credit_room: np.ndarray,
+        q_sold: np.ndarray,
+        q_excess: np.ndarray,
+    ) -> None:
+        """Append Increment 1 borrower-side excess-demand finance diagnostics."""
+        self.compute_excess_demand_finance_potential_capacities(
+            expected_lcu_prices=expected_lcu_prices,
+            wage_obligation_preview=wage_obligation_preview,
+            non_loan_interest_obligation_preview=non_loan_interest_obligation_preview,
+            borrower_st_credit_room=borrower_st_credit_room,
+            borrower_lt_credit_room=borrower_lt_credit_room,
+            borrower_total_credit_room=borrower_total_credit_room,
+            q_sold=q_sold,
+        )
+        self.append_cached_excess_demand_finance_potential_diagnostics(q_excess=q_excess)
 
     def set_goods_to_buy_from_current_targets(
         self,

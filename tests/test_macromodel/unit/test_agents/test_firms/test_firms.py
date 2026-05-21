@@ -230,6 +230,43 @@ class TestFirms:
         assert np.isfinite(test_firms.ts.current("excess_demand_above_borrower_cap_share")[0])
         assert np.isnan(test_firms.ts.current("excess_demand_above_borrower_cap_share")[1:]).all()
 
+    def test__compute_excess_demand_finance_potential_capacities_rescales_by_bank_supply(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.ts.override_current("activity_finance_opening_deposits", np.zeros(n_firms))
+        test_firms.ts.override_current("target_debt_rollover_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("target_overdraft_refinance_credit", np.zeros(n_firms))
+
+        test_firms.compute_excess_demand_finance_potential_capacities(
+            expected_lcu_prices=np.ones(test_firms.n_industries),
+            wage_obligation_preview=np.zeros(n_firms),
+            non_loan_interest_obligation_preview=np.zeros(n_firms),
+            borrower_st_credit_room=np.full(n_firms, 3.0),
+            borrower_lt_credit_room=np.full(n_firms, 7.0),
+            borrower_total_credit_room=np.full(n_firms, 10.0),
+            q_sold=np.zeros(n_firms),
+            ordinary_bank_supply=5.0 * n_firms,
+        )
+
+        cache = test_firms._last_excess_demand_finance_potential
+        assert np.allclose(cache["borrower_max_credit"], 10.0)
+        assert np.allclose(cache["supply_max_credit"], 5.0)
+        assert np.all(test_firms.get_supply_adjusted_excess_demand_capacity() >= 0.0)
+
+    def test__compute_excess_demand_finance_potential_capacities_rejects_bad_bank_supply(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+
+        with pytest.raises(ValueError, match="ordinary_bank_supply"):
+            test_firms.compute_excess_demand_finance_potential_capacities(
+                expected_lcu_prices=np.ones(test_firms.n_industries),
+                wage_obligation_preview=np.zeros(n_firms),
+                non_loan_interest_obligation_preview=np.zeros(n_firms),
+                borrower_st_credit_room=np.zeros(n_firms),
+                borrower_lt_credit_room=np.zeros(n_firms),
+                borrower_total_credit_room=np.zeros(n_firms),
+                q_sold=np.zeros(n_firms),
+                ordinary_bank_supply=np.nan,
+            )
+
     @staticmethod
     def _set_simple_activity_solver_inputs(
         test_firms,

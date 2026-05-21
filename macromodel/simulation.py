@@ -436,6 +436,24 @@ class Simulation:
         # Clearing the goods market
         self.goods_market.prepare()
         self.goods_market.clear()
+        goods_market_functions = getattr(self.goods_market, "functions", {})
+        goods_market_clearer = (
+            goods_market_functions.get("clearing") if isinstance(goods_market_functions, dict) else None
+        )
+        if hasattr(goods_market_clearer, "assign_supply_capped_excess_demand"):
+            for country in self.countries.values():
+                credit_clearer = country.credit_market.functions.get("clearing")
+                ordinary_bank_supply = getattr(
+                    credit_clearer,
+                    "_last_available_bank_supply_for_ordinary_firm_credit",
+                    None,
+                )
+                if ordinary_bank_supply is None:
+                    raise ValueError("Ordinary firm-credit bank supply was not captured for excess-demand assignment")
+                country.compute_excess_demand_finance_potential_capacities(
+                    ordinary_bank_supply=ordinary_bank_supply,
+                )
+            self.goods_market.assign_supply_capped_excess_demand()
         for country in self.countries.values():
             country.append_excess_demand_finance_potential_diagnostics()
         self.goods_market.record()

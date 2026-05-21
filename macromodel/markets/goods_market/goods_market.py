@@ -253,6 +253,17 @@ class GoodsMarket:
             row_index=self.row_index,
         )
 
+    def assign_supply_capped_excess_demand(self) -> bool:
+        """Assign replacement excess demand when the active clearer supports it."""
+        assigner = getattr(self.functions["clearing"], "assign_supply_capped_excess_demand", None)
+        if assigner is None:
+            return False
+        assigner(
+            goods_market_participants=self.goods_market_participants,
+            n_industries=self.n_industries,
+        )
+        return True
+
     def record(self) -> None:
         """Record market outcomes.
 

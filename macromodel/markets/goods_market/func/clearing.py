@@ -637,12 +637,6 @@ class WaterBucketGoodsMarketClearer(GoodsMarketClearer):
             buyer_priorities=buyer_priorities,
         )
 
-        # Handle any remaining excess demand
-        self.distribute_excess_demand_water_bucket(
-            goods_market_participants=goods_market_participants,
-            n_industries=n_industries,
-        )
-
         # Allow additional ROW exports if enabled
         if self.allow_additional_row_exports and self.additionally_available_factor > 0.0:
             self.handle_additional_row_exports(
@@ -839,6 +833,214 @@ class WaterBucketGoodsMarketClearer(GoodsMarketClearer):
                             priorities=seller_priorities,
                             minimum_fill=self.seller_minimum_fill,
                         )
+
+    def assign_supply_capped_excess_demand(
+        self,
+        goods_market_participants: dict[str, list[Agent]],
+        n_industries: int,
+    ) -> None:
+        """Assign final excess demand using origin retention and supply-adjusted firm caps."""
+        for transactors in goods_market_participants.values():
+            for transactor in transactors:
+                if transactor.transactor_seller_states["Value Type"] == ValueType.REAL:
+                    transactor.transactor_seller_states["Real Excess Demand"] = np.zeros_like(
+                        transactor.transactor_seller_states["Real Excess Demand"],
+                        dtype=float,
+                    )
+
+        _, _, total_nominal_supply, aggr_nominal_supply, average_price = collect_seller_info(
+            goods_market_participants=goods_market_participants,
+            n_industries=n_industries,
+            use_initial=True,
+        )
+        residual_by_origin, invalid_by_origin = self._collect_residual_real_demand_by_origin(
+            goods_market_participants=goods_market_participants,
+            n_industries=n_industries,
+            average_price=average_price,
+        )
+        capacity_by_country, firm_capacity_by_country = self._collect_supply_adjusted_capacity_by_country(
+            goods_market_participants=goods_market_participants,
+            n_industries=n_industries,
+        )
+
+        countries = list(goods_market_participants.keys())
+        unassigned_by_origin = {country: invalid_by_origin[country].copy() for country in countries}
+        assigned_by_country = {country: np.zeros(n_industries) for country in countries}
+
+        for g in range(n_industries):
+            demand = np.array([residual_by_origin[country][g] for country in countries], dtype=float)
+            if demand.sum() <= 0.0:
+                continue
+            weights = np.zeros(len(countries))
+            if aggr_nominal_supply[g] > 0.0:
+                weights = np.array(
+                    [total_nominal_supply[country][g] / aggr_nominal_supply[g] for country in countries],
+                    dtype=float,
+                )
+            if "ROW" in countries:
+                weights[countries.index("ROW")] *= 1.0 - max(0.0, min(1.0, self.real_country_prioritisation))
+            if weights.sum() <= 0.0:
+                for origin_index, country in enumerate(countries):
+                    unassigned_by_origin[country][g] += demand[origin_index]
+                continue
+            weights = weights / weights.sum()
+            capacities = np.array([capacity_by_country[country][g] for country in countries], dtype=float)
+            allocation, unassigned = self._allocate_origins_to_seller_countries(demand, weights, capacities)
+            for origin_index, origin_country in enumerate(countries):
+                unassigned_by_origin[origin_country][g] += unassigned[origin_index]
+            for country_index, country in enumerate(countries):
+                assigned_by_country[country][g] += allocation[:, country_index].sum()
+
+        for country in countries:
+            self._assign_country_excess_demand_to_sellers(
+                transactors=goods_market_participants[country],
+                n_industries=n_industries,
+                assigned_by_industry=assigned_by_country[country],
+                capacity_by_transactor=firm_capacity_by_country[country],
+            )
+
+        self._last_unassigned_supply_capped_excess_demand_by_origin = unassigned_by_origin
+        self._last_assigned_supply_capped_excess_demand_by_country = assigned_by_country
+
+    def _collect_residual_real_demand_by_origin(
+        self,
+        goods_market_participants: dict[str, list[Agent]],
+        n_industries: int,
+        average_price: np.ndarray,
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        residual_by_origin = {country: np.zeros(n_industries) for country in goods_market_participants}
+        invalid_by_origin = {country: np.zeros(n_industries) for country in goods_market_participants}
+        valid_price = np.isfinite(average_price) & (average_price > 0.0)
+        for country, transactors in goods_market_participants.items():
+            for transactor in transactors:
+                value_type = transactor.transactor_buyer_states["Value Type"]
+                if value_type == ValueType.NONE:
+                    continue
+                residual = np.maximum(
+                    0.0,
+                    np.nan_to_num(transactor.transactor_buyer_states["Remaining Goods"], nan=0.0),
+                ).sum(axis=0)
+                if value_type == ValueType.REAL:
+                    residual_by_origin[country] += residual
+                elif value_type == ValueType.NOMINAL:
+                    real_residual = np.zeros(n_industries)
+                    real_residual[valid_price] = residual[valid_price] / average_price[valid_price]
+                    residual_by_origin[country] += real_residual
+                    invalid_by_origin[country][~valid_price] += residual[~valid_price]
+        return residual_by_origin, invalid_by_origin
+
+    def _collect_supply_adjusted_capacity_by_country(
+        self,
+        goods_market_participants: dict[str, list[Agent]],
+        n_industries: int,
+    ) -> tuple[dict[str, np.ndarray], dict[str, dict[Agent, np.ndarray]]]:
+        capacity_by_country = {country: np.zeros(n_industries) for country in goods_market_participants}
+        capacity_by_transactor: dict[str, dict[Agent, np.ndarray]] = {
+            country: {} for country in goods_market_participants
+        }
+        for country, transactors in goods_market_participants.items():
+            for transactor in transactors:
+                if transactor.transactor_seller_states["Value Type"] != ValueType.REAL:
+                    continue
+                if country == "ROW":
+                    capacity = np.maximum(
+                        0.0,
+                        np.nan_to_num(
+                            np.asarray(transactor.transactor_seller_states["Remaining Excess Goods"], dtype=float),
+                            nan=0.0,
+                            posinf=np.inf,
+                            neginf=0.0,
+                        ),
+                    )
+                elif hasattr(transactor, "get_supply_adjusted_excess_demand_capacity"):
+                    capacity = transactor.get_supply_adjusted_excess_demand_capacity()
+                else:
+                    capacity = np.zeros_like(transactor.transactor_seller_states["Remaining Excess Goods"])
+                industries = transactor.transactor_seller_states["Industries"]
+                capacity_by_transactor[country][transactor] = capacity
+                for g in range(n_industries):
+                    capacity_by_country[country][g] += capacity[industries == g].sum()
+        return capacity_by_country, capacity_by_transactor
+
+    def _allocate_origins_to_seller_countries(
+        self,
+        demand: np.ndarray,
+        weights: np.ndarray,
+        capacities: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        allocation = np.zeros((demand.size, weights.size))
+        remaining_demand = np.maximum(0.0, demand.astype(float).copy())
+        remaining_capacity = np.maximum(0.0, capacities.astype(float).copy())
+
+        for _ in range(weights.size + 1):
+            active = remaining_capacity > 1e-12
+            if remaining_demand.sum() <= 1e-12 or not np.any(active):
+                break
+            active_weights = np.where(active, weights, 0.0)
+            if active_weights.sum() <= 0.0:
+                break
+            active_weights = active_weights / active_weights.sum()
+            proposal = np.outer(remaining_demand, active_weights)
+            accepted = proposal.copy()
+            proposed_by_country = proposal.sum(axis=0)
+            for country_index, proposed in enumerate(proposed_by_country):
+                if proposed <= 0.0 or np.isinf(remaining_capacity[country_index]):
+                    continue
+                if proposed > remaining_capacity[country_index]:
+                    accepted[:, country_index] *= remaining_capacity[country_index] / proposed
+            if accepted.sum() <= 1e-12:
+                break
+            allocation += accepted
+            remaining_demand = np.maximum(0.0, remaining_demand - accepted.sum(axis=1))
+            remaining_capacity = np.maximum(0.0, remaining_capacity - accepted.sum(axis=0))
+
+        return allocation, remaining_demand
+
+    def _assign_country_excess_demand_to_sellers(
+        self,
+        transactors: list[Agent],
+        n_industries: int,
+        assigned_by_industry: np.ndarray,
+        capacity_by_transactor: dict[Agent, np.ndarray],
+    ) -> None:
+        for g in range(n_industries):
+            fill_amount = assigned_by_industry[g]
+            if fill_amount <= 0.0:
+                continue
+            seller_slices = []
+            capacities = []
+            for transactor in transactors:
+                capacity = capacity_by_transactor.get(transactor)
+                if capacity is None:
+                    continue
+                ind = transactor.transactor_seller_states["Industries"] == g
+                if not np.any(ind):
+                    continue
+                seller_slices.append((transactor, ind))
+                capacities.append(capacity[ind])
+            if not capacities:
+                continue
+            flat_capacity = np.concatenate(capacities)
+            flat_alloc = self._allocate_to_sellers_by_capacity(flat_capacity, fill_amount)
+            cursor = 0
+            for transactor, ind in seller_slices:
+                width = int(ind.sum())
+                transactor.transactor_seller_states["Real Excess Demand"][ind] = flat_alloc[cursor : cursor + width]
+                cursor += width
+
+    @staticmethod
+    def _allocate_to_sellers_by_capacity(capacity: np.ndarray, fill_amount: float) -> np.ndarray:
+        capacity = np.maximum(0.0, np.asarray(capacity, dtype=float))
+        allocation = np.zeros_like(capacity)
+        infinite = np.isinf(capacity)
+        if np.any(infinite):
+            allocation[infinite] = fill_amount / infinite.sum()
+            return allocation
+        capacity_sum = capacity.sum()
+        if capacity_sum <= 0.0:
+            return allocation
+        allocation = fill_amount * capacity / capacity_sum
+        return np.minimum(allocation, capacity)
 
     def handle_additional_row_exports(
         self,

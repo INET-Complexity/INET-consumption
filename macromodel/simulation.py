@@ -436,6 +436,8 @@ class Simulation:
         # Clearing the goods market
         self.goods_market.prepare()
         self.goods_market.clear()
+        for country in self.countries.values():
+            country.append_excess_demand_finance_potential_diagnostics()
         self.goods_market.record()
 
         logging.info("Updating metrics")

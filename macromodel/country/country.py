@@ -53,6 +53,7 @@ from macromodel.economy.economy import Economy
 from macromodel.exchange_rates import ExchangeRates
 from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
+from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
@@ -1111,6 +1112,45 @@ class Country:
             forecasting_window=self.forecasting_window,
             assume_zero_growth=self.assume_zero_growth,
             assume_zero_noise=self.assume_zero_noise,
+        )
+
+    def append_excess_demand_finance_potential_diagnostics(self) -> None:
+        """Append borrower-side finance-potential diagnostics after goods clearing."""
+        firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
+            corresponding_firm=self.individuals.states["Corresponding Firm ID"],
+            individual_wages=self.individuals.ts.current("employee_income"),
+            income_taxes=self.central_government.states["Income Tax"],
+            employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
+            employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+            cpi=self.economy.current_consumer_price_level(),
+        )
+        firm_loan_interest_preview = self.firms.ts.current("firm_settlement_scheduled_interest_due")
+        firm_interest_obligation_preview = firm_loan_interest_preview + self.firms.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        non_loan_interest_obligation_preview = np.maximum(
+            0.0,
+            firm_interest_obligation_preview - firm_loan_interest_preview,
+        )
+        credit_clearer = self.credit_market.functions.get("clearing")
+        borrower_credit_room = compute_firm_borrower_credit_room(
+            banks=self.banks,
+            firms=self.firms,
+            allow_short_term_firm_loans=getattr(credit_clearer, "allow_short_term_firm_loans", True),
+        )
+        expected_lcu_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.economy.ts.current(
+            "good_prices"
+        )
+        self.firms.append_excess_demand_finance_potential_diagnostics(
+            expected_lcu_prices=expected_lcu_prices,
+            wage_obligation_preview=firm_wage_obligation_preview,
+            non_loan_interest_obligation_preview=non_loan_interest_obligation_preview,
+            borrower_st_credit_room=borrower_credit_room["short_term"],
+            borrower_lt_credit_room=borrower_credit_room["long_term"],
+            borrower_total_credit_room=borrower_credit_room["total"],
+            q_sold=self.firms.transactor_seller_states["Real Amount sold"],
+            q_excess=self.firms.transactor_seller_states["Real Excess Demand"],
         )
 
     def update_realised_metrics(self) -> None:

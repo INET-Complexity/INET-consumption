@@ -115,6 +115,8 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_transaction_flow_residual: Residual of the cash-flow identity at settlement close
         - firm_settlement_accounting_control_passed: Per-firm pass flag for the settlement accounting controls
         - total_credit_exposure: Explicit firm debt plus end-of-period residual overdraft exposure
+        - excess_demand_finance_*: Diagnostic upper-bound finance-potential cap used to compare current recorded
+          excess demand with borrower-side production capacity
 
     Planning & Targets:
     - limiting_intermediate_inputs: Input constraints on production
@@ -448,6 +450,17 @@ class FirmTimeSeries(TimeSeries):
             credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
             credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
             credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
+            excess_demand_finance_cash=np.full(data.shape[0], np.nan),
+            excess_demand_borrower_st_credit_room=np.full(data.shape[0], np.nan),
+            excess_demand_borrower_lt_credit_room=np.full(data.shape[0], np.nan),
+            excess_demand_borrower_total_credit_room=np.full(data.shape[0], np.nan),
+            excess_demand_repair_cash_used=np.full(data.shape[0], np.nan),
+            excess_demand_residual_repair_credit_need=np.full(data.shape[0], np.nan),
+            excess_demand_borrower_max_credit=np.full(data.shape[0], np.nan),
+            excess_demand_activity_finance_borrower=np.full(data.shape[0], np.nan),
+            excess_demand_finance_potential_output_borrower=np.full(data.shape[0], np.nan),
+            excess_demand_potential_capacity_borrower=np.full(data.shape[0], np.nan),
+            excess_demand_above_borrower_cap_share=np.full(data.shape[0], np.nan),
             #
             short_term_loan_debt=np.zeros(data.shape[0]),
             long_term_loan_debt=data["Debt"].values,
@@ -787,6 +800,17 @@ def create_firms_timeseries(
         credit_market_firm_lt_dscr_cap=np.full(data.shape[0], np.nan),
         credit_market_firm_lt_binding_reason=np.full(data.shape[0], np.nan),
         credit_market_firm_lt_binding_amount=np.full(data.shape[0], np.nan),
+        excess_demand_finance_cash=np.full(data.shape[0], np.nan),
+        excess_demand_borrower_st_credit_room=np.full(data.shape[0], np.nan),
+        excess_demand_borrower_lt_credit_room=np.full(data.shape[0], np.nan),
+        excess_demand_borrower_total_credit_room=np.full(data.shape[0], np.nan),
+        excess_demand_repair_cash_used=np.full(data.shape[0], np.nan),
+        excess_demand_residual_repair_credit_need=np.full(data.shape[0], np.nan),
+        excess_demand_borrower_max_credit=np.full(data.shape[0], np.nan),
+        excess_demand_activity_finance_borrower=np.full(data.shape[0], np.nan),
+        excess_demand_finance_potential_output_borrower=np.full(data.shape[0], np.nan),
+        excess_demand_potential_capacity_borrower=np.full(data.shape[0], np.nan),
+        excess_demand_above_borrower_cap_share=np.full(data.shape[0], np.nan),
         #
         short_term_loan_debt=np.zeros(data.shape[0]),
         long_term_loan_debt=data["Debt"].values,

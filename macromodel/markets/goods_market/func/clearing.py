@@ -637,6 +637,14 @@ class WaterBucketGoodsMarketClearer(GoodsMarketClearer):
             buyer_priorities=buyer_priorities,
         )
 
+        # Keep GoodsMarket.clear() behaviour complete for direct callers. The simulation-level
+        # supply-capped allocator resets and overwrites this legacy assignment when its credit
+        # supply inputs are available.
+        self.distribute_excess_demand_water_bucket(
+            goods_market_participants=goods_market_participants,
+            n_industries=n_industries,
+        )
+
         # Allow additional ROW exports if enabled
         if self.allow_additional_row_exports and self.additionally_available_factor > 0.0:
             self.handle_additional_row_exports(

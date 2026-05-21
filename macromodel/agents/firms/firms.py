@@ -2610,6 +2610,7 @@ class Firms(Agent):
         self.ts.excess_demand_finance_potential_output_borrower.append(cache["finance_potential_output_borrower"])
         self.ts.excess_demand_potential_capacity_borrower.append(cache["potential_capacity_borrower"])
         self.ts.excess_demand_above_borrower_cap_share.append(above_cap_share)
+        self.reset_excess_demand_finance_potential_transients()
 
     def append_excess_demand_finance_potential_diagnostics(
         self,
@@ -2623,6 +2624,7 @@ class Firms(Agent):
         q_excess: np.ndarray,
     ) -> None:
         """Append Increment 1 borrower-side excess-demand finance diagnostics."""
+        self.reset_excess_demand_finance_potential_transients()
         self.compute_excess_demand_finance_potential_capacities(
             expected_lcu_prices=expected_lcu_prices,
             wage_obligation_preview=wage_obligation_preview,

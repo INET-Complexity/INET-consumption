@@ -441,6 +441,7 @@ class Simulation:
             goods_market_functions.get("clearing") if isinstance(goods_market_functions, dict) else None
         )
         if hasattr(goods_market_clearer, "assign_supply_capped_excess_demand"):
+            ordinary_bank_supply_by_country = {}
             for country in self.countries.values():
                 credit_clearer = country.credit_market.functions.get("clearing")
                 ordinary_bank_supply = getattr(
@@ -449,11 +450,19 @@ class Simulation:
                     None,
                 )
                 if ordinary_bank_supply is None:
-                    raise ValueError("Ordinary firm-credit bank supply was not captured for excess-demand assignment")
+                    ordinary_bank_supply_by_country = {}
+                    break
+                if not np.isfinite(ordinary_bank_supply) or ordinary_bank_supply < 0.0:
+                    raise ValueError("Ordinary firm-credit bank supply must be finite and non-negative")
+                ordinary_bank_supply_by_country[country.country_name] = ordinary_bank_supply
+            for country in self.countries.values():
+                if country.country_name not in ordinary_bank_supply_by_country:
+                    break
                 country.compute_excess_demand_finance_potential_capacities(
-                    ordinary_bank_supply=ordinary_bank_supply,
+                    ordinary_bank_supply=ordinary_bank_supply_by_country[country.country_name],
                 )
-            self.goods_market.assign_supply_capped_excess_demand()
+            else:
+                self.goods_market.assign_supply_capped_excess_demand()
         for country in self.countries.values():
             country.append_excess_demand_finance_potential_diagnostics()
         self.goods_market.record()

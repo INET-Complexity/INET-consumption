@@ -172,6 +172,96 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
     assert events.index("country.append_excess_demand_finance_potential_diagnostics") < events.index("goods.record")
 
 
+def test_iterate_skips_supply_capped_assignment_without_credit_supply_transient(monkeypatch):
+    events = []
+
+    class _TS:
+        def current(self, _key):
+            return [0.0]
+
+    class _Country:
+        country_name = "FRA"
+        economy = SimpleNamespace(ts=_TS())
+        credit_market = SimpleNamespace(functions={"clearing": object()})
+
+        def compute_excess_demand_finance_potential_capacities(self, **_kwargs):
+            raise AssertionError("supply-capped capacity should not be computed without a credit supply transient")
+
+        def append_excess_demand_finance_potential_diagnostics(self):
+            events.append("country.append_excess_demand_finance_potential_diagnostics")
+
+        def __getattr__(self, name):
+            if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):
+
+                def _method(**_kwargs):
+                    events.append(f"country.{name}")
+
+                return _method
+            raise AttributeError(name)
+
+    class _ReplacementClearer:
+        def assign_supply_capped_excess_demand(self, **_kwargs):
+            events.append("goods.assign_supply_capped_excess_demand")
+
+    class _GoodsMarket:
+        functions = {"clearing": _ReplacementClearer()}
+
+        def prepare(self):
+            events.append("goods.prepare")
+
+        def clear(self):
+            events.append("goods.clear")
+
+        def assign_supply_capped_excess_demand(self):
+            events.append("goods.assign_supply_capped_excess_demand")
+
+        def record(self):
+            events.append("goods.record")
+
+    class _ExchangeRates:
+        def get_current_exchange_rates_from_usd_to_lcu(self, **_kwargs):
+            events.append("exchange_rates.get")
+            return 1.0
+
+    class _RegionalAggregator:
+        def sync_central_banks(self, _countries):
+            events.append("regional.sync")
+
+    class _RestOfWorld:
+        def update_planning_metrics(self, **_kwargs):
+            events.append("row.update_planning_metrics")
+
+        def record_bought_goods(self):
+            events.append("row.record_bought_goods")
+
+    class _Timestep:
+        year = 2014
+        month = 1
+
+        def step(self):
+            events.append("timestep.step")
+
+    monkeypatch.setattr(Simulation, "production_price_index", property(lambda _self: 1.0))
+    monkeypatch.setattr(Simulation, "total_real_production", property(lambda _self: 1.0))
+    monkeypatch.setattr(Simulation, "aggregate_nominal_production", property(lambda _self: 1.0))
+
+    simulation = Simulation(
+        countries={"FRA": _Country()},
+        rest_of_the_world=_RestOfWorld(),
+        goods_market=_GoodsMarket(),
+        exchange_rates=_ExchangeRates(),
+        timestep=_Timestep(),
+        configuration=SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()}),
+        initial_year=2014,
+        regional_aggregator=_RegionalAggregator(),
+    )
+
+    simulation.iterate()
+
+    assert "goods.assign_supply_capped_excess_demand" not in events
+    assert "country.append_excess_demand_finance_potential_diagnostics" in events
+
+
 def test_different_non_default_country_goods_market_configurations_raise():
     france_configuration = CountryConfiguration(
         goods_market=_goods_market_with_buyer_minimum_fill_micro(0.25),

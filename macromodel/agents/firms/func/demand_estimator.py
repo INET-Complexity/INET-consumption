@@ -3,6 +3,11 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 
+def clip_unit_interval(x: float) -> float:
+    """Clip a value to the range [0, 1]."""
+    return max(0.0, min(1.0, x))
+
+
 class DemandEstimator(ABC):
     """Abstract base class for estimating future demand for firms' products.
 
@@ -18,6 +23,7 @@ class DemandEstimator(ABC):
     Attributes:
         sectoral_growth_adjustment_speed (float): Rate at which firms adjust to overall economic growth
             Values closer to 1 mean faster adjustment to sectoral trends
+            Clipped to range [0,1]
         firm_growth_adjustment_speed (float): Rate at which firms adjust to firm-specific growth
             Values closer to 1 mean faster adjustment to individual conditions
             Clipped to range [0,1]
@@ -32,12 +38,12 @@ class DemandEstimator(ABC):
 
         Args:
             sectoral_growth_adjustment_speed (float): Speed of adjustment to overall economic growth
+                Will be clipped to range [0,1]
             firm_growth_adjustment_speed (float): Speed of adjustment to firm-specific growth
                 Will be clipped to range [0,1]
         """
-        self.sectoral_growth_adjustment_speed = sectoral_growth_adjustment_speed
-        self.firm_growth_adjustment_speed = max(0.0, min(1.0, firm_growth_adjustment_speed))
-        self.firm_growth_adjustment_speed = firm_growth_adjustment_speed
+        self.sectoral_growth_adjustment_speed = clip_unit_interval(sectoral_growth_adjustment_speed)
+        self.firm_growth_adjustment_speed = clip_unit_interval(firm_growth_adjustment_speed)
 
     @abstractmethod
     def compute_estimated_demand(

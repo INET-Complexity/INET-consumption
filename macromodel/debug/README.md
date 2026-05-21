@@ -44,6 +44,12 @@ Documents the owner-occupancy flag invariant used to debug
 properties are correctly classified as other-property wealth rather than stale
 owner-occupied housing.
 
+### Household Property Income Power Warning (`household_property_income_power_warning.md`)
+
+Documents the FRA calibration warning where fractional price/rent income
+exponents receive negative `expected_income`, producing `nan` affordability
+values during property demand calculation.
+
 ### H1: Labor Substitution Logger (`tfp_labor_logger.py`)
 
 **Hypothesis**: TFP growth causes unemployment by allowing firms to produce same output with fewer workers, while demand expectations remain flat.

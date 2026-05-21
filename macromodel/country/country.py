@@ -1133,14 +1133,11 @@ class Country:
             0.0,
             firm_interest_obligation_preview - firm_loan_interest_preview,
         )
+        credit_clearer = self.credit_market.functions.get("clearing")
         borrower_credit_room = compute_firm_borrower_credit_room(
             banks=self.banks,
             firms=self.firms,
-            allow_short_term_firm_loans=getattr(
-                self.credit_market.functions["clearing"],
-                "allow_short_term_firm_loans",
-                True,
-            ),
+            allow_short_term_firm_loans=getattr(credit_clearer, "allow_short_term_firm_loans", True),
         )
         expected_lcu_prices = (1 + self.economy.ts.current("estimated_ppi_inflation")[0]) * self.economy.ts.current(
             "good_prices"

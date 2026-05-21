@@ -92,6 +92,9 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
         country_name = "FRA"
         economy = SimpleNamespace(ts=_TS())
 
+        def append_excess_demand_finance_potential_diagnostics(self):
+            events.append("country.append_excess_demand_finance_potential_diagnostics")
+
         def __getattr__(self, name):
             if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):
 
@@ -165,6 +168,8 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
     assert events.index("country.update_post_labour_planning_metrics") < events.index(
         "country.prepare_goods_market_clearing"
     )
+    assert events.index("goods.clear") < events.index("country.append_excess_demand_finance_potential_diagnostics")
+    assert events.index("country.append_excess_demand_finance_potential_diagnostics") < events.index("goods.record")
 
 
 def test_different_non_default_country_goods_market_configurations_raise():

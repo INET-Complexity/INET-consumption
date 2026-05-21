@@ -1,5 +1,6 @@
 import numpy as np
 
+import macromodel.country.country as country_module
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
@@ -130,6 +131,58 @@ class TestCountry:
             test_country.economy.ts.current("estimated_ppi_inflation")[0],
             equal_nan=True,
         )
+
+    def test__excess_demand_finance_diagnostic_only_appends_diagnostics(self, test_country, monkeypatch):
+        n_firms = test_country.firms.ts.current("n_firms")
+        wage_preview = np.full(n_firms, 2.0)
+        interest_preview = np.full(n_firms, 1.0)
+        room = {
+            "short_term": np.full(n_firms, 3.0),
+            "long_term": np.full(n_firms, 7.0),
+            "total": np.full(n_firms, 10.0),
+        }
+        diagnostic_keys = [
+            "excess_demand_finance_cash",
+            "excess_demand_borrower_st_credit_room",
+            "excess_demand_borrower_lt_credit_room",
+            "excess_demand_borrower_total_credit_room",
+            "excess_demand_repair_cash_used",
+            "excess_demand_residual_repair_credit_need",
+            "excess_demand_borrower_max_credit",
+            "excess_demand_activity_finance_borrower",
+            "excess_demand_finance_potential_output_borrower",
+            "excess_demand_potential_capacity_borrower",
+            "excess_demand_above_borrower_cap_share",
+        ]
+        core_ts_keys = [
+            "target_production",
+            "target_intermediate_inputs",
+            "target_capital_inputs",
+            "deposits",
+            "debt",
+            "received_credit",
+        ]
+        test_country.firms.transactor_seller_states["Real Amount sold"] = np.zeros(n_firms)
+        test_country.firms.transactor_seller_states["Real Excess Demand"] = np.zeros(n_firms)
+        core_state_before = {key: test_country.firms.ts.current(key).copy() for key in core_ts_keys}
+        transactor_before = {
+            "Real Amount sold": test_country.firms.transactor_seller_states["Real Amount sold"].copy(),
+            "Real Excess Demand": test_country.firms.transactor_seller_states["Real Excess Demand"].copy(),
+        }
+        diagnostic_lengths_before = {key: len(test_country.firms.ts.dicts[key]) for key in diagnostic_keys}
+
+        monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **_kwargs: wage_preview)
+        monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **_kwargs: interest_preview)
+        monkeypatch.setattr(country_module, "compute_firm_borrower_credit_room", lambda **_kwargs: room)
+
+        test_country.append_excess_demand_finance_potential_diagnostics()
+
+        for key in core_ts_keys:
+            assert np.allclose(test_country.firms.ts.current(key), core_state_before[key], equal_nan=True)
+        for key, value in transactor_before.items():
+            assert np.allclose(test_country.firms.transactor_seller_states[key], value, equal_nan=True)
+        for key in diagnostic_keys:
+            assert len(test_country.firms.ts.dicts[key]) == diagnostic_lengths_before[key] + 1
 
     def test__current_firm_corporate_tax_preview_prefers_post_credit_feasible_preview(self, test_country, monkeypatch):
         n_firms = test_country.firms.ts.current("n_firms")

@@ -2431,6 +2431,128 @@ class Firms(Agent):
             self.ts.current("activity_finance_feasible_desired_labour_inputs").copy(),
         )
 
+    def _excess_demand_finance_candidate_costs(
+        self,
+        candidate_output: np.ndarray,
+        expected_lcu_prices: np.ndarray,
+        wage_cost_rate: np.ndarray,
+        tfp_for_labour: np.ndarray,
+    ) -> np.ndarray:
+        """Return diagnostic activity costs for candidate output levels."""
+        _, _, intermediate_costs, capital_costs = self._activity_finance_candidate_inputs(
+            candidate_output,
+            expected_lcu_prices,
+        )
+        candidate_labour = self._activity_finance_feasible_labour(candidate_output, tfp_for_labour)
+        costs = wage_cost_rate * candidate_labour + intermediate_costs + capital_costs
+        return np.where(np.isfinite(costs), np.maximum(0.0, costs), np.inf)
+
+    def compute_excess_demand_finance_potential_output(
+        self,
+        activity_finance_borrower: np.ndarray,
+        expected_lcu_prices: np.ndarray,
+        wage_obligation_preview: np.ndarray,
+    ) -> np.ndarray:
+        """Solve borrower-side finance-potential output for the excess-demand diagnostic."""
+        n_firms = self.ts.current("n_firms")
+        finance = np.maximum(0.0, np.nan_to_num(np.asarray(activity_finance_borrower, dtype=float), nan=0.0))
+        current_target = np.maximum(0.0, np.nan_to_num(self.ts.current("target_production"), nan=0.0))
+        high = np.maximum(2.0 * current_target, np.ones(n_firms))
+        tfp_for_labour = self._activity_finance_tfp_for_feasible_labour()
+        wage_cost_rate = self._activity_finance_wage_cost_rate(wage_obligation_preview)
+
+        for _ in range(20):
+            high_costs = self._excess_demand_finance_candidate_costs(
+                candidate_output=high,
+                expected_lcu_prices=expected_lcu_prices,
+                wage_cost_rate=wage_cost_rate,
+                tfp_for_labour=tfp_for_labour,
+            )
+            high = np.where(high_costs <= finance + 1e-8, 2.0 * high, high)
+
+        low = np.zeros(n_firms)
+        for _ in range(30):
+            candidate = 0.5 * (low + high)
+            candidate_costs = self._excess_demand_finance_candidate_costs(
+                candidate_output=candidate,
+                expected_lcu_prices=expected_lcu_prices,
+                wage_cost_rate=wage_cost_rate,
+                tfp_for_labour=tfp_for_labour,
+            )
+            feasible = candidate_costs <= finance + 1e-8
+            low = np.where(feasible, candidate, low)
+            high = np.where(feasible, high, candidate)
+
+        return np.maximum(0.0, low)
+
+    def append_excess_demand_finance_potential_diagnostics(
+        self,
+        expected_lcu_prices: np.ndarray,
+        wage_obligation_preview: np.ndarray,
+        non_loan_interest_obligation_preview: np.ndarray,
+        borrower_st_credit_room: np.ndarray,
+        borrower_lt_credit_room: np.ndarray,
+        borrower_total_credit_room: np.ndarray,
+        q_sold: np.ndarray,
+        q_excess: np.ndarray,
+    ) -> None:
+        """Append Increment 1 borrower-side excess-demand finance diagnostics."""
+        n_firms = self.ts.current("n_firms")
+        opening_deposits = np.nan_to_num(
+            np.asarray(self.ts.current("activity_finance_opening_deposits"), dtype=float),
+            nan=0.0,
+        )
+        non_loan_interest = np.maximum(
+            0.0,
+            np.nan_to_num(np.asarray(non_loan_interest_obligation_preview, dtype=float), nan=0.0),
+        )
+        finance_cash = np.maximum(0.0, opening_deposits - non_loan_interest)
+        repair_cash_used = np.zeros(n_firms)
+        residual_repair_credit_need = (
+            np.maximum(0.0, np.nan_to_num(self.ts.current("target_debt_rollover_credit"), nan=0.0))
+            + np.maximum(0.0, np.nan_to_num(self.ts.current("target_overdraft_refinance_credit"), nan=0.0))
+        )
+        borrower_st_credit_room = np.maximum(
+            0.0,
+            np.nan_to_num(np.asarray(borrower_st_credit_room, dtype=float), nan=0.0),
+        )
+        borrower_lt_credit_room = np.maximum(
+            0.0,
+            np.nan_to_num(np.asarray(borrower_lt_credit_room, dtype=float), nan=0.0),
+        )
+        borrower_total_credit_room = np.maximum(
+            0.0,
+            np.nan_to_num(np.asarray(borrower_total_credit_room, dtype=float), nan=0.0),
+        )
+        borrower_max_credit = np.maximum(0.0, borrower_total_credit_room - residual_repair_credit_need)
+        activity_finance_borrower = finance_cash + borrower_max_credit
+        finance_potential_output = self.compute_excess_demand_finance_potential_output(
+            activity_finance_borrower=activity_finance_borrower,
+            expected_lcu_prices=expected_lcu_prices,
+            wage_obligation_preview=wage_obligation_preview,
+        )
+        q_sold = np.maximum(0.0, np.nan_to_num(np.asarray(q_sold, dtype=float), nan=0.0))
+        q_excess = np.maximum(0.0, np.nan_to_num(np.asarray(q_excess, dtype=float), nan=0.0))
+        potential_capacity = np.maximum(0.0, finance_potential_output - q_sold)
+        above_cap_share = np.divide(
+            np.maximum(0.0, q_excess - potential_capacity),
+            q_excess,
+            out=np.full(n_firms, np.nan),
+            where=q_excess > 0.0,
+        )
+
+        self.ts.excess_demand_finance_cash.append(finance_cash)
+        self.ts.excess_demand_borrower_st_credit_room.append(borrower_st_credit_room)
+        self.ts.excess_demand_borrower_lt_credit_room.append(borrower_lt_credit_room)
+        self.ts.excess_demand_borrower_total_credit_room.append(borrower_total_credit_room)
+        self.ts.excess_demand_repair_cash_used.append(repair_cash_used)
+        self.ts.excess_demand_residual_repair_credit_need.append(residual_repair_credit_need)
+        self.ts.excess_demand_borrower_max_credit.append(borrower_max_credit)
+        self.ts.excess_demand_activity_finance_borrower.append(activity_finance_borrower)
+        self.ts.excess_demand_finance_potential_output_borrower.append(finance_potential_output)
+        self.ts.excess_demand_potential_capacity_borrower.append(potential_capacity)
+        self.ts.excess_demand_above_borrower_cap_share.append(above_cap_share)
+
     def set_goods_to_buy_from_current_targets(
         self,
         previous_good_prices: np.ndarray,

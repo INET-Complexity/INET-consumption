@@ -4,6 +4,7 @@ import pytest
 from macromodel.agents.firms.firms import Firms
 from macromodel.configurations.firms_configuration import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
+from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 
 
 class TestFirms:
@@ -108,6 +109,17 @@ class TestFirms:
             "firm_settlement_transaction_flow_residual",
             "firm_settlement_accounting_control_passed",
             "total_credit_exposure",
+            "excess_demand_finance_cash",
+            "excess_demand_borrower_st_credit_room",
+            "excess_demand_borrower_lt_credit_room",
+            "excess_demand_borrower_total_credit_room",
+            "excess_demand_repair_cash_used",
+            "excess_demand_residual_repair_credit_need",
+            "excess_demand_borrower_max_credit",
+            "excess_demand_activity_finance_borrower",
+            "excess_demand_finance_potential_output_borrower",
+            "excess_demand_potential_capacity_borrower",
+            "excess_demand_above_borrower_cap_share",
             "short_term_loan_debt",
             "long_term_loan_debt",
             "debt",
@@ -156,6 +168,67 @@ class TestFirms:
                 average_initial_price=country.industry_data["industry_vectors"]["Average Initial Price"].values,
                 industries=datawrapper.industries,
             )
+
+    def test__borrower_credit_room_is_not_clipped_by_target_credit(self, test_banks, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_banks.parameters.enable_firm_loans_return_on_assets_restriction = False
+        test_banks.parameters.enable_firm_loans_return_on_equity_restriction = False
+        test_banks.parameters.enable_firm_loans_dscr_restriction = False
+        test_banks.parameters.firm_loans_capital_stock_collateral_ratio = 0.5
+        test_firms.ts.override_current("capital_inputs_stock_value", np.full(n_firms, 100.0))
+        test_firms.ts.override_current("debt", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("deposits", np.zeros(n_firms))
+        test_firms.ts.override_current("target_long_term_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("target_short_term_credit", np.zeros(n_firms))
+
+        room = compute_firm_borrower_credit_room(
+            banks=test_banks,
+            firms=test_firms,
+            allow_short_term_firm_loans=False,
+        )
+
+        assert np.allclose(room["short_term"], 0.0)
+        assert np.allclose(room["long_term"], 40.0)
+        assert np.allclose(room["total"], 40.0)
+
+        room_with_short_term_first = compute_firm_borrower_credit_room(
+            banks=test_banks,
+            firms=test_firms,
+            allow_short_term_firm_loans=True,
+        )
+
+        assert np.allclose(room_with_short_term_first["short_term"], 40.0)
+        assert np.allclose(room_with_short_term_first["long_term"], 0.0)
+        assert np.allclose(room_with_short_term_first["total"], 40.0)
+
+    def test__append_excess_demand_finance_potential_diagnostics_records_cap_share(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        before = len(test_firms.ts.excess_demand_finance_cash)
+        test_firms.ts.override_current("activity_finance_opening_deposits", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("target_debt_rollover_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("target_overdraft_refinance_credit", np.zeros(n_firms))
+
+        q_sold = np.zeros(n_firms)
+        q_excess = np.zeros(n_firms)
+        q_excess[0] = 5.0
+        test_firms.append_excess_demand_finance_potential_diagnostics(
+            expected_lcu_prices=np.ones(test_firms.n_industries),
+            wage_obligation_preview=np.zeros(n_firms),
+            non_loan_interest_obligation_preview=np.full(n_firms, 2.0),
+            borrower_st_credit_room=np.full(n_firms, 3.0),
+            borrower_lt_credit_room=np.full(n_firms, 7.0),
+            borrower_total_credit_room=np.full(n_firms, 10.0),
+            q_sold=q_sold,
+            q_excess=q_excess,
+        )
+
+        assert len(test_firms.ts.excess_demand_finance_cash) == before + 1
+        assert np.allclose(test_firms.ts.current("excess_demand_finance_cash"), 8.0)
+        assert np.allclose(test_firms.ts.current("excess_demand_borrower_max_credit"), 10.0)
+        assert np.allclose(test_firms.ts.current("excess_demand_activity_finance_borrower"), 18.0)
+        assert np.all(test_firms.ts.current("excess_demand_potential_capacity_borrower") >= 0.0)
+        assert np.isfinite(test_firms.ts.current("excess_demand_above_borrower_cap_share")[0])
+        assert np.isnan(test_firms.ts.current("excess_demand_above_borrower_cap_share")[1:]).all()
 
     @staticmethod
     def _set_simple_activity_solver_inputs(

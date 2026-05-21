@@ -289,6 +289,136 @@ def _compute_firm_dscr_capacity(
     return np.where(np.isfinite(dscr_capacity), np.maximum(0.0, dscr_capacity), 0.0)
 
 
+def _compute_firm_borrower_credit_room_for_type(
+    banks: Banks,
+    firms: Firms,
+    loan_type: LoanTypes,
+    new_credit_by_firm: np.ndarray,
+    new_debt_service_by_firm: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return borrower-side firm credit room without demand or bank-supply clipping."""
+    n_firms = firms.ts.current("n_firms")
+    agents = np.arange(n_firms)
+
+    if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
+        loan_maturity = banks.parameters.short_term_firm_loan_maturity
+        banks_ir = banks.ts.current("interest_rates_on_short_term_firm_loans")
+    elif loan_type == LoanTypes.FIRM_LONG_TERM_LOAN:
+        loan_maturity = banks.parameters.long_term_firm_loan_maturity
+        banks_ir = banks.ts.current("interest_rates_on_long_term_firm_loans")
+    else:
+        raise ValueError("Expected firm loan type", loan_type)
+
+    collateral_cap = _clip_nonneg(
+        banks.parameters.firm_loans_capital_stock_collateral_ratio
+        * firms.ts.current("capital_inputs_stock_value")
+        - firms.ts.current("debt")
+        - new_credit_by_firm
+        + np.minimum(0.0, firms.ts.current("deposits"))
+    )
+
+    roa_cap = np.full(n_firms, np.inf)
+    if banks.parameters.enable_firm_loans_return_on_assets_restriction:
+        firm_expected_profits = firms.ts.current("expected_profits")
+        firm_capital_stock = firms.ts.current("capital_inputs_stock_value")
+        firm_roa = np.divide(
+            firm_expected_profits,
+            firm_capital_stock,
+            out=np.zeros_like(firm_expected_profits),
+            where=firm_capital_stock != 0.0,
+        )
+        roa_cap[firm_roa < banks.parameters.firm_loans_return_on_assets_ratio] = 0.0
+
+    roe_cap = np.full(n_firms, np.inf)
+    if banks.parameters.enable_firm_loans_return_on_equity_restriction:
+        roe_cap = _clip_nonneg(
+            firms.ts.current("capital_inputs_stock_value")
+            + firms.ts.current("deposits")
+            - firms.ts.current("debt")
+            - new_credit_by_firm
+            - firms.ts.current("expected_profits") / banks.parameters.firm_loans_return_on_equity_ratio
+        )
+
+    dscr_cap = np.full(n_firms, np.inf)
+    if banks.parameters.enable_firm_loans_dscr_restriction:
+        underwriting_rate = _firm_dscr_underwriting_rate(
+            banks_ir,
+            banks.parameters.firm_loans_dscr_underwriting_rate_mode,
+        )
+        dscr_cap = _clip_nonneg(
+            _compute_firm_dscr_capacity(
+                firms=firms,
+                agents_with_demand=agents,
+                min_dscr=banks.parameters.firm_loans_min_dscr,
+                cfads_window=banks.parameters.firm_loans_cfads_window,
+                cfads_haircut=banks.parameters.firm_loans_cfads_haircut,
+                underwriting_rate=underwriting_rate,
+                loan_maturity=loan_maturity,
+                new_debt_service_by_firm=new_debt_service_by_firm,
+            )
+        )
+
+    room = _clip_nonneg(np.minimum.reduce((collateral_cap, roa_cap, roe_cap, dscr_cap)))
+    return room, collateral_cap, dscr_cap
+
+
+def compute_firm_borrower_credit_room(
+    banks: Banks,
+    firms: Firms,
+    allow_short_term_firm_loans: bool,
+) -> dict[str, np.ndarray]:
+    """Compute diagnostic borrower-side firm credit room, independent of bank supply.
+
+    The helper mirrors borrower constraints used by credit clearing, but it does
+    not allocate loans, consume priorities, apply bank-supply scarcity, or clip
+    room by current target-credit demand.
+    """
+    n_firms = firms.ts.current("n_firms")
+    new_credit_by_firm = np.zeros(n_firms)
+    new_debt_service_by_firm = np.zeros(n_firms)
+
+    if allow_short_term_firm_loans:
+        st_room, st_collateral_cap, st_dscr_cap = _compute_firm_borrower_credit_room_for_type(
+            banks=banks,
+            firms=firms,
+            loan_type=LoanTypes.FIRM_SHORT_TERM_LOAN,
+            new_credit_by_firm=new_credit_by_firm,
+            new_debt_service_by_firm=new_debt_service_by_firm,
+        )
+        new_credit_by_firm += st_room
+        st_underwriting_rate = _firm_dscr_underwriting_rate(
+            banks.ts.current("interest_rates_on_short_term_firm_loans"),
+            banks.parameters.firm_loans_dscr_underwriting_rate_mode,
+        )
+        st_annuity_factor = _annuity_payment_factor(
+            st_underwriting_rate,
+            banks.parameters.short_term_firm_loan_maturity,
+        )
+        new_debt_service_by_firm += st_room * st_annuity_factor
+    else:
+        st_room = np.zeros(n_firms)
+        st_collateral_cap = np.zeros(n_firms)
+        st_dscr_cap = _nan_array(n_firms)
+
+    lt_room, lt_collateral_cap, lt_dscr_cap = _compute_firm_borrower_credit_room_for_type(
+        banks=banks,
+        firms=firms,
+        loan_type=LoanTypes.FIRM_LONG_TERM_LOAN,
+        new_credit_by_firm=new_credit_by_firm,
+        new_debt_service_by_firm=new_debt_service_by_firm,
+    )
+
+    return {
+        "short_term": st_room,
+        "long_term": lt_room,
+        "total": st_room + lt_room,
+        "short_term_collateral_cap": st_collateral_cap,
+        "short_term_dscr_cap": st_dscr_cap,
+        "long_term_collateral_cap": lt_collateral_cap,
+        "long_term_dscr_cap": lt_dscr_cap,
+    }
+
+
 class CreditMarketClearer(ABC):
     """Abstract base class for credit market clearing mechanisms.
 

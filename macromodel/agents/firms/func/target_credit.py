@@ -60,11 +60,16 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
     """Default implementation of credit demand calculation.
 
     This class implements a pro-rata activity credit demand strategy that:
-    1. Applies internal cash plus expected sales to hard obligations.
+    1. Applies internal cash to hard obligations.
     2. Treats existing negative deposits as overdraft liabilities that must be
        repaired/refinanced before new spending.
     3. Allocates remaining internal funds pro-rata across planned activity.
     4. Requests activity credit for the uncovered category costs.
+
+    Expected sales may still be computed upstream as a planning preview, but
+    they are not counted as spendable finance inside the ordinary activity
+    budget. They are used later in the wrapper logic that classifies rollover
+    and overdraft-refinance repair buckets.
     """
 
     def compute_target_credit(
@@ -81,7 +86,7 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
         """Calculate credit demand using the default pro-rata activity strategy.
 
         The method follows these steps:
-        1. Apply internal cash plus expected sales to hard obligations.
+        1. Apply internal cash to hard obligations.
         2. Reserve enough liquidity to repair existing overdrafts.
         3. Allocate remaining finance pro-rata across planned activity.
         4. Request ST/LT credit for uncovered activity costs.
@@ -89,7 +94,9 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
         Args:
             internal_cash (np.ndarray): Non-negative liquid funds available before new credit
             existing_overdraft (np.ndarray): Negative deposit balances that must be repaired/refinanced
-            expected_sales (np.ndarray): Expected current-period sales proceeds
+            expected_sales (np.ndarray): Expected current-period sales proceeds.
+                Accepted for API compatibility with the wrapper path, but not
+                used as spendable finance inside the ordinary activity budget.
             hard_obligations (np.ndarray): Wages, taxes, interest, and scheduled debt service
             unconstrained_target_intermediate_inputs_costs (np.ndarray): Desired intermediate
                 input spending without financial constraints
@@ -104,8 +111,9 @@ class DefaultTargetCreditSetter(TargetCreditSetter):
                 and direct TFP spending. Second array is long-term activity credit
                 for capital inputs and technical investment.
         """
-        # Expected sales remain a planning preview, but the current activity budget
-        # should only use cash that is actually available before the goods market.
+        # Expected sales remain a planning preview, but the ordinary activity
+        # budget should only use cash that is actually available before the
+        # goods market.
         available_for_activity = np.maximum(0.0, internal_cash - hard_obligations - existing_overdraft)
         total_activity_budget = (
             unconstrained_target_intermediate_inputs_costs

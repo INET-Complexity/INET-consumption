@@ -2538,6 +2538,7 @@ class Firms(Agent):
         potential_capacity_borrower = np.maximum(0.0, finance_potential_output_borrower - q_sold)
 
         supply_max_credit = None
+        activity_finance_supply = None
         finance_potential_output_supply = None
         potential_capacity_supply = None
         if ordinary_bank_supply is not None:
@@ -2550,8 +2551,9 @@ class Firms(Agent):
             else:
                 supply_ratio = min(1.0, ordinary_bank_supply / borrower_total)
                 supply_max_credit = borrower_max_credit * supply_ratio
+            activity_finance_supply = finance_cash + supply_max_credit
             finance_potential_output_supply = self.compute_excess_demand_finance_potential_output(
-                activity_finance_borrower=finance_cash + supply_max_credit,
+                activity_finance_borrower=activity_finance_supply,
                 expected_lcu_prices=expected_lcu_prices,
                 wage_obligation_preview=wage_obligation_preview,
             )
@@ -2569,6 +2571,7 @@ class Firms(Agent):
             "finance_potential_output_borrower": finance_potential_output_borrower,
             "potential_capacity_borrower": potential_capacity_borrower,
             "supply_max_credit": supply_max_credit,
+            "activity_finance_supply": activity_finance_supply,
             "finance_potential_output_supply": finance_potential_output_supply,
             "potential_capacity_supply": potential_capacity_supply,
         }
@@ -2598,6 +2601,23 @@ class Firms(Agent):
             out=np.full(n_firms, np.nan),
             where=q_excess > 0.0,
         )
+        potential_capacity_supply = cache["potential_capacity_supply"]
+        if potential_capacity_supply is None:
+            supply_max_credit = np.full(n_firms, np.nan)
+            activity_finance_supply = np.full(n_firms, np.nan)
+            finance_potential_output_supply = np.full(n_firms, np.nan)
+            potential_capacity_supply = np.full(n_firms, np.nan)
+            above_supply_cap_share = np.full(n_firms, np.nan)
+        else:
+            supply_max_credit = cache["supply_max_credit"]
+            activity_finance_supply = cache["activity_finance_supply"]
+            finance_potential_output_supply = cache["finance_potential_output_supply"]
+            above_supply_cap_share = np.divide(
+                np.maximum(0.0, q_excess - potential_capacity_supply),
+                q_excess,
+                out=np.full(n_firms, np.nan),
+                where=q_excess > 0.0,
+            )
 
         self.ts.excess_demand_finance_cash.append(cache["finance_cash"])
         self.ts.excess_demand_borrower_st_credit_room.append(cache["borrower_st_credit_room"])
@@ -2610,6 +2630,11 @@ class Firms(Agent):
         self.ts.excess_demand_finance_potential_output_borrower.append(cache["finance_potential_output_borrower"])
         self.ts.excess_demand_potential_capacity_borrower.append(cache["potential_capacity_borrower"])
         self.ts.excess_demand_above_borrower_cap_share.append(above_cap_share)
+        self.ts.excess_demand_supply_max_credit.append(supply_max_credit)
+        self.ts.excess_demand_activity_finance_supply.append(activity_finance_supply)
+        self.ts.excess_demand_finance_potential_output_supply.append(finance_potential_output_supply)
+        self.ts.excess_demand_potential_capacity_supply.append(potential_capacity_supply)
+        self.ts.excess_demand_above_supply_cap_share.append(above_supply_cap_share)
         self.reset_excess_demand_finance_potential_transients()
 
     def append_excess_demand_finance_potential_diagnostics(

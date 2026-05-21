@@ -153,6 +153,11 @@ class TestCountry:
             "excess_demand_finance_potential_output_borrower",
             "excess_demand_potential_capacity_borrower",
             "excess_demand_above_borrower_cap_share",
+            "excess_demand_supply_max_credit",
+            "excess_demand_activity_finance_supply",
+            "excess_demand_finance_potential_output_supply",
+            "excess_demand_potential_capacity_supply",
+            "excess_demand_above_supply_cap_share",
         ]
         core_ts_keys = [
             "target_production",

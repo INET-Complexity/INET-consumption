@@ -310,8 +310,7 @@ def _compute_firm_borrower_credit_room_for_type(
         raise ValueError("Expected firm loan type", loan_type)
 
     collateral_cap = _clip_nonneg(
-        banks.parameters.firm_loans_capital_stock_collateral_ratio
-        * firms.ts.current("capital_inputs_stock_value")
+        banks.parameters.firm_loans_capital_stock_collateral_ratio * firms.ts.current("capital_inputs_stock_value")
         - firms.ts.current("debt")
         - new_credit_by_firm
         + np.minimum(0.0, firms.ts.current("deposits"))

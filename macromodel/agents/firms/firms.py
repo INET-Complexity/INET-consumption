@@ -2508,10 +2508,9 @@ class Firms(Agent):
         )
         finance_cash = np.maximum(0.0, opening_deposits - non_loan_interest)
         repair_cash_used = np.zeros(n_firms)
-        residual_repair_credit_need = (
-            np.maximum(0.0, np.nan_to_num(self.ts.current("target_debt_rollover_credit"), nan=0.0))
-            + np.maximum(0.0, np.nan_to_num(self.ts.current("target_overdraft_refinance_credit"), nan=0.0))
-        )
+        residual_repair_credit_need = np.maximum(
+            0.0, np.nan_to_num(self.ts.current("target_debt_rollover_credit"), nan=0.0)
+        ) + np.maximum(0.0, np.nan_to_num(self.ts.current("target_overdraft_refinance_credit"), nan=0.0))
         borrower_st_credit_room = np.maximum(
             0.0,
             np.nan_to_num(np.asarray(borrower_st_credit_room, dtype=float), nan=0.0),

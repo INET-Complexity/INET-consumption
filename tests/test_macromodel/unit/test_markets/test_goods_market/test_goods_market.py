@@ -139,3 +139,46 @@ class TestGoodsMarket:
         # Check basics
         check_things_adding_up(firms, households)
         check_excess_demand(firms, households)
+
+    def test__direct_waterbucket_clear_still_assigns_legacy_excess_demand(self, test_goods_market):
+        firms, households, row = create_test_transactors()
+        firms.set_goods_to_sell(np.array([5.0, 0.0, 10.0]))
+        test_goods_market.n_industries = 2
+        test_goods_market.goods_market_participants = {
+            "FRA": [firms, households],
+            "ROW": [row],
+        }
+        test_goods_market.functions["clearing"].consider_trade_proportions = False
+
+        test_goods_market.prepare()
+        test_goods_market.clear()
+
+        ind0 = firms.transactor_seller_states["Industries"] == 0
+        assert firms.transactor_seller_states["Real Excess Demand"][ind0].sum() > 0.0
+
+    def test__supply_capped_excess_demand_uses_supply_adjusted_firm_capacity(self, test_goods_market):
+        firms, households, row = create_test_transactors()
+        test_goods_market.n_industries = 2
+        test_goods_market.goods_market_participants = {
+            "FRA": [firms, households],
+            "ROW": [row],
+        }
+        test_goods_market.prepare()
+
+        firms.transactor_buyer_states["Remaining Goods"][:] = 0.0
+        households.transactor_buyer_states["Remaining Goods"][:] = 0.0
+        households.transactor_buyer_states["Remaining Goods"][0, 0] = 10.0
+        row.transactor_buyer_states["Remaining Goods"][:] = 0.0
+        row.transactor_seller_states["Remaining Excess Goods"][:] = 0.0
+        firms.transactor_seller_states["Real Excess Demand"][:] = 99.0
+        firms.get_supply_adjusted_excess_demand_capacity = lambda: np.array([2.0, 3.0, 0.0])
+
+        test_goods_market.assign_supply_capped_excess_demand()
+
+        ind0 = firms.transactor_seller_states["Industries"] == 0
+        assert np.allclose(firms.transactor_seller_states["Real Excess Demand"][ind0], [2.0, 3.0])
+        assert np.allclose(firms.transactor_seller_states["Real Excess Demand"][~ind0], 0.0)
+        assert np.allclose(
+            test_goods_market.functions["clearing"]._last_unassigned_supply_capped_excess_demand_by_origin["FRA"],
+            [5.0, 0.0],
+        )

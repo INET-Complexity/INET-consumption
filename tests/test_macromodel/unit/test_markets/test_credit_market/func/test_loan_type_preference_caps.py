@@ -6,6 +6,7 @@ from macromodel.markets.credit_market.func.clearing import (
     DefaultCreditMarketClearer,
     WaterBucketCreditMarketClearer,
     _compute_loan_type_preference_caps,
+    compute_available_bank_supply_for_credit_tranche,
 )
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
 
@@ -340,3 +341,51 @@ def test_default_clearer_keeps_household_quota_after_firm_lending(test_banks, te
 
     assert np.isclose(short_term_loans[0, :, 0].sum(), 60.0)
     assert np.isclose(consumption_loans[0, :, 0].sum(), 40.0)
+
+
+def test_compute_available_bank_supply_for_credit_tranche_matches_clearer_formula(test_banks):
+    n_banks = test_banks.ts.current("n_banks")
+    test_banks.parameters.capital_adequacy_ratio = 0.1
+    test_banks.ts.override_current("equity", np.full(n_banks, 10.0))
+    test_banks.ts.override_current("total_outstanding_loans", np.full(n_banks, 40.0))
+    new_credit_by_bank = np.full(n_banks, 15.0)
+    max_supply_based_on_preferences = np.full(n_banks, 80.0)
+    new_preference_credit_by_bank = np.full(n_banks, 20.0)
+
+    expected = np.maximum(
+        0.0,
+        np.minimum(
+            test_banks.ts.current("equity") / test_banks.parameters.capital_adequacy_ratio
+            - test_banks.ts.current("total_outstanding_loans")
+            - new_credit_by_bank,
+            max_supply_based_on_preferences - new_preference_credit_by_bank,
+        ),
+    )
+
+    actual = compute_available_bank_supply_for_credit_tranche(
+        banks=test_banks,
+        new_credit_by_bank=new_credit_by_bank,
+        max_supply_based_on_preferences=max_supply_based_on_preferences,
+        new_preference_credit_by_bank=new_preference_credit_by_bank,
+    )
+
+    assert np.allclose(actual, expected)
+
+
+def test_waterbucket_captures_ordinary_firm_credit_supply_start(test_banks, test_firms, test_households):
+    clearer = _waterbucket_clearer(consider_loan_type_fractions=False)
+    _set_bank_lending_room(test_banks, max_car=100.0)
+    _set_one_firm_one_household_credit_case(test_banks, test_firms, test_households)
+
+    clearer.clear(
+        banks=test_banks,
+        firms=test_firms,
+        households=test_households,
+        current_npl_firm_loans=0.0,
+        current_npl_hh_cons_loans=0.0,
+        current_npl_mortgages=0.0,
+    )
+
+    assert np.isclose(
+        clearer._last_available_bank_supply_for_ordinary_firm_credit, 100.0 * test_banks.ts.current("n_banks")
+    )

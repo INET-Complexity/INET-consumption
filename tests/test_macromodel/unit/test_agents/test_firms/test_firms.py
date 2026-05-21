@@ -120,6 +120,11 @@ class TestFirms:
             "excess_demand_finance_potential_output_borrower",
             "excess_demand_potential_capacity_borrower",
             "excess_demand_above_borrower_cap_share",
+            "excess_demand_supply_max_credit",
+            "excess_demand_activity_finance_supply",
+            "excess_demand_finance_potential_output_supply",
+            "excess_demand_potential_capacity_supply",
+            "excess_demand_above_supply_cap_share",
             "short_term_loan_debt",
             "long_term_loan_debt",
             "debt",
@@ -229,6 +234,83 @@ class TestFirms:
         assert np.all(test_firms.ts.current("excess_demand_potential_capacity_borrower") >= 0.0)
         assert np.isfinite(test_firms.ts.current("excess_demand_above_borrower_cap_share")[0])
         assert np.isnan(test_firms.ts.current("excess_demand_above_borrower_cap_share")[1:]).all()
+        assert np.isnan(test_firms.ts.current("excess_demand_potential_capacity_supply")).all()
+        assert np.isnan(test_firms.ts.current("excess_demand_above_supply_cap_share")).all()
+        assert test_firms._last_excess_demand_finance_potential is None
+
+    def test__append_excess_demand_finance_potential_diagnostics_does_not_reuse_stale_cache(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.ts.override_current("activity_finance_opening_deposits", np.full(n_firms, 10.0))
+        test_firms.ts.override_current("target_debt_rollover_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("target_overdraft_refinance_credit", np.zeros(n_firms))
+
+        kwargs = {
+            "expected_lcu_prices": np.ones(test_firms.n_industries),
+            "wage_obligation_preview": np.zeros(n_firms),
+            "non_loan_interest_obligation_preview": np.zeros(n_firms),
+            "borrower_st_credit_room": np.zeros(n_firms),
+            "borrower_lt_credit_room": np.zeros(n_firms),
+            "q_sold": np.zeros(n_firms),
+            "q_excess": np.zeros(n_firms),
+        }
+
+        test_firms.append_excess_demand_finance_potential_diagnostics(
+            **kwargs,
+            borrower_total_credit_room=np.full(n_firms, 1.0),
+        )
+        test_firms.append_excess_demand_finance_potential_diagnostics(
+            **kwargs,
+            borrower_total_credit_room=np.full(n_firms, 7.0),
+        )
+
+        assert np.allclose(test_firms.ts.current("excess_demand_borrower_max_credit"), 7.0)
+        assert test_firms._last_excess_demand_finance_potential is None
+
+    def test__compute_excess_demand_finance_potential_capacities_rescales_by_bank_supply(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.ts.override_current("activity_finance_opening_deposits", np.zeros(n_firms))
+        test_firms.ts.override_current("target_debt_rollover_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("target_overdraft_refinance_credit", np.zeros(n_firms))
+
+        test_firms.compute_excess_demand_finance_potential_capacities(
+            expected_lcu_prices=np.ones(test_firms.n_industries),
+            wage_obligation_preview=np.zeros(n_firms),
+            non_loan_interest_obligation_preview=np.zeros(n_firms),
+            borrower_st_credit_room=np.full(n_firms, 3.0),
+            borrower_lt_credit_room=np.full(n_firms, 7.0),
+            borrower_total_credit_room=np.full(n_firms, 10.0),
+            q_sold=np.zeros(n_firms),
+            ordinary_bank_supply=5.0 * n_firms,
+        )
+
+        cache = test_firms._last_excess_demand_finance_potential
+        assert np.allclose(cache["borrower_max_credit"], 10.0)
+        assert np.allclose(cache["supply_max_credit"], 5.0)
+        assert np.all(test_firms.get_supply_adjusted_excess_demand_capacity() >= 0.0)
+
+        q_excess = np.zeros(n_firms)
+        q_excess[0] = test_firms.get_supply_adjusted_excess_demand_capacity()[0] + 1.0
+        test_firms.append_cached_excess_demand_finance_potential_diagnostics(q_excess=q_excess)
+
+        assert np.allclose(test_firms.ts.current("excess_demand_supply_max_credit"), 5.0)
+        assert np.allclose(test_firms.ts.current("excess_demand_activity_finance_supply"), 5.0)
+        assert np.all(test_firms.ts.current("excess_demand_potential_capacity_supply") >= 0.0)
+        assert np.isfinite(test_firms.ts.current("excess_demand_above_supply_cap_share")[0])
+
+    def test__compute_excess_demand_finance_potential_capacities_rejects_bad_bank_supply(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+
+        with pytest.raises(ValueError, match="ordinary_bank_supply"):
+            test_firms.compute_excess_demand_finance_potential_capacities(
+                expected_lcu_prices=np.ones(test_firms.n_industries),
+                wage_obligation_preview=np.zeros(n_firms),
+                non_loan_interest_obligation_preview=np.zeros(n_firms),
+                borrower_st_credit_room=np.zeros(n_firms),
+                borrower_lt_credit_room=np.zeros(n_firms),
+                borrower_total_credit_room=np.zeros(n_firms),
+                q_sold=np.zeros(n_firms),
+                ordinary_bank_supply=np.nan,
+            )
 
     @staticmethod
     def _set_simple_activity_solver_inputs(

@@ -116,7 +116,7 @@ class FirmTimeSeries(TimeSeries):
         - firm_settlement_accounting_control_passed: Per-firm pass flag for the settlement accounting controls
         - total_credit_exposure: Explicit firm debt plus end-of-period residual overdraft exposure
         - excess_demand_finance_*: Diagnostic upper-bound finance-potential cap used to compare current recorded
-          excess demand with borrower-side production capacity
+          excess demand with borrower-side and supply-adjusted production capacity
 
     Planning & Targets:
     - limiting_intermediate_inputs: Input constraints on production
@@ -461,6 +461,11 @@ class FirmTimeSeries(TimeSeries):
             excess_demand_finance_potential_output_borrower=np.full(data.shape[0], np.nan),
             excess_demand_potential_capacity_borrower=np.full(data.shape[0], np.nan),
             excess_demand_above_borrower_cap_share=np.full(data.shape[0], np.nan),
+            excess_demand_supply_max_credit=np.full(data.shape[0], np.nan),
+            excess_demand_activity_finance_supply=np.full(data.shape[0], np.nan),
+            excess_demand_finance_potential_output_supply=np.full(data.shape[0], np.nan),
+            excess_demand_potential_capacity_supply=np.full(data.shape[0], np.nan),
+            excess_demand_above_supply_cap_share=np.full(data.shape[0], np.nan),
             #
             short_term_loan_debt=np.zeros(data.shape[0]),
             long_term_loan_debt=data["Debt"].values,
@@ -811,6 +816,11 @@ def create_firms_timeseries(
         excess_demand_finance_potential_output_borrower=np.full(data.shape[0], np.nan),
         excess_demand_potential_capacity_borrower=np.full(data.shape[0], np.nan),
         excess_demand_above_borrower_cap_share=np.full(data.shape[0], np.nan),
+        excess_demand_supply_max_credit=np.full(data.shape[0], np.nan),
+        excess_demand_activity_finance_supply=np.full(data.shape[0], np.nan),
+        excess_demand_finance_potential_output_supply=np.full(data.shape[0], np.nan),
+        excess_demand_potential_capacity_supply=np.full(data.shape[0], np.nan),
+        excess_demand_above_supply_cap_share=np.full(data.shape[0], np.nan),
         #
         short_term_loan_debt=np.zeros(data.shape[0]),
         long_term_loan_debt=data["Debt"].values,

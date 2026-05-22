@@ -17,7 +17,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from macromodel.agents.households.func.property import DefaultHouseholdDemandForProperty
+from macromodel.agents.households.func.property import (
+    PRIVATE_RENTER_TENURE_STATUS,
+    DefaultHouseholdDemandForProperty,
+)
 
 
 class TestHouseholdProbabilityOfBuying:
@@ -68,8 +71,8 @@ class TestHouseholdProbabilityOfBuying:
         """
         np.random.seed(42)  # For reproducibility
 
-        # Single household that is renting (status = 0)
-        household_residence_tenure_status = np.array([0])
+        # Single household that is renting
+        household_residence_tenure_status = np.array([PRIVATE_RENTER_TENURE_STATUS])
         household_income = np.array([50000.0])  # Moderate income
         household_financial_wealth = np.array([10000.0])  # Some savings
 
@@ -147,8 +150,21 @@ class TestHouseholdProbabilityOfBuying:
         np.random.seed(123)
 
         n_households = 10
-        # Mix of renters (0) and people in social housing (-1)
-        household_residence_tenure_status = np.array([-1, 0, 0, 0, -1, 0, 0, -1, 0, 0])
+        # Mix of renters and people in social housing (-1)
+        household_residence_tenure_status = np.array(
+            [
+                -1,
+                PRIVATE_RENTER_TENURE_STATUS,
+                PRIVATE_RENTER_TENURE_STATUS,
+                PRIVATE_RENTER_TENURE_STATUS,
+                -1,
+                PRIVATE_RENTER_TENURE_STATUS,
+                PRIVATE_RENTER_TENURE_STATUS,
+                -1,
+                PRIVATE_RENTER_TENURE_STATUS,
+                PRIVATE_RENTER_TENURE_STATUS,
+            ]
+        )
 
         # Varying incomes
         household_income = np.linspace(20000, 100000, n_households)
@@ -206,7 +222,7 @@ class TestHouseholdProbabilityOfBuying:
         )
 
         np.random.seed(123)
-        household_residence_tenure_status = np.array([-1, 0])
+        household_residence_tenure_status = np.array([-1, PRIVATE_RENTER_TENURE_STATUS])
         household_income = np.array([-1000.0, -1.0])
         household_financial_wealth = np.array([0.0, 0.0])
         observed_fraction_value_price = np.array([1.0, 0.0])
@@ -242,7 +258,7 @@ class TestHouseholdProbabilityOfBuying:
         try:
             max_price, max_rent, _ = property_demand_calculator.compute_demand(
                 housing_data=minimal_housing_data,
-                household_residence_tenure_status=np.array([0]),
+                household_residence_tenure_status=np.array([PRIVATE_RENTER_TENURE_STATUS]),
                 household_income=np.array([1.0e12]),
                 household_financial_wealth=np.array([0.0]),
                 observed_fraction_value_price=np.array([1.0, 0.0]),

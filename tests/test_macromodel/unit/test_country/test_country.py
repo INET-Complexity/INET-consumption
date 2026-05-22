@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 import macromodel.country.country as country_module
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
@@ -417,6 +418,57 @@ class TestCountry:
         assert np.allclose(captured["production_tax_obligation_preview"], tax_preview)
         assert np.allclose(captured["loan_interest_obligation_preview"], loan_interest_preview)
         assert np.allclose(captured["interest_obligation_preview"], loan_interest_preview + deposit_interest_preview)
+
+    def test__housing_market_ratios_are_recorded_after_clearing(self, test_country, monkeypatch):
+        calls = []
+
+        def process_housing_market_clearing(**kwargs):
+            calls.append("process")
+            test_country.housing_market.states["current_sales"] = pd.DataFrame(
+                {
+                    "sales_types": ["Sell"],
+                    "property_id": [0],
+                    "property_value": [100.0],
+                    "price_or_rent": [200.0],
+                    "seller_id": [0],
+                    "buyer_id": [1],
+                }
+            )
+
+        def compute_observed_fraction_value_price():
+            assert calls == ["process"]
+            calls.append("value")
+            return np.array([2.0, 0.0])
+
+        def compute_observed_fraction_rent_value():
+            assert calls == ["process", "value"]
+            calls.append("rent")
+            return np.array([0.01, 0.0])
+
+        monkeypatch.setattr(
+            test_country.housing_market,
+            "process_housing_market_clearing",
+            process_housing_market_clearing,
+        )
+        monkeypatch.setattr(
+            test_country.housing_market,
+            "compute_observed_fraction_value_price",
+            compute_observed_fraction_value_price,
+        )
+        monkeypatch.setattr(
+            test_country.housing_market,
+            "compute_observed_fraction_rent_value",
+            compute_observed_fraction_rent_value,
+        )
+        monkeypatch.setattr(test_country.households, "process_housing_market_clearing", lambda **kwargs: None)
+
+        test_country.process_housing_market_clearing()
+
+        assert calls == ["process", "value", "rent"]
+        np.testing.assert_array_equal(
+            test_country.housing_market.ts.current("observed_fraction_value_price"),
+            np.array([2.0, 0.0]),
+        )
 
     def test__pre_credit_production_tax_preview_uses_target_plan_not_realised_production(self, test_country):
         n_firms = test_country.firms.ts.current("n_firms")

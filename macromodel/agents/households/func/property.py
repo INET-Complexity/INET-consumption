@@ -21,6 +21,9 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+PRIVATE_RENTER_TENURE_STATUS = 3
+SOCIAL_HOUSING_TENURE_STATUS = -1
+
 
 class HouseholdDemandForProperty(ABC):
     """Abstract base class for household property demand behavior.
@@ -257,8 +260,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
                 maximum rent willing to pay, households hoping to move
         """
         # Indices
-        ind_in_social_housing = household_residence_tenure_status == -1
-        ind_renting = np.array(household_residence_tenure_status == 0)
+        ind_in_social_housing = household_residence_tenure_status == SOCIAL_HOUSING_TENURE_STATUS
+        ind_renting = np.array(household_residence_tenure_status == PRIVATE_RENTER_TENURE_STATUS)
         ind_renting_not_staying = np.logical_and(
             ind_renting,
             np.random.random(ind_renting.shape[0]) > self.probability_stay_in_rented_property,

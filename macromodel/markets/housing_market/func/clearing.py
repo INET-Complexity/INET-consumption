@@ -26,6 +26,19 @@ import pandas as pd
 import scipy as sp
 from scipy.optimize import linear_sum_assignment as lsa  # noqa
 
+TRANSACTION_COLUMNS = [
+    "sales_types",
+    "property_id",
+    "property_value",
+    "price_or_rent",
+    "seller_id",
+    "buyer_id",
+]
+
+
+def _empty_transactions() -> pd.DataFrame:
+    return pd.DataFrame(columns=TRANSACTION_COLUMNS)
+
 
 class HousingMarketClearer(ABC):
     """Abstract base class for housing market clearing algorithms.
@@ -102,16 +115,7 @@ class NoHousingMarketClearer(HousingMarketClearer):
         Returns:
             pd.DataFrame: Empty DataFrame with required columns
         """
-        return pd.DataFrame(
-            {
-                "sales_types": [],
-                "property_id": [],
-                "seller_id": [],
-                "buyer_id": [],
-                "property_value": [],
-                "price_or_rent": [],
-            }
-        )
+        return _empty_transactions()
 
 
 class DefaultHousingMarketClearer(HousingMarketClearer):
@@ -151,6 +155,9 @@ class DefaultHousingMarketClearer(HousingMarketClearer):
             max_willing_to_pay=max_price_willing_to_pay,
             is_rental_market=False,
         )
+        if len(matching_sales) > 0:
+            sold_property_ids = matching_sales["property_id"].to_numpy(dtype=int, copy=False)
+            housing_data.loc[sold_property_ids, "Up for Rent"] = False
 
         # Rental market
         matching_rental = self.perform_matching(
@@ -301,6 +308,9 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
             max_willing_to_pay=max_price_willing_to_pay,
             is_rental_market=False,
         )
+        if len(matching_sales) > 0:
+            sold_property_ids = matching_sales["property_id"].to_numpy(dtype=int, copy=False)
+            housing_data.loc[sold_property_ids, "Up for Rent"] = False
 
         # Rental market
         matching_rental = self.perform_matching(
@@ -372,6 +382,9 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
         # Collect properties
         property_open_ind = housing_data.index[housing_data[status_field].values]
         property_prices = housing_data.loc[property_open_ind, price_field].values
+
+        if len(households_with_demand) == 0 or len(property_open_ind) == 0:
+            return _empty_transactions()
 
         # Create a cost matrix
         cost = sp.spatial.distance_matrix(

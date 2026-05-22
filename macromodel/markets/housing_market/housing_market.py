@@ -28,6 +28,8 @@ from macromodel.util.function_mapping import (
 )
 from macromodel.util.get_histogram import get_histogram
 
+VACANT_HOUSEHOLD_ID = -1
+
 
 class HousingMarket:
     """Housing market model implementing property transactions and rental agreements.
@@ -401,17 +403,20 @@ class HousingMarket:
             with deviations from 1.0 indicating potential market imbalances.
         """
         current_sells = self.states["current_sales"].loc[self.states["current_sales"]["sales_types"] == "Sell"]
+        if len(current_sells) == 0:
+            self.ts.price_value_histogram.append(get_histogram(np.array([], dtype=float), None))
+            return self.ts.current("observed_fraction_value_price")
+        property_values = current_sells["property_value"].to_numpy(dtype=float, copy=False)
+        prices = current_sells["price_or_rent"].to_numpy(dtype=float, copy=False)
         self.ts.price_value_histogram.append(
             get_histogram(
-                current_sells["price_or_rent"].values / current_sells["property_value"].values,
+                prices / property_values,
                 None,
             )
         )
-        if len(current_sells) == 0:
-            return self.ts.current("observed_fraction_value_price")
         return self._perform_linear_regression(
-            current_sells["property_value"].values,
-            current_sells["price_or_rent"].values,
+            property_values,
+            prices,
         )
 
     def compute_observed_fraction_rent_value(self) -> np.ndarray:
@@ -431,18 +436,64 @@ class HousingMarket:
             providing insights into investment returns and market balance.
         """
         current_rentals = self.states["current_sales"].loc[self.states["current_sales"]["sales_types"] == "Rental"]
+        if len(current_rentals) == 0:
+            self.ts.rent_value_histogram.append(get_histogram(np.array([], dtype=float), None))
+            return self.ts.current("observed_fraction_rent_value")
+        property_values = current_rentals["property_value"].to_numpy(dtype=float, copy=False)
+        rents = current_rentals["price_or_rent"].to_numpy(dtype=float, copy=False)
         self.ts.rent_value_histogram.append(
             get_histogram(
-                current_rentals["price_or_rent"].values / current_rentals["property_value"].values,
+                rents / property_values,
                 None,
             )
         )
-        if len(current_rentals) == 0:
-            return self.ts.current("observed_fraction_rent_value")
         return self._perform_linear_regression(
-            current_rentals["price_or_rent"].values,
-            current_rentals["property_value"].values,
+            property_values,
+            rents,
         )
+
+    def _filter_feasible_current_sale_indices(
+        self,
+        household_received_mortgages: np.ndarray,
+        household_financial_wealth: np.ndarray,
+    ) -> pd.Index:
+        current_sales = self.states["current_sales"]
+        if len(current_sales) == 0 or "sales_types" not in current_sales.columns:
+            return current_sales.index
+
+        feasible = pd.Series(True, index=current_sales.index)
+        sale_transactions = current_sales.loc[current_sales["sales_types"].eq("Sell")]
+        if len(sale_transactions) == 0:
+            return current_sales.index
+
+        buyer_ids = sale_transactions["buyer_id"].to_numpy(dtype=int, copy=False)
+        prices = sale_transactions["price_or_rent"].to_numpy(dtype=float, copy=False)
+        has_financing = (household_received_mortgages[buyer_ids] > 0) | (
+            household_financial_wealth[buyer_ids] >= prices
+        )
+        feasible.loc[sale_transactions.index[~has_financing]] = False
+
+        kept_sale_indices = sale_transactions.index[has_financing]
+        initial_inhabitants = (
+            self.states["properties"]["Corresponding Inhabitant Household ID"].fillna(VACANT_HOUSEHOLD_ID).astype(int)
+        )
+        while len(kept_sale_indices) > 0:
+            kept_sales = current_sales.loc[kept_sale_indices]
+            moving_households = kept_sales["buyer_id"].to_numpy(dtype=int, copy=False)
+            property_ids = kept_sales["property_id"].to_numpy(dtype=int, copy=False)
+            inhabitants = initial_inhabitants.reindex(property_ids).fillna(VACANT_HOUSEHOLD_ID).to_numpy(dtype=int)
+            can_transfer = (
+                (inhabitants == VACANT_HOUSEHOLD_ID)
+                | (inhabitants == moving_households)
+                | np.isin(inhabitants, moving_households)
+            )
+            new_kept_sale_indices = kept_sale_indices[can_transfer]
+            if len(new_kept_sale_indices) == len(kept_sale_indices):
+                break
+            feasible.loc[kept_sale_indices.difference(new_kept_sale_indices)] = False
+            kept_sale_indices = new_kept_sale_indices
+
+        return current_sales.index[feasible.to_numpy()]
 
     def process_housing_market_clearing(
         self,
@@ -480,7 +531,25 @@ class HousingMarket:
         """
         total_number_of_bought_houses = 0
         total_number_of_newly_rented_houses = 0
-        for index, sale in self.states["current_sales"].iterrows():
+        feasible_sale_indices = self._filter_feasible_current_sale_indices(
+            household_received_mortgages=household_received_mortgages,
+            household_financial_wealth=household_financial_wealth,
+        )
+        self.states["current_sales"] = self.states["current_sales"].loc[feasible_sale_indices].reset_index(drop=True)
+
+        def clear_previous_residence(buyer_id: int, prev_property_id: int) -> None:
+            if prev_property_id == VACANT_HOUSEHOLD_ID or prev_property_id not in self.states["properties"].index:
+                return
+            current_inhabitant_id = int(
+                self.states["properties"].loc[prev_property_id, "Corresponding Inhabitant Household ID"]
+            )
+            if current_inhabitant_id == buyer_id:
+                self.states["properties"].loc[
+                    prev_property_id,
+                    "Corresponding Inhabitant Household ID",
+                ] = VACANT_HOUSEHOLD_ID
+
+        for _, sale in self.states["current_sales"].iterrows():
             buyer_id, seller_id, property_id = (
                 int(sale["buyer_id"]),
                 int(sale["seller_id"]),
@@ -489,11 +558,7 @@ class HousingMarket:
             prev_property_id = household_states["Corresponding Inhabited House ID"][buyer_id]
             if sale["sales_types"] == "Rental":
                 self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
-                if prev_property_id != -1:
-                    self.states["properties"].loc[
-                        prev_property_id,
-                        "Corresponding Inhabitant Household ID",
-                    ] = -1
+                clear_previous_residence(buyer_id, int(prev_property_id))
                 household_states["Corresponding Inhabited House ID"][buyer_id] = property_id
                 household_states["Tenure Status of the Main Residence"][buyer_id] = 3
                 household_states["corr_renters"][seller_id].append(buyer_id)
@@ -511,11 +576,7 @@ class HousingMarket:
 
                     # Corresponding inhabitant households
                     self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
-                    if prev_property_id != -1:
-                        self.states["properties"].loc[
-                            prev_property_id,
-                            "Corresponding Inhabitant Household ID",
-                        ] = -1
+                    clear_previous_residence(buyer_id, int(prev_property_id))
 
                     # Corresponding inhabited house ID
                     household_states["Corresponding Inhabited House ID"][buyer_id] = property_id

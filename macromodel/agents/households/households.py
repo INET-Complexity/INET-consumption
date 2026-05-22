@@ -39,6 +39,8 @@ from macromodel.util.function_mapping import functions_from_model, update_functi
 from macromodel.util.get_histogram import get_histogram
 from macromodel.util.property_mapping import map_to_enum
 
+VACANT_HOUSEHOLD_ID = -1
+
 
 class Households(Agent):
     """Economic agent representing household sector behavior.
@@ -779,8 +781,14 @@ class Households(Agent):
         self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
         self.ts.max_rent_willing_to_pay.append(max_rent_willing_to_pay)
 
-        # Set price of properties of households that are hoping to move
-        ind_mhr_temp_sale = housing_data["Corresponding Owner Household ID"].isin(households_hoping_to_move)
+        # Set price of owner-occupied or vacant properties whose owners are hoping to move.
+        household_ids_hoping_to_move = np.flatnonzero(households_hoping_to_move)
+        owner_ids = housing_data["Corresponding Owner Household ID"]
+        inhabitant_ids = housing_data["Corresponding Inhabitant Household ID"]
+        owner_wants_to_move = owner_ids.isin(household_ids_hoping_to_move)
+        property_is_vacant = inhabitant_ids.isna() | inhabitant_ids.eq(VACANT_HOUSEHOLD_ID)
+        property_is_owner_occupied = inhabitant_ids.eq(owner_ids)
+        ind_mhr_temp_sale = owner_wants_to_move & (property_is_vacant | property_is_owner_occupied)
         housing_data.loc[np.logical_not(ind_mhr_temp_sale), "Sale Price"] = np.nan
         ind_still_on_sale = housing_data["Temporarily for Sale"].copy()
         housing_data["Temporarily for Sale"] = False
@@ -805,7 +813,8 @@ class Households(Agent):
 
         # Set what's up for rent
         prev_up_for_rent = pd.Series(housing_data["Up for Rent"], index=housing_data.index).fillna(False).astype(bool)
-        now_up_for_rent = housing_data.index[housing_data["Corresponding Inhabitant Household ID"].values == -1]
+        inhabitant_ids = housing_data["Corresponding Inhabitant Household ID"]
+        now_up_for_rent = housing_data.index[inhabitant_ids.isna() | inhabitant_ids.eq(VACANT_HOUSEHOLD_ID)]
         newly_up_for_rent = now_up_for_rent[~prev_up_for_rent.loc[now_up_for_rent].values]
         housing_data["Up for Rent"] = False
         housing_data.loc[now_up_for_rent, "Up for Rent"] = True

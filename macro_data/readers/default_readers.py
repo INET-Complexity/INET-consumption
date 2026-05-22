@@ -40,6 +40,7 @@ from macro_data.readers.economic_data.ons_reader import ONSReader
 from macro_data.readers.economic_data.policy_rates import PolicyRatesReader
 from macro_data.readers.economic_data.world_bank_reader import WorldBankReader
 from macro_data.readers.emissions.emissions_reader import EmissionsReader
+from macro_data.readers.exo_prices.exo_prices_reader import SectorExoPricesReader
 from macro_data.readers.icio_sea_matching import (
     add_investment_matrix_to_icio,
     get_investment_fractions,
@@ -108,6 +109,7 @@ class DataPaths:
     compustat_firms_quarterly_path: Path
     compustat_banks_path: Path
     emissions_path: Path
+    firm_prices_path: Optional[Path] = None
 
     @classmethod
     def default_paths(cls, raw_data_path: Path, icio_years: Iterable[int]):
@@ -140,6 +142,7 @@ class DataPaths:
             compustat_firms_quarterly_path=raw_data_path / "compustat" / "firms_quarterly.csv",
             compustat_banks_path=raw_data_path / "compustat" / "banks.csv",
             emissions_path=raw_data_path / "emissions",
+            firm_prices_path=raw_data_path / "cims_prices" / "firm_prices.csv",
         )
 
     # @classmethod
@@ -203,6 +206,7 @@ class DataReaders:
     compustat_firms: CompustatFirmsReader
     compustat_banks: CompustatBanksReader
     emissions: EmissionsReader
+    exo_prices: Optional[SectorExoPricesReader] = None
     regions_dict: Optional[dict[Country, list[Region]]] = None
 
     @classmethod
@@ -479,6 +483,10 @@ class DataReaders:
 
         emissions = EmissionsReader.read_price_data(datapaths.emissions_path)
 
+        exo_prices = None
+        if datapaths.firm_prices_path is not None and datapaths.firm_prices_path.exists():
+            exo_prices = SectorExoPricesReader.read_from_raw_data(datapaths.firm_prices_path)
+
         return cls(
             icio=icio,
             wiod_sea=wiod_sea,
@@ -495,6 +503,7 @@ class DataReaders:
             compustat_firms=compustat_firms,
             compustat_banks=compustat_banks,
             emissions=emissions,
+            exo_prices=exo_prices,
             regions_dict=regions_dict,
         )
 

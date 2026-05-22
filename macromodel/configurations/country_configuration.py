@@ -39,6 +39,7 @@ class CountryConfiguration(BaseModel):
     forecasting_window: int = 60
     assume_zero_growth: bool = False
     assume_zero_noise: bool = False
+    CH4_production_emissions_only: bool = False
 
     @classmethod
     def n_industry_default(

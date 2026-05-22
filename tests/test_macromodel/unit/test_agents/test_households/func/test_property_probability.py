@@ -179,3 +179,79 @@ class TestHouseholdProbabilityOfBuying:
             if not np.isnan(max_rent[i]):
                 assert np.isfinite(max_rent[i]), f"Household {i}: max_rent must be finite"
                 assert max_rent[i] > 0, f"Household {i}: max_rent must be positive"
+
+    def test_fractional_income_exponents_handle_negative_income_without_warning(self, minimal_housing_data):
+        """Negative expected income should imply zero affordability, not invalid powers."""
+        property_demand_calculator = DefaultHouseholdDemandForProperty(
+            probability_stay_in_rented_property=0.0,
+            probability_stay_in_owned_property=1.0,
+            maximum_price_income_coefficient=5.0,
+            maximum_price_income_exponent=0.789,
+            maximum_price_noise_mean=0.0,
+            maximum_price_noise_variance=0.0,
+            maximum_rent_income_coefficient=0.3,
+            maximum_rent_income_exponent=0.3464,
+            psychological_pressure_of_renting=0.1,
+            cost_comparison_temperature=1.0,
+            price_initial_markup=0.1,
+            price_decrease_probability=0.5,
+            price_decrease_mean=-0.05,
+            price_decrease_variance=0.01,
+            rent_initial_markup=0.1,
+            rent_decrease_probability=0.5,
+            rent_decrease_mean=-0.05,
+            rent_decrease_variance=0.01,
+            partial_rent_inflation_indexation=0.5,
+            partial_rent_inflation_delay=4,
+        )
+
+        np.random.seed(123)
+        household_residence_tenure_status = np.array([-1, 0])
+        household_income = np.array([-1000.0, -1.0])
+        household_financial_wealth = np.array([0.0, 0.0])
+        observed_fraction_value_price = np.array([1.0, 0.0])
+        observed_fraction_rent_value = np.array([0.005, 0.0])
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            max_price, max_rent, _ = property_demand_calculator.compute_demand(
+                housing_data=minimal_housing_data,
+                household_residence_tenure_status=household_residence_tenure_status,
+                household_income=household_income,
+                household_financial_wealth=household_financial_wealth,
+                observed_fraction_value_price=observed_fraction_value_price,
+                observed_fraction_rent_value=observed_fraction_rent_value,
+                expected_hpi_growth=0.02,
+                assumed_mortgage_maturity=25,
+                rental_income_taxes=0.2,
+            )
+
+        assigned_willingness = np.concatenate(
+            [
+                max_price[np.isfinite(max_price)],
+                max_rent[np.isfinite(max_rent)],
+            ]
+        )
+        assert assigned_willingness.size == household_income.size
+        assert np.all(assigned_willingness == 0.0)
+
+    def test_stable_buying_probability_handles_strict_underflow(self, property_demand_calculator, minimal_housing_data):
+        """Large rent-buy cost differences should not raise under strict NumPy errors."""
+        np.random.seed(42)
+        old_err = np.seterr(all="raise")
+        try:
+            max_price, max_rent, _ = property_demand_calculator.compute_demand(
+                housing_data=minimal_housing_data,
+                household_residence_tenure_status=np.array([0]),
+                household_income=np.array([1.0e12]),
+                household_financial_wealth=np.array([0.0]),
+                observed_fraction_value_price=np.array([1.0, 0.0]),
+                observed_fraction_rent_value=np.array([0.005, 0.0]),
+                expected_hpi_growth=0.02,
+                assumed_mortgage_maturity=25,
+                rental_income_taxes=0.2,
+            )
+        finally:
+            np.seterr(**old_err)
+
+        assert not (np.isnan(max_price[0]) and np.isnan(max_rent[0]))

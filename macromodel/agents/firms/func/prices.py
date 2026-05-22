@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+from scipy.interpolate import interp1d
 
 
 class PriceSetter(ABC):
@@ -203,6 +204,90 @@ class DefaultPriceSetter(PriceSetter):
             * (1 + self.price_setting_speed_dp * demand_pull_inflation)
             * (1 + self.price_setting_speed_cp * cost_push_inflation),
         )
+
+
+class SectorExogenousPriceSetter(DefaultPriceSetter):
+    """Price setter that overrides selected sectors with exogenous price paths."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.firm_exo_prices = None
+        self.overriden_industries: list[str] = []
+
+    def _indices_for(self, industry_name: str) -> list[int]:
+        """Return all firm array indices belonging to the given sector."""
+        return [i for i, name in enumerate(self.overriden_industries) if name == industry_name]
+
+    def _normalised_price(self, industry_name: str, current_quarter: int) -> float:
+        """Interpolate the sector price and normalise to the initial year."""
+        initial_year = self.firm_exo_prices.initial_year
+        series = self.firm_exo_prices.prices[industry_name]
+        years = series.index.astype(float).values
+        prices = series.values.astype(float)
+        fn = interp1d(years, prices)
+        year = initial_year + (current_quarter - 1) / 4
+        return float(fn(year)) / float(fn(initial_year))
+
+    def compute_price(
+        self,
+        prev_prices: np.ndarray,
+        current_estimated_ppi_inflation: float,
+        excess_demand: np.ndarray,
+        inventories: np.ndarray,
+        production: np.ndarray,
+        prev_average_good_prices: np.ndarray,
+        prev_firm_prices: np.ndarray,
+        prev_supply: np.ndarray,
+        prev_demand: np.ndarray,
+        current_firm_sectors: np.ndarray,
+        curr_unit_costs: np.ndarray,
+        prev_unit_costs: np.ndarray,
+        ppi_during: np.ndarray,
+        current_time: int,
+        min_inflation: float = -0.1,
+        max_inflation: float = 0.1,
+    ) -> np.ndarray:
+        """Compute prices, overriding listed sectors with exogenous paths."""
+        price = super().compute_price(
+            prev_prices=prev_prices,
+            current_estimated_ppi_inflation=current_estimated_ppi_inflation,
+            excess_demand=excess_demand,
+            inventories=inventories,
+            production=production,
+            prev_average_good_prices=prev_average_good_prices,
+            prev_firm_prices=prev_firm_prices,
+            prev_supply=prev_supply,
+            prev_demand=prev_demand,
+            current_firm_sectors=current_firm_sectors,
+            curr_unit_costs=curr_unit_costs,
+            prev_unit_costs=prev_unit_costs,
+            ppi_during=ppi_during,
+            current_time=current_time,
+            min_inflation=min_inflation,
+            max_inflation=max_inflation,
+        )
+
+        if self.firm_exo_prices is None or self.firm_exo_prices.prices is None or len(self.overriden_industries) == 0:
+            return price
+
+        if self.firm_exo_prices.initial_model_prices is None:
+            base_prices = prev_average_good_prices[current_firm_sectors]
+        else:
+            initial_model_prices = self.firm_exo_prices.initial_model_prices
+            base_prices = (
+                initial_model_prices
+                if initial_model_prices.shape == price.shape
+                else initial_model_prices[current_firm_sectors]
+            )
+
+        for industry_name in self.firm_exo_prices.prices.columns:
+            if industry_name not in self.overriden_industries:
+                continue
+            ratio = self._normalised_price(industry_name, current_quarter=current_time)
+            for idx in self._indices_for(industry_name):
+                price[idx] = base_prices[idx] * ratio
+
+        return price
 
 
 class ExogenousPriceSetter(PriceSetter):

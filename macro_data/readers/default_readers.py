@@ -41,6 +41,7 @@ from macro_data.readers.economic_data.policy_rates import PolicyRatesReader
 from macro_data.readers.economic_data.world_bank_reader import WorldBankReader
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionsFractionReader
 from macro_data.readers.emissions.emissions_reader import CH4EmissionsReaderCAN, EmissionsReader
+from macro_data.readers.exo_prices.exo_prices_reader import SectorExoPricesReader
 from macro_data.readers.icio_sea_matching import (
     add_investment_matrix_to_icio,
     get_investment_fractions,
@@ -111,6 +112,7 @@ class DataPaths:
     emissions_path: Path
     emissions_fraction_path: Optional[Path] = None
     ch4_emissions_path: Optional[Path] = None
+    firm_prices_path: Optional[Path] = None
 
     @classmethod
     def default_paths(cls, raw_data_path: Path, icio_years: Iterable[int]):
@@ -147,6 +149,7 @@ class DataPaths:
             ch4_emissions_path=raw_data_path
             / "emission_factors"
             / "EN-GHG_EconSectByGas-CA_Emissions_2014_2023_v4.csv",
+            firm_prices_path=raw_data_path / "cims_prices" / "firm_prices.csv",
         )
 
     # @classmethod
@@ -213,6 +216,7 @@ class DataReaders:
     emissions: EmissionsReader
     emission_fractions: Optional[EmissionsFractionReader] = None
     ch4_emissions: Optional[CH4EmissionsReaderCAN] = None
+    exo_prices: Optional[SectorExoPricesReader] = None
     regions_dict: Optional[dict[Country, list[Region]]] = None
 
     @classmethod
@@ -497,6 +501,10 @@ class DataReaders:
         if datapaths.ch4_emissions_path is not None and datapaths.ch4_emissions_path.exists():
             ch4_emissions = CH4EmissionsReaderCAN.read_data(datapaths.ch4_emissions_path)
 
+        exo_prices = None
+        if datapaths.firm_prices_path is not None and datapaths.firm_prices_path.exists():
+            exo_prices = SectorExoPricesReader.read_from_raw_data(datapaths.firm_prices_path)
+
         return cls(
             icio=icio,
             wiod_sea=wiod_sea,
@@ -515,6 +523,7 @@ class DataReaders:
             emissions=emissions,
             emission_fractions=emission_fractions,
             ch4_emissions=ch4_emissions,
+            exo_prices=exo_prices,
             regions_dict=regions_dict,
         )
 

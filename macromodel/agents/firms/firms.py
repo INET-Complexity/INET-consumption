@@ -8,6 +8,7 @@ import pandas as pd
 
 from macro_data import SyntheticFirms
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
+from macro_data.readers.exo_prices import SectorExoPrices
 from macromodel.agents.agent import Agent
 from macromodel.agents.firms.firm_ts import FirmTimeSeries
 from macromodel.agents.firms.utils.create_bundle_matrix import create_bundle_matrix
@@ -238,6 +239,7 @@ class Firms(Agent):
         industries: list[str],
         add_emissions: bool = False,
         emission_fractions: Optional[EmissionFractions] = None,
+        firm_exo_prices: Optional[SectorExoPrices] = None,
     ):
         """Create a Firms instance from pickled synthetic data.
 
@@ -254,6 +256,7 @@ class Firms(Agent):
             industries (list[str]): Industry sector names
             add_emissions (bool, optional): Whether to track emissions. Defaults to False.
             emission_fractions (Optional[EmissionFractions]): Per-industry emission fraction multipliers.
+            firm_exo_prices (Optional[SectorExoPrices]): Sector-level exogenous price paths.
 
         Returns:
             Firms: Initialized Firms instance
@@ -266,7 +269,13 @@ class Firms(Agent):
                 "capital_depreciation_accounting_mode='eurostat_cfc' requires "
                 "capital_replacement_matrix_source='eurostat_cfc_output'."
             )
+        from macromodel.agents.firms.func.prices import SectorExogenousPriceSetter
+
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.firms")
+
+        if isinstance(functions.get("prices"), SectorExogenousPriceSetter) and firm_exo_prices is not None:
+            functions["prices"].firm_exo_prices = firm_exo_prices
+            functions["prices"].overriden_industries = industries
 
         intermediate_inputs_productivity_matrix = synthetic_firms.intermediate_inputs_productivity_matrix
         capital_inputs_productivity_matrix = synthetic_firms.capital_inputs_productivity_matrix

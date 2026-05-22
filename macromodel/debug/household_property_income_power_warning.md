@@ -43,6 +43,24 @@ The rent-willingness calculation has the same failure mode for deciding renters:
 household_income[ind_deciding_to_rent] ** self.maximum_rent_income_exponent
 ```
 
+## Resolution
+
+`household-property-income-power-warning` chooses a narrow affordability-rule
+fix: keep upstream `expected_income` unchanged, but use a local non-negative
+income base before applying the fractional buy/rent affordability exponents.
+Non-positive expected income therefore implies zero buy/rent willingness in
+these power terms rather than `nan`.
+
+The same branch also ports the stable `scipy.special.expit` buy-probability
+sigmoid from `INET-Complexity/macro-main#90`.
+
+Regression coverage:
+
+```text
+uv run pytest tests/test_macromodel/unit/test_agents/test_households/func/test_property_probability.py
+uv run ruff check macromodel/agents/households/func/property.py tests/test_macromodel/unit/test_agents/test_households/func/test_property_probability.py
+```
+
 ## Data Path
 
 The property demand function receives:
@@ -62,13 +80,19 @@ expected_income_employee
 + expected_income_financial_assets
 ```
 
-One plausible route to negative household expected income is negative
+One possible route to negative household expected income is negative
 `wealth_other_financial_assets`, because expected financial-asset income is
 currently linear in current other financial assets:
 
 ```python
 return income_coefficient * current_other_financial_assets
 ```
+
+However, the saved FRA diagnostic that motivated this note did **not** show
+negative `wealth_other_financial_assets` or negative
+`expected_income_financial_assets`. It showed negative `expected_income` for
+household `5169` in periods `35-50`, driven by large negative `income_rental`.
+That source is tracked separately as a `compute_rental_income` diagnostic bug.
 
 ## Expected Diagnostic Checks
 
@@ -103,16 +127,15 @@ expected_income_financial_assets
 wealth_other_financial_assets
 ```
 
-## Open Model Decision
+## Model Decision
 
-The code needs an explicit modeling decision for non-positive-income households
-in the property affordability equations. Candidate behaviors include:
+For property affordability powers, non-positive-income households use a zero
+affordability base:
 
-- clamp the income base used for fractional powers to zero;
-- use a small positive floor if zero willingness creates downstream issues;
-- exclude non-positive-income households from buy/rent affordability decisions;
-- prevent the upstream income components from producing negative expected
-  household income.
+- upstream income components remain unchanged and diagnosable;
+- the local power base is clamped to zero;
+- households are not excluded from the tenure decision solely because expected
+  income is non-positive.
 
-Until that decision is made, suppressing the warning would hide a real
-affordability-state inconsistency.
+If zero willingness creates downstream housing-market issues, reopen that as a
+participation-policy question rather than silently introducing a positive floor.

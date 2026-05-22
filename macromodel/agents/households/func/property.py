@@ -14,12 +14,12 @@ The implementation handles:
 - Property value adjustments
 """
 
-import warnings
 from abc import ABC, abstractmethod
 from typing import Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit
 
 
 class HouseholdDemandForProperty(ABC):
@@ -271,9 +271,10 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
 
         # Decision between renting and owning for households renting or in social housing
         ind_dec = ind_in_social_housing | ind_renting_not_staying | ind_owning_not_staying
+        affordability_income = np.maximum(household_income, 0.0)
         max_amount_pay = (
             self.maximum_price_income_coefficient
-            * household_income[ind_dec] ** self.maximum_price_income_exponent
+            * affordability_income[ind_dec] ** self.maximum_price_income_exponent
             * np.exp(
                 np.random.normal(
                     self.maximum_price_noise_mean,
@@ -291,14 +292,10 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
             4 * np.maximum(0, max_amount_pay - household_financial_wealth[ind_dec]) / assumed_mortgage_maturity
             - ((1 + expected_hpi_growth) ** 4 - 1) * max_value_affordable
         )
-        # Use logistic function to calculate probability of buying
-        # Normalize cost difference for numerical stability
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            diff = (annual_cost_of_renting - annual_cost_of_purchasing) / 10000
-            diff_exp = np.exp(-self.cost_comparison_temperature * diff)
-            prob_buying = 1.0 / (1.0 + diff_exp)
-            prob_buying = np.clip(prob_buying, 0.0, 1.0)
+        # Logistic probability of buying, normalized by 10000.
+        # scipy.special.expit saturates safely at the float64 limits.
+        diff = (annual_cost_of_renting - annual_cost_of_purchasing) / 10000
+        prob_buying = expit(self.cost_comparison_temperature * diff)
         ind_deciding_to_buy_rel = np.random.random(prob_buying.shape) < prob_buying
         ind_deciding_to_rent_rel = ~ind_deciding_to_buy_rel
         ind_deciding_to_buy = np.where(ind_dec)[0][ind_deciding_to_buy_rel]
@@ -312,7 +309,7 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         max_rent_willing_to_pay = np.full(household_income.shape, np.nan)
         max_rent_willing_to_pay[ind_deciding_to_rent] = (
             self.maximum_rent_income_coefficient
-            * household_income[ind_deciding_to_rent] ** self.maximum_rent_income_exponent
+            * affordability_income[ind_deciding_to_rent] ** self.maximum_rent_income_exponent
         )
 
         return (

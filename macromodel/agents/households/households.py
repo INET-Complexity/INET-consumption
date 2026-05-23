@@ -742,6 +742,7 @@ class Households(Agent):
         expected_hpi_growth: float,
         assumed_mortgage_maturity: int,
         rental_income_taxes: float,
+        time_unit: int,
     ) -> None:
         """Prepare for housing market clearing.
 
@@ -758,6 +759,7 @@ class Households(Agent):
             expected_hpi_growth (float): Expected house price growth
             assumed_mortgage_maturity (int): Mortgage term length
             rental_income_taxes (float): Tax rate on rental income
+            time_unit (int): Model period length in months
         """
         if len(housing_data) == 0:
             return
@@ -836,6 +838,7 @@ class Households(Agent):
             "property"
         ].compute_offered_rent_for_existing_properties(
             current_offered_rent=housing_data.loc[not_newly_up_for_rent, "Rent"].values,
+            time_unit=time_unit,
         )
 
     def update_rent(

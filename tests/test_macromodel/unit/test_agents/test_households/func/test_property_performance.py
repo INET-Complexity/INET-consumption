@@ -33,7 +33,7 @@ class _StubPropertyDemand:
             observed_fraction_rent_value[0] * np.asarray(property_value, dtype=float) + observed_fraction_rent_value[1]
         )
 
-    def compute_offered_rent_for_existing_properties(self, current_offered_rent):
+    def compute_offered_rent_for_existing_properties(self, current_offered_rent, time_unit):
         return np.asarray(current_offered_rent, dtype=float)
 
 
@@ -100,6 +100,7 @@ class TestHouseholdPropertyPerformance:
             expected_hpi_growth=0.0,
             assumed_mortgage_maturity=120,
             rental_income_taxes=0.0,
+            time_unit=3,
         )
 
         assert bool(housing_data.loc[10, "Temporarily for Sale"])
@@ -129,6 +130,7 @@ class TestHouseholdPropertyPerformance:
             expected_hpi_growth=0.0,
             assumed_mortgage_maturity=120,
             rental_income_taxes=0.0,
+            time_unit=3,
         )
 
         assert bool(housing_data.loc[10, "Up for Rent"])

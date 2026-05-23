@@ -14,6 +14,7 @@ The implementation handles:
 - Property value adjustments
 """
 
+import math
 from abc import ABC, abstractmethod
 from typing import Tuple
 
@@ -23,6 +24,58 @@ from scipy.special import expit
 
 PRIVATE_RENTER_TENURE_STATUS = 3
 SOCIAL_HOUSING_TENURE_STATUS = -1
+RENT_REDUCTION_MAX_DECREASE = 0.20
+
+
+def convert_monthly_reduction_calibration_to_period(
+    probability_monthly: float,
+    mean_percentage_reduction: float,
+    std_of_percentage_reduction: float,
+    time_unit: int,
+) -> tuple[float, float, float]:
+    """Convert monthly event-driven percentage reductions to model-period terms.
+
+    The source calibration is a monthly event probability and a monthly
+    percentage-point reduction distribution. For multi-month model periods,
+    this returns the probability of at least one event and the conditional
+    mean/std of the cumulative reduction given that at least one event occurs.
+    """
+    if time_unit <= 0:
+        raise ValueError("time_unit must be a positive number of months.")
+    if not 0.0 <= probability_monthly <= 1.0:
+        raise ValueError("probability_monthly must be in [0, 1].")
+    if std_of_percentage_reduction < 0.0:
+        raise ValueError("std_of_percentage_reduction must be non-negative.")
+
+    time_unit = int(time_unit)
+    if probability_monthly == 0.0 or time_unit == 1:
+        return probability_monthly, mean_percentage_reduction, std_of_percentage_reduction
+
+    probability_period = 1.0 - (1.0 - probability_monthly) ** time_unit
+    if probability_period == 0.0:
+        return 0.0, mean_percentage_reduction, std_of_percentage_reduction
+
+    mean_fraction = mean_percentage_reduction / 100.0
+    std_fraction = std_of_percentage_reduction / 100.0
+    expected_remaining = 1.0 - mean_fraction
+    expected_remaining_squared = expected_remaining**2 + std_fraction**2
+
+    conditional_mean = 0.0
+    conditional_second_moment = 0.0
+    for n_events in range(1, time_unit + 1):
+        event_probability = (
+            math.comb(time_unit, n_events)
+            * probability_monthly**n_events
+            * (1.0 - probability_monthly) ** (time_unit - n_events)
+        )
+        conditional_weight = event_probability / probability_period
+        conditional_mean += conditional_weight * (1.0 - expected_remaining**n_events)
+        conditional_second_moment += conditional_weight * (
+            1.0 - 2.0 * expected_remaining**n_events + expected_remaining_squared**n_events
+        )
+
+    conditional_variance = max(0.0, conditional_second_moment - conditional_mean**2)
+    return probability_period, conditional_mean * 100.0, conditional_variance**0.5 * 100.0
 
 
 class HouseholdDemandForProperty(ABC):
@@ -50,9 +103,9 @@ class HouseholdDemandForProperty(ABC):
         price_decrease_mean (float): Price reduction mean
         price_decrease_variance (float): Price reduction variance
         rent_initial_markup (float): Initial rent markup factor
-        rent_decrease_probability (float): Rent reduction probability
-        rent_decrease_mean (float): Rent reduction mean
-        rent_decrease_variance (float): Rent reduction variance
+        rent_decrease_probability_monthly (float): Monthly rent reduction probability
+        rent_mean_percentage_reduction (float): Monthly mean rent reduction in percentage points
+        std_of_rent_percentage_reduction (float): Monthly standard deviation of rent reduction in percentage points
         partial_rent_inflation_indexation (float): Inflation pass-through
         partial_rent_inflation_delay (int): Inflation adjustment lag
     """
@@ -74,9 +127,9 @@ class HouseholdDemandForProperty(ABC):
         price_decrease_mean: float,
         price_decrease_variance: float,
         rent_initial_markup: float,
-        rent_decrease_probability: float,
-        rent_decrease_mean: float,
-        rent_decrease_variance: float,
+        rent_decrease_probability_monthly: float,
+        rent_mean_percentage_reduction: float,
+        std_of_rent_percentage_reduction: float,
         partial_rent_inflation_indexation: float,
         partial_rent_inflation_delay: int,
     ):
@@ -95,9 +148,9 @@ class HouseholdDemandForProperty(ABC):
         self.price_decrease_mean = price_decrease_mean
         self.price_decrease_variance = price_decrease_variance
         self.rent_initial_markup = rent_initial_markup
-        self.rent_decrease_probability = rent_decrease_probability
-        self.rent_decrease_mean = rent_decrease_mean
-        self.rent_decrease_variance = rent_decrease_variance
+        self.rent_decrease_probability_monthly = rent_decrease_probability_monthly
+        self.rent_mean_percentage_reduction = rent_mean_percentage_reduction
+        self.std_of_rent_percentage_reduction = std_of_rent_percentage_reduction
         self.partial_rent_inflation_indexation = partial_rent_inflation_indexation
         self.partial_rent_inflation_delay = partial_rent_inflation_delay
 
@@ -200,12 +253,14 @@ class HouseholdDemandForProperty(ABC):
     def compute_offered_rent_for_existing_properties(
         self,
         current_offered_rent: np.ndarray,
-        max_decrease: float = 0.2,
+        time_unit: int,
+        max_decrease: float = RENT_REDUCTION_MAX_DECREASE,
     ) -> np.ndarray:
         """Update rental offers.
 
         Args:
             current_offered_rent (np.ndarray): Current rental offers
+            time_unit (int): Model period length in months
             max_decrease (float): Maximum rent reduction
 
         Returns:
@@ -358,6 +413,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
 
         new_sale_prices = sale_prices.copy()
         properties_with_reduced_price = np.random.random(sale_prices.shape) < self.price_decrease_probability
+        # TODO: Audit whether sale-price reduction calibration uses the same
+        # percentage-point/frequency convention as rent reductions.
         new_sale_prices[properties_with_reduced_price] *= np.maximum(
             max_decrease,
             1
@@ -424,15 +481,28 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
     def compute_offered_rent_for_existing_properties(
         self,
         current_offered_rent: np.ndarray,
-        max_decrease: float = 0.2,
+        time_unit: int,
+        max_decrease: float = RENT_REDUCTION_MAX_DECREASE,
     ) -> np.ndarray:
         new_offered_rent = current_offered_rent.copy()
-        properties_with_reduced_rent = np.random.random(current_offered_rent.shape) < self.rent_decrease_probability
-        new_offered_rent[properties_with_reduced_rent] *= 1 - np.exp(
-            np.random.normal(
-                self.rent_decrease_mean,
-                self.rent_decrease_variance**0.5,
-                np.sum(properties_with_reduced_rent),
-            )
+        (
+            reduction_probability,
+            reduction_mean,
+            reduction_std,
+        ) = convert_monthly_reduction_calibration_to_period(
+            probability_monthly=self.rent_decrease_probability_monthly,
+            mean_percentage_reduction=self.rent_mean_percentage_reduction,
+            std_of_percentage_reduction=self.std_of_rent_percentage_reduction,
+            time_unit=time_unit,
         )
+        properties_with_reduced_rent = np.random.random(current_offered_rent.shape) < reduction_probability
+        n_reduced = int(np.sum(properties_with_reduced_rent))
+        if n_reduced == 0:
+            return new_offered_rent
+
+        reduction = np.random.normal(reduction_mean, reduction_std, n_reduced) / 100.0
+        # The 20% cap is intentionally loose; the standard quarterly calibration
+        # has a 99th percentile reduction near 5%.
+        reduction = np.clip(reduction, 0.0, max_decrease)
+        new_offered_rent[properties_with_reduced_rent] *= 1.0 - reduction
         return new_offered_rent

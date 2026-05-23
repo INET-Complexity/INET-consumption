@@ -24,6 +24,7 @@ from scipy.special import expit
 
 PRIVATE_RENTER_TENURE_STATUS = 3
 SOCIAL_HOUSING_TENURE_STATUS = -1
+SALE_PRICE_REDUCTION_MAX_DECREASE = 0.20
 RENT_REDUCTION_MAX_DECREASE = 0.20
 
 
@@ -99,9 +100,9 @@ class HouseholdDemandForProperty(ABC):
         psychological_pressure_of_renting (float): Renting preference factor
         cost_comparison_temperature (float): Decision sensitivity parameter
         price_initial_markup (float): Initial price markup factor
-        price_decrease_probability (float): Price reduction probability
-        price_decrease_mean (float): Price reduction mean
-        price_decrease_variance (float): Price reduction variance
+        price_decrease_probability_monthly (float): Monthly sale-price reduction probability
+        price_mean_percentage_reduction (float): Monthly mean sale-price reduction in percentage points
+        std_of_price_percentage_reduction (float): Monthly standard deviation of sale-price reduction in percentage points
         rent_initial_markup (float): Initial rent markup factor
         rent_decrease_probability_monthly (float): Monthly rent reduction probability
         rent_mean_percentage_reduction (float): Monthly mean rent reduction in percentage points
@@ -123,9 +124,9 @@ class HouseholdDemandForProperty(ABC):
         maximum_rent_income_exponent: float,
         probability_stay_in_owned_property: float,
         price_initial_markup: float,
-        price_decrease_probability: float,
-        price_decrease_mean: float,
-        price_decrease_variance: float,
+        price_decrease_probability_monthly: float,
+        price_mean_percentage_reduction: float,
+        std_of_price_percentage_reduction: float,
         rent_initial_markup: float,
         rent_decrease_probability_monthly: float,
         rent_mean_percentage_reduction: float,
@@ -144,9 +145,9 @@ class HouseholdDemandForProperty(ABC):
         self.psychological_pressure_of_renting = psychological_pressure_of_renting
         self.cost_comparison_temperature = cost_comparison_temperature
         self.price_initial_markup = price_initial_markup
-        self.price_decrease_probability = price_decrease_probability
-        self.price_decrease_mean = price_decrease_mean
-        self.price_decrease_variance = price_decrease_variance
+        self.price_decrease_probability_monthly = price_decrease_probability_monthly
+        self.price_mean_percentage_reduction = price_mean_percentage_reduction
+        self.std_of_price_percentage_reduction = std_of_price_percentage_reduction
         self.rent_initial_markup = rent_initial_markup
         self.rent_decrease_probability_monthly = rent_decrease_probability_monthly
         self.rent_mean_percentage_reduction = rent_mean_percentage_reduction
@@ -202,12 +203,14 @@ class HouseholdDemandForProperty(ABC):
     def compute_updated_sale_price(
         self,
         sale_prices: np.ndarray,
-        max_decrease: float = 0.2,
+        time_unit: int,
+        max_decrease: float = SALE_PRICE_REDUCTION_MAX_DECREASE,
     ) -> np.ndarray:
         """Update property sale prices.
 
         Args:
             sale_prices (np.ndarray): Current sale prices
+            time_unit (int): Model period length in months
             max_decrease (float): Maximum price reduction
 
         Returns:
@@ -395,7 +398,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
     def compute_updated_sale_price(
         self,
         sale_prices: np.ndarray,
-        max_decrease: float = 0.2,
+        time_unit: int,
+        max_decrease: float = SALE_PRICE_REDUCTION_MAX_DECREASE,
     ) -> np.ndarray:
         """Update sale prices using default behavior.
 
@@ -405,6 +409,7 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
 
         Args:
             sale_prices (np.ndarray): Current sale prices
+            time_unit (int): Model period length in months
             max_decrease (float): Maximum price reduction
 
         Returns:
@@ -412,20 +417,33 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         """
 
         new_sale_prices = sale_prices.copy()
-        properties_with_reduced_price = np.random.random(sale_prices.shape) < self.price_decrease_probability
-        # TODO: Audit whether sale-price reduction calibration uses the same
-        # percentage-point/frequency convention as rent reductions.
-        new_sale_prices[properties_with_reduced_price] *= np.maximum(
-            max_decrease,
-            1
-            - np.exp(
-                np.random.normal(
-                    self.price_decrease_mean,
-                    self.price_decrease_variance**0.5,
-                    np.sum(properties_with_reduced_price),
-                )
-            ),
+        (
+            reduction_probability,
+            reduction_mean,
+            reduction_std,
+        ) = convert_monthly_reduction_calibration_to_period(
+            probability_monthly=self.price_decrease_probability_monthly,
+            mean_percentage_reduction=self.price_mean_percentage_reduction,
+            std_of_percentage_reduction=self.std_of_price_percentage_reduction,
+            time_unit=time_unit,
         )
+        properties_with_reduced_price = np.random.random(sale_prices.shape) < reduction_probability
+        n_reduced = int(np.sum(properties_with_reduced_price))
+        if n_reduced == 0:
+            return new_sale_prices
+
+        reduction = (
+            np.random.normal(
+                loc=float(reduction_mean),
+                scale=float(reduction_std),
+                size=n_reduced,
+            )
+            / 100.0
+        )
+        # The 20% cap is intentionally loose; the standard quarterly calibration
+        # has a 99th percentile reduction below 4%.
+        reduction = np.clip(reduction, 0.0, max_decrease)
+        new_sale_prices[properties_with_reduced_price] *= 1.0 - reduction
         return new_sale_prices
 
     def compute_rent(

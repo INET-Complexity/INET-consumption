@@ -80,10 +80,13 @@ FRA:
           maximum_rent_income_exponent: 0.3464  # 0.0
           partial_rent_inflation_delay: 1
           partial_rent_inflation_indexation: 1.0  # 0.0
-          price_decrease_mean: 1.4531  # 0.0
-          price_decrease_probability: 0.1964  # 0.0
-          price_decrease_variance: 0.4889  # 0.0
           price_initial_markup: 0.0
+          # Monthly-frequency Carro calibration: probability that an unsold listing reduces price in a month.
+          price_decrease_probability_monthly: 0.0703  # 0.0
+          # Monthly-frequency Carro calibration: mean sale-price reduction in percentage points.
+          price_mean_percentage_reduction: 1.4532  # 0.0
+          # Monthly-frequency Carro calibration: standard deviation of sale-price reduction in percentage points.
+          std_of_price_percentage_reduction: 0.7070  # 0.0
           probability_stay_in_owned_property: 0.9875  # 0.5
           probability_stay_in_rented_property: 0.875  # 0.5
           psychological_pressure_of_renting: 0.4  # 0.1

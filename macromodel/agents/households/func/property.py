@@ -432,7 +432,7 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
             np.random.normal(
                 self.rent_decrease_mean,
                 self.rent_decrease_variance**0.5,
-                np.sum(properties_with_reduced_rent),
+                int(np.sum(properties_with_reduced_rent)),
             )
         )
         return new_offered_rent

@@ -87,9 +87,12 @@ FRA:
           probability_stay_in_owned_property: 0.9875  # 0.5
           probability_stay_in_rented_property: 0.875  # 0.5
           psychological_pressure_of_renting: 0.4  # 0.1
-          rent_decrease_mean: 1.6559  # 0.0
-          rent_decrease_probability: 0.2848  # 0.0
-          rent_decrease_variance: 0.7855  # 0.0
+          # Monthly-frequency Carro calibration: probability that an unrented listing reduces rent in a month.
+          rent_decrease_probability_monthly: 0.1057  # 0.0
+          # Monthly-frequency Carro calibration: mean rent reduction in percentage points.
+          rent_mean_percentage_reduction: 1.6559  # 0.0
+          # Monthly-frequency Carro calibration: standard deviation of rent reduction in percentage points.
+          std_of_rent_percentage_reduction: 0.7855  # 0.0
           rent_initial_markup: 0.0
       rent:
         name: ConstantRentSetter

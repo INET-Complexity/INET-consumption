@@ -20,7 +20,10 @@ import pytest
 from macromodel.agents.households.func.property import (
     PRIVATE_RENTER_TENURE_STATUS,
     DefaultHouseholdDemandForProperty,
+    convert_monthly_reduction_calibration_to_period,
 )
+from macromodel.configurations.households_configuration import HouseholdsConfiguration
+from macromodel.util.function_mapping import functions_from_model
 
 
 class TestHouseholdProbabilityOfBuying:
@@ -45,9 +48,9 @@ class TestHouseholdProbabilityOfBuying:
             price_decrease_mean=-0.05,
             price_decrease_variance=0.01,
             rent_initial_markup=0.1,
-            rent_decrease_probability=0.5,
-            rent_decrease_mean=-0.05,
-            rent_decrease_variance=0.01,
+            rent_decrease_probability_monthly=0.5,
+            rent_mean_percentage_reduction=5.0,
+            std_of_rent_percentage_reduction=1.0,
             partial_rent_inflation_indexation=0.5,
             partial_rent_inflation_delay=4,
         )
@@ -214,9 +217,9 @@ class TestHouseholdProbabilityOfBuying:
             price_decrease_mean=-0.05,
             price_decrease_variance=0.01,
             rent_initial_markup=0.1,
-            rent_decrease_probability=0.5,
-            rent_decrease_mean=-0.05,
-            rent_decrease_variance=0.01,
+            rent_decrease_probability_monthly=0.5,
+            rent_mean_percentage_reduction=5.0,
+            std_of_rent_percentage_reduction=1.0,
             partial_rent_inflation_indexation=0.5,
             partial_rent_inflation_delay=4,
         )
@@ -271,3 +274,139 @@ class TestHouseholdProbabilityOfBuying:
             np.seterr(**old_err)
 
         assert not (np.isnan(max_price[0]) and np.isnan(max_rent[0]))
+
+    def test_monthly_reduction_calibration_is_unchanged_for_monthly_model(self):
+        probability, mean, std = convert_monthly_reduction_calibration_to_period(
+            probability_monthly=0.1057,
+            mean_percentage_reduction=1.6559,
+            std_of_percentage_reduction=0.7855,
+            time_unit=1,
+        )
+
+        assert probability == 0.1057
+        assert mean == 1.6559
+        assert std == 0.7855
+
+    def test_monthly_reduction_calibration_converts_to_quarterly_model(self):
+        probability, mean, std = convert_monthly_reduction_calibration_to_period(
+            probability_monthly=0.1057,
+            mean_percentage_reduction=1.6559,
+            std_of_percentage_reduction=0.7855,
+            time_unit=3,
+        )
+
+        np.testing.assert_allclose(probability, 0.2847634621930001)
+        np.testing.assert_allclose(mean, 1.8407114856812123)
+        np.testing.assert_allclose(std, 0.9851783434605734)
+
+    def test_monthly_reduction_calibration_rejects_invalid_time_unit(self):
+        with pytest.raises(ValueError, match="time_unit"):
+            convert_monthly_reduction_calibration_to_period(
+                probability_monthly=0.1057,
+                mean_percentage_reduction=1.6559,
+                std_of_percentage_reduction=0.7855,
+                time_unit=0,
+            )
+
+    def test_old_rent_decrease_variance_key_fails_loudly(self):
+        configuration = HouseholdsConfiguration()
+        configuration.functions.property.parameters["rent_decrease_variance"] = 0.7855
+
+        with pytest.raises(ValueError, match="rent_decrease_variance"):
+            functions_from_model(configuration.functions, loc="macromodel.agents.households")
+
+    def test_existing_rent_reduction_standard_calibration_stays_positive(self):
+        property_demand_calculator = DefaultHouseholdDemandForProperty(
+            probability_stay_in_rented_property=0.0,
+            probability_stay_in_owned_property=1.0,
+            maximum_price_income_coefficient=5.0,
+            maximum_price_income_exponent=1.0,
+            maximum_price_noise_mean=0.0,
+            maximum_price_noise_variance=0.0,
+            maximum_rent_income_coefficient=0.3,
+            maximum_rent_income_exponent=1.0,
+            psychological_pressure_of_renting=0.1,
+            cost_comparison_temperature=1.0,
+            price_initial_markup=0.1,
+            price_decrease_probability=0.0,
+            price_decrease_mean=0.0,
+            price_decrease_variance=0.0,
+            rent_initial_markup=0.1,
+            rent_decrease_probability_monthly=0.1057,
+            rent_mean_percentage_reduction=1.6559,
+            std_of_rent_percentage_reduction=0.7855,
+            partial_rent_inflation_indexation=0.5,
+            partial_rent_inflation_delay=4,
+        )
+
+        np.random.seed(123)
+        updated_rent = property_demand_calculator.compute_offered_rent_for_existing_properties(
+            current_offered_rent=np.full(1000, 100.0),
+            time_unit=3,
+        )
+
+        assert np.all(updated_rent > 0.0)
+        assert np.all(updated_rent <= 100.0)
+
+    def test_existing_rent_reduction_extreme_draw_is_clipped(self):
+        property_demand_calculator = DefaultHouseholdDemandForProperty(
+            probability_stay_in_rented_property=0.0,
+            probability_stay_in_owned_property=1.0,
+            maximum_price_income_coefficient=5.0,
+            maximum_price_income_exponent=1.0,
+            maximum_price_noise_mean=0.0,
+            maximum_price_noise_variance=0.0,
+            maximum_rent_income_coefficient=0.3,
+            maximum_rent_income_exponent=1.0,
+            psychological_pressure_of_renting=0.1,
+            cost_comparison_temperature=1.0,
+            price_initial_markup=0.1,
+            price_decrease_probability=0.0,
+            price_decrease_mean=0.0,
+            price_decrease_variance=0.0,
+            rent_initial_markup=0.1,
+            rent_decrease_probability_monthly=1.0,
+            rent_mean_percentage_reduction=100.0,
+            std_of_rent_percentage_reduction=0.0,
+            partial_rent_inflation_indexation=0.5,
+            partial_rent_inflation_delay=4,
+        )
+
+        updated_rent = property_demand_calculator.compute_offered_rent_for_existing_properties(
+            current_offered_rent=np.array([100.0]),
+            time_unit=1,
+        )
+
+        np.testing.assert_allclose(updated_rent, np.array([80.0]))
+
+    def test_existing_rent_reduction_zero_probability_leaves_rent_unchanged(self):
+        property_demand_calculator = DefaultHouseholdDemandForProperty(
+            probability_stay_in_rented_property=0.0,
+            probability_stay_in_owned_property=1.0,
+            maximum_price_income_coefficient=5.0,
+            maximum_price_income_exponent=1.0,
+            maximum_price_noise_mean=0.0,
+            maximum_price_noise_variance=0.0,
+            maximum_rent_income_coefficient=0.3,
+            maximum_rent_income_exponent=1.0,
+            psychological_pressure_of_renting=0.1,
+            cost_comparison_temperature=1.0,
+            price_initial_markup=0.1,
+            price_decrease_probability=0.0,
+            price_decrease_mean=0.0,
+            price_decrease_variance=0.0,
+            rent_initial_markup=0.1,
+            rent_decrease_probability_monthly=0.0,
+            rent_mean_percentage_reduction=100.0,
+            std_of_rent_percentage_reduction=0.0,
+            partial_rent_inflation_indexation=0.5,
+            partial_rent_inflation_delay=4,
+        )
+
+        current_rent = np.array([100.0, 200.0])
+        updated_rent = property_demand_calculator.compute_offered_rent_for_existing_properties(
+            current_offered_rent=current_rent,
+            time_unit=3,
+        )
+
+        np.testing.assert_array_equal(updated_rent, current_rent)

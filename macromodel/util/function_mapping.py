@@ -37,6 +37,11 @@ _STALE_FUNCTION_PARAMETERS = {
         "existing_inventory_fraction": None,
         "target_inventory_to_production_fraction": "target_inventory_to_demand_fraction",
     },
+    "property": {
+        "rent_decrease_probability": "rent_decrease_probability_monthly",
+        "rent_decrease_mean": "rent_mean_percentage_reduction",
+        "rent_decrease_variance": "std_of_rent_percentage_reduction",
+    },
 }
 
 

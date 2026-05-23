@@ -625,18 +625,21 @@ FRA:
             options: ''
             type: float
             value: 0.0
-          rent_decrease_probability:
-            desc: Probability of the noise decrease in offered rents.
+          rent_decrease_probability_monthly:
+            desc: Monthly-frequency Carro calibration probability that an unrented
+              listing reduces rent in a month.
             options: ''
             type: float
             value: 0.0
-          rent_decrease_mean:
-            desc: Mean of the noise decrease in offered rents.
+          rent_mean_percentage_reduction:
+            desc: Monthly-frequency Carro calibration mean rent reduction in
+              percentage points, not a fraction.
             options: ''
             type: float
             value: 0.0
-          rent_decrease_variance:
-            desc: Variance of the noise decrease in offered rents.
+          std_of_rent_percentage_reduction:
+            desc: Monthly-frequency Carro calibration standard deviation of rent
+              reduction in percentage points, not a variance.
             options: ''
             type: float
             value: 0.0

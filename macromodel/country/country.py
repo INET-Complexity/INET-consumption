@@ -845,6 +845,7 @@ class Country:
             expected_hpi_growth=self.economy.ts.current("estimated_hpi_inflation")[0],
             assumed_mortgage_maturity=self.banks.parameters.mortgage_maturity,
             rental_income_taxes=self.central_government.states["Income Tax"],
+            time_unit=self.economy.time_unit,
         )
 
         # Set rent

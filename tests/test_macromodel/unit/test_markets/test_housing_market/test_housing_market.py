@@ -101,6 +101,7 @@ def test_households_prepare_housing_market_marks_missing_inhabitants_for_rent(te
         expected_hpi_growth=0.0,
         assumed_mortgage_maturity=120,
         rental_income_taxes=0.0,
+        time_unit=3,
     )
 
     assert bool(housing_data.loc[12, "Up for Rent"])
@@ -130,6 +131,7 @@ def test_households_prepare_housing_market_marks_first_row_vacancy_as_new(test_h
         expected_hpi_growth=0.0,
         assumed_mortgage_maturity=120,
         rental_income_taxes=0.0,
+        time_unit=3,
     )
 
     assert bool(housing_data.loc[0, "Up for Rent"])

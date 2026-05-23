@@ -605,18 +605,18 @@ FRA:
             options: ''
             type: float
             value: 0.0
-          price_decrease_probability:
-            desc: The probability of decreasing the offered price.
+          price_decrease_probability_monthly:
+            desc: Monthly probability of decreasing the offered sale price.
             options: ''
             type: float
             value: 0.0
-          price_decrease_mean:
-            desc: Mean of the noise decrease in offered prices.
+          price_mean_percentage_reduction:
+            desc: Monthly mean sale-price reduction in percentage points.
             options: ''
             type: float
             value: 0.0
-          price_decrease_variance:
-            desc: Variance of the noise decrease in offered prices.
+          std_of_price_percentage_reduction:
+            desc: Monthly standard deviation of sale-price reduction in percentage points.
             options: ''
             type: float
             value: 0.0

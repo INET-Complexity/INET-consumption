@@ -811,6 +811,7 @@ class Households(Agent):
                 np.logical_and(ind_mhr_temp_sale, ind_still_on_sale),
                 "Sale Price",
             ],
+            time_unit=time_unit,
         )
 
         # Set what's up for rent

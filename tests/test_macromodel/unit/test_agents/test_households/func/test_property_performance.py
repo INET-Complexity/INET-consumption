@@ -25,7 +25,7 @@ class _StubPropertyDemand:
     def compute_initial_sale_price(self, property_values):
         return np.asarray(property_values, dtype=float)
 
-    def compute_updated_sale_price(self, sale_prices):
+    def compute_updated_sale_price(self, sale_prices, time_unit):
         return np.asarray(sale_prices, dtype=float)
 
     def compute_offered_rent_for_new_properties(self, property_value, observed_fraction_rent_value):

@@ -27,6 +27,12 @@ class FirmTimeSeries(TimeSeries):
     - price_offered: Average price offered by industry
     - price_in_usd: Prices converted to USD
     - unit_costs: Cost per unit of output
+    - pricing_uc_smooth: Smoothed unit cost used by markup pricing
+    - pricing_target_markup: Markup selected before numerical price floors/fallbacks
+    - pricing_realized_markup: Realized price divided by smoothed unit cost
+    - pricing_markup_lower: Lower markup corridor bound
+    - pricing_markup_upper: Upper markup corridor bound
+    - pricing_gate_state: Numeric code for the demand-pull gate state
 
     Labor & Employment:
     - number_of_employees: Workers per firm
@@ -271,6 +277,12 @@ class FirmTimeSeries(TimeSeries):
             total_wage=data["Total Wages Paid"].values,
             real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
             unit_costs=data["Unit Costs"].values,
+            pricing_uc_smooth=np.where(data["Unit Costs"].values > 0.0, data["Unit Costs"].values, np.nan),
+            pricing_target_markup=np.full(data.shape[0], np.nan),
+            pricing_realized_markup=np.full(data.shape[0], np.nan),
+            pricing_markup_lower=np.full(data.shape[0], np.nan),
+            pricing_markup_upper=np.full(data.shape[0], np.nan),
+            pricing_gate_state=np.zeros(data.shape[0]),
             taxes_paid_on_production=data["Taxes paid on Production"].values,
             corporate_taxes_paid=data["Corporate Taxes Paid"].values,
             equity=data["Equity"].values,
@@ -629,6 +641,12 @@ def create_firms_timeseries(
         total_wage=data["Total Wages Paid"].values,
         real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
         unit_costs=data["Unit Costs"].values,
+        pricing_uc_smooth=np.where(data["Unit Costs"].values > 0.0, data["Unit Costs"].values, np.nan),
+        pricing_target_markup=np.full(data.shape[0], np.nan),
+        pricing_realized_markup=np.full(data.shape[0], np.nan),
+        pricing_markup_lower=np.full(data.shape[0], np.nan),
+        pricing_markup_upper=np.full(data.shape[0], np.nan),
+        pricing_gate_state=np.zeros(data.shape[0]),
         taxes_paid_on_production=data["Taxes paid on Production"].values,
         corporate_taxes_paid=data["Corporate Taxes Paid"].values,
         equity=data["Equity"].values,

@@ -205,13 +205,38 @@ FRA:
           labour_market_tightness_markup_scale: 0
           markup_time_span: 4
       prices:
-        name: DefaultPriceSetter
+        name: SectorMarkupUnitCostPriceSetter
         path_name: prices
         parameters:
-          price_setting_noise_std: 0.05
-          price_setting_speed_cp: 0.025
-          price_setting_speed_dp: 0.025
-          price_setting_speed_gf: 1.0
+          orbis_markup_path: run_model/data/raw_data/orbis/orbis_markups_by_nace_rev_2_main_section.csv
+          markup_year: 2014
+          markup_central_column: mu_all_weighted_median
+          markup_lower_column: mu_all_median_interval_low
+          markup_upper_column: mu_all_median_interval_high
+          unit_cost_smoothing_horizon: 4
+          demand_pull_speed: 1.0
+          fallback_mode: last_valid_then_price_then_sector_median_then_previous_price
+          industry_to_nace_main_section:
+            '0': A
+            '1': B
+            '2': C
+            '3': D
+            '4': E
+            '5': F
+            '6': G
+            '7': H
+            '8': I
+            '9': J
+            '10': K
+            '11': L
+            '12': M
+            '13': N
+            '14': O
+            '15': P
+            '16': Q
+            '17':
+              - R
+              - S
       production:
         name: CriticalAndImportantLeontief
         path_name: production

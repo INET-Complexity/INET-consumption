@@ -1207,7 +1207,8 @@ class Firms(Agent):
         Returns:
             np.ndarray: New prices for each firm
         """
-        return self.functions["prices"].compute_price(
+        price_setter = self.functions["prices"]
+        prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,
             excess_demand=self.states["Excess Demand"],
@@ -1228,7 +1229,24 @@ class Firms(Agent):
             ),
             ppi_during=ppi_during,
             current_time=len(self.ts.historic("price")),
+            prev_uc_smooth=self.ts.current("pricing_uc_smooth"),
         )
+        self._append_pricing_diagnostics(price_setter=price_setter, prices=prices)
+        return prices
+
+    def _append_pricing_diagnostics(self, price_setter, prices: np.ndarray) -> None:
+        """Append pricing diagnostics exposed by price setters."""
+        default = np.full(prices.shape, np.nan, dtype=float)
+        diagnostics = {
+            "pricing_uc_smooth": getattr(price_setter, "last_pricing_uc_smooth", default),
+            "pricing_target_markup": getattr(price_setter, "last_pricing_target_markup", default),
+            "pricing_realized_markup": getattr(price_setter, "last_pricing_realized_markup", default),
+            "pricing_markup_lower": getattr(price_setter, "last_pricing_markup_lower", default),
+            "pricing_markup_upper": getattr(price_setter, "last_pricing_markup_upper", default),
+            "pricing_gate_state": getattr(price_setter, "last_pricing_gate_state", np.zeros(prices.shape, dtype=float)),
+        }
+        for field, values in diagnostics.items():
+            getattr(self.ts, field).append(np.asarray(values, dtype=float).copy())
 
     def compute_unconstrained_demand_for_intermediate_inputs(
         self, good_prices: np.ndarray, extra_taxes: Optional[np.ndarray] = None

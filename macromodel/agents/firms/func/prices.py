@@ -107,6 +107,19 @@ class PriceSetter(ABC):
         pass
 
 
+_MARKUP_PRICE_COMPATIBILITY_PARAMETERS = {
+    "orbis_markup_path",
+    "markup_year",
+    "industry_to_nace_main_section",
+    "markup_central_column",
+    "markup_lower_column",
+    "markup_upper_column",
+    "unit_cost_smoothing_horizon",
+    "demand_pull_speed",
+    "fallback_mode",
+}
+
+
 class DefaultPriceSetter(PriceSetter):
     """Default implementation of price setting with multiple inflation sources.
 
@@ -122,6 +135,28 @@ class DefaultPriceSetter(PriceSetter):
     - Competitive positioning is maintained
     - Prices remain positive
     """
+
+    def __init__(
+        self,
+        price_setting_noise_std: float = 0.05,
+        price_setting_speed_gf: float = 1.0,
+        price_setting_speed_dp: float = 0.0,
+        price_setting_speed_cp: float = 0.0,
+        **extra_parameters: object,
+    ):
+        unexpected_parameters = sorted(set(extra_parameters) - _MARKUP_PRICE_COMPATIBILITY_PARAMETERS)
+        if unexpected_parameters:
+            raise TypeError(
+                f"{self.__class__.__name__} got unexpected price parameter(s): "
+                f"{unexpected_parameters}"
+            )
+
+        super().__init__(
+            price_setting_noise_std=price_setting_noise_std,
+            price_setting_speed_gf=price_setting_speed_gf,
+            price_setting_speed_dp=price_setting_speed_dp,
+            price_setting_speed_cp=price_setting_speed_cp,
+        )
 
     def compute_price(
         self,

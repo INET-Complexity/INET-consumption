@@ -186,6 +186,7 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_supply=np.array([1.0, 2.0, 1.0, 2.0]),
             prev_demand=np.array([2.0, 1.0, 2.0, 1.0]),
             curr_unit_costs=np.array([10.0, 10.0, 10.0, 10.0]),
+            prev_unit_costs=np.array([10.0, 10.0, 10.0, 10.0]),
             prev_uc_smooth=np.array([10.0, 10.0, 10.0, 10.0]),
         )
 
@@ -204,6 +205,7 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_supply=np.array([1.0]),
             prev_demand=np.array([2.0]),
             curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
             prev_uc_smooth=np.array([10.0]),
         )
 
@@ -223,6 +225,7 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_supply=np.array([2.0]),
             prev_demand=np.array([1.0]),
             curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
             prev_uc_smooth=np.array([10.0]),
         )
 
@@ -251,6 +254,7 @@ class TestSectorMarkupUnitCostPriceSetter:
                     prev_demand=np.array([1.0, 1.0]),
                     current_firm_sectors=np.array([0, 0]),
                     curr_unit_costs=np.array([20.0, 0.0]),
+                    prev_unit_costs=np.array([10.0, 10.0]),
                     prev_uc_smooth=np.array([10.0, 10.0]),
                 )
             )
@@ -272,7 +276,32 @@ class TestSectorMarkupUnitCostPriceSetter:
                     prev_demand=np.array([1.0]),
                     current_firm_sectors=np.array([0]),
                     curr_unit_costs=np.array([0.0]),
+                    prev_unit_costs=np.array([0.0]),
                     prev_uc_smooth=np.array([np.nan]),
+                )
+            )
+        )
+
+        assert setter.last_pricing_uc_smooth[0] == pytest.approx(20.0)
+        assert prices[0] == pytest.approx(24.0)
+
+
+    def test_first_price_update_anchors_unit_cost_to_previous_price(self, tmp_path):
+        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([24.0]),
+                    prev_firm_prices=np.array([24.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([0.05]),
+                    prev_unit_costs=np.array([0.05]),
+                    prev_uc_smooth=np.array([0.05]),
+                    current_time=1,
                 )
             )
         )

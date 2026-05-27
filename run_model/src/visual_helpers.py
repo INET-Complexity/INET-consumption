@@ -918,8 +918,20 @@ def build_macro_output_df(model, country_code):
         if values is not None:
             add_column(output_name, as_output_series(values))
 
+    def add_aggregate_agent_ts_column(output_name, ts_obj, ts_name):
+        values = _safe_ts_values(ts_obj, ts_name)
+        if values is None:
+            return None
+
+        aggregated = []
+        for value in list(values):
+            array = np.asarray(value, dtype=float).reshape(-1)
+            aggregated.append(float(np.nansum(array)) if array.size else np.nan)
+        return add_column(output_name, as_output_series(aggregated))
+
     firms_ts = getattr(getattr(country, "firms", None), "ts", None)
     households_ts = getattr(getattr(country, "households", None), "ts", None)
+    add_aggregate_agent_ts_column("real_demand", firms_ts, "demand")
 
     add_agent_ts_column("firm_credit_demand_short_term", firms_ts, "total_target_short_term_credit")
     add_agent_ts_column("firm_credit_demand_long_term", firms_ts, "total_target_long_term_credit")
@@ -1064,6 +1076,7 @@ def build_macro_output_df(model, country_code):
         "cpi_transaction_pop_change",
         "cpi_transaction_yoy_change",
         "real_gross_output",
+        "real_demand",
         "potential_output",
         "output_gap",
         "hpi",

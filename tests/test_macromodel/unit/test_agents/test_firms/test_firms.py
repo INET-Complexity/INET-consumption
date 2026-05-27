@@ -625,6 +625,38 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("firm_settlement_transaction_flow_residual"), 0.0)
         assert np.all(test_firms.ts.current("firm_settlement_accounting_control_passed"))
 
+    def test__check_firm_accounting_controls_allows_high_scale_roundoff(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        opening_deposits = np.full(n_firms, 1e24)
+        closing_deposits = opening_deposits + 1e8
+
+        test_firms.ts.override_current("activity_finance_opening_deposits", opening_deposits)
+        test_firms.ts.override_current("deposits", closing_deposits)
+        test_firms.ts.override_current("nominal_amount_sold_in_lcu", np.zeros(n_firms))
+        test_firms.ts.override_current("received_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("total_wage", np.zeros(n_firms))
+        test_firms.ts.override_current("nominal_amount_spent_in_lcu", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("direct_tfp_investment_cash_expense", np.zeros(n_firms))
+        test_firms.ts.override_current("taxes_paid_on_production", np.zeros(n_firms))
+        test_firms.ts.override_current("corporate_taxes_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("interest_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+        test_firms.ts.override_current("inventory", np.zeros(n_firms))
+        test_firms.ts.override_current("price", np.ones(n_firms))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("debt", np.zeros(n_firms))
+        test_firms.ts.override_current("equity", closing_deposits)
+
+        result = test_firms.check_firm_accounting_controls(
+            current_good_prices=np.ones(n_industries),
+            enforce=True,
+        )
+
+        assert np.max(np.abs(result["transaction_flow_residual"])) > 1e-4
+        assert np.all(result["control_passed"])
+
     def test__check_firm_accounting_controls_raises_on_mismatch(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries

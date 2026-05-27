@@ -1753,6 +1753,7 @@ class Firms(Agent):
         self,
         current_good_prices: np.ndarray,
         tolerance: float = 1e-4,
+        relative_tolerance: float = 1e-12,
         enforce: bool = True,
     ) -> dict[str, np.ndarray]:
         """Check the firm balance-sheet and settlement cash-flow identities.
@@ -1797,6 +1798,22 @@ class Firms(Agent):
         )
         transaction_flow_residual = expected_closing_deposits - closing_deposits
 
+        transaction_flow_scale = np.maximum.reduce(
+            [
+                np.abs(opening_deposits),
+                np.abs(nominal_amount_sold_in_lcu),
+                np.abs(received_credit),
+                np.abs(total_wage),
+                np.abs(nominal_amount_spent_in_lcu).sum(axis=1),
+                np.abs(direct_tfp_investment_cash_expense),
+                np.abs(taxes_paid_on_production),
+                np.abs(corporate_taxes_paid),
+                np.abs(interest_paid),
+                np.abs(debt_installments),
+                np.abs(closing_deposits),
+            ]
+        )
+
         material = np.dot(self.ts.current("intermediate_inputs_stock"), current_good_prices)
         capital = np.dot(self.ts.current("capital_inputs_stock"), current_good_prices)
         expected_equity = (
@@ -1809,8 +1826,22 @@ class Firms(Agent):
         )
         balance_sheet_residual = expected_equity - np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))
 
-        control_passed = (np.abs(balance_sheet_residual) <= tolerance) & (
-            np.abs(transaction_flow_residual) <= tolerance
+        balance_sheet_scale = np.maximum.reduce(
+            [
+                np.abs(expected_equity),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("inventory"), dtype=float)) * self.ts.current("price")),
+                np.abs(material),
+                np.abs(capital),
+                np.abs(closing_deposits),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))),
+            ]
+        )
+
+        balance_sheet_tolerance = tolerance + relative_tolerance * balance_sheet_scale
+        transaction_flow_tolerance = tolerance + relative_tolerance * transaction_flow_scale
+        control_passed = (np.abs(balance_sheet_residual) <= balance_sheet_tolerance) & (
+            np.abs(transaction_flow_residual) <= transaction_flow_tolerance
         )
 
         self.ts.override_current("firm_settlement_balance_sheet_residual", balance_sheet_residual.copy())
@@ -1821,12 +1852,31 @@ class Firms(Agent):
             failing_firms = np.where(~control_passed)[0]
             max_bs_residual = float(np.max(np.abs(balance_sheet_residual[~control_passed])))
             max_cf_residual = float(np.max(np.abs(transaction_flow_residual[~control_passed])))
+            max_bs_relative_residual = float(
+                np.max(
+                    np.divide(
+                        np.abs(balance_sheet_residual[~control_passed]),
+                        np.maximum(balance_sheet_scale[~control_passed], 1.0),
+                    )
+                )
+            )
+            max_cf_relative_residual = float(
+                np.max(
+                    np.divide(
+                        np.abs(transaction_flow_residual[~control_passed]),
+                        np.maximum(transaction_flow_scale[~control_passed], 1.0),
+                    )
+                )
+            )
             raise ValueError(
                 "Firm accounting control violation: "
                 f"failing_firms={failing_firms.tolist()}, "
                 f"max_balance_sheet_residual={max_bs_residual:.6g}, "
                 f"max_transaction_flow_residual={max_cf_residual:.6g}, "
-                f"tolerance={tolerance:.6g}"
+                f"max_balance_sheet_relative_residual={max_bs_relative_residual:.6g}, "
+                f"max_transaction_flow_relative_residual={max_cf_relative_residual:.6g}, "
+                f"tolerance={tolerance:.6g}, "
+                f"relative_tolerance={relative_tolerance:.6g}"
             )
 
         return {

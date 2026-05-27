@@ -386,13 +386,16 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
     def _compute_uc_smooth(
         self,
         curr_unit_costs: np.ndarray,
+        prev_unit_costs: np.ndarray,
         prev_uc_smooth: np.ndarray | None,
         prev_prices: np.ndarray,
         current_firm_sectors: np.ndarray,
         markup_central: np.ndarray,
+        current_time: int,
     ) -> np.ndarray:
         current_valid = np.isfinite(curr_unit_costs) & (curr_unit_costs > 0.0)
-        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape:
+        previous_raw_valid = np.isfinite(prev_unit_costs) & (prev_unit_costs > 0.0)
+        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape or current_time <= 1:
             previous_valid_smooth = np.full(curr_unit_costs.shape, np.nan, dtype=float)
         else:
             previous_valid_smooth = np.asarray(prev_uc_smooth, dtype=float).copy()
@@ -405,20 +408,43 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
             where=markup_central > 0.0,
         )
         inferred_from_price[~(np.isfinite(inferred_from_price) & (inferred_from_price > 0.0))] = np.nan
-        sector_median = self._sector_median_unit_cost(curr_unit_costs, current_firm_sectors)
 
-        base_uc = np.where(current_valid, curr_unit_costs, previous_valid_smooth)
-        base_uc = np.where(np.isfinite(base_uc) & (base_uc > 0.0), base_uc, inferred_from_price)
-        base_uc = np.where(np.isfinite(base_uc) & (base_uc > 0.0), base_uc, sector_median)
+        # Raw model unit costs and output prices are not guaranteed to share an
+        # initial level. Convert current raw unit costs into the price-implied
+        # unit-cost scale, then smooth the scaled series.
+        unit_cost_scale = np.divide(
+            previous_valid_smooth,
+            prev_unit_costs,
+            out=np.full_like(curr_unit_costs, np.nan, dtype=float),
+            where=previous_raw_valid,
+        )
+        price_implied_scale = np.divide(
+            inferred_from_price,
+            curr_unit_costs,
+            out=np.full_like(curr_unit_costs, np.nan, dtype=float),
+            where=current_valid,
+        )
+        unit_cost_scale = np.where(
+            np.isfinite(unit_cost_scale) & (unit_cost_scale > 0.0), unit_cost_scale, price_implied_scale
+        )
+        scaled_current_uc = curr_unit_costs * unit_cost_scale
+        scaled_current_uc[~(np.isfinite(scaled_current_uc) & (scaled_current_uc > 0.0))] = np.nan
+        sector_median = self._sector_median_unit_cost(scaled_current_uc, current_firm_sectors)
 
         prior_for_smoothing = np.where(
-            np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0), previous_valid_smooth, base_uc
+            np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0),
+            previous_valid_smooth,
+            inferred_from_price,
         )
         uc_smooth = np.where(
-            current_valid,
-            self.unit_cost_smoothing_alpha * curr_unit_costs + (1.0 - self.unit_cost_smoothing_alpha) * prior_for_smoothing,
-            base_uc,
+            np.isfinite(scaled_current_uc) & (scaled_current_uc > 0.0),
+            self.unit_cost_smoothing_alpha * scaled_current_uc
+            + (1.0 - self.unit_cost_smoothing_alpha) * prior_for_smoothing,
+            np.nan,
         )
+        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, previous_valid_smooth)
+        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, inferred_from_price)
+        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, sector_median)
         return uc_smooth
 
     def compute_price(
@@ -452,10 +478,12 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         markup_upper = self.markup_upper_by_industry[current_firm_sectors]
         uc_smooth = self._compute_uc_smooth(
             curr_unit_costs=curr_unit_costs,
+            prev_unit_costs=prev_unit_costs,
             prev_uc_smooth=prev_uc_smooth,
             prev_prices=prev_prices,
             current_firm_sectors=current_firm_sectors,
             markup_central=markup_central,
+            current_time=current_time,
         )
 
         average_price_by_firm = prev_average_good_prices[current_firm_sectors]

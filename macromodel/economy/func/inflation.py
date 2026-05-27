@@ -89,7 +89,7 @@ class InflationForecasting(ABC):
         if min_inflation is not None:
             forecast = np.maximum(min_inflation, forecast)
         if max_inflation is not None:
-            forecast = np.maximum(max_inflation, forecast)
+            forecast = np.minimum(max_inflation, forecast)
         return forecast
 
 

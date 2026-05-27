@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations.economy_configuration import EconomyConfiguration
+from macromodel.economy.func.inflation import InflationForecastingConstant
 
 
 class _CapturingInflationForecaster:
@@ -392,6 +393,24 @@ class TestEconomy:
 
         expected = np.prod([1.01, 1.02, 1.03, 1.04]) - 1.0
         assert test_economy.ts.current("cpi_transaction_yoy_change")[0] == pytest.approx(expected)
+
+    def test__bounded_expm1_rate_clips_before_exponentiating(self, test_economy):
+        with np.errstate(over="raise"):
+            assert test_economy._bounded_expm1_rate(1e6, -0.1, 0.1) == pytest.approx(0.1)
+            assert test_economy._bounded_expm1_rate(-1e6, -0.1, 0.1) == pytest.approx(-0.1)
+
+    def test__inflation_forecast_respects_upper_bound(self):
+        forecaster = InflationForecastingConstant(value=1.0)
+
+        forecast = forecaster.forecast_inflation(
+            historic_inflation=np.array([0.0, 0.0, 0.0]),
+            exogenous_inflation=np.array([0.0]),
+            current_time=0,
+            min_inflation=-0.1,
+            max_inflation=0.1,
+        )
+
+        assert forecast[0] == pytest.approx(0.1)
 
     def test__set_estimates_uses_configured_consumer_period_inflation_source(self, test_economy):
         forecaster = _CapturingInflationForecaster()

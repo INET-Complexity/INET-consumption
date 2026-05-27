@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 from scipy.interpolate import interp1d
 
 
@@ -71,6 +73,7 @@ class PriceSetter(ABC):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
+        prev_uc_smooth: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate prices for each firm based on market conditions.
 
@@ -95,6 +98,8 @@ class PriceSetter(ABC):
             prev_unit_costs (np.ndarray): Previous unit costs
             ppi_during (np.ndarray): PPI time series
             current_time (int): Current period index
+            prev_uc_smooth (np.ndarray | None): Previous smoothed unit costs,
+                used by pricing rules that smooth unit costs.
 
         Returns:
             np.ndarray: Updated prices by firm
@@ -134,6 +139,7 @@ class DefaultPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
+        prev_uc_smooth: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -206,6 +212,308 @@ class DefaultPriceSetter(PriceSetter):
         )
 
 
+class SectorMarkupUnitCostPriceSetter(PriceSetter):
+    """Set prices as sector markups over smoothed own unit costs.
+
+    This rule intentionally does not use stochastic price noise, expected PPI
+    inflation, or a separate cost-push multiplier. Unit costs enter directly
+    through the markup anchor.
+    """
+
+    PRICE_FLOOR = 1e-2
+    SUPPLY_EPSILON = 1e-2
+    GATE_CHEAP_TIGHT = 1
+    GATE_EXPENSIVE_SLACK = 2
+    GATE_CHEAP_SLACK = 3
+    GATE_EXPENSIVE_TIGHT = 4
+    GATE_STATE_LABELS = {
+        GATE_CHEAP_TIGHT: "cheap_tight",
+        GATE_EXPENSIVE_SLACK: "expensive_slack",
+        GATE_CHEAP_SLACK: "cheap_slack",
+        GATE_EXPENSIVE_TIGHT: "expensive_tight",
+    }
+
+    def __init__(
+        self,
+        orbis_markup_path: str = "run_model/data/raw_data/orbis/orbis_markups_by_nace_rev_2_main_section.csv",
+        markup_year: int = 2014,
+        industry_to_nace_main_section: dict | None = None,
+        markup_central_column: str = "mu_all_weighted_median",
+        markup_lower_column: str = "mu_all_median_interval_low",
+        markup_upper_column: str = "mu_all_median_interval_high",
+        unit_cost_smoothing_horizon: float = 4.0,
+        demand_pull_speed: float = 1.0,
+        fallback_mode: str = "last_valid_then_price_then_sector_median_then_previous_price",
+    ):
+        if unit_cost_smoothing_horizon <= 0:
+            raise ValueError("unit_cost_smoothing_horizon must be positive.")
+        self.orbis_markup_path = orbis_markup_path
+        self.markup_year = int(markup_year)
+        mapping = industry_to_nace_main_section or self._default_industry_mapping()
+        self.industry_to_nace_main_section = {str(key): value for key, value in mapping.items()}
+        self.markup_central_column = markup_central_column
+        self.markup_lower_column = markup_lower_column
+        self.markup_upper_column = markup_upper_column
+        self.unit_cost_smoothing_horizon = float(unit_cost_smoothing_horizon)
+        self.unit_cost_smoothing_alpha = 2.0 / (self.unit_cost_smoothing_horizon + 1.0)
+        self.demand_pull_speed = max(0.0, min(1.0, float(demand_pull_speed)))
+        self.fallback_mode = fallback_mode
+
+        self.markup_lower_by_industry, self.markup_central_by_industry, self.markup_upper_by_industry = (
+            self._load_markup_arrays()
+        )
+        self._set_neutral_diagnostics(np.array([], dtype=float))
+
+    @staticmethod
+    def _default_industry_mapping() -> dict[str, str | list[str]]:
+        return {
+            "0": "A",
+            "1": "B",
+            "2": "C",
+            "3": "D",
+            "4": "E",
+            "5": "F",
+            "6": "G",
+            "7": "H",
+            "8": "I",
+            "9": "J",
+            "10": "K",
+            "11": "L",
+            "12": "M",
+            "13": "N",
+            "14": "O",
+            "15": "P",
+            "16": "Q",
+            "17": ["R", "S"],
+        }
+
+    def _resolve_markup_path(self) -> Path:
+        path = Path(self.orbis_markup_path).expanduser()
+        if path.is_absolute():
+            return path
+        for parent in Path(__file__).resolve().parents:
+            candidate = parent / path
+            if candidate.exists():
+                return candidate
+        return path
+
+    @staticmethod
+    def _normalise_sections(value) -> list[str]:
+        values = value if isinstance(value, (list, tuple)) else [value]
+        sections = []
+        for section in values:
+            if section is None:
+                raise ValueError("NACE main-section mapping cannot contain null values.")
+            code = str(section).strip()
+            if not code:
+                raise ValueError("NACE main-section mapping cannot contain empty values.")
+            sections.append(code[0].upper())
+        return sections
+
+    def _load_markup_arrays(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        path = self._resolve_markup_path()
+        if not path.exists():
+            raise ValueError(f"Orbis markup file not found: {path}")
+        data = pd.read_csv(path)
+        required_columns = {
+            "year",
+            "nace_rev_2_main_section",
+            "sum_weights",
+            self.markup_lower_column,
+            self.markup_central_column,
+            self.markup_upper_column,
+        }
+        missing_columns = required_columns.difference(data.columns)
+        if missing_columns:
+            raise ValueError(f"Orbis markup file is missing columns: {sorted(missing_columns)}")
+
+        data = data.loc[data["year"] == self.markup_year].copy()
+        if data.empty:
+            raise ValueError(f"No Orbis markup data for markup_year={self.markup_year}.")
+        data["section_code"] = data["nace_rev_2_main_section"].astype(str).str.strip().str[0].str.upper()
+        rows_by_section = {row["section_code"]: row for _, row in data.iterrows()}
+
+        industry_keys = sorted(int(key) for key in self.industry_to_nace_main_section)
+        if industry_keys != list(range(len(industry_keys))):
+            raise ValueError("industry_to_nace_main_section keys must be contiguous integer industry indices from 0.")
+
+        lower = np.zeros(len(industry_keys), dtype=float)
+        central = np.zeros(len(industry_keys), dtype=float)
+        upper = np.zeros(len(industry_keys), dtype=float)
+        for industry in industry_keys:
+            sections = self._normalise_sections(self.industry_to_nace_main_section[str(industry)])
+            missing_sections = [section for section in sections if section not in rows_by_section]
+            if missing_sections:
+                raise ValueError(f"Missing Orbis markup rows for NACE sections {missing_sections}.")
+            rows = [rows_by_section[section] for section in sections]
+            weights = np.array([row["sum_weights"] for row in rows], dtype=float)
+            if not np.all(np.isfinite(weights)) or weights.sum() <= 0.0:
+                weights = np.ones(len(rows), dtype=float)
+            lower[industry] = np.average([row[self.markup_lower_column] for row in rows], weights=weights)
+            central[industry] = np.average([row[self.markup_central_column] for row in rows], weights=weights)
+            upper[industry] = np.average([row[self.markup_upper_column] for row in rows], weights=weights)
+
+        if not (
+            np.all(np.isfinite(lower))
+            and np.all(np.isfinite(central))
+            and np.all(np.isfinite(upper))
+            and np.all(lower > 0.0)
+            and np.all(central > 0.0)
+            and np.all(upper > 0.0)
+        ):
+            raise ValueError("Markup corridor values must be finite and strictly positive.")
+        if not np.all((lower <= central) & (central <= upper)):
+            raise ValueError("Markup corridor must satisfy markup_lower <= markup_central <= markup_upper.")
+        return lower, central, upper
+
+    def _set_neutral_diagnostics(self, prev_prices: np.ndarray) -> None:
+        self.last_pricing_uc_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_target_markup = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_realized_markup = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_lower = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_upper = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_gate_state = np.zeros(prev_prices.shape, dtype=float)
+
+    def _sector_median_unit_cost(self, unit_costs: np.ndarray, current_firm_sectors: np.ndarray) -> np.ndarray:
+        medians = np.full(unit_costs.shape, np.nan, dtype=float)
+        valid = np.isfinite(unit_costs) & (unit_costs > 0.0)
+        for sector in np.unique(current_firm_sectors):
+            sector_valid = valid & (current_firm_sectors == sector)
+            if np.any(sector_valid):
+                medians[current_firm_sectors == sector] = np.median(unit_costs[sector_valid])
+        return medians
+
+    def _compute_uc_smooth(
+        self,
+        curr_unit_costs: np.ndarray,
+        prev_uc_smooth: np.ndarray | None,
+        prev_prices: np.ndarray,
+        current_firm_sectors: np.ndarray,
+        markup_central: np.ndarray,
+    ) -> np.ndarray:
+        current_valid = np.isfinite(curr_unit_costs) & (curr_unit_costs > 0.0)
+        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape:
+            previous_valid_smooth = np.full(curr_unit_costs.shape, np.nan, dtype=float)
+        else:
+            previous_valid_smooth = np.asarray(prev_uc_smooth, dtype=float).copy()
+            previous_valid_smooth[~(np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0))] = np.nan
+
+        inferred_from_price = np.divide(
+            prev_prices,
+            markup_central,
+            out=np.full_like(prev_prices, np.nan, dtype=float),
+            where=markup_central > 0.0,
+        )
+        inferred_from_price[~(np.isfinite(inferred_from_price) & (inferred_from_price > 0.0))] = np.nan
+        sector_median = self._sector_median_unit_cost(curr_unit_costs, current_firm_sectors)
+
+        base_uc = np.where(current_valid, curr_unit_costs, previous_valid_smooth)
+        base_uc = np.where(np.isfinite(base_uc) & (base_uc > 0.0), base_uc, inferred_from_price)
+        base_uc = np.where(np.isfinite(base_uc) & (base_uc > 0.0), base_uc, sector_median)
+
+        prior_for_smoothing = np.where(
+            np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0), previous_valid_smooth, base_uc
+        )
+        uc_smooth = np.where(
+            current_valid,
+            self.unit_cost_smoothing_alpha * curr_unit_costs + (1.0 - self.unit_cost_smoothing_alpha) * prior_for_smoothing,
+            base_uc,
+        )
+        return uc_smooth
+
+    def compute_price(
+        self,
+        prev_prices: np.ndarray,
+        current_estimated_ppi_inflation: float,
+        excess_demand: np.ndarray,
+        inventories: np.ndarray,
+        production: np.ndarray,
+        prev_average_good_prices: np.ndarray,
+        prev_firm_prices: np.ndarray,
+        prev_supply: np.ndarray,
+        prev_demand: np.ndarray,
+        current_firm_sectors: np.ndarray,
+        curr_unit_costs: np.ndarray,
+        prev_unit_costs: np.ndarray,
+        ppi_during: np.ndarray,
+        current_time: int,
+        prev_uc_smooth: np.ndarray | None = None,
+        min_inflation: float = -1.0,
+        max_inflation: float = 1.0,
+    ) -> np.ndarray:
+        """Calculate prices from markup corridors and smoothed own unit costs."""
+        self._set_neutral_diagnostics(prev_prices)
+        current_firm_sectors = current_firm_sectors.astype(int)
+        if np.any(current_firm_sectors < 0) or np.any(current_firm_sectors >= len(self.markup_central_by_industry)):
+            raise ValueError("current_firm_sectors contains sectors not covered by markup configuration.")
+
+        markup_lower = self.markup_lower_by_industry[current_firm_sectors]
+        markup_central = self.markup_central_by_industry[current_firm_sectors]
+        markup_upper = self.markup_upper_by_industry[current_firm_sectors]
+        uc_smooth = self._compute_uc_smooth(
+            curr_unit_costs=curr_unit_costs,
+            prev_uc_smooth=prev_uc_smooth,
+            prev_prices=prev_prices,
+            current_firm_sectors=current_firm_sectors,
+            markup_central=markup_central,
+        )
+
+        average_price_by_firm = prev_average_good_prices[current_firm_sectors]
+        cheap = prev_firm_prices < average_price_by_firm
+        tight = prev_supply <= prev_demand
+        cheap_tight = cheap & tight
+        expensive_slack = (~cheap) & (~tight)
+        cheap_slack = cheap & (~tight)
+        expensive_tight = (~cheap) & tight
+
+        gate_state = np.zeros(prev_prices.shape, dtype=float)
+        gate_state[cheap_tight] = self.GATE_CHEAP_TIGHT
+        gate_state[expensive_slack] = self.GATE_EXPENSIVE_SLACK
+        gate_state[cheap_slack] = self.GATE_CHEAP_SLACK
+        gate_state[expensive_tight] = self.GATE_EXPENSIVE_TIGHT
+
+        demand_pull = np.zeros(prev_prices.shape, dtype=float)
+        active_gate = cheap_tight | expensive_slack
+        demand_pull[active_gate] = (
+            np.divide(
+                prev_demand[active_gate],
+                np.maximum(prev_supply[active_gate], self.SUPPLY_EPSILON),
+                out=np.ones_like(prev_demand[active_gate], dtype=float),
+            )
+            - 1.0
+        )
+        demand_pull = np.clip(demand_pull, min_inflation, max_inflation)
+
+        target_markup = markup_central.copy()
+        positive = demand_pull > 0.0
+        negative = demand_pull < 0.0
+        target_markup[positive] = markup_central[positive] + self.demand_pull_speed * demand_pull[positive] * (
+            markup_upper[positive] - markup_central[positive]
+        )
+        target_markup[negative] = markup_central[negative] + self.demand_pull_speed * demand_pull[negative] * (
+            markup_central[negative] - markup_lower[negative]
+        )
+        target_markup = np.clip(target_markup, markup_lower, markup_upper)
+
+        computed_prices = target_markup * uc_smooth
+        invalid_price = ~(np.isfinite(computed_prices) & (computed_prices > 0.0))
+        prices = np.where(invalid_price, prev_prices, np.maximum(self.PRICE_FLOOR, computed_prices))
+        realized_markup = np.divide(
+            prices,
+            uc_smooth,
+            out=np.full_like(prices, np.nan, dtype=float),
+            where=np.isfinite(uc_smooth) & (uc_smooth > 0.0),
+        )
+
+        self.last_pricing_uc_smooth = uc_smooth
+        self.last_pricing_target_markup = target_markup
+        self.last_pricing_realized_markup = realized_markup
+        self.last_pricing_markup_lower = markup_lower
+        self.last_pricing_markup_upper = markup_upper
+        self.last_pricing_gate_state = gate_state
+        return prices
+
+
 class SectorExogenousPriceSetter(DefaultPriceSetter):
     """Price setter that overrides selected sectors with exogenous price paths."""
 
@@ -244,6 +552,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
+        prev_uc_smooth: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -263,6 +572,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
             prev_unit_costs=prev_unit_costs,
             ppi_during=ppi_during,
             current_time=current_time,
+            prev_uc_smooth=prev_uc_smooth,
             min_inflation=min_inflation,
             max_inflation=max_inflation,
         )
@@ -321,6 +631,7 @@ class ExogenousPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
+        prev_uc_smooth: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:

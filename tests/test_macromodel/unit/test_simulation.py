@@ -847,6 +847,29 @@ def test_reset_firm_params(datawrapper):
         simulation.iterate()
 
 
+
+def test_sector_markup_unit_cost_price_setter_loads_from_configuration(tmp_path):
+    path = tmp_path / "markups.csv"
+    path.write_text(
+        "year,nace_rev_2_main_section,sum_weights,mu_all_weighted_median,"
+        "mu_all_median_interval_low,mu_all_median_interval_high\n"
+        "2014,A - Agriculture,1,1.20,1.00,1.50\n"
+    )
+    country_sim_configuration = CountryConfiguration()
+    country_sim_configuration.firms.functions.prices.name = "SectorMarkupUnitCostPriceSetter"
+    country_sim_configuration.firms.functions.prices.parameters = {
+        "orbis_markup_path": str(path),
+        "markup_year": 2014,
+        "industry_to_nace_main_section": {"0": "A"},
+        "unit_cost_smoothing_horizon": 4,
+        "demand_pull_speed": 1.0,
+    }
+
+    functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
+
+    assert functions["prices"].__class__.__name__ == "SectorMarkupUnitCostPriceSetter"
+
+
 def test_stale_existing_inventory_fraction_fails_on_function_load():
     country_sim_configuration = CountryConfiguration()
     country_sim_configuration.firms.functions.target_production.parameters["existing_inventory_fraction"] = 0.75

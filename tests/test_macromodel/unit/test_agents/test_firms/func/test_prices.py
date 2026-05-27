@@ -74,6 +74,29 @@ def test_price_setting_speeds_are_clipped_to_unit_interval():
     np.testing.assert_allclose(prices, np.array([12.1]))
 
 
+def test_default_price_setter_ignores_markup_rule_parameters():
+    setter = DefaultPriceSetter(
+        orbis_markup_path="unused.csv",
+        markup_year=2014,
+        markup_central_column="mu_all_weighted_median",
+        markup_lower_column="mu_all_median_interval_low",
+        markup_upper_column="mu_all_median_interval_high",
+        unit_cost_smoothing_horizon=4,
+        demand_pull_speed=1.0,
+        fallback_mode="last_valid_then_price_then_sector_median_then_previous_price",
+    )
+
+    assert setter.price_setting_noise_std == pytest.approx(0.05)
+    assert setter.price_setting_speed_gf == pytest.approx(1.0)
+    assert setter.price_setting_speed_dp == pytest.approx(0.0)
+    assert setter.price_setting_speed_cp == pytest.approx(0.0)
+
+
+def test_default_price_setter_rejects_unknown_parameters():
+    with pytest.raises(TypeError, match="unexpected price parameter"):
+        DefaultPriceSetter(not_a_price_parameter=1)
+
+
 class TestSectorExoPricesReader:
     def test_read_from_csv(self, tmp_path):
         csv = "year,B05a,C19\n2013,100.0,80.0\n2014,110.0,90.0\n2030,130.0,110.0\n"

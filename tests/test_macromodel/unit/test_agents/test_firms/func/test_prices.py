@@ -176,6 +176,25 @@ class TestSectorExogenousPriceSetter:
         assert result[2] == pytest.approx(result[3])
         assert result[2] == pytest.approx(2 * result[0])
 
+    def test_same_class_update_preserves_loaded_exogenous_price_state(self):
+        setter = self._make_setter()
+        firm_exo_prices = _make_exo_prices(["B05a"])
+        setter.firm_exo_prices = firm_exo_prices
+        setter.overriden_industries = INDUSTRIES
+
+        setter.update_parameters_from_config(
+            {
+                "price_setting_noise_std": 0.1,
+                "price_setting_speed_gf": 0.2,
+                "price_setting_speed_dp": 0.3,
+                "price_setting_speed_cp": 0.4,
+            }
+        )
+
+        assert setter.firm_exo_prices is firm_exo_prices
+        assert setter.overriden_industries == INDUSTRIES
+        assert setter.price_setting_noise_std == pytest.approx(0.1)
+
 
 def _write_markup_csv(path):
     path.write_text(
@@ -308,8 +327,7 @@ class TestSectorMarkupUnitCostPriceSetter:
         assert setter.last_pricing_uc_smooth[0] == pytest.approx(20.0)
         assert prices[0] == pytest.approx(24.0)
 
-
-    def test_first_price_update_anchors_unit_cost_to_previous_price(self, tmp_path):
+    def test_first_price_update_uses_raw_model_unit_cost(self, tmp_path):
         setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
         prices = setter.compute_price(
             **(
@@ -329,8 +347,55 @@ class TestSectorMarkupUnitCostPriceSetter:
             )
         )
 
-        assert setter.last_pricing_uc_smooth[0] == pytest.approx(20.0)
-        assert prices[0] == pytest.approx(24.0)
+        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.05)
+        assert prices[0] == pytest.approx(0.06)
+
+    def test_after_initialisation_smoothing_uses_raw_model_unit_cost_levels(self, tmp_path):
+        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([0.24]),
+                    prev_firm_prices=np.array([0.24]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([0.10]),
+                    prev_unit_costs=np.array([0.05]),
+                    prev_uc_smooth=np.array([0.20]),
+                    current_time=2,
+                )
+            )
+        )
+
+        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.16)
+        assert prices[0] == pytest.approx(0.192)
+
+    def test_near_zero_production_unit_cost_spike_uses_last_valid_smooth_uc(self, tmp_path):
+        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([0.036]),
+                    prev_firm_prices=np.array([0.036]),
+                    prev_average_good_prices=np.array([0.03]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    production=np.array([1e-15]),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([1e30]),
+                    prev_unit_costs=np.array([0.03]),
+                    prev_uc_smooth=np.array([0.03]),
+                    current_time=50,
+                )
+            )
+        )
+
+        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.03)
+        assert prices[0] == pytest.approx(0.036)
 
     def test_invalid_markup_configuration_fails(self, tmp_path):
         path = tmp_path / "bad.csv"
@@ -345,3 +410,7 @@ class TestSectorMarkupUnitCostPriceSetter:
                 orbis_markup_path=str(path),
                 industry_to_nace_main_section={"0": "A"},
             )
+
+    def test_invalid_fallback_mode_fails(self, tmp_path):
+        with pytest.raises(ValueError, match="Unsupported fallback_mode"):
+            self._make_setter(tmp_path, fallback_mode="unsupported")

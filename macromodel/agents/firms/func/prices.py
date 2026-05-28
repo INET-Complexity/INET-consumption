@@ -146,10 +146,7 @@ class DefaultPriceSetter(PriceSetter):
     ):
         unexpected_parameters = sorted(set(extra_parameters) - _MARKUP_PRICE_COMPATIBILITY_PARAMETERS)
         if unexpected_parameters:
-            raise TypeError(
-                f"{self.__class__.__name__} got unexpected price parameter(s): "
-                f"{unexpected_parameters}"
-            )
+            raise TypeError(f"{self.__class__.__name__} got unexpected price parameter(s): {unexpected_parameters}")
 
         super().__init__(
             price_setting_noise_std=price_setting_noise_std,
@@ -157,6 +154,9 @@ class DefaultPriceSetter(PriceSetter):
             price_setting_speed_dp=price_setting_speed_dp,
             price_setting_speed_cp=price_setting_speed_cp,
         )
+
+    def update_parameters_from_config(self, parameters: dict) -> None:
+        DefaultPriceSetter.__init__(self, **parameters)
 
     def compute_price(
         self,
@@ -257,6 +257,10 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
 
     PRICE_FLOOR = 1e-2
     SUPPLY_EPSILON = 1e-2
+    FALLBACK_MODE_LAST_VALID_THEN_PRICE_THEN_SECTOR_MEDIAN_THEN_PREVIOUS_PRICE = (
+        "last_valid_then_price_then_sector_median_then_previous_price"
+    )
+    SUPPORTED_FALLBACK_MODES = {FALLBACK_MODE_LAST_VALID_THEN_PRICE_THEN_SECTOR_MEDIAN_THEN_PREVIOUS_PRICE}
     GATE_CHEAP_TIGHT = 1
     GATE_EXPENSIVE_SLACK = 2
     GATE_CHEAP_SLACK = 3
@@ -282,6 +286,11 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
     ):
         if unit_cost_smoothing_horizon <= 0:
             raise ValueError("unit_cost_smoothing_horizon must be positive.")
+        if fallback_mode not in self.SUPPORTED_FALLBACK_MODES:
+            raise ValueError(
+                f"Unsupported fallback_mode={fallback_mode!r}. "
+                f"Supported values: {sorted(self.SUPPORTED_FALLBACK_MODES)}."
+            )
         self.orbis_markup_path = orbis_markup_path
         self.markup_year = int(markup_year)
         mapping = industry_to_nace_main_section or self._default_industry_mapping()
@@ -298,6 +307,9 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
             self._load_markup_arrays()
         )
         self._set_neutral_diagnostics(np.array([], dtype=float))
+
+    def update_parameters_from_config(self, parameters: dict) -> None:
+        SectorMarkupUnitCostPriceSetter.__init__(self, **parameters)
 
     @staticmethod
     def _default_industry_mapping() -> dict[str, str | list[str]]:
@@ -424,17 +436,25 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         prev_uc_smooth: np.ndarray | None,
         prev_prices: np.ndarray,
+        production: np.ndarray,
         current_firm_sectors: np.ndarray,
         markup_central: np.ndarray,
         current_time: int,
     ) -> np.ndarray:
-        current_valid = np.isfinite(curr_unit_costs) & (curr_unit_costs > 0.0)
-        previous_raw_valid = np.isfinite(prev_unit_costs) & (prev_unit_costs > 0.0)
-        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape or current_time <= 1:
+        _ = prev_unit_costs
+        production = np.asarray(production, dtype=float)
+        if production.shape != curr_unit_costs.shape:
+            production = np.ones_like(curr_unit_costs, dtype=float)
+        production_valid = np.isfinite(production) & (production > self.SUPPLY_EPSILON)
+        current_valid = np.isfinite(curr_unit_costs) & (curr_unit_costs > 0.0) & production_valid
+        current_unit_costs = np.asarray(curr_unit_costs, dtype=float).copy()
+        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape:
             previous_valid_smooth = np.full(curr_unit_costs.shape, np.nan, dtype=float)
         else:
             previous_valid_smooth = np.asarray(prev_uc_smooth, dtype=float).copy()
             previous_valid_smooth[~(np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0))] = np.nan
+        has_previous_smooth = np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0)
+        current_unit_costs[~current_valid] = np.nan
 
         inferred_from_price = np.divide(
             prev_prices,
@@ -444,42 +464,30 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         )
         inferred_from_price[~(np.isfinite(inferred_from_price) & (inferred_from_price > 0.0))] = np.nan
 
-        # Raw model unit costs and output prices are not guaranteed to share an
-        # initial level. Convert current raw unit costs into the price-implied
-        # unit-cost scale, then smooth the scaled series.
-        unit_cost_scale = np.divide(
-            previous_valid_smooth,
-            prev_unit_costs,
-            out=np.full_like(curr_unit_costs, np.nan, dtype=float),
-            where=previous_raw_valid,
-        )
-        price_implied_scale = np.divide(
-            inferred_from_price,
-            curr_unit_costs,
-            out=np.full_like(curr_unit_costs, np.nan, dtype=float),
-            where=current_valid,
-        )
-        unit_cost_scale = np.where(
-            np.isfinite(unit_cost_scale) & (unit_cost_scale > 0.0), unit_cost_scale, price_implied_scale
-        )
-        scaled_current_uc = curr_unit_costs * unit_cost_scale
-        scaled_current_uc[~(np.isfinite(scaled_current_uc) & (scaled_current_uc > 0.0))] = np.nan
-        sector_median = self._sector_median_unit_cost(scaled_current_uc, current_firm_sectors)
+        sector_median = self._sector_median_unit_cost(current_unit_costs, current_firm_sectors)
 
-        prior_for_smoothing = np.where(
-            np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0),
+        has_current_uc = np.isfinite(current_unit_costs) & (current_unit_costs > 0.0)
+        uc_smooth = np.where(
+            has_current_uc & has_previous_smooth,
+            self.unit_cost_smoothing_alpha * current_unit_costs
+            + (1.0 - self.unit_cost_smoothing_alpha) * previous_valid_smooth,
+            current_unit_costs,
+        )
+        uc_smooth = np.where(
+            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
+            uc_smooth,
             previous_valid_smooth,
+        )
+        uc_smooth = np.where(
+            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
+            uc_smooth,
             inferred_from_price,
         )
         uc_smooth = np.where(
-            np.isfinite(scaled_current_uc) & (scaled_current_uc > 0.0),
-            self.unit_cost_smoothing_alpha * scaled_current_uc
-            + (1.0 - self.unit_cost_smoothing_alpha) * prior_for_smoothing,
-            np.nan,
+            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
+            uc_smooth,
+            sector_median,
         )
-        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, previous_valid_smooth)
-        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, inferred_from_price)
-        uc_smooth = np.where(np.isfinite(uc_smooth) & (uc_smooth > 0.0), uc_smooth, sector_median)
         return uc_smooth
 
     def compute_price(
@@ -516,6 +524,7 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
             prev_unit_costs=prev_unit_costs,
             prev_uc_smooth=prev_uc_smooth,
             prev_prices=prev_prices,
+            production=production,
             current_firm_sectors=current_firm_sectors,
             markup_central=markup_central,
             current_time=current_time,

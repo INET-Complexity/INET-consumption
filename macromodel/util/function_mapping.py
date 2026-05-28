@@ -216,6 +216,10 @@ def update_functions(
             # setattr(functions, func_name, cls(**new_func_config.parameters))
             functions[func_name] = cls(**new_func_config.parameters)
         else:
-            # Same class, just update parameters
-            for param, value in new_func_config.parameters.items():
-                setattr(existing_func, param, value)
+            update_from_config = getattr(existing_func, "update_parameters_from_config", None)
+            if update_from_config is not None:
+                update_from_config(new_func_config.parameters)
+            else:
+                # Same class, just update parameters
+                for param, value in new_func_config.parameters.items():
+                    setattr(existing_func, param, value)

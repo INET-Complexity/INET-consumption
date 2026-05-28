@@ -105,6 +105,15 @@ def _run_single_seed(
         model.save(save_dir=seed_dir, file_name="multi_country_simulation.h5")
 
     output_df = build_macro_output_df(model, country_code=country_code).copy()
+    country = model.countries[country_code]
+    firms_ts = getattr(getattr(country, "firms", None), "ts", None)
+    if firms_ts is not None:
+        for col in ("inventory", "inventory_nominal"):
+            try:
+                series = pd.Series(firms_ts.get_aggregate(col), index=output_df.index, dtype=float)
+            except (AttributeError, KeyError, ValueError, TypeError):
+                continue
+            output_df[col] = series
     output_df.index.name = output_df.index.name or "time"
 
     return int(seed), output_df

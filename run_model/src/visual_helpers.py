@@ -1,4 +1,5 @@
 import re
+import warnings
 from ast import literal_eval
 from typing import Literal, overload
 
@@ -918,8 +919,22 @@ def build_macro_output_df(model, country_code):
         if values is not None:
             add_column(output_name, as_output_series(values))
 
+    def add_aggregate_agent_ts_column(output_name, ts_obj, ts_name):
+        values = _safe_ts_values(ts_obj, ts_name)
+        if values is None:
+            return None
+
+        aggregated = []
+        for value in list(values):
+            array = np.asarray(value, dtype=float).reshape(-1)
+            aggregated.append(float(np.nansum(array)) if array.size else np.nan)
+        return add_column(output_name, as_output_series(aggregated))
+
     firms_ts = getattr(getattr(country, "firms", None), "ts", None)
     households_ts = getattr(getattr(country, "households", None), "ts", None)
+    add_aggregate_agent_ts_column("real_demand", firms_ts, "demand")
+    add_aggregate_agent_ts_column("inventory", firms_ts, "inventory")
+    add_aggregate_agent_ts_column("inventory_nominal", firms_ts, "inventory_nominal")
 
     add_agent_ts_column("firm_credit_demand_short_term", firms_ts, "total_target_short_term_credit")
     add_agent_ts_column("firm_credit_demand_long_term", firms_ts, "total_target_long_term_credit")
@@ -1064,6 +1079,7 @@ def build_macro_output_df(model, country_code):
         "cpi_transaction_pop_change",
         "cpi_transaction_yoy_change",
         "real_gross_output",
+        "real_demand",
         "potential_output",
         "output_gap",
         "hpi",
@@ -1095,6 +1111,13 @@ def build_macro_output_df(model, country_code):
     ]:
         add_firm_vector_columns(firm_column)
     add_average_firm_timeseries_column("avg_tfp_multiplier", "tfp_multiplier")
+
+    try:
+        wage_rate_by_sector = build_wage_rate_by_sector_df(model, country_code)
+        if "economy" in wage_rate_by_sector.columns:
+            add_column("economy_wage_rate", wage_rate_by_sector["economy"].reindex(out_index))
+    except (AttributeError, KeyError, ValueError):
+        pass
 
     out = pd.DataFrame(output_columns, index=out_index).copy()
     out.attrs["time_unit_months"] = model.timestep.increment
@@ -3320,8 +3343,11 @@ def plot_mc(
         A ``MonteCarloResult`` or a dataframe indexed by ``seed`` and simulation time.
     cols:
         Columns to plot. Each subplot overlays one line per seed.
-    no_rows, no_cols:
-        Optional subplot grid dimensions. If omitted, a near-square grid is used.
+    no_cols:
+        Optional number of subplot columns. Rows are computed automatically
+        from the number of series to plot.
+    no_rows:
+        Deprecated. Kept for backward compatibility and ignored.
     country_code:
         Optional title override.
     """
@@ -3331,18 +3357,24 @@ def plot_mc(
     if combined.index.nlevels < 2:
         raise ValueError("mc dataframe must be indexed by seed and simulation time.")
 
+    missing_cols = [col for col in cols if col not in combined.columns]
+    if missing_cols:
+        warnings.warn(
+            "plot_mc skipped requested columns not found in Monte Carlo output: " + ", ".join(map(str, missing_cols)),
+            stacklevel=2,
+        )
     available_cols = [col for col in cols if col in combined.columns]
     if not available_cols:
         raise ValueError("None of the requested cols are present in the Monte Carlo output.")
 
     n_plots = len(available_cols)
-    if no_cols is None and no_rows is None:
+    if no_cols is None:
         no_cols = int(np.ceil(np.sqrt(n_plots)))
-        no_rows = int(np.ceil(n_plots / no_cols))
-    elif no_cols is None:
-        no_cols = int(np.ceil(n_plots / no_rows))
-    elif no_rows is None:
-        no_rows = int(np.ceil(n_plots / no_cols))
+    else:
+        no_cols = int(no_cols)
+        if no_cols <= 0:
+            raise ValueError("no_cols must be a positive integer.")
+    no_rows = int(np.ceil(n_plots / no_cols))
 
     seeds = combined.index.get_level_values(0).unique()
     fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)

@@ -109,6 +109,43 @@ class TestCentralGovernment:
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
 
+    def test__compute_taxes_nominalises_employee_income_with_cpi(self, test_central_government):
+        test_central_government.compute_taxes(
+            current_ind_employee_income=np.array([50.0, 100.0, 200.0]),
+            current_cpi=2.0,
+            current_total_rent_paid=0.0,
+            current_income_financial_assets=np.zeros(3),
+            current_ind_activity=np.array(
+                [
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.UNEMPLOYED,
+                    ActivityStatus.EMPLOYED,
+                ]
+            ),
+            current_ind_realised_cons=np.zeros(3),
+            current_bank_profits=np.zeros(1),
+            current_firm_production=np.zeros(1),
+            current_firm_price=np.ones(1),
+            current_firm_profits=np.zeros(1),
+            current_firm_industries=np.zeros(1, dtype=int),
+            current_household_new_real_wealth=np.zeros(1),
+            taxes_less_subsidies_rates=np.zeros(1),
+            current_total_exports=0.0,
+        )
+
+        nominal_employed_income = 2.0 * (50.0 + 200.0)
+        assert test_central_government.ts.current("taxes_income")[0] == np.float64(
+            test_central_government.states["Income Tax"]
+            * (1 - test_central_government.states["Employee Social Insurance Tax"])
+            * nominal_employed_income
+        )
+        assert test_central_government.ts.current("taxes_employee_si")[0] == np.float64(
+            test_central_government.states["Employee Social Insurance Tax"] * nominal_employed_income
+        )
+        assert test_central_government.ts.current("taxes_employer_si")[0] == np.float64(
+            test_central_government.states["Employer Social Insurance Tax"] * nominal_employed_income
+        )
+
     # def test__compute_taxes_revenue_deficit_debt(self, test_central_government):
     #     test_central_government.compute_taxes(
     #         current_ind_employee_income=np.array([50.0, 100.0]),

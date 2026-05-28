@@ -1687,6 +1687,7 @@ class Country:
         # General government fields
         self.central_government.compute_taxes(
             current_ind_employee_income=self.individuals.ts.current("employee_income"),
+            current_cpi=self.economy.current_consumer_price_level(),
             current_total_rent_paid=self.households.ts.current("rent")[
                 self.households.states["Tenure Status of the Main Residence"] == 3
             ].sum(),

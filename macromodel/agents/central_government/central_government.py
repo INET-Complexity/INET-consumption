@@ -243,6 +243,7 @@ class CentralGovernment(Agent):
     def compute_taxes(
         self,
         current_ind_employee_income: np.ndarray,
+        current_cpi: float,
         current_total_rent_paid: float,
         current_income_financial_assets: np.ndarray,
         current_ind_activity: np.ndarray,
@@ -266,6 +267,7 @@ class CentralGovernment(Agent):
 
         Args:
             current_ind_employee_income (np.ndarray): Employee incomes
+            current_cpi (float): Current consumer price index used to nominalise employee income
             current_total_rent_paid (float): Total rent payments
             current_income_financial_assets (np.ndarray): Financial income
             current_ind_activity (np.ndarray): Individual activity status
@@ -303,8 +305,10 @@ class CentralGovernment(Agent):
         # Taxes on exports
         self.ts.taxes_exports.append([self.states["Export Tax"] * current_total_exports])
 
-        # Total wages of employed individuals
-        tot_wages_employed_ind = np.sum([current_ind_employee_income[current_ind_activity == ActivityStatus.EMPLOYED]])
+        # Employee income is stored in base-period units; wage taxes are nominal.
+        tot_wages_employed_ind = current_cpi * np.sum(
+            current_ind_employee_income[current_ind_activity == ActivityStatus.EMPLOYED]
+        )
 
         # Taxes on income
         self.ts.taxes_income.append(

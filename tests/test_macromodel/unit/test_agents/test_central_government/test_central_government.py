@@ -133,17 +133,23 @@ class TestCentralGovernment:
             current_total_exports=0.0,
         )
 
-        nominal_employed_income = 2.0 * (50.0 + 200.0)
+        nominal_net_employee_income = 2.0 * (50.0 + 200.0)
+        net_of_employee_taxes = 1 - test_central_government.states["Employee Social Insurance Tax"] - (
+            test_central_government.states["Income Tax"]
+            * (1 - test_central_government.states["Employee Social Insurance Tax"])
+        )
+        nominal_gross_employee_income = nominal_net_employee_income / net_of_employee_taxes
+
         assert test_central_government.ts.current("taxes_income")[0] == np.float64(
             test_central_government.states["Income Tax"]
             * (1 - test_central_government.states["Employee Social Insurance Tax"])
-            * nominal_employed_income
+            * nominal_gross_employee_income
         )
         assert test_central_government.ts.current("taxes_employee_si")[0] == np.float64(
-            test_central_government.states["Employee Social Insurance Tax"] * nominal_employed_income
+            test_central_government.states["Employee Social Insurance Tax"] * nominal_gross_employee_income
         )
         assert test_central_government.ts.current("taxes_employer_si")[0] == np.float64(
-            test_central_government.states["Employer Social Insurance Tax"] * nominal_employed_income
+            test_central_government.states["Employer Social Insurance Tax"] * nominal_gross_employee_income
         )
 
     # def test__compute_taxes_revenue_deficit_debt(self, test_central_government):

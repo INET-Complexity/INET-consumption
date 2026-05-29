@@ -6,7 +6,7 @@ from macro_data.readers.exo_prices.exo_prices_reader import SectorExoPrices, Sec
 from macromodel.agents.firms.func.prices import (
     DefaultPriceSetter,
     SectorExogenousPriceSetter,
-    SectorMarkupUnitCostPriceSetter,
+    SectorMarkupMarginalCostPriceSetter,
 )
 
 N_FIRMS = 4
@@ -78,12 +78,16 @@ def test_default_price_setter_ignores_markup_rule_parameters():
     setter = DefaultPriceSetter(
         orbis_markup_path="unused.csv",
         markup_year=2014,
-        markup_central_column="mu_all_weighted_median",
-        markup_lower_column="mu_all_median_interval_low",
-        markup_upper_column="mu_all_median_interval_high",
-        unit_cost_smoothing_horizon=4,
+        markup_central_column="mu_op_weighted_median",
+        markup_lower_column="mu_op_median_interval_low",
+        markup_upper_column="mu_op_median_interval_high",
+        markup_corridor_relative_cap=1.0,
+        mc_smoothing_horizon=4,
+        ac_smoothing_horizon=8,
+        normal_output_smoothing_horizon=8,
+        normal_output_capital_floor_lambda=0.25,
         demand_pull_speed=1.0,
-        fallback_mode="last_valid_then_price_then_sector_median_then_previous_price",
+        ac_floor_share=1.0,
     )
 
     assert setter.price_setting_noise_std == pytest.approx(0.05)
@@ -198,14 +202,14 @@ class TestSectorExogenousPriceSetter:
 
 def _write_markup_csv(path):
     path.write_text(
-        "year,nace_rev_2_main_section,sum_weights,mu_all_weighted_median,"
-        "mu_all_median_interval_low,mu_all_median_interval_high\n"
+        "year,nace_rev_2_main_section,sum_weights,mu_op_weighted_median,"
+        "mu_op_median_interval_low,mu_op_median_interval_high\n"
         "2014,A - Agriculture,1,1.20,1.00,1.50\n"
         "2014,B - Mining,1,2.00,1.50,3.00\n"
     )
 
 
-class TestSectorMarkupUnitCostPriceSetter:
+class TestSectorMarkupMarginalCostPriceSetter:
     def _make_setter(self, tmp_path, **kwargs):
         path = tmp_path / "markups.csv"
         _write_markup_csv(path)
@@ -213,11 +217,28 @@ class TestSectorMarkupUnitCostPriceSetter:
             orbis_markup_path=str(path),
             markup_year=2014,
             industry_to_nace_main_section={"0": "A", "1": "B"},
-            unit_cost_smoothing_horizon=1,
+            mc_smoothing_horizon=1,
+            ac_smoothing_horizon=1,
+            normal_output_smoothing_horizon=1,
             demand_pull_speed=1.0,
         )
         params.update(kwargs)
-        return SectorMarkupUnitCostPriceSetter(**params)
+        return SectorMarkupMarginalCostPriceSetter(**params)
+
+    @staticmethod
+    def _cost_kwargs(n: int, mc: float | np.ndarray = 10.0, ac: float | np.ndarray | None = None):
+        mc_values = np.full(n, mc, dtype=float) if np.isscalar(mc) else np.asarray(mc, dtype=float)
+        ac_values = mc_values if ac is None else (np.full(n, ac, dtype=float) if np.isscalar(ac) else np.asarray(ac))
+        return dict(
+            pricing_material_mc=mc_values,
+            pricing_normal_output=np.ones(n),
+            pricing_depreciation_unit_cost=ac_values - mc_values,
+            wage_obligation_preview=np.zeros(n),
+            producer_tax_rates=np.zeros(n),
+            prev_mc_smooth=mc_values,
+            prev_ac_smooth=ac_values,
+            prev_normal_output=np.ones(n),
+        )
 
     def test_inactive_gate_uses_central_markup(self, tmp_path):
         setter = self._make_setter(tmp_path)
@@ -229,13 +250,13 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_demand=np.array([2.0, 1.0, 2.0, 1.0]),
             curr_unit_costs=np.array([10.0, 10.0, 10.0, 10.0]),
             prev_unit_costs=np.array([10.0, 10.0, 10.0, 10.0]),
-            prev_uc_smooth=np.array([10.0, 10.0, 10.0, 10.0]),
+            **self._cost_kwargs(4, mc=10.0),
         )
 
         prices = setter.compute_price(**kwargs)
 
         np.testing.assert_allclose(prices, np.array([12.0, 12.0, 20.0, 20.0]))
-        np.testing.assert_allclose(setter.last_pricing_target_markup, np.array([1.2, 1.2, 2.0, 2.0]))
+        np.testing.assert_allclose(setter.last_pricing_markup_mu, np.array([1.2, 1.2, 2.0, 2.0]))
 
     def test_cheap_tight_moves_markup_up(self, tmp_path):
         setter = self._make_setter(tmp_path)
@@ -248,13 +269,13 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_demand=np.array([2.0]),
             curr_unit_costs=np.array([10.0]),
             prev_unit_costs=np.array([10.0]),
-            prev_uc_smooth=np.array([10.0]),
+            **self._cost_kwargs(1, mc=10.0),
         )
 
         prices = setter.compute_price(**kwargs)
 
         assert prices[0] == pytest.approx(15.0)
-        assert setter.last_pricing_target_markup[0] == pytest.approx(1.5)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.5)
         assert setter.last_pricing_gate_state[0] == setter.GATE_CHEAP_TIGHT
 
     def test_expensive_slack_moves_markup_down(self, tmp_path):
@@ -268,13 +289,13 @@ class TestSectorMarkupUnitCostPriceSetter:
             prev_demand=np.array([1.0]),
             curr_unit_costs=np.array([10.0]),
             prev_unit_costs=np.array([10.0]),
-            prev_uc_smooth=np.array([10.0]),
+            **self._cost_kwargs(1, mc=10.0),
         )
 
         prices = setter.compute_price(**kwargs)
 
         assert prices[0] == pytest.approx(11.0)
-        assert setter.last_pricing_target_markup[0] == pytest.approx(1.1)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.1)
         assert setter.last_pricing_gate_state[0] == setter.GATE_EXPENSIVE_SLACK
 
     def test_demand_pull_speed_is_clipped(self, tmp_path):
@@ -283,8 +304,24 @@ class TestSectorMarkupUnitCostPriceSetter:
         setter = self._make_setter(tmp_path, demand_pull_speed=-1.0)
         assert setter.demand_pull_speed == 0.0
 
-    def test_smooths_only_valid_current_unit_costs(self, tmp_path):
-        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+    def test_relative_corridor_cap_limits_upper_bound(self, tmp_path):
+        path = tmp_path / "wide.csv"
+        path.write_text(
+            "year,nace_rev_2_main_section,sum_weights,mu_op_weighted_median,"
+            "mu_op_median_interval_low,mu_op_median_interval_high\n"
+            "2014,A - Agriculture,1,1.00,0.50,3.00\n"
+        )
+
+        setter = SectorMarkupMarginalCostPriceSetter(
+            orbis_markup_path=str(path),
+            industry_to_nace_main_section={"0": "A"},
+            markup_corridor_relative_cap=1.0,
+        )
+
+        assert setter.markup_upper_by_industry[0] == pytest.approx(2.0)
+
+    def test_smooths_only_valid_current_mc(self, tmp_path):
+        setter = self._make_setter(tmp_path, mc_smoothing_horizon=4, ac_smoothing_horizon=4)
         prices = setter.compute_price(
             **(
                 PRICE_KWARGS
@@ -297,15 +334,79 @@ class TestSectorMarkupUnitCostPriceSetter:
                     current_firm_sectors=np.array([0, 0]),
                     curr_unit_costs=np.array([20.0, 0.0]),
                     prev_unit_costs=np.array([10.0, 10.0]),
-                    prev_uc_smooth=np.array([10.0, 10.0]),
+                    pricing_material_mc=np.array([20.0, np.nan]),
+                    pricing_normal_output=np.ones(2),
+                    pricing_depreciation_unit_cost=np.zeros(2),
+                    wage_obligation_preview=np.zeros(2),
+                    producer_tax_rates=np.zeros(2),
+                    prev_mc_smooth=np.array([10.0, 10.0]),
+                    prev_ac_smooth=np.array([10.0, 10.0]),
+                    prev_normal_output=np.ones(2),
                 )
             )
         )
 
-        np.testing.assert_allclose(setter.last_pricing_uc_smooth, np.array([14.0, 10.0]))
+        np.testing.assert_allclose(setter.last_pricing_mc_smooth, np.array([14.0, 10.0]))
         np.testing.assert_allclose(prices, np.array([16.8, 12.0]))
 
-    def test_invalid_unit_cost_falls_back_to_previous_price_implied_uc(self, tmp_path):
+    def test_wage_preview_enters_mc_through_normal_output(self, tmp_path):
+        setter = self._make_setter(tmp_path)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([12.0]),
+                    prev_firm_prices=np.array([12.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    current_firm_sectors=np.array([0]),
+                    pricing_material_mc=np.array([10.0]),
+                    pricing_normal_output=np.array([5.0]),
+                    pricing_depreciation_unit_cost=np.array([0.0]),
+                    wage_obligation_preview=np.array([20.0]),
+                    producer_tax_rates=np.array([0.0]),
+                    prev_mc_smooth=np.array([14.0]),
+                    prev_ac_smooth=np.array([14.0]),
+                    prev_normal_output=np.array([5.0]),
+                )
+            )
+        )
+
+        np.testing.assert_allclose(setter.last_pricing_mc, np.array([14.0]))
+        np.testing.assert_allclose(prices, np.array([16.8]))
+
+    def test_realised_production_and_accounting_uc_do_not_anchor_price(self, tmp_path):
+        setter = self._make_setter(tmp_path)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([12.0]),
+                    prev_firm_prices=np.array([12.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    current_firm_sectors=np.array([0]),
+                    production=np.array([1e-9]),
+                    curr_unit_costs=np.array([1e9]),
+                    prev_unit_costs=np.array([1e9]),
+                    pricing_material_mc=np.array([10.0]),
+                    pricing_normal_output=np.array([5.0]),
+                    pricing_depreciation_unit_cost=np.array([0.0]),
+                    wage_obligation_preview=np.array([0.0]),
+                    producer_tax_rates=np.array([0.0]),
+                    prev_mc_smooth=np.array([10.0]),
+                    prev_ac_smooth=np.array([10.0]),
+                    prev_normal_output=np.array([5.0]),
+                )
+            )
+        )
+
+        np.testing.assert_allclose(setter.last_pricing_mc, np.array([10.0]))
+        np.testing.assert_allclose(prices, np.array([12.0]))
+
+    def test_invalid_costs_fall_back_to_previous_price(self, tmp_path):
         setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
             **(
@@ -319,16 +420,23 @@ class TestSectorMarkupUnitCostPriceSetter:
                     current_firm_sectors=np.array([0]),
                     curr_unit_costs=np.array([0.0]),
                     prev_unit_costs=np.array([0.0]),
-                    prev_uc_smooth=np.array([np.nan]),
+                    pricing_material_mc=np.array([np.nan]),
+                    pricing_normal_output=np.array([np.nan]),
+                    pricing_depreciation_unit_cost=np.array([0.0]),
+                    wage_obligation_preview=np.array([np.nan]),
+                    producer_tax_rates=np.array([0.0]),
+                    prev_mc_smooth=np.array([np.nan]),
+                    prev_ac_smooth=np.array([np.nan]),
+                    prev_normal_output=np.array([np.nan]),
                 )
             )
         )
 
-        assert setter.last_pricing_uc_smooth[0] == pytest.approx(20.0)
         assert prices[0] == pytest.approx(24.0)
+        assert setter.last_pricing_fallback_code[0] == setter.FALLBACK_PREVIOUS_PRICE
 
-    def test_first_price_update_uses_raw_model_unit_cost(self, tmp_path):
-        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+    def test_ac_floor_can_bind(self, tmp_path):
+        setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
             **(
                 PRICE_KWARGS
@@ -339,78 +447,114 @@ class TestSectorMarkupUnitCostPriceSetter:
                     prev_supply=np.array([1.0]),
                     prev_demand=np.array([1.0]),
                     current_firm_sectors=np.array([0]),
-                    curr_unit_costs=np.array([0.05]),
-                    prev_unit_costs=np.array([0.05]),
-                    prev_uc_smooth=np.array([0.05]),
-                    current_time=1,
+                    curr_unit_costs=np.array([100.0]),
+                    prev_unit_costs=np.array([100.0]),
+                    **self._cost_kwargs(1, mc=100.0, ac=150.0),
                 )
             )
         )
 
-        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.05)
-        assert prices[0] == pytest.approx(0.06)
+        assert prices[0] == pytest.approx(150.0)
+        assert setter.last_pricing_ac_floor_binding[0] == 1.0
 
-    def test_after_initialisation_smoothing_uses_raw_model_unit_cost_levels(self, tmp_path):
-        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+    def test_ac_above_sector_p95_uses_sector_median(self, tmp_path):
+        setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
             **(
                 PRICE_KWARGS
                 | dict(
-                    prev_prices=np.array([0.24]),
-                    prev_firm_prices=np.array([0.24]),
+                    prev_prices=np.array([96.0, 96.0, 96.0]),
+                    prev_firm_prices=np.array([96.0, 96.0, 96.0]),
                     prev_average_good_prices=np.array([10.0]),
-                    prev_supply=np.array([1.0]),
-                    prev_demand=np.array([1.0]),
-                    current_firm_sectors=np.array([0]),
-                    curr_unit_costs=np.array([0.10]),
-                    prev_unit_costs=np.array([0.05]),
-                    prev_uc_smooth=np.array([0.20]),
-                    current_time=2,
+                    prev_supply=np.ones(3),
+                    prev_demand=np.ones(3),
+                    current_firm_sectors=np.array([0, 0, 0]),
+                    curr_unit_costs=np.full(3, 80.0),
+                    prev_unit_costs=np.full(3, 80.0),
+                    **self._cost_kwargs(3, mc=np.array([80.0, 80.0, 80.0]), ac=np.array([100.0, 110.0, 1000.0])),
                 )
             )
         )
 
-        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.16)
-        assert prices[0] == pytest.approx(0.192)
+        assert prices[2] == pytest.approx(110.0)
+        assert setter.last_pricing_ac_fallback_binding[2] == 1.0
 
-    def test_near_zero_production_unit_cost_spike_uses_last_valid_smooth_uc(self, tmp_path):
-        setter = self._make_setter(tmp_path, unit_cost_smoothing_horizon=4)
+    def test_positive_producer_tax_grosses_up_price(self, tmp_path):
+        setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
             **(
                 PRICE_KWARGS
                 | dict(
-                    prev_prices=np.array([0.036]),
-                    prev_firm_prices=np.array([0.036]),
-                    prev_average_good_prices=np.array([0.03]),
+                    prev_prices=np.array([120.0]),
+                    prev_firm_prices=np.array([120.0]),
+                    prev_average_good_prices=np.array([100.0]),
                     prev_supply=np.array([1.0]),
                     prev_demand=np.array([1.0]),
-                    production=np.array([1e-15]),
                     current_firm_sectors=np.array([0]),
-                    curr_unit_costs=np.array([1e30]),
-                    prev_unit_costs=np.array([0.03]),
-                    prev_uc_smooth=np.array([0.03]),
-                    current_time=50,
+                    curr_unit_costs=np.array([100.0]),
+                    prev_unit_costs=np.array([100.0]),
+                    **(self._cost_kwargs(1, mc=100.0) | {"producer_tax_rates": np.array([0.10])}),
                 )
             )
         )
 
-        assert setter.last_pricing_uc_smooth[0] == pytest.approx(0.03)
-        assert prices[0] == pytest.approx(0.036)
+        assert prices[0] == pytest.approx(120.0 / 0.9)
+
+    def test_subsidy_does_not_mark_down_price(self, tmp_path):
+        setter = self._make_setter(tmp_path)
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([120.0]),
+                    prev_firm_prices=np.array([120.0]),
+                    prev_average_good_prices=np.array([100.0]),
+                    prev_supply=np.array([1.0]),
+                    prev_demand=np.array([1.0]),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([100.0]),
+                    prev_unit_costs=np.array([100.0]),
+                    **(self._cost_kwargs(1, mc=100.0) | {"producer_tax_rates": np.array([-0.10])}),
+                )
+            )
+        )
+
+        assert prices[0] == pytest.approx(120.0)
+
+    def test_tax_rate_at_or_above_one_fails(self, tmp_path):
+        setter = self._make_setter(tmp_path)
+        with pytest.raises(ValueError, match="Producer tax rates"):
+            setter.compute_price(
+                **(
+                    PRICE_KWARGS
+                    | dict(
+                        prev_prices=np.array([120.0]),
+                        prev_firm_prices=np.array([120.0]),
+                        prev_average_good_prices=np.array([100.0]),
+                        prev_supply=np.array([1.0]),
+                        prev_demand=np.array([1.0]),
+                        current_firm_sectors=np.array([0]),
+                        curr_unit_costs=np.array([100.0]),
+                        prev_unit_costs=np.array([100.0]),
+                        **(self._cost_kwargs(1, mc=100.0) | {"producer_tax_rates": np.array([1.0])}),
+                    )
+                )
+            )
 
     def test_invalid_markup_configuration_fails(self, tmp_path):
         path = tmp_path / "bad.csv"
         path.write_text(
-            "year,nace_rev_2_main_section,sum_weights,mu_all_weighted_median,"
-            "mu_all_median_interval_low,mu_all_median_interval_high\n"
+            "year,nace_rev_2_main_section,sum_weights,mu_op_weighted_median,"
+            "mu_op_median_interval_low,mu_op_median_interval_high\n"
             "2014,A - Agriculture,1,1.00,1.20,1.50\n"
         )
 
         with pytest.raises(ValueError, match="markup_lower <= markup_central"):
-            SectorMarkupUnitCostPriceSetter(
+            SectorMarkupMarginalCostPriceSetter(
                 orbis_markup_path=str(path),
                 industry_to_nace_main_section={"0": "A"},
             )
 
-    def test_invalid_fallback_mode_fails(self, tmp_path):
-        with pytest.raises(ValueError, match="Unsupported fallback_mode"):
-            self._make_setter(tmp_path, fallback_mode="unsupported")
+    def test_missing_orbis_file_fails(self, tmp_path):
+        with pytest.raises(ValueError, match="Orbis markup file not found"):
+            SectorMarkupMarginalCostPriceSetter(orbis_markup_path=str(tmp_path / "missing.csv"))

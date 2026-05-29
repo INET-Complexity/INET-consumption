@@ -847,26 +847,41 @@ def test_reset_firm_params(datawrapper):
         simulation.iterate()
 
 
-def test_sector_markup_unit_cost_price_setter_loads_from_configuration(tmp_path):
+def test_sector_markup_marginal_cost_price_setter_loads_from_configuration(tmp_path):
     path = tmp_path / "markups.csv"
     path.write_text(
-        "year,nace_rev_2_main_section,sum_weights,mu_all_weighted_median,"
-        "mu_all_median_interval_low,mu_all_median_interval_high\n"
+        "year,nace_rev_2_main_section,sum_weights,mu_op_weighted_median,"
+        "mu_op_median_interval_low,mu_op_median_interval_high\n"
         "2014,A - Agriculture,1,1.20,1.00,1.50\n"
     )
     country_sim_configuration = CountryConfiguration()
-    country_sim_configuration.firms.functions.prices.name = "SectorMarkupUnitCostPriceSetter"
+    country_sim_configuration.firms.functions.prices.name = "SectorMarkupMarginalCostPriceSetter"
     country_sim_configuration.firms.functions.prices.parameters = {
         "orbis_markup_path": str(path),
         "markup_year": 2014,
         "industry_to_nace_main_section": {"0": "A"},
-        "unit_cost_smoothing_horizon": 4,
+        "mc_smoothing_horizon": 4,
+        "ac_smoothing_horizon": 8,
+        "normal_output_smoothing_horizon": 8,
         "demand_pull_speed": 1.0,
     }
 
     functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
 
-    assert functions["prices"].__class__.__name__ == "SectorMarkupUnitCostPriceSetter"
+    assert functions["prices"].__class__.__name__ == "SectorMarkupMarginalCostPriceSetter"
+
+
+def test_old_sector_markup_unit_cost_price_setter_is_rejected():
+    with pytest.raises(ValueError, match="SectorMarkupUnitCostPriceSetter"):
+        CountryConfiguration(
+            firms={
+                "functions": {
+                    "prices": {
+                        "name": "SectorMarkupUnitCostPriceSetter",
+                    }
+                }
+            }
+        )
 
 
 def test_stale_existing_inventory_fraction_fails_on_function_load():
@@ -920,26 +935,27 @@ def test_stale_existing_inventory_fraction_fails_on_function_update():
 def test_same_class_function_update_refreshes_derived_state(tmp_path):
     path = tmp_path / "markups.csv"
     path.write_text(
-        "year,nace_rev_2_main_section,sum_weights,mu_all_weighted_median,"
-        "mu_all_median_interval_low,mu_all_median_interval_high\n"
+        "year,nace_rev_2_main_section,sum_weights,mu_op_weighted_median,"
+        "mu_op_median_interval_low,mu_op_median_interval_high\n"
         "2014,A - Agriculture,1,1.20,1.00,1.50\n"
         "2015,A - Agriculture,1,1.40,1.10,1.70\n"
     )
     country_sim_configuration = CountryConfiguration()
-    country_sim_configuration.firms.functions.prices.name = "SectorMarkupUnitCostPriceSetter"
+    country_sim_configuration.firms.functions.prices.name = "SectorMarkupMarginalCostPriceSetter"
     country_sim_configuration.firms.functions.prices.parameters = {
         "orbis_markup_path": str(path),
         "markup_year": 2014,
         "industry_to_nace_main_section": {"0": "A"},
-        "unit_cost_smoothing_horizon": 4,
+        "mc_smoothing_horizon": 4,
+        "ac_smoothing_horizon": 8,
+        "normal_output_smoothing_horizon": 8,
         "demand_pull_speed": 1.0,
-        "fallback_mode": "last_valid_then_price_then_sector_median_then_previous_price",
     }
     functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
     old_price_setter = functions["prices"]
 
     updated_country_sim_configuration = deepcopy(country_sim_configuration)
-    updated_country_sim_configuration.firms.functions.prices.parameters["unit_cost_smoothing_horizon"] = 9
+    updated_country_sim_configuration.firms.functions.prices.parameters["mc_smoothing_horizon"] = 9
     updated_country_sim_configuration.firms.functions.prices.parameters["markup_year"] = 2015
 
     update_functions(
@@ -950,7 +966,7 @@ def test_same_class_function_update_refreshes_derived_state(tmp_path):
 
     new_price_setter = functions["prices"]
     assert new_price_setter is old_price_setter
-    assert new_price_setter.unit_cost_smoothing_alpha == pytest.approx(0.2)
+    assert new_price_setter.mc_smoothing_alpha == pytest.approx(0.2)
     assert new_price_setter.markup_central_by_industry[0] == pytest.approx(1.40)
 
 

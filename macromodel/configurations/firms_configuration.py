@@ -191,7 +191,7 @@ class Prices(BaseModel):
         "DefaultPriceSetter",
         "ExogenousPriceSetter",
         "SectorExogenousPriceSetter",
-        "SectorMarkupUnitCostPriceSetter",
+        "SectorMarkupMarginalCostPriceSetter",
     ] = "DefaultPriceSetter"
     path_name: str = "prices"
     parameters: dict[str, Any] = {

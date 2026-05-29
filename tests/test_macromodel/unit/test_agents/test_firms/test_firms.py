@@ -29,6 +29,18 @@ class TestFirms:
             "target_production",
             "price",
             "price_in_usd",
+            "pricing_mc",
+            "pricing_mc_smooth",
+            "pricing_ac",
+            "pricing_ac_smooth",
+            "pricing_normal_output",
+            "pricing_markup_mu",
+            "pricing_markup_lower",
+            "pricing_markup_upper",
+            "pricing_ac_floor_binding",
+            "pricing_ac_fallback_binding",
+            "pricing_gate_state",
+            "pricing_fallback_code",
             "profits",
             "taxes_paid_on_production",
             "corporate_taxes_paid",
@@ -542,6 +554,53 @@ class TestFirms:
         test_firms.ts.override_current("capital_inputs_stock_value", np.full(n_firms, 1000.0))
 
         assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 2.0))
+
+    def test__pricing_material_mc_uses_reciprocal_productivity(self, test_firms):
+        n_industries = test_firms.n_industries
+        test_firms.base_intermediate_inputs_productivity_matrix = np.zeros((n_industries, n_industries))
+        test_firms.base_intermediate_inputs_productivity_matrix[0, :] = 2.0
+        test_firms.base_intermediate_inputs_productivity_matrix[1, :] = 4.0
+        good_prices = np.full(n_industries, np.nan)
+        good_prices[0] = 8.0
+
+        material_mc = test_firms.compute_pricing_material_mc(good_prices)
+
+        assert np.allclose(material_mc, 8.0 / 2.0 + 8.0 / 4.0)
+
+    def test__pricing_material_mc_is_invalid_when_all_good_prices_are_invalid(self, test_firms):
+        material_mc = test_firms.compute_pricing_material_mc(np.full(test_firms.n_industries, np.nan))
+
+        assert np.isnan(material_mc).all()
+
+    def test__pricing_normal_output_uses_conservative_capital_floor(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.pricing_rho_k_by_sector = np.full(test_firms.n_industries, 2.0)
+        capital_stock = np.zeros((n_firms, test_firms.n_industries))
+        capital_stock[:, 0] = 100.0
+        target_production = np.full(n_firms, 1.0)
+        target_production[0] = 60.0
+        test_firms.ts.override_current("capital_inputs_stock", capital_stock)
+        test_firms.ts.override_current("target_production", target_production)
+
+        normal_output = test_firms.compute_pricing_normal_output_candidate(capital_floor_lambda=0.25)
+
+        assert normal_output[0] == pytest.approx(60.0)
+        assert np.allclose(normal_output[1:], 50.0)
+
+    def test__pricing_depreciation_unit_cost_uses_previous_pre_tax_price(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        test_firms.capital_depreciation_rates = np.full(test_firms.n_industries, 0.1)
+        test_firms.ts.override_current("price", np.full(n_firms, 100.0))
+        tax_rates = np.zeros(n_firms)
+        tax_rates[0] = 0.2
+        tax_rates[1] = -0.2
+
+        depreciation_unit_cost = test_firms.compute_pricing_depreciation_unit_cost(tax_rates)
+
+        assert depreciation_unit_cost[0] == pytest.approx(8.0)
+        assert depreciation_unit_cost[1] == pytest.approx(10.0)
+        assert np.allclose(depreciation_unit_cost[2:], 10.0)
 
     def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

@@ -73,7 +73,14 @@ class PriceSetter(ABC):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
-        prev_uc_smooth: np.ndarray | None = None,
+        pricing_material_mc: np.ndarray | None = None,
+        pricing_normal_output: np.ndarray | None = None,
+        pricing_depreciation_unit_cost: np.ndarray | None = None,
+        wage_obligation_preview: np.ndarray | None = None,
+        producer_tax_rates: np.ndarray | None = None,
+        prev_mc_smooth: np.ndarray | None = None,
+        prev_ac_smooth: np.ndarray | None = None,
+        prev_normal_output: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate prices for each firm based on market conditions.
 
@@ -98,8 +105,20 @@ class PriceSetter(ABC):
             prev_unit_costs (np.ndarray): Previous unit costs
             ppi_during (np.ndarray): PPI time series
             current_time (int): Current period index
-            prev_uc_smooth (np.ndarray | None): Previous smoothed unit costs,
-                used by pricing rules that smooth unit costs.
+            pricing_material_mc (np.ndarray | None): Current technical material
+                marginal cost from firm technology and input prices.
+            pricing_normal_output (np.ndarray | None): Current normal-output
+                candidate for pricing-cost allocation.
+            pricing_depreciation_unit_cost (np.ndarray | None): Current normal
+                depreciation unit cost for the AC floor.
+            wage_obligation_preview (np.ndarray | None): Current wage-obligation
+                preview used for the labour MC proxy.
+            producer_tax_rates (np.ndarray | None): Producer tax/subsidy rates
+                by firm.
+            prev_mc_smooth (np.ndarray | None): Previous smoothed pricing MC.
+            prev_ac_smooth (np.ndarray | None): Previous smoothed pricing AC.
+            prev_normal_output (np.ndarray | None): Previous smoothed normal
+                output used by pricing.
 
         Returns:
             np.ndarray: Updated prices by firm
@@ -114,9 +133,13 @@ _MARKUP_PRICE_COMPATIBILITY_PARAMETERS = {
     "markup_central_column",
     "markup_lower_column",
     "markup_upper_column",
-    "unit_cost_smoothing_horizon",
+    "markup_corridor_relative_cap",
+    "mc_smoothing_horizon",
+    "ac_smoothing_horizon",
+    "normal_output_smoothing_horizon",
+    "normal_output_capital_floor_lambda",
     "demand_pull_speed",
-    "fallback_mode",
+    "ac_floor_share",
 }
 
 
@@ -174,7 +197,14 @@ class DefaultPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
-        prev_uc_smooth: np.ndarray | None = None,
+        pricing_material_mc: np.ndarray | None = None,
+        pricing_normal_output: np.ndarray | None = None,
+        pricing_depreciation_unit_cost: np.ndarray | None = None,
+        wage_obligation_preview: np.ndarray | None = None,
+        producer_tax_rates: np.ndarray | None = None,
+        prev_mc_smooth: np.ndarray | None = None,
+        prev_ac_smooth: np.ndarray | None = None,
+        prev_normal_output: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -247,20 +277,21 @@ class DefaultPriceSetter(PriceSetter):
         )
 
 
-class SectorMarkupUnitCostPriceSetter(PriceSetter):
-    """Set prices as sector markups over smoothed own unit costs.
+class SectorMarkupMarginalCostPriceSetter(PriceSetter):
+    """Set prices as sector markups over technical marginal costs.
 
-    This rule intentionally does not use stochastic price noise, expected PPI
-    inflation, or a separate cost-push multiplier. Unit costs enter directly
-    through the markup anchor.
+    The rule uses technical MC as the markup anchor and a normal-AC floor for
+    break-even discipline. Realised accounting unit costs remain diagnostics
+    elsewhere in the model and are not used by this price setter.
     """
 
     PRICE_FLOOR = 1e-2
     SUPPLY_EPSILON = 1e-2
-    FALLBACK_MODE_LAST_VALID_THEN_PRICE_THEN_SECTOR_MEDIAN_THEN_PREVIOUS_PRICE = (
-        "last_valid_then_price_then_sector_median_then_previous_price"
-    )
-    SUPPORTED_FALLBACK_MODES = {FALLBACK_MODE_LAST_VALID_THEN_PRICE_THEN_SECTOR_MEDIAN_THEN_PREVIOUS_PRICE}
+    FALLBACK_NONE = 0
+    FALLBACK_NORMAL_OUTPUT = 1
+    FALLBACK_MC = 2
+    FALLBACK_AC = 3
+    FALLBACK_PREVIOUS_PRICE = 4
     GATE_CHEAP_TIGHT = 1
     GATE_EXPENSIVE_SLACK = 2
     GATE_CHEAP_SLACK = 3
@@ -277,20 +308,29 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         orbis_markup_path: str = "run_model/data/raw_data/orbis/orbis_markups_by_nace_rev_2_main_section.csv",
         markup_year: int = 2014,
         industry_to_nace_main_section: dict | None = None,
-        markup_central_column: str = "mu_all_weighted_median",
-        markup_lower_column: str = "mu_all_median_interval_low",
-        markup_upper_column: str = "mu_all_median_interval_high",
-        unit_cost_smoothing_horizon: float = 4.0,
+        markup_central_column: str = "mu_op_weighted_median",
+        markup_lower_column: str = "mu_op_median_interval_low",
+        markup_upper_column: str = "mu_op_median_interval_high",
+        markup_corridor_relative_cap: float = 1.0,
+        mc_smoothing_horizon: float = 4.0,
+        ac_smoothing_horizon: float = 8.0,
+        normal_output_smoothing_horizon: float = 8.0,
+        normal_output_capital_floor_lambda: float = 0.25,
         demand_pull_speed: float = 1.0,
-        fallback_mode: str = "last_valid_then_price_then_sector_median_then_previous_price",
+        ac_floor_share: float = 1.0,
     ):
-        if unit_cost_smoothing_horizon <= 0:
-            raise ValueError("unit_cost_smoothing_horizon must be positive.")
-        if fallback_mode not in self.SUPPORTED_FALLBACK_MODES:
-            raise ValueError(
-                f"Unsupported fallback_mode={fallback_mode!r}. "
-                f"Supported values: {sorted(self.SUPPORTED_FALLBACK_MODES)}."
-            )
+        if mc_smoothing_horizon <= 0:
+            raise ValueError("mc_smoothing_horizon must be positive.")
+        if ac_smoothing_horizon <= 0:
+            raise ValueError("ac_smoothing_horizon must be positive.")
+        if normal_output_smoothing_horizon <= 0:
+            raise ValueError("normal_output_smoothing_horizon must be positive.")
+        if markup_corridor_relative_cap < 0:
+            raise ValueError("markup_corridor_relative_cap must be non-negative.")
+        if not (0.0 < normal_output_capital_floor_lambda < 1.0):
+            raise ValueError("normal_output_capital_floor_lambda must be in (0, 1).")
+        if ac_floor_share <= 0:
+            raise ValueError("ac_floor_share must be positive.")
         self.orbis_markup_path = orbis_markup_path
         self.markup_year = int(markup_year)
         mapping = industry_to_nace_main_section or self._default_industry_mapping()
@@ -298,10 +338,16 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         self.markup_central_column = markup_central_column
         self.markup_lower_column = markup_lower_column
         self.markup_upper_column = markup_upper_column
-        self.unit_cost_smoothing_horizon = float(unit_cost_smoothing_horizon)
-        self.unit_cost_smoothing_alpha = 2.0 / (self.unit_cost_smoothing_horizon + 1.0)
+        self.markup_corridor_relative_cap = float(markup_corridor_relative_cap)
+        self.mc_smoothing_horizon = float(mc_smoothing_horizon)
+        self.ac_smoothing_horizon = float(ac_smoothing_horizon)
+        self.normal_output_smoothing_horizon = float(normal_output_smoothing_horizon)
+        self.mc_smoothing_alpha = 2.0 / (self.mc_smoothing_horizon + 1.0)
+        self.ac_smoothing_alpha = 2.0 / (self.ac_smoothing_horizon + 1.0)
+        self.normal_output_smoothing_alpha = 2.0 / (self.normal_output_smoothing_horizon + 1.0)
+        self.normal_output_capital_floor_lambda = float(normal_output_capital_floor_lambda)
         self.demand_pull_speed = max(0.0, min(1.0, float(demand_pull_speed)))
-        self.fallback_mode = fallback_mode
+        self.ac_floor_share = float(ac_floor_share)
 
         self.markup_lower_by_industry, self.markup_central_by_industry, self.markup_upper_by_industry = (
             self._load_markup_arrays()
@@ -309,7 +355,7 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         self._set_neutral_diagnostics(np.array([], dtype=float))
 
     def update_parameters_from_config(self, parameters: dict) -> None:
-        SectorMarkupUnitCostPriceSetter.__init__(self, **parameters)
+        SectorMarkupMarginalCostPriceSetter.__init__(self, **parameters)
 
     @staticmethod
     def _default_industry_mapping() -> dict[str, str | list[str]]:
@@ -411,84 +457,73 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
             raise ValueError("Markup corridor values must be finite and strictly positive.")
         if not np.all((lower <= central) & (central <= upper)):
             raise ValueError("Markup corridor must satisfy markup_lower <= markup_central <= markup_upper.")
+        lower_delta = np.clip(lower / central - 1.0, -self.markup_corridor_relative_cap, 0.0)
+        upper_delta = np.clip(upper / central - 1.0, 0.0, self.markup_corridor_relative_cap)
+        lower = central * (1.0 + lower_delta)
+        upper = central * (1.0 + upper_delta)
         return lower, central, upper
 
     def _set_neutral_diagnostics(self, prev_prices: np.ndarray) -> None:
-        self.last_pricing_uc_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
-        self.last_pricing_target_markup = np.full(prev_prices.shape, np.nan, dtype=float)
-        self.last_pricing_realized_markup = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_mc = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_mc_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_ac = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_ac_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_normal_output = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_mu = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_lower = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_upper = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_ac_floor_binding = np.zeros(prev_prices.shape, dtype=float)
+        self.last_pricing_ac_fallback_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_gate_state = np.zeros(prev_prices.shape, dtype=float)
+        self.last_pricing_fallback_code = np.zeros(prev_prices.shape, dtype=float)
 
-    def _sector_median_unit_cost(self, unit_costs: np.ndarray, current_firm_sectors: np.ndarray) -> np.ndarray:
-        medians = np.full(unit_costs.shape, np.nan, dtype=float)
-        valid = np.isfinite(unit_costs) & (unit_costs > 0.0)
+    @staticmethod
+    def _sector_stat(values: np.ndarray, current_firm_sectors: np.ndarray, stat: str) -> np.ndarray:
+        out = np.full(values.shape, np.nan, dtype=float)
+        valid = np.isfinite(values) & (values > 0.0)
         for sector in np.unique(current_firm_sectors):
             sector_valid = valid & (current_firm_sectors == sector)
             if np.any(sector_valid):
-                medians[current_firm_sectors == sector] = np.median(unit_costs[sector_valid])
-        return medians
+                if stat == "median":
+                    out[current_firm_sectors == sector] = np.median(values[sector_valid])
+                elif stat == "p95":
+                    out[current_firm_sectors == sector] = np.percentile(values[sector_valid], 95)
+                else:
+                    raise ValueError(f"Unsupported sector stat {stat!r}.")
+        return out
 
-    def _compute_uc_smooth(
+    @staticmethod
+    def _valid_positive(values: np.ndarray) -> np.ndarray:
+        return np.isfinite(values) & (values > 0.0)
+
+    def _smooth_with_fallback(
         self,
-        curr_unit_costs: np.ndarray,
-        prev_unit_costs: np.ndarray,
-        prev_uc_smooth: np.ndarray | None,
-        prev_prices: np.ndarray,
-        production: np.ndarray,
+        current: np.ndarray,
+        previous: np.ndarray | None,
         current_firm_sectors: np.ndarray,
-        markup_central: np.ndarray,
-        current_time: int,
-    ) -> np.ndarray:
-        _ = prev_unit_costs
-        production = np.asarray(production, dtype=float)
-        if production.shape != curr_unit_costs.shape:
-            production = np.ones_like(curr_unit_costs, dtype=float)
-        production_valid = np.isfinite(production) & (production > self.SUPPLY_EPSILON)
-        current_valid = np.isfinite(curr_unit_costs) & (curr_unit_costs > 0.0) & production_valid
-        current_unit_costs = np.asarray(curr_unit_costs, dtype=float).copy()
-        if prev_uc_smooth is None or prev_uc_smooth.shape != curr_unit_costs.shape:
-            previous_valid_smooth = np.full(curr_unit_costs.shape, np.nan, dtype=float)
+        alpha: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if previous is None or previous.shape != current.shape:
+            previous_valid = np.full(current.shape, np.nan, dtype=float)
         else:
-            previous_valid_smooth = np.asarray(prev_uc_smooth, dtype=float).copy()
-            previous_valid_smooth[~(np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0))] = np.nan
-        has_previous_smooth = np.isfinite(previous_valid_smooth) & (previous_valid_smooth > 0.0)
-        current_unit_costs[~current_valid] = np.nan
+            previous_valid = np.asarray(previous, dtype=float).copy()
+            previous_valid[~self._valid_positive(previous_valid)] = np.nan
 
-        inferred_from_price = np.divide(
-            prev_prices,
-            markup_central,
-            out=np.full_like(prev_prices, np.nan, dtype=float),
-            where=markup_central > 0.0,
-        )
-        inferred_from_price[~(np.isfinite(inferred_from_price) & (inferred_from_price > 0.0))] = np.nan
+        current_valid = np.asarray(current, dtype=float).copy()
+        current_valid[~self._valid_positive(current_valid)] = np.nan
+        has_current = self._valid_positive(current_valid)
+        has_previous = self._valid_positive(previous_valid)
+        sector_median = self._sector_stat(current_valid, current_firm_sectors, "median")
 
-        sector_median = self._sector_median_unit_cost(current_unit_costs, current_firm_sectors)
-
-        has_current_uc = np.isfinite(current_unit_costs) & (current_unit_costs > 0.0)
-        uc_smooth = np.where(
-            has_current_uc & has_previous_smooth,
-            self.unit_cost_smoothing_alpha * current_unit_costs
-            + (1.0 - self.unit_cost_smoothing_alpha) * previous_valid_smooth,
-            current_unit_costs,
+        smoothed = np.where(
+            has_current & has_previous,
+            alpha * current_valid + (1.0 - alpha) * previous_valid,
+            current_valid,
         )
-        uc_smooth = np.where(
-            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
-            uc_smooth,
-            previous_valid_smooth,
-        )
-        uc_smooth = np.where(
-            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
-            uc_smooth,
-            inferred_from_price,
-        )
-        uc_smooth = np.where(
-            np.isfinite(uc_smooth) & (uc_smooth > 0.0),
-            uc_smooth,
-            sector_median,
-        )
-        return uc_smooth
+        smoothed = np.where(self._valid_positive(smoothed), smoothed, previous_valid)
+        smoothed = np.where(self._valid_positive(smoothed), smoothed, sector_median)
+        fallback = (~has_current | ~self._valid_positive(smoothed)).astype(float)
+        return smoothed, fallback
 
     def compute_price(
         self,
@@ -506,29 +541,85 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
-        prev_uc_smooth: np.ndarray | None = None,
+        pricing_material_mc: np.ndarray | None = None,
+        pricing_normal_output: np.ndarray | None = None,
+        pricing_depreciation_unit_cost: np.ndarray | None = None,
+        wage_obligation_preview: np.ndarray | None = None,
+        producer_tax_rates: np.ndarray | None = None,
+        prev_mc_smooth: np.ndarray | None = None,
+        prev_ac_smooth: np.ndarray | None = None,
+        prev_normal_output: np.ndarray | None = None,
         min_inflation: float = -1.0,
         max_inflation: float = 1.0,
     ) -> np.ndarray:
-        """Calculate prices from markup corridors and smoothed own unit costs."""
+        """Calculate prices from markup corridors, technical MC, and normal AC."""
+        _ = (
+            current_estimated_ppi_inflation,
+            excess_demand,
+            inventories,
+            production,
+            curr_unit_costs,
+            prev_unit_costs,
+            ppi_during,
+            current_time,
+        )
         self._set_neutral_diagnostics(prev_prices)
         current_firm_sectors = current_firm_sectors.astype(int)
         if np.any(current_firm_sectors < 0) or np.any(current_firm_sectors >= len(self.markup_central_by_industry)):
             raise ValueError("current_firm_sectors contains sectors not covered by markup configuration.")
+        if producer_tax_rates is None:
+            producer_tax_rates = np.zeros(prev_prices.shape, dtype=float)
+        producer_tax_rates = np.asarray(producer_tax_rates, dtype=float)
+        if np.any(producer_tax_rates >= 1.0):
+            raise ValueError("Producer tax rates must be below 1.0 for gross-up pricing.")
 
         markup_lower = self.markup_lower_by_industry[current_firm_sectors]
         markup_central = self.markup_central_by_industry[current_firm_sectors]
         markup_upper = self.markup_upper_by_industry[current_firm_sectors]
-        uc_smooth = self._compute_uc_smooth(
-            curr_unit_costs=curr_unit_costs,
-            prev_unit_costs=prev_unit_costs,
-            prev_uc_smooth=prev_uc_smooth,
-            prev_prices=prev_prices,
-            production=production,
-            current_firm_sectors=current_firm_sectors,
-            markup_central=markup_central,
-            current_time=current_time,
+        if pricing_material_mc is None:
+            pricing_material_mc = np.full(prev_prices.shape, np.nan, dtype=float)
+        if pricing_normal_output is None:
+            pricing_normal_output = np.full(prev_prices.shape, np.nan, dtype=float)
+        if pricing_depreciation_unit_cost is None:
+            pricing_depreciation_unit_cost = np.zeros(prev_prices.shape, dtype=float)
+        if wage_obligation_preview is None:
+            wage_obligation_preview = np.full(prev_prices.shape, np.nan, dtype=float)
+
+        normal_output, normal_output_fallback = self._smooth_with_fallback(
+            np.asarray(pricing_normal_output, dtype=float),
+            prev_normal_output,
+            current_firm_sectors,
+            self.normal_output_smoothing_alpha,
         )
+        wage_obligation_preview = np.asarray(wage_obligation_preview, dtype=float)
+        labour_mc = np.divide(
+            wage_obligation_preview,
+            normal_output,
+            out=np.full_like(prev_prices, np.nan, dtype=float),
+            where=np.isfinite(wage_obligation_preview) & (wage_obligation_preview >= 0.0) & (normal_output > 0.0),
+        )
+        material_mc = np.asarray(pricing_material_mc, dtype=float)
+        mc_raw = material_mc + labour_mc
+        mc_raw[~self._valid_positive(mc_raw)] = np.nan
+        mc_smooth, mc_fallback = self._smooth_with_fallback(
+            mc_raw, prev_mc_smooth, current_firm_sectors, self.mc_smoothing_alpha
+        )
+
+        depreciation_unit_cost = np.asarray(pricing_depreciation_unit_cost, dtype=float).copy()
+        depreciation_unit_cost[~(np.isfinite(depreciation_unit_cost) & (depreciation_unit_cost >= 0.0))] = 0.0
+        ac_raw = mc_raw + depreciation_unit_cost
+        ac_raw[~self._valid_positive(ac_raw)] = np.nan
+        sector_ac_median = self._sector_stat(ac_raw, current_firm_sectors, "median")
+        sector_ac_p95 = self._sector_stat(ac_raw, current_firm_sectors, "p95")
+        ac_current_valid = self._valid_positive(ac_raw)
+        ac_outlier = ac_current_valid & np.isfinite(sector_ac_p95) & (ac_raw > sector_ac_p95)
+        ac_valid = ac_current_valid & ~ac_outlier
+        ac_signal = np.where(ac_valid, ac_raw, np.nan)
+        ac_signal = np.where(ac_outlier, sector_ac_median, ac_signal)
+        ac_smooth, ac_smooth_fallback = self._smooth_with_fallback(
+            ac_signal, prev_ac_smooth, current_firm_sectors, self.ac_smoothing_alpha
+        )
+        ac_fallback = (~ac_valid | (ac_smooth_fallback > 0.0)).astype(float)
 
         average_price_by_firm = prev_average_good_prices[current_firm_sectors]
         cheap = prev_firm_prices < average_price_by_firm
@@ -556,33 +647,47 @@ class SectorMarkupUnitCostPriceSetter(PriceSetter):
         )
         demand_pull = np.clip(demand_pull, min_inflation, max_inflation)
 
-        target_markup = markup_central.copy()
+        markup_mu = markup_central.copy()
         positive = demand_pull > 0.0
         negative = demand_pull < 0.0
-        target_markup[positive] = markup_central[positive] + self.demand_pull_speed * demand_pull[positive] * (
+        markup_mu[positive] = markup_central[positive] + self.demand_pull_speed * demand_pull[positive] * (
             markup_upper[positive] - markup_central[positive]
         )
-        target_markup[negative] = markup_central[negative] + self.demand_pull_speed * demand_pull[negative] * (
+        markup_mu[negative] = markup_central[negative] + self.demand_pull_speed * demand_pull[negative] * (
             markup_central[negative] - markup_lower[negative]
         )
-        target_markup = np.clip(target_markup, markup_lower, markup_upper)
+        markup_mu = np.clip(markup_mu, markup_lower, markup_upper)
 
-        computed_prices = target_markup * uc_smooth
-        invalid_price = ~(np.isfinite(computed_prices) & (computed_prices > 0.0))
-        prices = np.where(invalid_price, prev_prices, np.maximum(self.PRICE_FLOOR, computed_prices))
-        realized_markup = np.divide(
-            prices,
-            uc_smooth,
-            out=np.full_like(prices, np.nan, dtype=float),
-            where=np.isfinite(uc_smooth) & (uc_smooth > 0.0),
+        markup_candidate = markup_mu * mc_smooth
+        ac_candidate = self.ac_floor_share * ac_smooth
+        pre_tax_candidate = np.maximum(markup_candidate, ac_candidate)
+        ac_floor_binding = (ac_candidate >= markup_candidate) & self._valid_positive(ac_candidate)
+        grossup = np.where(
+            producer_tax_rates > 0.0,
+            1.0 / (1.0 - producer_tax_rates),
+            1.0,
         )
+        computed_prices = pre_tax_candidate * grossup
+        invalid_price = ~self._valid_positive(computed_prices)
+        prices = np.where(invalid_price, prev_prices, np.maximum(self.PRICE_FLOOR, computed_prices))
+        fallback_code = np.zeros(prev_prices.shape, dtype=float)
+        fallback_code = np.where(normal_output_fallback > 0.0, self.FALLBACK_NORMAL_OUTPUT, fallback_code)
+        fallback_code = np.where(mc_fallback > 0.0, self.FALLBACK_MC, fallback_code)
+        fallback_code = np.where(ac_fallback > 0.0, self.FALLBACK_AC, fallback_code)
+        fallback_code = np.where(invalid_price, self.FALLBACK_PREVIOUS_PRICE, fallback_code)
 
-        self.last_pricing_uc_smooth = uc_smooth
-        self.last_pricing_target_markup = target_markup
-        self.last_pricing_realized_markup = realized_markup
+        self.last_pricing_mc = mc_raw
+        self.last_pricing_mc_smooth = mc_smooth
+        self.last_pricing_ac = ac_raw
+        self.last_pricing_ac_smooth = ac_smooth
+        self.last_pricing_normal_output = normal_output
+        self.last_pricing_markup_mu = markup_mu
         self.last_pricing_markup_lower = markup_lower
         self.last_pricing_markup_upper = markup_upper
+        self.last_pricing_ac_floor_binding = ac_floor_binding.astype(float)
+        self.last_pricing_ac_fallback_binding = ac_fallback.astype(float)
         self.last_pricing_gate_state = gate_state
+        self.last_pricing_fallback_code = fallback_code
         return prices
 
 
@@ -624,7 +729,14 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
-        prev_uc_smooth: np.ndarray | None = None,
+        pricing_material_mc: np.ndarray | None = None,
+        pricing_normal_output: np.ndarray | None = None,
+        pricing_depreciation_unit_cost: np.ndarray | None = None,
+        wage_obligation_preview: np.ndarray | None = None,
+        producer_tax_rates: np.ndarray | None = None,
+        prev_mc_smooth: np.ndarray | None = None,
+        prev_ac_smooth: np.ndarray | None = None,
+        prev_normal_output: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -644,7 +756,14 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
             prev_unit_costs=prev_unit_costs,
             ppi_during=ppi_during,
             current_time=current_time,
-            prev_uc_smooth=prev_uc_smooth,
+            pricing_material_mc=pricing_material_mc,
+            pricing_normal_output=pricing_normal_output,
+            pricing_depreciation_unit_cost=pricing_depreciation_unit_cost,
+            wage_obligation_preview=wage_obligation_preview,
+            producer_tax_rates=producer_tax_rates,
+            prev_mc_smooth=prev_mc_smooth,
+            prev_ac_smooth=prev_ac_smooth,
+            prev_normal_output=prev_normal_output,
             min_inflation=min_inflation,
             max_inflation=max_inflation,
         )
@@ -703,7 +822,14 @@ class ExogenousPriceSetter(PriceSetter):
         prev_unit_costs: np.ndarray,
         ppi_during: np.ndarray,
         current_time: int,
-        prev_uc_smooth: np.ndarray | None = None,
+        pricing_material_mc: np.ndarray | None = None,
+        pricing_normal_output: np.ndarray | None = None,
+        pricing_depreciation_unit_cost: np.ndarray | None = None,
+        wage_obligation_preview: np.ndarray | None = None,
+        producer_tax_rates: np.ndarray | None = None,
+        prev_mc_smooth: np.ndarray | None = None,
+        prev_ac_smooth: np.ndarray | None = None,
+        prev_normal_output: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:

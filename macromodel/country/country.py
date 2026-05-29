@@ -691,11 +691,24 @@ class Country:
 
         # Firm prices
         if not self.assume_zero_growth:
+            firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
+                corresponding_firm=self.individuals.states["Corresponding Firm ID"],
+                individual_wages=self.individuals.ts.current("employee_income"),
+                income_taxes=self.central_government.states["Income Tax"],
+                employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
+                employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+                cpi=self.economy.current_consumer_price_level(),
+            )
             self.firms.ts.price.append(
                 self.firms.compute_price(
                     current_estimated_ppi_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
                     previous_average_good_prices=self.economy.ts.current("good_prices"),
                     ppi_during=self.exogenous.national_accounts_during["PPI (Value)"].values.flatten(),
+                    current_good_prices=self.economy.ts.current("good_prices"),
+                    wage_obligation_preview=firm_wage_obligation_preview,
+                    producer_tax_rates=self.central_government.states["Taxes Less Subsidies Rates"][
+                        self.firms.states["Industry"]
+                    ],
                 )
             )
 

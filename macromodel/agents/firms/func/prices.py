@@ -801,6 +801,8 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             - 1.0
         )
         demand_pull = np.clip(demand_pull, min_inflation, max_inflation)
+        # Preserve the relative-price gate: only cheap-tight firms raise markups and expensive-slack firms cut.
+        demand_pull = np.where(cheap_tight | expensive_slack, demand_pull, 0.0)
 
         markup_mu = markup_central.copy()
         positive = demand_pull > 0.0

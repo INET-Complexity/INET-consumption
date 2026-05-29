@@ -247,7 +247,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
             prev_normal_output=np.ones(n),
         )
 
-    def test_tight_slack_pressure_moves_markup_regardless_of_price_position(self, tmp_path):
+    def test_relative_price_gate_blocks_misaligned_tight_slack_pressure(self, tmp_path):
         setter = self._make_setter(tmp_path)
         kwargs = PRICE_KWARGS | dict(
             prev_prices=np.array([12.0, 8.0, 40.0, 10.0]),
@@ -262,8 +262,8 @@ class TestSectorMarkupMarginalCostPriceSetter:
 
         prices = setter.compute_price(**kwargs)
 
-        np.testing.assert_allclose(prices, np.array([15.0, 11.0, 30.0, 17.5]))
-        np.testing.assert_allclose(setter.last_pricing_markup_mu, np.array([1.5, 1.1, 3.0, 1.75]))
+        np.testing.assert_allclose(prices, np.array([12.0, 12.0, 20.0, 20.0]))
+        np.testing.assert_allclose(setter.last_pricing_markup_mu, np.array([1.2, 1.2, 2.0, 2.0]))
         np.testing.assert_allclose(
             setter.last_pricing_gate_state,
             np.array(
@@ -317,7 +317,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
         assert setter.last_pricing_markup_mu[0] == pytest.approx(1.1)
         assert setter.last_pricing_gate_state[0] == setter.GATE_EXPENSIVE_SLACK
 
-    def test_expensive_tight_moves_markup_up(self, tmp_path):
+    def test_expensive_tight_keeps_central_markup(self, tmp_path):
         setter = self._make_setter(tmp_path)
         kwargs = PRICE_KWARGS | dict(
             prev_prices=np.array([12.0]),
@@ -333,11 +333,11 @@ class TestSectorMarkupMarginalCostPriceSetter:
 
         prices = setter.compute_price(**kwargs)
 
-        assert prices[0] == pytest.approx(15.0)
-        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.5)
+        assert prices[0] == pytest.approx(12.0)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.2)
         assert setter.last_pricing_gate_state[0] == setter.GATE_EXPENSIVE_TIGHT
 
-    def test_cheap_slack_moves_markup_down(self, tmp_path):
+    def test_cheap_slack_keeps_central_markup(self, tmp_path):
         setter = self._make_setter(tmp_path)
         kwargs = PRICE_KWARGS | dict(
             prev_prices=np.array([8.0]),
@@ -353,8 +353,8 @@ class TestSectorMarkupMarginalCostPriceSetter:
 
         prices = setter.compute_price(**kwargs)
 
-        assert prices[0] == pytest.approx(11.0)
-        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.1)
+        assert prices[0] == pytest.approx(12.0)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.2)
         assert setter.last_pricing_gate_state[0] == setter.GATE_CHEAP_SLACK
 
     def test_demand_pull_speed_is_clipped(self, tmp_path):

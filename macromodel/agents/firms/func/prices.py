@@ -74,6 +74,7 @@ class PriceSetter(ABC):
         ppi_during: np.ndarray,
         current_time: int,
         pricing_material_mc: np.ndarray | None = None,
+        pricing_effective_labour_inputs: np.ndarray | None = None,
         pricing_normal_output: np.ndarray | None = None,
         pricing_depreciation_unit_cost: np.ndarray | None = None,
         wage_obligation_preview: np.ndarray | None = None,
@@ -107,6 +108,9 @@ class PriceSetter(ABC):
             current_time (int): Current period index
             pricing_material_mc (np.ndarray | None): Current technical material
                 marginal cost from firm technology and input prices.
+            pricing_effective_labour_inputs (np.ndarray | None): Current
+                effective labour capacity used to convert wage obligations into
+                labour marginal cost.
             pricing_normal_output (np.ndarray | None): Current normal-output
                 candidate for pricing-cost allocation.
             pricing_depreciation_unit_cost (np.ndarray | None): Current normal
@@ -198,6 +202,7 @@ class DefaultPriceSetter(PriceSetter):
         ppi_during: np.ndarray,
         current_time: int,
         pricing_material_mc: np.ndarray | None = None,
+        pricing_effective_labour_inputs: np.ndarray | None = None,
         pricing_normal_output: np.ndarray | None = None,
         pricing_depreciation_unit_cost: np.ndarray | None = None,
         wage_obligation_preview: np.ndarray | None = None,
@@ -468,6 +473,10 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_mc_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_ac = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_ac_smooth = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_material_mc = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_labour_mc = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_depreciation_unit_cost = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_initial_price_gap = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_normal_output = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_mu = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_lower = np.full(prev_prices.shape, np.nan, dtype=float)
@@ -542,6 +551,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         ppi_during: np.ndarray,
         current_time: int,
         pricing_material_mc: np.ndarray | None = None,
+        pricing_effective_labour_inputs: np.ndarray | None = None,
         pricing_normal_output: np.ndarray | None = None,
         pricing_depreciation_unit_cost: np.ndarray | None = None,
         wage_obligation_preview: np.ndarray | None = None,
@@ -578,6 +588,8 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         markup_upper = self.markup_upper_by_industry[current_firm_sectors]
         if pricing_material_mc is None:
             pricing_material_mc = np.full(prev_prices.shape, np.nan, dtype=float)
+        if pricing_effective_labour_inputs is None:
+            pricing_effective_labour_inputs = np.full(prev_prices.shape, np.nan, dtype=float)
         if pricing_normal_output is None:
             pricing_normal_output = np.full(prev_prices.shape, np.nan, dtype=float)
         if pricing_depreciation_unit_cost is None:
@@ -592,11 +604,15 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             self.normal_output_smoothing_alpha,
         )
         wage_obligation_preview = np.asarray(wage_obligation_preview, dtype=float)
+        pricing_effective_labour_inputs = np.asarray(pricing_effective_labour_inputs, dtype=float)
         labour_mc = np.divide(
             wage_obligation_preview,
-            normal_output,
+            pricing_effective_labour_inputs,
             out=np.full_like(prev_prices, np.nan, dtype=float),
-            where=np.isfinite(wage_obligation_preview) & (wage_obligation_preview >= 0.0) & (normal_output > 0.0),
+            where=np.isfinite(wage_obligation_preview)
+            & (wage_obligation_preview >= 0.0)
+            & np.isfinite(pricing_effective_labour_inputs)
+            & (pricing_effective_labour_inputs > 0.0),
         )
         material_mc = np.asarray(pricing_material_mc, dtype=float)
         mc_raw = material_mc + labour_mc
@@ -659,6 +675,17 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         markup_candidate = markup_mu * mc_smooth
         ac_candidate = self.ac_floor_share * ac_smooth
         pre_tax_candidate = np.maximum(markup_candidate, ac_candidate)
+        previous_pre_tax_price = np.where(
+            producer_tax_rates > 0.0,
+            prev_prices * (1.0 - producer_tax_rates),
+            prev_prices,
+        )
+        initial_price_gap = np.divide(
+            previous_pre_tax_price,
+            pre_tax_candidate,
+            out=np.full_like(prev_prices, np.nan, dtype=float),
+            where=self._valid_positive(previous_pre_tax_price) & self._valid_positive(pre_tax_candidate),
+        )
         ac_floor_binding = (ac_candidate >= markup_candidate) & self._valid_positive(ac_candidate)
         grossup = np.where(
             producer_tax_rates > 0.0,
@@ -678,6 +705,10 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_mc_smooth = mc_smooth
         self.last_pricing_ac = ac_raw
         self.last_pricing_ac_smooth = ac_smooth
+        self.last_pricing_material_mc = material_mc
+        self.last_pricing_labour_mc = labour_mc
+        self.last_pricing_depreciation_unit_cost = depreciation_unit_cost
+        self.last_pricing_initial_price_gap = initial_price_gap
         self.last_pricing_normal_output = normal_output
         self.last_pricing_markup_mu = markup_mu
         self.last_pricing_markup_lower = markup_lower
@@ -728,6 +759,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
         ppi_during: np.ndarray,
         current_time: int,
         pricing_material_mc: np.ndarray | None = None,
+        pricing_effective_labour_inputs: np.ndarray | None = None,
         pricing_normal_output: np.ndarray | None = None,
         pricing_depreciation_unit_cost: np.ndarray | None = None,
         wage_obligation_preview: np.ndarray | None = None,
@@ -755,6 +787,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
             ppi_during=ppi_during,
             current_time=current_time,
             pricing_material_mc=pricing_material_mc,
+            pricing_effective_labour_inputs=pricing_effective_labour_inputs,
             pricing_normal_output=pricing_normal_output,
             pricing_depreciation_unit_cost=pricing_depreciation_unit_cost,
             wage_obligation_preview=wage_obligation_preview,
@@ -821,6 +854,7 @@ class ExogenousPriceSetter(PriceSetter):
         ppi_during: np.ndarray,
         current_time: int,
         pricing_material_mc: np.ndarray | None = None,
+        pricing_effective_labour_inputs: np.ndarray | None = None,
         pricing_normal_output: np.ndarray | None = None,
         pricing_depreciation_unit_cost: np.ndarray | None = None,
         wage_obligation_preview: np.ndarray | None = None,

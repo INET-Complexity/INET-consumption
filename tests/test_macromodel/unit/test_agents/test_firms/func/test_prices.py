@@ -231,6 +231,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
         ac_values = mc_values if ac is None else (np.full(n, ac, dtype=float) if np.isscalar(ac) else np.asarray(ac))
         return dict(
             pricing_material_mc=mc_values,
+            pricing_effective_labour_inputs=np.ones(n),
             pricing_normal_output=np.ones(n),
             pricing_depreciation_unit_cost=ac_values - mc_values,
             wage_obligation_preview=np.zeros(n),
@@ -387,6 +388,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
                     curr_unit_costs=np.array([20.0, 0.0]),
                     prev_unit_costs=np.array([10.0, 10.0]),
                     pricing_material_mc=np.array([20.0, np.nan]),
+                    pricing_effective_labour_inputs=np.ones(2),
                     pricing_normal_output=np.ones(2),
                     pricing_depreciation_unit_cost=np.zeros(2),
                     wage_obligation_preview=np.zeros(2),
@@ -401,7 +403,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
         np.testing.assert_allclose(setter.last_pricing_mc_smooth, np.array([14.0, 10.0]))
         np.testing.assert_allclose(prices, np.array([16.8, 12.0]))
 
-    def test_wage_preview_enters_mc_through_normal_output(self, tmp_path):
+    def test_wage_preview_enters_mc_through_effective_labour_inputs(self, tmp_path):
         setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
             **(
@@ -414,6 +416,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
                     prev_demand=np.array([1.0]),
                     current_firm_sectors=np.array([0]),
                     pricing_material_mc=np.array([10.0]),
+                    pricing_effective_labour_inputs=np.array([10.0]),
                     pricing_normal_output=np.array([5.0]),
                     pricing_depreciation_unit_cost=np.array([0.0]),
                     wage_obligation_preview=np.array([20.0]),
@@ -425,8 +428,9 @@ class TestSectorMarkupMarginalCostPriceSetter:
             )
         )
 
-        np.testing.assert_allclose(setter.last_pricing_mc, np.array([14.0]))
-        np.testing.assert_allclose(prices, np.array([16.8]))
+        np.testing.assert_allclose(setter.last_pricing_labour_mc, np.array([2.0]))
+        np.testing.assert_allclose(setter.last_pricing_mc, np.array([12.0]))
+        np.testing.assert_allclose(prices, np.array([14.4]))
 
     def test_realised_production_and_accounting_uc_do_not_anchor_price(self, tmp_path):
         setter = self._make_setter(tmp_path)
@@ -444,6 +448,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
                     curr_unit_costs=np.array([1e9]),
                     prev_unit_costs=np.array([1e9]),
                     pricing_material_mc=np.array([10.0]),
+                    pricing_effective_labour_inputs=np.array([5.0]),
                     pricing_normal_output=np.array([5.0]),
                     pricing_depreciation_unit_cost=np.array([0.0]),
                     wage_obligation_preview=np.array([0.0]),
@@ -473,6 +478,7 @@ class TestSectorMarkupMarginalCostPriceSetter:
                     curr_unit_costs=np.array([0.0]),
                     prev_unit_costs=np.array([0.0]),
                     pricing_material_mc=np.array([np.nan]),
+                    pricing_effective_labour_inputs=np.array([np.nan]),
                     pricing_normal_output=np.array([np.nan]),
                     pricing_depreciation_unit_cost=np.array([0.0]),
                     wage_obligation_preview=np.array([np.nan]),

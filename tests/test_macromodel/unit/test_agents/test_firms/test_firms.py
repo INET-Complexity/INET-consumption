@@ -33,6 +33,10 @@ class TestFirms:
             "pricing_mc_smooth",
             "pricing_ac",
             "pricing_ac_smooth",
+            "pricing_material_mc",
+            "pricing_labour_mc",
+            "pricing_depreciation_unit_cost",
+            "pricing_initial_price_gap",
             "pricing_normal_output",
             "pricing_markup_mu",
             "pricing_markup_lower",
@@ -592,20 +596,17 @@ class TestFirms:
         assert normal_output[0] == pytest.approx(60.0)
         assert np.allclose(normal_output[1:], 50.0)
 
-    def test__pricing_depreciation_unit_cost_uses_previous_pre_tax_price(self, test_firms):
+    def test__pricing_depreciation_unit_cost_allocates_cfc_over_normal_output(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
-        test_firms.capital_depreciation_rates = np.full(test_firms.n_industries, 0.1)
-        test_firms.ts.override_current("price", np.full(n_firms, 100.0))
-        tax_rates = np.zeros(n_firms)
-        tax_rates[0] = 0.2
-        tax_rates[1] = -0.2
+        test_firms.ts.override_current("capital_depreciation_costs", np.full(n_firms, 30.0))
+        pricing_normal_output = np.full(n_firms, 10.0)
+        pricing_normal_output[0] = 15.0
 
-        depreciation_unit_cost = test_firms.compute_pricing_depreciation_unit_cost(tax_rates)
+        depreciation_unit_cost = test_firms.compute_pricing_depreciation_unit_cost(pricing_normal_output)
 
-        assert depreciation_unit_cost[0] == pytest.approx(8.0)
-        assert depreciation_unit_cost[1] == pytest.approx(10.0)
-        assert np.allclose(depreciation_unit_cost[2:], 10.0)
+        assert depreciation_unit_cost[0] == pytest.approx(2.0)
+        assert np.allclose(depreciation_unit_cost[1:], 3.0)
 
     def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

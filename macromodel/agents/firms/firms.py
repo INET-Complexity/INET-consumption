@@ -246,8 +246,8 @@ class Firms(Agent):
         normal_output[~self._valid_positive(normal_output)] = np.nan
         return normal_output
 
-    def compute_pricing_depreciation_unit_cost(self, producer_tax_rates: np.ndarray) -> np.ndarray:
-        """Compute non-circular CFC unit cost from previous pre-tax price."""
+    def compute_pricing_depreciation_unit_cost(self, pricing_normal_output: np.ndarray) -> np.ndarray:
+        """Compute CFC unit cost by allocating normal depreciation over normal output."""
         mode = self.configuration.parameters.capital_depreciation_accounting_mode
         if mode == "none":
             return np.zeros(self.ts.current("n_firms"), dtype=float)
@@ -256,16 +256,29 @@ class Firms(Agent):
                 f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'."
             )
 
-        producer_tax_rates = np.asarray(producer_tax_rates, dtype=float)
-        previous_price = np.asarray(self.ts.current("price"), dtype=float)
-        previous_pre_tax_price = np.where(
-            producer_tax_rates > 0.0,
-            previous_price * (1.0 - producer_tax_rates),
-            previous_price,
+        normal_depreciation_costs = np.asarray(self.capital_depreciation_accounting_costs(), dtype=float)
+        pricing_normal_output = np.asarray(pricing_normal_output, dtype=float)
+        previous_normal_output = np.asarray(self.ts.current("pricing_normal_output"), dtype=float)
+        normal_output = np.where(
+            self._valid_positive(pricing_normal_output),
+            pricing_normal_output,
+            np.where(self._valid_positive(previous_normal_output), previous_normal_output, np.nan),
         )
-        previous_pre_tax_price[~self._valid_positive(previous_pre_tax_price)] = np.nan
-        rates = self.capital_depreciation_rates[self.states["Industry"]]
-        depreciation_unit_cost = rates * previous_pre_tax_price
+        for sector in np.unique(self.states["Industry"]):
+            sector_mask = self.states["Industry"] == sector
+            sector_valid = sector_mask & self._valid_positive(normal_output)
+            if np.any(sector_valid):
+                normal_output[sector_mask & ~self._valid_positive(normal_output)] = np.nanmedian(
+                    normal_output[sector_valid]
+                )
+        depreciation_unit_cost = np.divide(
+            normal_depreciation_costs,
+            normal_output,
+            out=np.zeros_like(normal_depreciation_costs, dtype=float),
+            where=np.isfinite(normal_depreciation_costs)
+            & (normal_depreciation_costs >= 0.0)
+            & self._valid_positive(normal_output),
+        )
         depreciation_unit_cost[~(np.isfinite(depreciation_unit_cost) & (depreciation_unit_cost >= 0.0))] = 0.0
         return depreciation_unit_cost
 
@@ -1316,7 +1329,8 @@ class Firms(Agent):
         pricing_normal_output = self.compute_pricing_normal_output_candidate(
             capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
         )
-        pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(producer_tax_rates)
+        pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
+        pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
         prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,
@@ -1339,6 +1353,7 @@ class Firms(Agent):
             ppi_during=ppi_during,
             current_time=len(self.ts.historic("price")),
             pricing_material_mc=pricing_material_mc,
+            pricing_effective_labour_inputs=pricing_effective_labour_inputs,
             pricing_normal_output=pricing_normal_output,
             pricing_depreciation_unit_cost=pricing_depreciation_unit_cost,
             wage_obligation_preview=wage_obligation_preview,
@@ -1358,6 +1373,12 @@ class Firms(Agent):
             "pricing_mc_smooth": getattr(price_setter, "last_pricing_mc_smooth", default),
             "pricing_ac": getattr(price_setter, "last_pricing_ac", default),
             "pricing_ac_smooth": getattr(price_setter, "last_pricing_ac_smooth", default),
+            "pricing_material_mc": getattr(price_setter, "last_pricing_material_mc", default),
+            "pricing_labour_mc": getattr(price_setter, "last_pricing_labour_mc", default),
+            "pricing_depreciation_unit_cost": getattr(
+                price_setter, "last_pricing_depreciation_unit_cost", default
+            ),
+            "pricing_initial_price_gap": getattr(price_setter, "last_pricing_initial_price_gap", default),
             "pricing_normal_output": getattr(price_setter, "last_pricing_normal_output", default),
             "pricing_markup_mu": getattr(price_setter, "last_pricing_markup_mu", default),
             "pricing_markup_lower": getattr(price_setter, "last_pricing_markup_lower", default),

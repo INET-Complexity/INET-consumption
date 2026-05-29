@@ -31,6 +31,10 @@ class FirmTimeSeries(TimeSeries):
     - pricing_mc_smooth: Smoothed technical marginal cost
     - pricing_ac: Normal average cost used for the AC floor
     - pricing_ac_smooth: Smoothed normal average cost
+    - pricing_material_mc: Material component of pricing marginal cost
+    - pricing_labour_mc: Labour component of pricing marginal cost
+    - pricing_depreciation_unit_cost: Depreciation component added to pricing AC
+    - pricing_initial_price_gap: Previous pre-tax price divided by the new pre-tax cost candidate
     - pricing_normal_output: Normal output denominator used by pricing
     - pricing_markup_mu: Markup selected before tax gross-up/fallbacks
     - pricing_markup_lower: Lower markup corridor bound
@@ -287,6 +291,10 @@ class FirmTimeSeries(TimeSeries):
             pricing_mc_smooth=np.full(data.shape[0], np.nan),
             pricing_ac=np.full(data.shape[0], np.nan),
             pricing_ac_smooth=np.full(data.shape[0], np.nan),
+            pricing_material_mc=np.full(data.shape[0], np.nan),
+            pricing_labour_mc=np.full(data.shape[0], np.nan),
+            pricing_depreciation_unit_cost=np.full(data.shape[0], np.nan),
+            pricing_initial_price_gap=np.full(data.shape[0], np.nan),
             pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
             pricing_markup_mu=np.full(data.shape[0], np.nan),
             pricing_markup_lower=np.full(data.shape[0], np.nan),
@@ -657,6 +665,10 @@ def create_firms_timeseries(
         pricing_mc_smooth=np.full(data.shape[0], np.nan),
         pricing_ac=np.full(data.shape[0], np.nan),
         pricing_ac_smooth=np.full(data.shape[0], np.nan),
+        pricing_material_mc=np.full(data.shape[0], np.nan),
+        pricing_labour_mc=np.full(data.shape[0], np.nan),
+        pricing_depreciation_unit_cost=np.full(data.shape[0], np.nan),
+        pricing_initial_price_gap=np.full(data.shape[0], np.nan),
         pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
         pricing_markup_mu=np.full(data.shape[0], np.nan),
         pricing_markup_lower=np.full(data.shape[0], np.nan),

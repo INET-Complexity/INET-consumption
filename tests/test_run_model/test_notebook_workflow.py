@@ -124,6 +124,28 @@ def test_prepare_data_uses_deterministic_cache_path(tmp_path, monkeypatch):
     assert result.national_accounts.equals(national_accounts)
 
 
+def test_requires_cfc_rate_cache_rebuild_detects_stale_basis():
+    data_config = SimpleNamespace(
+        country_configs={
+            "ESP": SimpleNamespace(
+                firms_configuration=SimpleNamespace(capital_depreciation_accounting_mode="eurostat_cfc")
+            )
+        }
+    )
+
+    stale_data = SimpleNamespace(
+        synthetic_countries={"ESP": SimpleNamespace(firms=SimpleNamespace(capital_depreciation_rate_basis="output"))}
+    )
+    current_data = SimpleNamespace(
+        synthetic_countries={
+            "ESP": SimpleNamespace(firms=SimpleNamespace(capital_depreciation_rate_basis="capital_stock"))
+        }
+    )
+
+    assert nw._requires_cfc_rate_cache_rebuild(stale_data, data_config)
+    assert not nw._requires_cfc_rate_cache_rebuild(current_data, data_config)
+
+
 def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch):
     env_cfg = _fake_env_config(tmp_path)
     country_cfg = _summary_config()

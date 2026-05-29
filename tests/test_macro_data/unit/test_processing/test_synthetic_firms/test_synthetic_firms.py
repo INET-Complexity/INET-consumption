@@ -35,6 +35,29 @@ class TestSyntheticFirms:
 
         assert firms.firm_data["Capital Depreciation Costs"].to_numpy() == pytest.approx([3.5, 12.4])
 
+    def test__synthetic_firms_records_capital_stock_cfc_rate_basis(self):
+        firms = DefaultSyntheticFirms(
+            country_name="FRA",
+            scale=1,
+            year=2014,
+            industries=["A"],
+            number_of_firms_by_industry=np.array([1]),
+            firm_data=pd.DataFrame({"Industry": [0]}),
+            intermediate_inputs_stock=np.zeros((1, 1)),
+            used_intermediate_inputs=np.zeros((1, 1)),
+            capital_inputs_stock=np.zeros((1, 1)),
+            used_capital_inputs=np.zeros((1, 1)),
+            total_firm_deposits=0.0,
+            total_firm_debt=0.0,
+            capital_inputs_productivity_matrix=np.ones((1, 1)),
+            intermediate_inputs_productivity_matrix=np.ones((1, 1)),
+            capital_inputs_depreciation_matrix=np.zeros((1, 1)),
+            labour_productivity_by_industry=np.ones(1),
+            capital_depreciation_rates=np.array([0.1]),
+        )
+
+        assert firms.capital_depreciation_rate_basis == "capital_stock"
+
     def test__create(self, readers, industry_data):
         industries = [
             "A",

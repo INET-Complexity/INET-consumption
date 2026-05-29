@@ -195,6 +195,24 @@ class TestFirms:
                 industries=datawrapper.industries,
             )
 
+    def test__from_pickled_agent_rejects_stale_cfc_output_ratio_cache(self, datawrapper):
+        country = datawrapper.synthetic_countries["FRA"]
+        country.firms.capital_depreciation_rate_basis = "output"
+        configuration = FirmsConfiguration()
+        configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        configuration.parameters.capital_replacement_matrix_source = "eurostat_cfc_output"
+
+        with pytest.raises(ValueError, match="capital_depreciation_rate_basis='capital_stock'"):
+            Firms.from_pickled_agent(
+                synthetic_firms=country.firms,
+                configuration=configuration,
+                country_name="FRA",
+                all_country_names=["FRA", "ROW"],
+                goods_criticality_matrix=country.goods_criticality_matrix,
+                average_initial_price=country.industry_data["industry_vectors"]["Average Initial Price"].values,
+                industries=datawrapper.industries,
+            )
+
     def test__borrower_credit_room_is_not_clipped_by_target_credit(self, test_banks, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         test_banks.parameters.enable_firm_loans_return_on_assets_restriction = False

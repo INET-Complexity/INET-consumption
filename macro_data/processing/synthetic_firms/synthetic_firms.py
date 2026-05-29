@@ -134,6 +134,7 @@ class SyntheticFirms(ABC):
         if capital_depreciation_rates is None:
             capital_depreciation_rates = np.zeros(len(industries))
         self.capital_depreciation_rates = np.asarray(capital_depreciation_rates, dtype=float)
+        self.capital_depreciation_rate_basis = "capital_stock"
 
         self.labour_productivity_by_industry = labour_productivity_by_industry
 

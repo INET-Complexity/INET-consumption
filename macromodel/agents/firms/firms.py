@@ -370,6 +370,15 @@ class Firms(Agent):
                 "capital_depreciation_accounting_mode='eurostat_cfc' requires "
                 "capital_replacement_matrix_source='eurostat_cfc_output'."
             )
+        if configuration.parameters.capital_depreciation_accounting_mode == "eurostat_cfc":
+            cfc_rate_basis = getattr(synthetic_firms, "capital_depreciation_rate_basis", None)
+            if cfc_rate_basis != "capital_stock":
+                raise ValueError(
+                    "Incompatible synthetic firm CFC data: expected "
+                    "capital_depreciation_rate_basis='capital_stock'. "
+                    "Rebuild data.pkl so capital_depreciation_rates are Eurostat "
+                    "CFC/capital-stock rates, not stale CFC/output ratios."
+                )
         from macromodel.agents.firms.func.prices import SectorExogenousPriceSetter
 
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.firms")

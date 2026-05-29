@@ -406,6 +406,16 @@ class Economy:
         return float(np.prod(1.0 + clean_inflation[-periods_per_year:]) - 1.0)
 
     @staticmethod
+    def _bounded_expm1_rate(log_rate: float, min_rate: float, max_rate: float) -> float:
+        """Convert a log rate to a bounded level rate without overflowing."""
+        if min_rate <= -1.0:
+            min_log_rate = -np.inf
+        else:
+            min_log_rate = np.log1p(min_rate)
+        max_log_rate = np.log1p(max_rate)
+        return float(np.expm1(np.clip(log_rate, min_log_rate, max_log_rate)))
+
+    @staticmethod
     def _normalise_index_weights(values: np.ndarray) -> np.ndarray:
         """Return positive finite index weights, falling back to equal weights."""
         weights = np.asarray(values, dtype=float)
@@ -566,16 +576,15 @@ class Economy:
             if len(historic_cpi_inflation[~np.isnan(historic_cpi_inflation)]) < 3:
                 self.ts.estimated_cpi_inflation.append([default_inflation])
             else:
-                estimated_cpi_inflation = (
-                    np.exp(
-                        self.functions["inflation_forecaster"].forecast_inflation(
-                            historic_inflation=historic_cpi_inflation,
-                            exogenous_inflation=exogenous_cpi_inflation_during,
-                            current_time=len(self.ts.historic(self.consumer_price_level_series_name())),
-                            assume_zero_noise=assume_zero_noise,
-                        )[0]
-                    )
-                    - 1.0
+                estimated_cpi_inflation = self._bounded_expm1_rate(
+                    self.functions["inflation_forecaster"].forecast_inflation(
+                        historic_inflation=historic_cpi_inflation,
+                        exogenous_inflation=exogenous_cpi_inflation_during,
+                        current_time=len(self.ts.historic(self.consumer_price_level_series_name())),
+                        assume_zero_noise=assume_zero_noise,
+                    )[0],
+                    min_inflation,
+                    max_inflation,
                 )
                 estimated_cpi_inflation = np.maximum(
                     min_inflation,
@@ -597,16 +606,15 @@ class Economy:
             if len(historic_ppi_inflation[~np.isnan(historic_ppi_inflation)]) < 3:
                 self.ts.estimated_ppi_inflation.append([default_inflation])
             else:
-                estimated_ppi_inflation = (
-                    np.exp(
-                        self.functions["inflation_forecaster"].forecast_inflation(
-                            historic_inflation=historic_ppi_inflation,
-                            exogenous_inflation=exogenous_ppi_inflation_during,
-                            current_time=len(self.ts.historic("ppi")),
-                            assume_zero_noise=assume_zero_noise,
-                        )[0]
-                    )
-                    - 1.0
+                estimated_ppi_inflation = self._bounded_expm1_rate(
+                    self.functions["inflation_forecaster"].forecast_inflation(
+                        historic_inflation=historic_ppi_inflation,
+                        exogenous_inflation=exogenous_ppi_inflation_during,
+                        current_time=len(self.ts.historic("ppi")),
+                        assume_zero_noise=assume_zero_noise,
+                    )[0],
+                    min_inflation,
+                    max_inflation,
                 )
                 estimated_ppi_inflation = np.maximum(
                     min_inflation,
@@ -628,16 +636,15 @@ class Economy:
                         np.array(self.ts.historic("total_growth")).flatten(),
                     )
                 )
-                estimated_growth = (
-                    np.exp(
-                        self.functions["growth"].forecast_growth(
-                            historic_growth=historic_growth,
-                            exogenous_growth=exogenous_growth_during,
-                            current_time=len(self.ts.historic("ppi")),
-                            assume_zero_noise=assume_zero_noise,
-                        )[0]
-                    )
-                    - 1.0
+                estimated_growth = self._bounded_expm1_rate(
+                    self.functions["growth"].forecast_growth(
+                        historic_growth=historic_growth,
+                        exogenous_growth=exogenous_growth_during,
+                        current_time=len(self.ts.historic("ppi")),
+                        assume_zero_noise=assume_zero_noise,
+                    )[0],
+                    min_growth,
+                    max_growth,
                 )
                 estimated_growth = np.maximum(min_growth, np.minimum(max_growth, estimated_growth))
                 assert not np.isnan(estimated_growth)
@@ -656,16 +663,15 @@ class Economy:
             if len(historic_hpi_growth[~np.isnan(historic_hpi_growth)]) < 3:
                 self.ts.estimated_hpi_inflation.append([default_hpi_growth])
             else:
-                estimated_hpi_inflation = (
-                    np.exp(
-                        self.functions["house_price_index"].forecast_hpi_growth(
-                            historic_hpi=historic_hpi_growth,
-                            min_hpi_growth=min_growth,
-                            max_hpi_growth=max_growth,
-                            assume_zero_noise=assume_zero_noise,
-                        )[0]
-                    )
-                    - 1.0
+                estimated_hpi_inflation = self._bounded_expm1_rate(
+                    self.functions["house_price_index"].forecast_hpi_growth(
+                        historic_hpi=historic_hpi_growth,
+                        min_hpi_growth=min_growth,
+                        max_hpi_growth=max_growth,
+                        assume_zero_noise=assume_zero_noise,
+                    )[0],
+                    min_growth,
+                    max_growth,
                 )
                 assert not np.isnan(estimated_hpi_inflation)
                 self.ts.estimated_hpi_inflation.append([estimated_hpi_inflation])

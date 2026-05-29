@@ -227,6 +227,22 @@ def summarize_agent_counts(data: DataWrapper, country_code: str) -> dict[str, in
     }
 
 
+def _requires_cfc_rate_cache_rebuild(data: DataWrapper, data_config: DataConfiguration) -> bool:
+    """Return true when cached firm CFC rates predate stock-rate semantics."""
+    country_configs = getattr(data_config, "country_configs", {})
+    synthetic_countries = getattr(data, "synthetic_countries", {})
+    for country, country_config in country_configs.items():
+        firms_config = getattr(country_config, "firms_configuration", None)
+        if getattr(firms_config, "capital_depreciation_accounting_mode", "none") != "eurostat_cfc":
+            continue
+
+        synthetic_country = synthetic_countries.get(str(country), synthetic_countries.get(country))
+        synthetic_firms = getattr(synthetic_country, "firms", None)
+        if getattr(synthetic_firms, "capital_depreciation_rate_basis", None) != "capital_stock":
+            return True
+    return False
+
+
 def prepare_data(config: NotebookRunConfig) -> PreparedData:
     """Build or load notebook data and return the objects needed for simulation."""
     cfg, raw_data_path, output_dir, _ = _resolve_runtime_config(config)
@@ -239,7 +255,17 @@ def prepare_data(config: NotebookRunConfig) -> PreparedData:
 
     if data_pkl_path.exists() and not config.force_rebuild_data:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
-        creator = data
+        if _requires_cfc_rate_cache_rebuild(data, data_config):
+            print(f"Rebuilding stale CFC-rate data cache: {data_pkl_path}")
+            creator = DataWrapper.from_config(
+                configuration=data_config,
+                raw_data_path=raw_data_path,
+                single_hfcs_survey=config.single_hfcs_survey,
+            )
+            creator.save(str(data_pkl_path))
+            data = DataWrapper.init_from_pickle(str(data_pkl_path))
+        else:
+            creator = data
     else:
         creator = DataWrapper.from_config(
             configuration=data_config,
@@ -352,10 +378,19 @@ def run_benchmark(
             loaded_from_cache=True,
         )
 
+    data_config = _load_data_config(cfg)
     if data_pkl_path.exists() and not config.force_rerun_benchmark:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
+        if _requires_cfc_rate_cache_rebuild(data, data_config):
+            print(f"Rebuilding stale benchmark CFC-rate data cache: {data_pkl_path}")
+            data = DataWrapper.from_config(
+                configuration=data_config,
+                raw_data_path=raw_data_path,
+                single_hfcs_survey=config.single_hfcs_survey,
+            )
+            data.save(str(data_pkl_path))
+            data = DataWrapper.init_from_pickle(str(data_pkl_path))
     else:
-        data_config = _load_data_config(cfg)
         data = DataWrapper.from_config(
             configuration=data_config,
             raw_data_path=raw_data_path,

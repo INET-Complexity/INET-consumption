@@ -38,7 +38,8 @@ The class stores firm data in a pandas DataFrame with the following key columns:
 - `total_firm_debt`: Aggregate firm debt
 - `capital_inputs_productivity_matrix`: Capital productivity parameters
 - `intermediate_inputs_productivity_matrix`: Input productivity parameters
-- `capital_inputs_depreciation_matrix`: Capital depreciation rates
+- `capital_inputs_depreciation_matrix`: Deprecated alias for the physical capital-use/replacement matrix
+- `capital_depreciation_rates`: Period Eurostat CFC/capital-stock accounting rates
 - `labour_productivity_by_industry`: Labor productivity by industry
 
 ## Main Methods

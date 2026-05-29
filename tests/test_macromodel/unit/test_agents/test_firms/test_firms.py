@@ -29,6 +29,25 @@ class TestFirms:
             "target_production",
             "price",
             "price_in_usd",
+            "pricing_mc",
+            "pricing_mc_smooth",
+            "pricing_ac",
+            "pricing_ac_smooth",
+            "pricing_material_mc",
+            "pricing_labour_mc",
+            "pricing_depreciation_unit_cost",
+            "pricing_initial_price_gap",
+            "pricing_normal_output",
+            "pricing_markup_mu",
+            "pricing_markup_lower",
+            "pricing_markup_upper",
+            "pricing_ac_floor_binding",
+            "pricing_ac_fallback_binding",
+            "pricing_gate_state",
+            "pricing_fallback_code",
+            "pricing_cost_normalization_factor",
+            "pricing_cost_normalization_raw_gap",
+            "pricing_cost_normalization_status",
             "profits",
             "taxes_paid_on_production",
             "corporate_taxes_paid",
@@ -157,6 +176,36 @@ class TestFirms:
         ]:
             assert ts_key in test_firms.ts.get_keys()
 
+    def test__pricing_cost_state_does_not_bootstrap_from_accounting_unit_costs(self, test_firms):
+        assert np.isfinite(test_firms.ts.current("unit_costs")).any()
+        assert np.isnan(test_firms.ts.current("pricing_mc_smooth")).all()
+        assert np.isnan(test_firms.ts.current("pricing_ac_smooth")).all()
+
+    def test__compute_price_passes_initial_output_weights_and_appends_normalization_diagnostics(self, test_firms):
+        class CapturingPriceSetter:
+            def compute_price(self, **kwargs):
+                self.initial_output_weights = kwargs["initial_output_weights"].copy()
+                shape = kwargs["prev_prices"].shape
+                self.last_pricing_cost_normalization_factor = np.full(shape, 1.25)
+                self.last_pricing_cost_normalization_raw_gap = np.full(shape, 1.10)
+                self.last_pricing_cost_normalization_status = np.full(shape, 1.0)
+                return kwargs["prev_prices"].copy()
+
+        price_setter = CapturingPriceSetter()
+        test_firms.functions["prices"] = price_setter
+        previous_average_good_prices = np.ones(test_firms.n_industries)
+
+        test_firms.compute_price(
+            current_estimated_ppi_inflation=0.0,
+            previous_average_good_prices=previous_average_good_prices,
+            ppi_during=np.ones(2),
+        )
+
+        np.testing.assert_allclose(price_setter.initial_output_weights, test_firms.ts.initial("production"))
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_factor"), 1.25)
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_raw_gap"), 1.10)
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_status"), 1.0)
+
     def test__from_pickled_agent_rejects_cfc_depreciation_without_cfc_replacement(self, datawrapper):
         country = datawrapper.synthetic_countries["FRA"]
         configuration = FirmsConfiguration()
@@ -164,6 +213,24 @@ class TestFirms:
         configuration.parameters.capital_replacement_matrix_source = "capital_compensation"
 
         with pytest.raises(ValueError, match="capital_replacement_matrix_source='eurostat_cfc_output'"):
+            Firms.from_pickled_agent(
+                synthetic_firms=country.firms,
+                configuration=configuration,
+                country_name="FRA",
+                all_country_names=["FRA", "ROW"],
+                goods_criticality_matrix=country.goods_criticality_matrix,
+                average_initial_price=country.industry_data["industry_vectors"]["Average Initial Price"].values,
+                industries=datawrapper.industries,
+            )
+
+    def test__from_pickled_agent_rejects_stale_cfc_output_ratio_cache(self, datawrapper):
+        country = datawrapper.synthetic_countries["FRA"]
+        country.firms.capital_depreciation_rate_basis = "output"
+        configuration = FirmsConfiguration()
+        configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        configuration.parameters.capital_replacement_matrix_source = "eurostat_cfc_output"
+
+        with pytest.raises(ValueError, match="capital_depreciation_rate_basis='capital_stock'"):
             Firms.from_pickled_agent(
                 synthetic_firms=country.firms,
                 configuration=configuration,
@@ -533,7 +600,7 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("executed_tfp_investment"), 4.0)
         assert np.allclose(test_firms.ts.current("direct_tfp_investment_cash_expense"), 4.0)
 
-    def test__compute_capital_depreciation_costs_uses_output_scaled_cfc(self, test_firms):
+    def test__compute_capital_depreciation_costs_uses_stock_value_cfc(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
         test_firms.capital_depreciation_rates = np.full(test_firms.n_industries, 0.1)
@@ -541,7 +608,51 @@ class TestFirms:
         test_firms.ts.override_current("price", np.full(n_firms, 2.0))
         test_firms.ts.override_current("capital_inputs_stock_value", np.full(n_firms, 1000.0))
 
-        assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 2.0))
+        assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 100.0))
+
+    def test__pricing_material_mc_uses_reciprocal_productivity(self, test_firms):
+        n_industries = test_firms.n_industries
+        test_firms.base_intermediate_inputs_productivity_matrix = np.zeros((n_industries, n_industries))
+        test_firms.base_intermediate_inputs_productivity_matrix[0, :] = 2.0
+        test_firms.base_intermediate_inputs_productivity_matrix[1, :] = 4.0
+        good_prices = np.full(n_industries, np.nan)
+        good_prices[0] = 8.0
+
+        material_mc = test_firms.compute_pricing_material_mc(good_prices)
+
+        assert np.allclose(material_mc, 8.0 / 2.0 + 8.0 / 4.0)
+
+    def test__pricing_material_mc_is_invalid_when_all_good_prices_are_invalid(self, test_firms):
+        material_mc = test_firms.compute_pricing_material_mc(np.full(test_firms.n_industries, np.nan))
+
+        assert np.isnan(material_mc).all()
+
+    def test__pricing_normal_output_uses_conservative_capital_floor(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.pricing_rho_k_by_sector = np.full(test_firms.n_industries, 2.0)
+        capital_stock = np.zeros((n_firms, test_firms.n_industries))
+        capital_stock[:, 0] = 100.0
+        target_production = np.full(n_firms, 1.0)
+        target_production[0] = 60.0
+        test_firms.ts.override_current("capital_inputs_stock", capital_stock)
+        test_firms.ts.override_current("target_production", target_production)
+
+        normal_output = test_firms.compute_pricing_normal_output_candidate(capital_floor_lambda=0.25)
+
+        assert normal_output[0] == pytest.approx(60.0)
+        assert np.allclose(normal_output[1:], 50.0)
+
+    def test__pricing_depreciation_unit_cost_allocates_cfc_over_normal_output(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
+        test_firms.ts.override_current("capital_depreciation_costs", np.full(n_firms, 30.0))
+        pricing_normal_output = np.full(n_firms, 10.0)
+        pricing_normal_output[0] = 15.0
+
+        depreciation_unit_cost = test_firms.compute_pricing_depreciation_unit_cost(pricing_normal_output)
+
+        assert depreciation_unit_cost[0] == pytest.approx(2.0)
+        assert np.allclose(depreciation_unit_cost[1:], 3.0)
 
     def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
@@ -624,6 +735,38 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("firm_settlement_balance_sheet_residual"), 0.0)
         assert np.allclose(test_firms.ts.current("firm_settlement_transaction_flow_residual"), 0.0)
         assert np.all(test_firms.ts.current("firm_settlement_accounting_control_passed"))
+
+    def test__check_firm_accounting_controls_allows_high_scale_roundoff(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        opening_deposits = np.full(n_firms, 1e24)
+        closing_deposits = opening_deposits + 1e8
+
+        test_firms.ts.override_current("activity_finance_opening_deposits", opening_deposits)
+        test_firms.ts.override_current("deposits", closing_deposits)
+        test_firms.ts.override_current("nominal_amount_sold_in_lcu", np.zeros(n_firms))
+        test_firms.ts.override_current("received_credit", np.zeros(n_firms))
+        test_firms.ts.override_current("total_wage", np.zeros(n_firms))
+        test_firms.ts.override_current("nominal_amount_spent_in_lcu", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("direct_tfp_investment_cash_expense", np.zeros(n_firms))
+        test_firms.ts.override_current("taxes_paid_on_production", np.zeros(n_firms))
+        test_firms.ts.override_current("corporate_taxes_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("interest_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+        test_firms.ts.override_current("inventory", np.zeros(n_firms))
+        test_firms.ts.override_current("price", np.ones(n_firms))
+        test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("debt", np.zeros(n_firms))
+        test_firms.ts.override_current("equity", closing_deposits)
+
+        result = test_firms.check_firm_accounting_controls(
+            current_good_prices=np.ones(n_industries),
+            enforce=True,
+        )
+
+        assert np.max(np.abs(result["transaction_flow_residual"])) > 1e-4
+        assert np.all(result["control_passed"])
 
     def test__check_firm_accounting_controls_raises_on_mismatch(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

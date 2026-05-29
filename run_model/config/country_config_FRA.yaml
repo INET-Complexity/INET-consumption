@@ -205,13 +205,27 @@ FRA:
           labour_market_tightness_markup_scale: 0
           markup_time_span: 4
       prices:
-        name: DefaultPriceSetter
+        name: SectorMarkupMarginalCostPriceSetter
         path_name: prices
         parameters:
-          price_setting_noise_std: 0.05
-          price_setting_speed_cp: 0.025
-          price_setting_speed_dp: 0.025
-          price_setting_speed_gf: 1.0
+          orbis_markup_path: run_model/data/raw_data/orbis/orbis_markups_by_nace_rev_2_main_section.csv
+          markup_year: 2014
+          markup_central_column: mu_op_weighted_median
+          markup_lower_column: mu_op_median_interval_low
+          markup_upper_column: mu_op_median_interval_high
+          markup_corridor_relative_cap: 1.0
+          mc_smoothing_horizon: 4
+          ac_smoothing_horizon: 8
+          normal_output_smoothing_horizon: 8
+          normal_output_capital_floor_lambda: 0.25
+          demand_pull_speed: 1.0
+          ac_floor_share: 1.0
+          initial_cost_normalization_mode: output_weighted_robust_gap
+          initial_cost_normalization_lower_quantile: 0.01
+          initial_cost_normalization_upper_quantile: 0.99
+          initial_cost_normalization_min_factor: 0.5
+          initial_cost_normalization_max_factor: 2.0
+          initial_cost_normalization_min_valid_weight_share: 0.5
       production:
         name: CriticalAndImportantLeontief
         path_name: production

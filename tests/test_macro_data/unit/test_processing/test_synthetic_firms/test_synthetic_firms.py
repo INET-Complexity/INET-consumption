@@ -14,6 +14,50 @@ PARENT = pathlib.Path(__file__).parent.parent.parent.parent.parent.resolve()
 
 
 class TestSyntheticFirms:
+    def test__set_capital_depreciation_costs_uses_capital_stock_value(self):
+        firms = DefaultSyntheticFirms.__new__(DefaultSyntheticFirms)
+        firms.capital_depreciation_rates = np.array([0.10, 0.20])
+        firms.capital_inputs_stock = np.array(
+            [
+                [10.0, 5.0],
+                [1.0, 20.0],
+            ]
+        )
+        firms.firm_data = pd.DataFrame(
+            {
+                "Industry": [0, 1],
+                "Production": [999.0, 999.0],
+                "Price": [999.0, 999.0],
+            }
+        )
+
+        firms.set_capital_depreciation_costs(initial_good_prices=np.array([2.0, 3.0]))
+
+        assert firms.firm_data["Capital Depreciation Costs"].to_numpy() == pytest.approx([3.5, 12.4])
+
+    def test__synthetic_firms_records_capital_stock_cfc_rate_basis(self):
+        firms = DefaultSyntheticFirms(
+            country_name="FRA",
+            scale=1,
+            year=2014,
+            industries=["A"],
+            number_of_firms_by_industry=np.array([1]),
+            firm_data=pd.DataFrame({"Industry": [0]}),
+            intermediate_inputs_stock=np.zeros((1, 1)),
+            used_intermediate_inputs=np.zeros((1, 1)),
+            capital_inputs_stock=np.zeros((1, 1)),
+            used_capital_inputs=np.zeros((1, 1)),
+            total_firm_deposits=0.0,
+            total_firm_debt=0.0,
+            capital_inputs_productivity_matrix=np.ones((1, 1)),
+            intermediate_inputs_productivity_matrix=np.ones((1, 1)),
+            capital_inputs_depreciation_matrix=np.zeros((1, 1)),
+            labour_productivity_by_industry=np.ones(1),
+            capital_depreciation_rates=np.array([0.1]),
+        )
+
+        assert firms.capital_depreciation_rate_basis == "capital_stock"
+
     def test__create(self, readers, industry_data):
         industries = [
             "A",

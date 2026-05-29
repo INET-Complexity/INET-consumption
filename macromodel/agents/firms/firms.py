@@ -101,7 +101,7 @@ class Firms(Agent):
             intermediate_inputs_productivity_matrix (np.ndarray): Input-output coefficients
             capital_inputs_productivity_matrix (np.ndarray): Capital productivity coefficients
             capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
-            capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
+            capital_depreciation_rates (np.ndarray): Period CFC/capital-stock rates by industry
             goods_criticality_matrix (np.ndarray): Critical input requirements
             intermediate_inputs_utilisation_rate (float): Input capacity utilization
             capital_inputs_utilisation_rate (float): Capital capacity utilization
@@ -144,6 +144,7 @@ class Firms(Agent):
 
         self.average_initial_price = average_initial_price
         self.current_good_prices = np.asarray(average_initial_price, dtype=float)
+        self.pricing_rho_k_by_sector = self._initial_pricing_capital_productivity()
 
         self.configuration = configuration
 
@@ -180,6 +181,106 @@ class Firms(Agent):
             return base_coefficients * multipliers
 
         return base_coefficients
+
+    def _initial_pricing_capital_productivity(self) -> np.ndarray:
+        """Sector median normal-output productivity of installed capital."""
+        rho = np.full(self.n_industries, np.nan, dtype=float)
+        industries = np.asarray(self.states["Industry"], dtype=int)
+        target_production = np.asarray(self.ts.current("target_production"), dtype=float)
+        capital_stock = np.asarray(self.ts.current("capital_inputs_stock"), dtype=float).sum(axis=1)
+        valid = (
+            np.isfinite(target_production)
+            & (target_production > 0.0)
+            & np.isfinite(capital_stock)
+            & (capital_stock > 0.0)
+        )
+        firm_rho = np.divide(
+            target_production,
+            capital_stock,
+            out=np.full_like(target_production, np.nan, dtype=float),
+            where=valid,
+        )
+        for sector in range(self.n_industries):
+            sector_valid = valid & (industries == sector)
+            if np.any(sector_valid):
+                rho[sector] = np.median(firm_rho[sector_valid])
+        return rho
+
+    @staticmethod
+    def _valid_positive(values: np.ndarray) -> np.ndarray:
+        return np.isfinite(values) & (values > 0.0)
+
+    def compute_pricing_material_mc(self, current_good_prices: np.ndarray) -> np.ndarray:
+        """Compute technical material marginal cost from reciprocal productivity."""
+        good_prices = np.asarray(current_good_prices, dtype=float).copy()
+        valid_prices = self._valid_positive(good_prices)
+        if np.any(valid_prices):
+            good_prices[~valid_prices] = np.median(good_prices[valid_prices])
+        else:
+            return np.full(self.ts.current("n_firms"), np.nan, dtype=float)
+
+        productivity = np.asarray(self.get_effective_intermediate_coefficients(), dtype=float)
+        return np.divide(
+            good_prices[None, :],
+            productivity,
+            out=np.zeros_like(productivity, dtype=float),
+            where=np.isfinite(productivity) & (productivity > 0.0),
+        ).sum(axis=1)
+
+    def compute_pricing_normal_output_candidate(self, capital_floor_lambda: float) -> np.ndarray:
+        """Compute target-based normal output with a conservative capital floor."""
+        target_output = np.asarray(self.ts.current("target_production"), dtype=float).copy()
+        target_output[~self._valid_positive(target_output)] = np.nan
+
+        capital_stock = np.asarray(self.ts.current("capital_inputs_stock"), dtype=float).sum(axis=1)
+        sector_rho = self.pricing_rho_k_by_sector[self.states["Industry"]]
+        capital_output = sector_rho * capital_stock
+        capital_floor = capital_floor_lambda * capital_output
+        capital_valid = self._valid_positive(capital_floor)
+
+        normal_output = np.where(
+            capital_valid,
+            np.fmax(target_output, capital_floor),
+            target_output,
+        )
+        normal_output[~self._valid_positive(normal_output)] = np.nan
+        return normal_output
+
+    def compute_pricing_depreciation_unit_cost(self, pricing_normal_output: np.ndarray) -> np.ndarray:
+        """Compute CFC unit cost by allocating normal depreciation over normal output."""
+        mode = self.configuration.parameters.capital_depreciation_accounting_mode
+        if mode == "none":
+            return np.zeros(self.ts.current("n_firms"), dtype=float)
+        if mode != "eurostat_cfc":
+            raise ValueError(
+                f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'."
+            )
+
+        normal_depreciation_costs = np.asarray(self.capital_depreciation_accounting_costs(), dtype=float)
+        pricing_normal_output = np.asarray(pricing_normal_output, dtype=float)
+        previous_normal_output = np.asarray(self.ts.current("pricing_normal_output"), dtype=float)
+        normal_output = np.where(
+            self._valid_positive(pricing_normal_output),
+            pricing_normal_output,
+            np.where(self._valid_positive(previous_normal_output), previous_normal_output, np.nan),
+        )
+        for sector in np.unique(self.states["Industry"]):
+            sector_mask = self.states["Industry"] == sector
+            sector_valid = sector_mask & self._valid_positive(normal_output)
+            if np.any(sector_valid):
+                normal_output[sector_mask & ~self._valid_positive(normal_output)] = np.nanmedian(
+                    normal_output[sector_valid]
+                )
+        depreciation_unit_cost = np.divide(
+            normal_depreciation_costs,
+            normal_output,
+            out=np.zeros_like(normal_depreciation_costs, dtype=float),
+            where=np.isfinite(normal_depreciation_costs)
+            & (normal_depreciation_costs >= 0.0)
+            & self._valid_positive(normal_output),
+        )
+        depreciation_unit_cost[~(np.isfinite(depreciation_unit_cost) & (depreciation_unit_cost >= 0.0))] = 0.0
+        return depreciation_unit_cost
 
     def get_effective_capital_coefficients(self) -> np.ndarray:
         """Get the effective capital input coefficients for each firm.
@@ -269,6 +370,15 @@ class Firms(Agent):
                 "capital_depreciation_accounting_mode='eurostat_cfc' requires "
                 "capital_replacement_matrix_source='eurostat_cfc_output'."
             )
+        if configuration.parameters.capital_depreciation_accounting_mode == "eurostat_cfc":
+            cfc_rate_basis = getattr(synthetic_firms, "capital_depreciation_rate_basis", None)
+            if cfc_rate_basis != "capital_stock":
+                raise ValueError(
+                    "Incompatible synthetic firm CFC data: expected "
+                    "capital_depreciation_rate_basis='capital_stock'. "
+                    "Rebuild data.pkl so capital_depreciation_rates are Eurostat "
+                    "CFC/capital-stock rates, not stale CFC/output ratios."
+                )
         from macromodel.agents.firms.func.prices import SectorExogenousPriceSetter
 
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.firms")
@@ -1194,6 +1304,9 @@ class Firms(Agent):
         current_estimated_ppi_inflation: np.ndarray,
         previous_average_good_prices: np.ndarray,
         ppi_during: np.ndarray,
+        current_good_prices: Optional[np.ndarray] = None,
+        wage_obligation_preview: Optional[np.ndarray] = None,
+        producer_tax_rates: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Set prices for each firm's output.
 
@@ -1209,11 +1322,31 @@ class Firms(Agent):
             current_estimated_ppi_inflation (np.ndarray): Expected PPI inflation
             previous_average_good_prices (np.ndarray): Previous period prices
             ppi_during (np.ndarray): Producer price indices
+            current_good_prices (np.ndarray, optional): Latest known good prices
+                before this price update.
+            wage_obligation_preview (np.ndarray, optional): Current wage
+                obligation preview used by marginal-cost pricing.
+            producer_tax_rates (np.ndarray, optional): Producer tax/subsidy
+                rates by firm.
 
         Returns:
             np.ndarray: New prices for each firm
         """
-        return self.functions["prices"].compute_price(
+        price_setter = self.functions["prices"]
+        if current_good_prices is None:
+            current_good_prices = previous_average_good_prices
+        if producer_tax_rates is None:
+            producer_tax_rates = np.zeros(self.ts.current("n_firms"), dtype=float)
+        if wage_obligation_preview is None:
+            wage_obligation_preview = np.full(self.ts.current("n_firms"), np.nan, dtype=float)
+
+        pricing_material_mc = self.compute_pricing_material_mc(current_good_prices)
+        pricing_normal_output = self.compute_pricing_normal_output_candidate(
+            capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
+        )
+        pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
+        pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
+        prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,
             excess_demand=self.states["Excess Demand"],
@@ -1234,7 +1367,52 @@ class Firms(Agent):
             ),
             ppi_during=ppi_during,
             current_time=len(self.ts.historic("price")),
+            pricing_material_mc=pricing_material_mc,
+            pricing_effective_labour_inputs=pricing_effective_labour_inputs,
+            pricing_normal_output=pricing_normal_output,
+            pricing_depreciation_unit_cost=pricing_depreciation_unit_cost,
+            wage_obligation_preview=wage_obligation_preview,
+            producer_tax_rates=producer_tax_rates,
+            prev_mc_smooth=self.ts.current("pricing_mc_smooth"),
+            prev_ac_smooth=self.ts.current("pricing_ac_smooth"),
+            prev_normal_output=self.ts.current("pricing_normal_output"),
+            initial_output_weights=self.ts.initial("production"),
         )
+        self._append_pricing_diagnostics(price_setter=price_setter, prices=prices)
+        return prices
+
+    def _append_pricing_diagnostics(self, price_setter, prices: np.ndarray) -> None:
+        """Append pricing diagnostics exposed by price setters."""
+        default = np.full(prices.shape, np.nan, dtype=float)
+        diagnostics = {
+            "pricing_mc": getattr(price_setter, "last_pricing_mc", default),
+            "pricing_mc_smooth": getattr(price_setter, "last_pricing_mc_smooth", default),
+            "pricing_ac": getattr(price_setter, "last_pricing_ac", default),
+            "pricing_ac_smooth": getattr(price_setter, "last_pricing_ac_smooth", default),
+            "pricing_material_mc": getattr(price_setter, "last_pricing_material_mc", default),
+            "pricing_labour_mc": getattr(price_setter, "last_pricing_labour_mc", default),
+            "pricing_depreciation_unit_cost": getattr(price_setter, "last_pricing_depreciation_unit_cost", default),
+            "pricing_initial_price_gap": getattr(price_setter, "last_pricing_initial_price_gap", default),
+            "pricing_normal_output": getattr(price_setter, "last_pricing_normal_output", default),
+            "pricing_markup_mu": getattr(price_setter, "last_pricing_markup_mu", default),
+            "pricing_markup_lower": getattr(price_setter, "last_pricing_markup_lower", default),
+            "pricing_markup_upper": getattr(price_setter, "last_pricing_markup_upper", default),
+            "pricing_ac_floor_binding": getattr(price_setter, "last_pricing_ac_floor_binding", default),
+            "pricing_ac_fallback_binding": getattr(price_setter, "last_pricing_ac_fallback_binding", default),
+            "pricing_gate_state": getattr(price_setter, "last_pricing_gate_state", np.zeros(prices.shape, dtype=float)),
+            "pricing_fallback_code": getattr(price_setter, "last_pricing_fallback_code", default),
+            "pricing_cost_normalization_factor": getattr(
+                price_setter, "last_pricing_cost_normalization_factor", default
+            ),
+            "pricing_cost_normalization_raw_gap": getattr(
+                price_setter, "last_pricing_cost_normalization_raw_gap", default
+            ),
+            "pricing_cost_normalization_status": getattr(
+                price_setter, "last_pricing_cost_normalization_status", default
+            ),
+        }
+        for field, values in diagnostics.items():
+            getattr(self.ts, field).append(np.asarray(values, dtype=float).copy())
 
     def compute_unconstrained_demand_for_intermediate_inputs(
         self, good_prices: np.ndarray, extra_taxes: Optional[np.ndarray] = None
@@ -1741,6 +1919,7 @@ class Firms(Agent):
         self,
         current_good_prices: np.ndarray,
         tolerance: float = 1e-4,
+        relative_tolerance: float = 1e-12,
         enforce: bool = True,
     ) -> dict[str, np.ndarray]:
         """Check the firm balance-sheet and settlement cash-flow identities.
@@ -1785,6 +1964,22 @@ class Firms(Agent):
         )
         transaction_flow_residual = expected_closing_deposits - closing_deposits
 
+        transaction_flow_scale = np.maximum.reduce(
+            [
+                np.abs(opening_deposits),
+                np.abs(nominal_amount_sold_in_lcu),
+                np.abs(received_credit),
+                np.abs(total_wage),
+                np.abs(nominal_amount_spent_in_lcu).sum(axis=1),
+                np.abs(direct_tfp_investment_cash_expense),
+                np.abs(taxes_paid_on_production),
+                np.abs(corporate_taxes_paid),
+                np.abs(interest_paid),
+                np.abs(debt_installments),
+                np.abs(closing_deposits),
+            ]
+        )
+
         material = np.dot(self.ts.current("intermediate_inputs_stock"), current_good_prices)
         capital = np.dot(self.ts.current("capital_inputs_stock"), current_good_prices)
         expected_equity = (
@@ -1797,8 +1992,22 @@ class Firms(Agent):
         )
         balance_sheet_residual = expected_equity - np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))
 
-        control_passed = (np.abs(balance_sheet_residual) <= tolerance) & (
-            np.abs(transaction_flow_residual) <= tolerance
+        balance_sheet_scale = np.maximum.reduce(
+            [
+                np.abs(expected_equity),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("inventory"), dtype=float)) * self.ts.current("price")),
+                np.abs(material),
+                np.abs(capital),
+                np.abs(closing_deposits),
+                np.abs(np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))),
+            ]
+        )
+
+        balance_sheet_tolerance = tolerance + relative_tolerance * balance_sheet_scale
+        transaction_flow_tolerance = tolerance + relative_tolerance * transaction_flow_scale
+        control_passed = (np.abs(balance_sheet_residual) <= balance_sheet_tolerance) & (
+            np.abs(transaction_flow_residual) <= transaction_flow_tolerance
         )
 
         self.ts.override_current("firm_settlement_balance_sheet_residual", balance_sheet_residual.copy())
@@ -1809,12 +2018,31 @@ class Firms(Agent):
             failing_firms = np.where(~control_passed)[0]
             max_bs_residual = float(np.max(np.abs(balance_sheet_residual[~control_passed])))
             max_cf_residual = float(np.max(np.abs(transaction_flow_residual[~control_passed])))
+            max_bs_relative_residual = float(
+                np.max(
+                    np.divide(
+                        np.abs(balance_sheet_residual[~control_passed]),
+                        np.maximum(balance_sheet_scale[~control_passed], 1.0),
+                    )
+                )
+            )
+            max_cf_relative_residual = float(
+                np.max(
+                    np.divide(
+                        np.abs(transaction_flow_residual[~control_passed]),
+                        np.maximum(transaction_flow_scale[~control_passed], 1.0),
+                    )
+                )
+            )
             raise ValueError(
                 "Firm accounting control violation: "
                 f"failing_firms={failing_firms.tolist()}, "
                 f"max_balance_sheet_residual={max_bs_residual:.6g}, "
                 f"max_transaction_flow_residual={max_cf_residual:.6g}, "
-                f"tolerance={tolerance:.6g}"
+                f"max_balance_sheet_relative_residual={max_bs_relative_residual:.6g}, "
+                f"max_transaction_flow_relative_residual={max_cf_relative_residual:.6g}, "
+                f"tolerance={tolerance:.6g}, "
+                f"relative_tolerance={relative_tolerance:.6g}"
             )
 
         return {
@@ -3094,7 +3322,9 @@ class Firms(Agent):
             return np.zeros(self.ts.current("n_firms"))
         if mode == "eurostat_cfc":
             rates = self.capital_depreciation_rates[self.states["Industry"]]
-            return rates * self.ts.current("production") * self.ts.current("price")
+            stock_value = self.ts.current("capital_inputs_stock_value")
+            costs = rates * stock_value
+            return np.where(np.isfinite(costs) & (costs > 0.0), costs, 0.0)
         raise ValueError(f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'.")
 
     def compute_total_inventory_change(self) -> np.ndarray:

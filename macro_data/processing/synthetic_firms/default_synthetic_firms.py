@@ -240,14 +240,14 @@ class DefaultSyntheticFirms(SyntheticFirms):
             capital_input_use_matrix = industry_data["capital_inputs_depreciation_matrix"].values
         if (
             firm_configuration.capital_depreciation_accounting_mode == "eurostat_cfc"
-            and "Capital Depreciation Output Ratio" not in industry_data["industry_vectors"]
+            and "Capital Depreciation Rate" not in industry_data["industry_vectors"]
         ):
             raise ValueError(
-                "capital_depreciation_accounting_mode='eurostat_cfc' requires Eurostat CFC depreciation data."
+                "capital_depreciation_accounting_mode='eurostat_cfc' requires Eurostat CFC/capital-stock rates."
             )
         capital_depreciation_rates = (
             industry_data["industry_vectors"]
-            .get("Capital Depreciation Output Ratio", pd.Series(0.0, index=industry_data["industry_vectors"].index))
+            .get("Capital Depreciation Rate", pd.Series(0.0, index=industry_data["industry_vectors"].index))
             .values
         )
 
@@ -490,9 +490,9 @@ class DefaultSyntheticFirms(SyntheticFirms):
     def set_capital_depreciation_costs(self, initial_good_prices: np.ndarray) -> None:
         rates_by_industry = getattr(self, "capital_depreciation_rates", np.zeros(len(initial_good_prices)))
         rates = rates_by_industry[self.firm_data["Industry"].values]
-        self.firm_data["Capital Depreciation Costs"] = (
-            rates * self.firm_data["Production"].values * self.firm_data["Price"].values
-        )
+        capital_stock_value = self.capital_inputs_stock @ initial_good_prices
+        costs = rates * capital_stock_value
+        self.firm_data["Capital Depreciation Costs"] = np.where(np.isfinite(costs) & (costs > 0.0), costs, 0.0)
 
     def set_corporate_taxes_paid(self, tau_firm: float) -> None:
         self.firm_data["Corporate Taxes Paid"] = tau_firm * np.maximum(0.0, self.firm_data["Profits"])

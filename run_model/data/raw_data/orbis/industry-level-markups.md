@@ -515,12 +515,12 @@ mean_interval_high = weighted_mean + weighted_standard_deviation
 For the France configuration, the active markup columns are:
 
 ```text
-markup_central_column = mu_all_weighted_median
-markup_lower_column   = mu_all_median_interval_low
-markup_upper_column   = mu_all_median_interval_high
+markup_central_column = mu_op_weighted_median
+markup_lower_column   = mu_op_median_interval_low
+markup_upper_column   = mu_op_median_interval_high
 ```
 
-Thus, the model uses the funding-inclusive markup median as the central markup, and the revenue-weighted 10th and 90th percentiles as the lower and upper markup bounds.
+Thus, the model uses the operating-cost markup median as the central markup, and the revenue-weighted 10th and 90th percentiles as the lower and upper markup bounds.
 
 ---
 

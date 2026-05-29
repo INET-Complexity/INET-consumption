@@ -27,6 +27,25 @@ class FirmTimeSeries(TimeSeries):
     - price_offered: Average price offered by industry
     - price_in_usd: Prices converted to USD
     - unit_costs: Cost per unit of output
+    - pricing_mc: Technical marginal cost used by markup pricing
+    - pricing_mc_smooth: Smoothed technical marginal cost
+    - pricing_ac: Normal average cost used for the AC floor
+    - pricing_ac_smooth: Smoothed normal average cost
+    - pricing_material_mc: Material component of pricing marginal cost
+    - pricing_labour_mc: Labour component of pricing marginal cost
+    - pricing_depreciation_unit_cost: Depreciation component added to pricing AC
+    - pricing_initial_price_gap: Previous pre-tax price divided by the new pre-tax cost candidate
+    - pricing_normal_output: Normal output denominator used by pricing
+    - pricing_markup_mu: Markup selected before tax gross-up/fallbacks
+    - pricing_markup_lower: Lower markup corridor bound
+    - pricing_markup_upper: Upper markup corridor bound
+    - pricing_ac_floor_binding: Indicator that the AC floor bound price
+    - pricing_ac_fallback_binding: Indicator that AC used sector/previous fallback
+    - pricing_gate_state: Numeric code for the demand-pull gate state
+    - pricing_fallback_code: Numeric code for pricing fallback source
+    - pricing_cost_normalization_factor: One-time initial pricing-cost scale factor
+    - pricing_cost_normalization_raw_gap: Opening pre-tax price/cost gap before normalization
+    - pricing_cost_normalization_status: Numeric code for normalization status
 
     Labor & Employment:
     - number_of_employees: Workers per firm
@@ -271,6 +290,25 @@ class FirmTimeSeries(TimeSeries):
             total_wage=data["Total Wages Paid"].values,
             real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
             unit_costs=data["Unit Costs"].values,
+            pricing_mc=np.full(data.shape[0], np.nan),
+            pricing_mc_smooth=np.full(data.shape[0], np.nan),
+            pricing_ac=np.full(data.shape[0], np.nan),
+            pricing_ac_smooth=np.full(data.shape[0], np.nan),
+            pricing_material_mc=np.full(data.shape[0], np.nan),
+            pricing_labour_mc=np.full(data.shape[0], np.nan),
+            pricing_depreciation_unit_cost=np.full(data.shape[0], np.nan),
+            pricing_initial_price_gap=np.full(data.shape[0], np.nan),
+            pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
+            pricing_markup_mu=np.full(data.shape[0], np.nan),
+            pricing_markup_lower=np.full(data.shape[0], np.nan),
+            pricing_markup_upper=np.full(data.shape[0], np.nan),
+            pricing_ac_floor_binding=np.zeros(data.shape[0]),
+            pricing_ac_fallback_binding=np.zeros(data.shape[0]),
+            pricing_gate_state=np.zeros(data.shape[0]),
+            pricing_fallback_code=np.zeros(data.shape[0]),
+            pricing_cost_normalization_factor=np.ones(data.shape[0]),
+            pricing_cost_normalization_raw_gap=np.full(data.shape[0], np.nan),
+            pricing_cost_normalization_status=np.zeros(data.shape[0]),
             taxes_paid_on_production=data["Taxes paid on Production"].values,
             corporate_taxes_paid=data["Corporate Taxes Paid"].values,
             equity=data["Equity"].values,
@@ -629,6 +667,25 @@ def create_firms_timeseries(
         total_wage=data["Total Wages Paid"].values,
         real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
         unit_costs=data["Unit Costs"].values,
+        pricing_mc=np.full(data.shape[0], np.nan),
+        pricing_mc_smooth=np.full(data.shape[0], np.nan),
+        pricing_ac=np.full(data.shape[0], np.nan),
+        pricing_ac_smooth=np.full(data.shape[0], np.nan),
+        pricing_material_mc=np.full(data.shape[0], np.nan),
+        pricing_labour_mc=np.full(data.shape[0], np.nan),
+        pricing_depreciation_unit_cost=np.full(data.shape[0], np.nan),
+        pricing_initial_price_gap=np.full(data.shape[0], np.nan),
+        pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
+        pricing_markup_mu=np.full(data.shape[0], np.nan),
+        pricing_markup_lower=np.full(data.shape[0], np.nan),
+        pricing_markup_upper=np.full(data.shape[0], np.nan),
+        pricing_ac_floor_binding=np.zeros(data.shape[0]),
+        pricing_ac_fallback_binding=np.zeros(data.shape[0]),
+        pricing_gate_state=np.zeros(data.shape[0]),
+        pricing_fallback_code=np.zeros(data.shape[0]),
+        pricing_cost_normalization_factor=np.ones(data.shape[0]),
+        pricing_cost_normalization_raw_gap=np.full(data.shape[0], np.nan),
+        pricing_cost_normalization_status=np.zeros(data.shape[0]),
         taxes_paid_on_production=data["Taxes paid on Production"].values,
         corporate_taxes_paid=data["Corporate Taxes Paid"].values,
         equity=data["Equity"].values,

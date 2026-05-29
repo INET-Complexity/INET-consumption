@@ -300,8 +300,18 @@ class CESHouseholdConsumption(HouseholdConsumption):
         Returns:
             np.ndarray: Target consumption by household and industry
         """
-        # If no substitution data provided, fall back to default behavior
-        if any(x is None for x in [prices, initial_prices, taxes, initial_taxes, bundle_matrix]):
+        # If substitution data is unavailable or not aligned to household
+        # consumption goods, fall back to default behavior.
+        if any(x is None for x in [prices, initial_prices, taxes, initial_taxes, bundle_matrix]) or (
+            not self._has_aligned_ces_inputs(
+                consumption_weights,
+                prices,
+                initial_prices,
+                taxes,
+                initial_taxes,
+                bundle_matrix,
+            )
+        ):
             return self._compute_target_consumption_default(
                 historic_consumption_sum,
                 saving_rates,
@@ -353,6 +363,26 @@ class CESHouseholdConsumption(HouseholdConsumption):
             self.consumption_smoothing_window,
             self.consumption_smoothing_fraction,
             self.minimum_consumption_fraction,
+        )
+
+    @staticmethod
+    def _has_aligned_ces_inputs(
+        consumption_weights: np.ndarray,
+        prices: np.ndarray,
+        initial_prices: np.ndarray,
+        taxes: np.ndarray,
+        initial_taxes: np.ndarray,
+        bundle_matrix: np.ndarray,
+    ) -> bool:
+        """Return whether CES substitution inputs share one goods dimension."""
+        n_goods = len(consumption_weights)
+        return (
+            np.ndim(bundle_matrix) == 2
+            and bundle_matrix.shape[0] == n_goods
+            and len(prices) == n_goods
+            and len(initial_prices) == n_goods
+            and len(taxes) == n_goods
+            and len(initial_taxes) == n_goods
         )
 
     def _compute_ces_weights(

@@ -188,8 +188,11 @@ class Firms(Agent):
         industries = np.asarray(self.states["Industry"], dtype=int)
         target_production = np.asarray(self.ts.current("target_production"), dtype=float)
         capital_stock = np.asarray(self.ts.current("capital_inputs_stock"), dtype=float).sum(axis=1)
-        valid = np.isfinite(target_production) & (target_production > 0.0) & np.isfinite(capital_stock) & (
-            capital_stock > 0.0
+        valid = (
+            np.isfinite(target_production)
+            & (target_production > 0.0)
+            & np.isfinite(capital_stock)
+            & (capital_stock > 0.0)
         )
         firm_rho = np.divide(
             target_production,
@@ -249,7 +252,9 @@ class Firms(Agent):
         if mode == "none":
             return np.zeros(self.ts.current("n_firms"), dtype=float)
         if mode != "eurostat_cfc":
-            raise ValueError(f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'.")
+            raise ValueError(
+                f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'."
+            )
 
         producer_tax_rates = np.asarray(producer_tax_rates, dtype=float)
         previous_price = np.asarray(self.ts.current("price"), dtype=float)

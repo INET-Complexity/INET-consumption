@@ -169,6 +169,11 @@ class TestFirms:
         ]:
             assert ts_key in test_firms.ts.get_keys()
 
+    def test__pricing_cost_state_does_not_bootstrap_from_accounting_unit_costs(self, test_firms):
+        assert np.isfinite(test_firms.ts.current("unit_costs")).any()
+        assert np.isnan(test_firms.ts.current("pricing_mc_smooth")).all()
+        assert np.isnan(test_firms.ts.current("pricing_ac_smooth")).all()
+
     def test__from_pickled_agent_rejects_cfc_depreciation_without_cfc_replacement(self, datawrapper):
         country = datawrapper.synthetic_countries["FRA"]
         configuration = FirmsConfiguration()

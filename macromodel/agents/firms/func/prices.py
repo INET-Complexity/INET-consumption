@@ -365,8 +365,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             raise ValueError("ac_floor_share must be positive.")
         if initial_cost_normalization_mode not in self.INITIAL_COST_NORMALIZATION_MODES:
             raise ValueError(
-                "initial_cost_normalization_mode must be one of "
-                f"{sorted(self.INITIAL_COST_NORMALIZATION_MODES)}."
+                f"initial_cost_normalization_mode must be one of {sorted(self.INITIAL_COST_NORMALIZATION_MODES)}."
             )
         if not (0.0 <= initial_cost_normalization_lower_quantile <= 1.0):
             raise ValueError("initial_cost_normalization_lower_quantile must be in [0, 1].")
@@ -381,8 +380,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             raise ValueError("initial_cost_normalization_min_factor must be positive.")
         if initial_cost_normalization_max_factor < initial_cost_normalization_min_factor:
             raise ValueError(
-                "initial_cost_normalization_max_factor must be at least "
-                "initial_cost_normalization_min_factor."
+                "initial_cost_normalization_max_factor must be at least initial_cost_normalization_min_factor."
             )
         if not (0.0 <= initial_cost_normalization_min_valid_weight_share <= 1.0):
             raise ValueError("initial_cost_normalization_min_valid_weight_share must be in [0, 1].")

@@ -1385,9 +1385,7 @@ class Firms(Agent):
             "pricing_ac_smooth": getattr(price_setter, "last_pricing_ac_smooth", default),
             "pricing_material_mc": getattr(price_setter, "last_pricing_material_mc", default),
             "pricing_labour_mc": getattr(price_setter, "last_pricing_labour_mc", default),
-            "pricing_depreciation_unit_cost": getattr(
-                price_setter, "last_pricing_depreciation_unit_cost", default
-            ),
+            "pricing_depreciation_unit_cost": getattr(price_setter, "last_pricing_depreciation_unit_cost", default),
             "pricing_initial_price_gap": getattr(price_setter, "last_pricing_initial_price_gap", default),
             "pricing_normal_output": getattr(price_setter, "last_pricing_normal_output", default),
             "pricing_markup_mu": getattr(price_setter, "last_pricing_markup_mu", default),

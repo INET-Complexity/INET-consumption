@@ -964,7 +964,8 @@ class Firms(Agent):
         """Calculate actual production quantities.
 
         Determines production based on:
-        - Target production levels
+        - Operative feasible activity, when post-credit/post-labour planning has run
+        - Behavioural target production otherwise
         - Labor input constraints (scaled by TFP)
         - Intermediate input constraints (scaled by TFP)
         - Capital input constraints (scaled by TFP)
@@ -972,8 +973,13 @@ class Firms(Agent):
         Returns:
             np.ndarray: Actual production quantity for each firm
         """
+        desired_production = self.ts.current("target_production")
+        realised_feasible_history = self.ts.historic("activity_finance_realised_feasible_target_production")
+        if len(realised_feasible_history) > 1:
+            desired_production = self.ts.current("activity_finance_realised_feasible_target_production")
+
         return self.functions["production"].compute_production(
-            desired_production=self.ts.current("target_production"),
+            desired_production=desired_production,
             current_labour_inputs=self.ts.current("labour_inputs"),
             current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
@@ -2355,7 +2361,6 @@ class Firms(Agent):
             expected_lcu_prices,
         )
 
-        self.ts.override_current("target_production", realised_feasible_y)
         self.ts.override_current("target_intermediate_inputs", candidate_intermediate)
         self.ts.override_current("target_capital_inputs", candidate_capital)
         self.ts.override_current(

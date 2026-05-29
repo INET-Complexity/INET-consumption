@@ -211,6 +211,51 @@ class TestCESHouseholdConsumption:
         # industry 2's lower initial weight with industry 3's higher price
         assert np.allclose(avg_consumption[2], avg_consumption[3], rtol=1e-10)  # Should be nearly equal
 
+    def test_ces_falls_back_when_substitution_dimensions_do_not_match(self):
+        """Test CES uses default consumption when prices and bundles use different goods dimensions."""
+        ces_consumption = CESHouseholdConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            elasticity_of_substitution=2.0,
+        )
+        default_consumption = DefaultHouseholdConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+        )
+
+        n_households = 2
+        n_consumption_goods = 4
+        n_price_goods = 6
+        bundle_matrix = create_bundle_matrix(np.array([0, 1, 2, 3]))
+
+        test_args = {
+            "expected_inflation": 0.0,
+            "current_cpi": 1.0,
+            "initial_cpi": 1.0,
+            "historic_consumption_sum": np.ones((2, n_households)),
+            "saving_rates": np.zeros(n_households),
+            "income": np.full(n_households, 100.0),
+            "household_benefits": np.zeros(n_households),
+            "consumption_weights": np.full(n_consumption_goods, 1.0 / n_consumption_goods),
+            "consumption_weights_by_income": np.zeros((n_consumption_goods, n_households)),
+            "exogenous_total_consumption": np.zeros(5),
+            "current_time": 0,
+            "take_consumption_weights_by_income_quantile": False,
+            "tau_vat": 0.0,
+            "prices": np.ones(n_price_goods),
+            "initial_prices": np.ones(n_price_goods),
+            "taxes": np.zeros(n_price_goods),
+            "initial_taxes": np.zeros(n_price_goods),
+            "bundle_matrix": bundle_matrix,
+        }
+
+        result = ces_consumption.compute_target_consumption(**test_args)
+        expected = default_consumption.compute_target_consumption(**test_args)
+
+        assert np.allclose(result, expected)
+
     def test_ces_bundle_normalization(self):
         """Test that CES substitution preserves bundle totals."""
         ces_consumption = CESHouseholdConsumption(

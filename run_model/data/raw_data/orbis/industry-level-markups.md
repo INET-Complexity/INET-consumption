@@ -497,11 +497,11 @@ mean_interval_high
 ```
 
 Median interval columns are weighted quantiles around the weighted median.
-With a median interval half-width of 0.10:
+With a median interval half-width of 0.40:
 
 ```text
-median_interval_low  = weighted 40th percentile
-median_interval_high = weighted 60th percentile
+median_interval_low  = weighted 10th percentile
+median_interval_high = weighted 90th percentile
 ```
 
 Mean interval columns are centered on the weighted mean.
@@ -520,7 +520,7 @@ markup_lower_column   = mu_all_median_interval_low
 markup_upper_column   = mu_all_median_interval_high
 ```
 
-Thus, the model uses the funding-inclusive markup median as the central markup, and the revenue-weighted 40th and 60th percentiles as the lower and upper markup bounds.
+Thus, the model uses the funding-inclusive markup median as the central markup, and the revenue-weighted 10th and 90th percentiles as the lower and upper markup bounds.
 
 ---
 

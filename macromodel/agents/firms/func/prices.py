@@ -635,13 +635,11 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         gate_state[cheap_slack] = self.GATE_CHEAP_SLACK
         gate_state[expensive_tight] = self.GATE_EXPENSIVE_TIGHT
 
-        demand_pull = np.zeros(prev_prices.shape, dtype=float)
-        active_gate = cheap_tight | expensive_slack
-        demand_pull[active_gate] = (
+        demand_pull = (
             np.divide(
-                prev_demand[active_gate],
-                np.maximum(prev_supply[active_gate], self.SUPPLY_EPSILON),
-                out=np.ones_like(prev_demand[active_gate], dtype=float),
+                prev_demand,
+                np.maximum(prev_supply, self.SUPPLY_EPSILON),
+                out=np.ones_like(prev_demand, dtype=float),
             )
             - 1.0
         )

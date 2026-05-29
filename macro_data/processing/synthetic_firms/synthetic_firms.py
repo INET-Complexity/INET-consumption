@@ -85,7 +85,7 @@ class SyntheticFirms(ABC):
         intermediate_inputs_productivity_matrix (np.ndarray): Input productivity parameters
         capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
         capital_inputs_depreciation_matrix (np.ndarray): Deprecated alias for capital_input_use_matrix
-        capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
+        capital_depreciation_rates (np.ndarray): Period CFC/capital-stock rates by industry
         labour_productivity_by_industry (np.ndarray): Labor productivity by industry
     """
 

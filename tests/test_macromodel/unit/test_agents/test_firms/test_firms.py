@@ -554,7 +554,7 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("executed_tfp_investment"), 4.0)
         assert np.allclose(test_firms.ts.current("direct_tfp_investment_cash_expense"), 4.0)
 
-    def test__compute_capital_depreciation_costs_uses_output_scaled_cfc(self, test_firms):
+    def test__compute_capital_depreciation_costs_uses_stock_value_cfc(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
         test_firms.capital_depreciation_rates = np.full(test_firms.n_industries, 0.1)
@@ -562,7 +562,7 @@ class TestFirms:
         test_firms.ts.override_current("price", np.full(n_firms, 2.0))
         test_firms.ts.override_current("capital_inputs_stock_value", np.full(n_firms, 1000.0))
 
-        assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 2.0))
+        assert np.allclose(test_firms.compute_capital_depreciation_costs(), np.full(n_firms, 100.0))
 
     def test__pricing_material_mc_uses_reciprocal_productivity(self, test_firms):
         n_industries = test_firms.n_industries

@@ -14,6 +14,27 @@ PARENT = pathlib.Path(__file__).parent.parent.parent.parent.parent.resolve()
 
 
 class TestSyntheticFirms:
+    def test__set_capital_depreciation_costs_uses_capital_stock_value(self):
+        firms = DefaultSyntheticFirms.__new__(DefaultSyntheticFirms)
+        firms.capital_depreciation_rates = np.array([0.10, 0.20])
+        firms.capital_inputs_stock = np.array(
+            [
+                [10.0, 5.0],
+                [1.0, 20.0],
+            ]
+        )
+        firms.firm_data = pd.DataFrame(
+            {
+                "Industry": [0, 1],
+                "Production": [999.0, 999.0],
+                "Price": [999.0, 999.0],
+            }
+        )
+
+        firms.set_capital_depreciation_costs(initial_good_prices=np.array([2.0, 3.0]))
+
+        assert firms.firm_data["Capital Depreciation Costs"].to_numpy() == pytest.approx([3.5, 12.4])
+
     def test__create(self, readers, industry_data):
         industries = [
             "A",

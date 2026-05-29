@@ -101,7 +101,7 @@ class Firms(Agent):
             intermediate_inputs_productivity_matrix (np.ndarray): Input-output coefficients
             capital_inputs_productivity_matrix (np.ndarray): Capital productivity coefficients
             capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
-            capital_depreciation_rates (np.ndarray): Period CFC/output accounting ratios by industry
+            capital_depreciation_rates (np.ndarray): Period CFC/capital-stock rates by industry
             goods_criticality_matrix (np.ndarray): Critical input requirements
             intermediate_inputs_utilisation_rate (float): Input capacity utilization
             capital_inputs_utilisation_rate (float): Capital capacity utilization
@@ -3300,7 +3300,9 @@ class Firms(Agent):
             return np.zeros(self.ts.current("n_firms"))
         if mode == "eurostat_cfc":
             rates = self.capital_depreciation_rates[self.states["Industry"]]
-            return rates * self.ts.current("production") * self.ts.current("price")
+            stock_value = self.ts.current("capital_inputs_stock_value")
+            costs = rates * stock_value
+            return np.where(np.isfinite(costs) & (costs > 0.0), costs, 0.0)
         raise ValueError(f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'.")
 
     def compute_total_inventory_change(self) -> np.ndarray:

@@ -254,8 +254,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--median-interval-half-width",
         type=float,
-        default=0.25,
-        help="Half-width around 50th percentile for median-centered interval. 0.25 -> [p25, p75].",
+        default=0.10,
+        help="Half-width around 50th percentile for median-centered interval. 0.10 -> [p40, p60].",
     )
     parser.add_argument(
         "--mean-interval-std-multiplier",

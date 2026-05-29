@@ -1370,6 +1370,7 @@ class Firms(Agent):
             prev_mc_smooth=self.ts.current("pricing_mc_smooth"),
             prev_ac_smooth=self.ts.current("pricing_ac_smooth"),
             prev_normal_output=self.ts.current("pricing_normal_output"),
+            initial_output_weights=self.ts.initial("production"),
         )
         self._append_pricing_diagnostics(price_setter=price_setter, prices=prices)
         return prices
@@ -1396,6 +1397,15 @@ class Firms(Agent):
             "pricing_ac_fallback_binding": getattr(price_setter, "last_pricing_ac_fallback_binding", default),
             "pricing_gate_state": getattr(price_setter, "last_pricing_gate_state", np.zeros(prices.shape, dtype=float)),
             "pricing_fallback_code": getattr(price_setter, "last_pricing_fallback_code", default),
+            "pricing_cost_normalization_factor": getattr(
+                price_setter, "last_pricing_cost_normalization_factor", default
+            ),
+            "pricing_cost_normalization_raw_gap": getattr(
+                price_setter, "last_pricing_cost_normalization_raw_gap", default
+            ),
+            "pricing_cost_normalization_status": getattr(
+                price_setter, "last_pricing_cost_normalization_status", default
+            ),
         }
         for field, values in diagnostics.items():
             getattr(self.ts, field).append(np.asarray(values, dtype=float).copy())

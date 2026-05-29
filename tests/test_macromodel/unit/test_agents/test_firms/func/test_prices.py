@@ -88,6 +88,12 @@ def test_default_price_setter_ignores_markup_rule_parameters():
         normal_output_capital_floor_lambda=0.25,
         demand_pull_speed=1.0,
         ac_floor_share=1.0,
+        initial_cost_normalization_mode="output_weighted_robust_gap",
+        initial_cost_normalization_lower_quantile=0.01,
+        initial_cost_normalization_upper_quantile=0.99,
+        initial_cost_normalization_min_factor=0.5,
+        initial_cost_normalization_max_factor=2.0,
+        initial_cost_normalization_min_valid_weight_share=0.5,
     )
 
     assert setter.price_setting_noise_std == pytest.approx(0.05)
@@ -537,6 +543,196 @@ class TestSectorMarkupMarginalCostPriceSetter:
         assert prices[2] == pytest.approx(110.0)
         assert setter.last_pricing_ac_fallback_binding[2] == 1.0
 
+    def test_initial_cost_normalization_uses_initial_output_weighted_gap(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+            initial_cost_normalization_lower_quantile=0.0,
+            initial_cost_normalization_upper_quantile=1.0,
+        )
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([24.0, 12.0, 12.0]),
+                    prev_firm_prices=np.array([24.0, 12.0, 12.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.ones(3),
+                    prev_demand=np.ones(3),
+                    current_firm_sectors=np.array([0, 0, 0]),
+                    curr_unit_costs=np.full(3, 10.0),
+                    prev_unit_costs=np.full(3, 10.0),
+                    initial_output_weights=np.array([100.0, 1.0, 1.0]),
+                    **self._cost_kwargs(3, mc=10.0),
+                )
+            )
+        )
+
+        np.testing.assert_allclose(prices, np.full(3, 24.0))
+        assert setter.initial_cost_normalization_factor == pytest.approx(2.0)
+        assert setter.initial_cost_normalization_status == setter.NORMALIZATION_STATUS_APPLIED
+        np.testing.assert_allclose(setter.last_pricing_cost_normalization_raw_gap, np.array([2.0, 1.0, 1.0]))
+        np.testing.assert_allclose(setter.last_pricing_cost_normalization_factor, np.full(3, 2.0))
+        np.testing.assert_allclose(setter.last_pricing_mc_smooth, np.full(3, 20.0))
+
+    def test_initial_cost_normalization_is_reused_after_first_call(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+            initial_cost_normalization_lower_quantile=0.0,
+            initial_cost_normalization_upper_quantile=1.0,
+        )
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([24.0, 12.0, 12.0]),
+            prev_firm_prices=np.array([24.0, 12.0, 12.0]),
+            prev_average_good_prices=np.array([10.0]),
+            prev_supply=np.ones(3),
+            prev_demand=np.ones(3),
+            current_firm_sectors=np.array([0, 0, 0]),
+            curr_unit_costs=np.full(3, 10.0),
+            prev_unit_costs=np.full(3, 10.0),
+            initial_output_weights=np.array([100.0, 1.0, 1.0]),
+            **self._cost_kwargs(3, mc=10.0),
+        )
+        setter.compute_price(**kwargs)
+
+        prices = setter.compute_price(
+            **(
+                kwargs
+                | dict(
+                    prev_prices=np.full(3, 12.0),
+                    prev_firm_prices=np.full(3, 12.0),
+                    initial_output_weights=np.array([1.0, 100.0, 100.0]),
+                )
+            )
+        )
+
+        np.testing.assert_allclose(prices, np.full(3, 24.0))
+        assert setter.initial_cost_normalization_factor == pytest.approx(2.0)
+        assert np.all(np.isnan(setter.last_pricing_cost_normalization_raw_gap))
+
+    def test_initial_cost_normalization_uses_previous_pre_tax_price(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+            initial_cost_normalization_lower_quantile=0.0,
+            initial_cost_normalization_upper_quantile=1.0,
+            initial_cost_normalization_max_factor=20.0,
+        )
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([120.0 / 0.9]),
+                    prev_firm_prices=np.array([120.0 / 0.9]),
+                    prev_average_good_prices=np.array([100.0]),
+                    prev_supply=np.ones(1),
+                    prev_demand=np.ones(1),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([10.0]),
+                    prev_unit_costs=np.array([10.0]),
+                    initial_output_weights=np.array([1.0]),
+                    **(self._cost_kwargs(1, mc=10.0) | {"producer_tax_rates": np.array([0.10])}),
+                )
+            )
+        )
+
+        assert setter.initial_cost_normalization_factor == pytest.approx(10.0)
+        assert prices[0] == pytest.approx(120.0 / 0.9)
+
+    def test_initial_cost_normalization_falls_back_without_valid_weights(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+        )
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([24.0]),
+                    prev_firm_prices=np.array([24.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.ones(1),
+                    prev_demand=np.ones(1),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([10.0]),
+                    prev_unit_costs=np.array([10.0]),
+                    initial_output_weights=np.array([0.0]),
+                    **self._cost_kwargs(1, mc=10.0),
+                )
+            )
+        )
+
+        assert prices[0] == pytest.approx(12.0)
+        assert setter.initial_cost_normalization_factor == pytest.approx(1.0)
+        assert setter.initial_cost_normalization_status == setter.NORMALIZATION_STATUS_INVALID
+
+    def test_initial_cost_normalization_reports_low_valid_weight_share(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+            initial_cost_normalization_min_valid_weight_share=0.5,
+        )
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([24.0, 24.0]),
+                    prev_firm_prices=np.array([24.0, 24.0]),
+                    prev_average_good_prices=np.array([10.0, 20.0]),
+                    prev_supply=np.ones(2),
+                    prev_demand=np.ones(2),
+                    current_firm_sectors=np.array([0, 1]),
+                    curr_unit_costs=np.array([10.0, 0.0]),
+                    prev_unit_costs=np.array([10.0, 0.0]),
+                    pricing_material_mc=np.array([10.0, np.nan]),
+                    pricing_effective_labour_inputs=np.ones(2),
+                    pricing_normal_output=np.ones(2),
+                    pricing_depreciation_unit_cost=np.zeros(2),
+                    wage_obligation_preview=np.zeros(2),
+                    producer_tax_rates=np.zeros(2),
+                    prev_mc_smooth=np.array([10.0, np.nan]),
+                    prev_ac_smooth=np.array([10.0, np.nan]),
+                    prev_normal_output=np.ones(2),
+                    initial_output_weights=np.array([1.0, 100.0]),
+                )
+            )
+        )
+
+        np.testing.assert_allclose(prices, np.array([12.0, 24.0]))
+        assert setter.initial_cost_normalization_factor == pytest.approx(1.0)
+        assert setter.initial_cost_normalization_status == setter.NORMALIZATION_STATUS_LOW_VALID_WEIGHT
+
+    def test_initial_cost_normalization_reports_clipped_factor(self, tmp_path):
+        setter = self._make_setter(
+            tmp_path,
+            initial_cost_normalization_mode="output_weighted_robust_gap",
+            initial_cost_normalization_lower_quantile=0.0,
+            initial_cost_normalization_upper_quantile=1.0,
+            initial_cost_normalization_max_factor=1.5,
+        )
+        prices = setter.compute_price(
+            **(
+                PRICE_KWARGS
+                | dict(
+                    prev_prices=np.array([24.0]),
+                    prev_firm_prices=np.array([24.0]),
+                    prev_average_good_prices=np.array([10.0]),
+                    prev_supply=np.ones(1),
+                    prev_demand=np.ones(1),
+                    current_firm_sectors=np.array([0]),
+                    curr_unit_costs=np.array([10.0]),
+                    prev_unit_costs=np.array([10.0]),
+                    initial_output_weights=np.array([1.0]),
+                    **self._cost_kwargs(1, mc=10.0),
+                )
+            )
+        )
+
+        assert prices[0] == pytest.approx(18.0)
+        assert setter.initial_cost_normalization_factor == pytest.approx(1.5)
+        assert setter.initial_cost_normalization_status == setter.NORMALIZATION_STATUS_CLIPPED
+
     def test_positive_producer_tax_grosses_up_price(self, tmp_path):
         setter = self._make_setter(tmp_path)
         prices = setter.compute_price(
@@ -611,6 +807,15 @@ class TestSectorMarkupMarginalCostPriceSetter:
             SectorMarkupMarginalCostPriceSetter(
                 orbis_markup_path=str(path),
                 industry_to_nace_main_section={"0": "A"},
+            )
+
+    def test_invalid_initial_cost_normalization_configuration_fails(self, tmp_path):
+        with pytest.raises(ValueError, match="initial_cost_normalization_lower_quantile"):
+            self._make_setter(
+                tmp_path,
+                initial_cost_normalization_mode="output_weighted_robust_gap",
+                initial_cost_normalization_lower_quantile=0.9,
+                initial_cost_normalization_upper_quantile=0.1,
             )
 
     def test_missing_orbis_file_fails(self, tmp_path):

@@ -43,6 +43,9 @@ class FirmTimeSeries(TimeSeries):
     - pricing_ac_fallback_binding: Indicator that AC used sector/previous fallback
     - pricing_gate_state: Numeric code for the demand-pull gate state
     - pricing_fallback_code: Numeric code for pricing fallback source
+    - pricing_cost_normalization_factor: One-time initial pricing-cost scale factor
+    - pricing_cost_normalization_raw_gap: Opening pre-tax price/cost gap before normalization
+    - pricing_cost_normalization_status: Numeric code for normalization status
 
     Labor & Employment:
     - number_of_employees: Workers per firm
@@ -303,6 +306,9 @@ class FirmTimeSeries(TimeSeries):
             pricing_ac_fallback_binding=np.zeros(data.shape[0]),
             pricing_gate_state=np.zeros(data.shape[0]),
             pricing_fallback_code=np.zeros(data.shape[0]),
+            pricing_cost_normalization_factor=np.ones(data.shape[0]),
+            pricing_cost_normalization_raw_gap=np.full(data.shape[0], np.nan),
+            pricing_cost_normalization_status=np.zeros(data.shape[0]),
             taxes_paid_on_production=data["Taxes paid on Production"].values,
             corporate_taxes_paid=data["Corporate Taxes Paid"].values,
             equity=data["Equity"].values,
@@ -677,6 +683,9 @@ def create_firms_timeseries(
         pricing_ac_fallback_binding=np.zeros(data.shape[0]),
         pricing_gate_state=np.zeros(data.shape[0]),
         pricing_fallback_code=np.zeros(data.shape[0]),
+        pricing_cost_normalization_factor=np.ones(data.shape[0]),
+        pricing_cost_normalization_raw_gap=np.full(data.shape[0], np.nan),
+        pricing_cost_normalization_status=np.zeros(data.shape[0]),
         taxes_paid_on_production=data["Taxes paid on Production"].values,
         corporate_taxes_paid=data["Corporate Taxes Paid"].values,
         equity=data["Equity"].values,

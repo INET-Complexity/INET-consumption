@@ -45,6 +45,9 @@ class TestFirms:
             "pricing_ac_fallback_binding",
             "pricing_gate_state",
             "pricing_fallback_code",
+            "pricing_cost_normalization_factor",
+            "pricing_cost_normalization_raw_gap",
+            "pricing_cost_normalization_status",
             "profits",
             "taxes_paid_on_production",
             "corporate_taxes_paid",
@@ -177,6 +180,31 @@ class TestFirms:
         assert np.isfinite(test_firms.ts.current("unit_costs")).any()
         assert np.isnan(test_firms.ts.current("pricing_mc_smooth")).all()
         assert np.isnan(test_firms.ts.current("pricing_ac_smooth")).all()
+
+    def test__compute_price_passes_initial_output_weights_and_appends_normalization_diagnostics(self, test_firms):
+        class CapturingPriceSetter:
+            def compute_price(self, **kwargs):
+                self.initial_output_weights = kwargs["initial_output_weights"].copy()
+                shape = kwargs["prev_prices"].shape
+                self.last_pricing_cost_normalization_factor = np.full(shape, 1.25)
+                self.last_pricing_cost_normalization_raw_gap = np.full(shape, 1.10)
+                self.last_pricing_cost_normalization_status = np.full(shape, 1.0)
+                return kwargs["prev_prices"].copy()
+
+        price_setter = CapturingPriceSetter()
+        test_firms.functions["prices"] = price_setter
+        previous_average_good_prices = np.ones(test_firms.n_industries)
+
+        test_firms.compute_price(
+            current_estimated_ppi_inflation=0.0,
+            previous_average_good_prices=previous_average_good_prices,
+            ppi_during=np.ones(2),
+        )
+
+        np.testing.assert_allclose(price_setter.initial_output_weights, test_firms.ts.initial("production"))
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_factor"), 1.25)
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_raw_gap"), 1.10)
+        np.testing.assert_allclose(test_firms.ts.current("pricing_cost_normalization_status"), 1.0)
 
     def test__from_pickled_agent_rejects_cfc_depreciation_without_cfc_replacement(self, datawrapper):
         country = datawrapper.synthetic_countries["FRA"]

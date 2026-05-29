@@ -82,6 +82,7 @@ class PriceSetter(ABC):
         prev_mc_smooth: np.ndarray | None = None,
         prev_ac_smooth: np.ndarray | None = None,
         prev_normal_output: np.ndarray | None = None,
+        initial_output_weights: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate prices for each firm based on market conditions.
 
@@ -123,6 +124,8 @@ class PriceSetter(ABC):
             prev_ac_smooth (np.ndarray | None): Previous smoothed pricing AC.
             prev_normal_output (np.ndarray | None): Previous smoothed normal
                 output used by pricing.
+            initial_output_weights (np.ndarray | None): Initial real output
+                weights used by optional first-period cost-level alignment.
 
         Returns:
             np.ndarray: Updated prices by firm
@@ -144,6 +147,12 @@ _MARKUP_PRICE_COMPATIBILITY_PARAMETERS = {
     "normal_output_capital_floor_lambda",
     "demand_pull_speed",
     "ac_floor_share",
+    "initial_cost_normalization_mode",
+    "initial_cost_normalization_lower_quantile",
+    "initial_cost_normalization_upper_quantile",
+    "initial_cost_normalization_min_factor",
+    "initial_cost_normalization_max_factor",
+    "initial_cost_normalization_min_valid_weight_share",
 }
 
 
@@ -210,6 +219,7 @@ class DefaultPriceSetter(PriceSetter):
         prev_mc_smooth: np.ndarray | None = None,
         prev_ac_smooth: np.ndarray | None = None,
         prev_normal_output: np.ndarray | None = None,
+        initial_output_weights: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -307,6 +317,17 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         GATE_CHEAP_SLACK: "cheap_slack",
         GATE_EXPENSIVE_TIGHT: "expensive_tight",
     }
+    INITIAL_COST_NORMALIZATION_NONE = "none"
+    INITIAL_COST_NORMALIZATION_OUTPUT_WEIGHTED_ROBUST_GAP = "output_weighted_robust_gap"
+    INITIAL_COST_NORMALIZATION_MODES = {
+        INITIAL_COST_NORMALIZATION_NONE,
+        INITIAL_COST_NORMALIZATION_OUTPUT_WEIGHTED_ROBUST_GAP,
+    }
+    NORMALIZATION_STATUS_DISABLED = 0
+    NORMALIZATION_STATUS_APPLIED = 1
+    NORMALIZATION_STATUS_CLIPPED = 2
+    NORMALIZATION_STATUS_INVALID = 3
+    NORMALIZATION_STATUS_LOW_VALID_WEIGHT = 4
 
     def __init__(
         self,
@@ -323,6 +344,12 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         normal_output_capital_floor_lambda: float = 0.25,
         demand_pull_speed: float = 1.0,
         ac_floor_share: float = 1.0,
+        initial_cost_normalization_mode: str = "none",
+        initial_cost_normalization_lower_quantile: float = 0.01,
+        initial_cost_normalization_upper_quantile: float = 0.99,
+        initial_cost_normalization_min_factor: float = 0.5,
+        initial_cost_normalization_max_factor: float = 2.0,
+        initial_cost_normalization_min_valid_weight_share: float = 0.5,
     ):
         if mc_smoothing_horizon <= 0:
             raise ValueError("mc_smoothing_horizon must be positive.")
@@ -336,6 +363,29 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             raise ValueError("normal_output_capital_floor_lambda must be in (0, 1).")
         if ac_floor_share <= 0:
             raise ValueError("ac_floor_share must be positive.")
+        if initial_cost_normalization_mode not in self.INITIAL_COST_NORMALIZATION_MODES:
+            raise ValueError(
+                "initial_cost_normalization_mode must be one of "
+                f"{sorted(self.INITIAL_COST_NORMALIZATION_MODES)}."
+            )
+        if not (0.0 <= initial_cost_normalization_lower_quantile <= 1.0):
+            raise ValueError("initial_cost_normalization_lower_quantile must be in [0, 1].")
+        if not (0.0 <= initial_cost_normalization_upper_quantile <= 1.0):
+            raise ValueError("initial_cost_normalization_upper_quantile must be in [0, 1].")
+        if initial_cost_normalization_lower_quantile > initial_cost_normalization_upper_quantile:
+            raise ValueError(
+                "initial_cost_normalization_lower_quantile must be no greater than "
+                "initial_cost_normalization_upper_quantile."
+            )
+        if initial_cost_normalization_min_factor <= 0.0:
+            raise ValueError("initial_cost_normalization_min_factor must be positive.")
+        if initial_cost_normalization_max_factor < initial_cost_normalization_min_factor:
+            raise ValueError(
+                "initial_cost_normalization_max_factor must be at least "
+                "initial_cost_normalization_min_factor."
+            )
+        if not (0.0 <= initial_cost_normalization_min_valid_weight_share <= 1.0):
+            raise ValueError("initial_cost_normalization_min_valid_weight_share must be in [0, 1].")
         self.orbis_markup_path = orbis_markup_path
         self.markup_year = int(markup_year)
         mapping = industry_to_nace_main_section or self._default_industry_mapping()
@@ -353,6 +403,23 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.normal_output_capital_floor_lambda = float(normal_output_capital_floor_lambda)
         self.demand_pull_speed = max(0.0, min(1.0, float(demand_pull_speed)))
         self.ac_floor_share = float(ac_floor_share)
+        self.initial_cost_normalization_mode = initial_cost_normalization_mode
+        self.initial_cost_normalization_lower_quantile = float(initial_cost_normalization_lower_quantile)
+        self.initial_cost_normalization_upper_quantile = float(initial_cost_normalization_upper_quantile)
+        self.initial_cost_normalization_min_factor = float(initial_cost_normalization_min_factor)
+        self.initial_cost_normalization_max_factor = float(initial_cost_normalization_max_factor)
+        self.initial_cost_normalization_min_valid_weight_share = float(
+            initial_cost_normalization_min_valid_weight_share
+        )
+        self.initial_cost_normalization_factor = 1.0
+        self.initial_cost_normalization_status = (
+            self.NORMALIZATION_STATUS_DISABLED
+            if self.initial_cost_normalization_mode == self.INITIAL_COST_NORMALIZATION_NONE
+            else self.NORMALIZATION_STATUS_INVALID
+        )
+        self._initial_cost_normalization_done = (
+            self.initial_cost_normalization_mode == self.INITIAL_COST_NORMALIZATION_NONE
+        )
 
         self.markup_lower_by_industry, self.markup_central_by_industry, self.markup_upper_by_industry = (
             self._load_markup_arrays()
@@ -485,6 +552,13 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_ac_fallback_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_gate_state = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_fallback_code = np.zeros(prev_prices.shape, dtype=float)
+        self.last_pricing_cost_normalization_factor = np.full(
+            prev_prices.shape, self.initial_cost_normalization_factor, dtype=float
+        )
+        self.last_pricing_cost_normalization_raw_gap = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_cost_normalization_status = np.full(
+            prev_prices.shape, self.initial_cost_normalization_status, dtype=float
+        )
 
     @staticmethod
     def _sector_stat(values: np.ndarray, current_firm_sectors: np.ndarray, stat: str) -> np.ndarray:
@@ -534,6 +608,114 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         fallback = (~has_current | ~self._valid_positive(smoothed)).astype(float)
         return smoothed, fallback
 
+    def _average_cost_signal(
+        self, ac_raw: np.ndarray, current_firm_sectors: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        sector_ac_median = self._sector_stat(ac_raw, current_firm_sectors, "median")
+        sector_ac_p95 = self._sector_stat(ac_raw, current_firm_sectors, "p95")
+        ac_current_valid = self._valid_positive(ac_raw)
+        ac_outlier = ac_current_valid & np.isfinite(sector_ac_p95) & (ac_raw > sector_ac_p95)
+        ac_valid = ac_current_valid & ~ac_outlier
+        ac_signal = np.where(ac_valid, ac_raw, np.nan)
+        ac_signal = np.where(ac_outlier, sector_ac_median, ac_signal)
+        return ac_signal, ac_valid
+
+    @staticmethod
+    def _weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+        valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0.0)
+        if not np.any(valid):
+            return np.nan
+        ordered = np.argsort(values[valid])
+        values_ordered = values[valid][ordered]
+        weights_ordered = weights[valid][ordered]
+        cumulative_weight = np.cumsum(weights_ordered)
+        cutoff = quantile * cumulative_weight[-1]
+        index = min(np.searchsorted(cumulative_weight, cutoff, side="left"), values_ordered.size - 1)
+        return float(values_ordered[index])
+
+    def _maybe_compute_initial_cost_normalization(
+        self,
+        previous_pre_tax_price: np.ndarray,
+        raw_pre_tax_candidate: np.ndarray,
+        initial_output_weights: np.ndarray | None,
+    ) -> np.ndarray:
+        raw_gap = np.divide(
+            previous_pre_tax_price,
+            raw_pre_tax_candidate,
+            out=np.full_like(previous_pre_tax_price, np.nan, dtype=float),
+            where=self._valid_positive(previous_pre_tax_price) & self._valid_positive(raw_pre_tax_candidate),
+        )
+        if self._initial_cost_normalization_done:
+            return np.full_like(raw_gap, np.nan, dtype=float)
+
+        self._initial_cost_normalization_done = True
+        if self.initial_cost_normalization_mode == self.INITIAL_COST_NORMALIZATION_NONE:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_DISABLED
+            return np.full_like(raw_gap, np.nan, dtype=float)
+
+        if initial_output_weights is None:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_INVALID
+            return raw_gap
+
+        weights = np.asarray(initial_output_weights, dtype=float)
+        if weights.shape != previous_pre_tax_price.shape:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_INVALID
+            return raw_gap
+        positive_weight = np.isfinite(weights) & (weights > 0.0)
+        total_positive_weight = weights[positive_weight].sum()
+        valid = (
+            positive_weight
+            & self._valid_positive(raw_gap)
+            & self._valid_positive(previous_pre_tax_price)
+            & self._valid_positive(raw_pre_tax_candidate)
+        )
+        if total_positive_weight <= 0.0 or not np.any(valid):
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_INVALID
+            return raw_gap
+
+        valid_weight_share = weights[valid].sum() / total_positive_weight
+        if valid_weight_share < self.initial_cost_normalization_min_valid_weight_share:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_LOW_VALID_WEIGHT
+            return raw_gap
+
+        lower_gap = self._weighted_quantile(
+            raw_gap[valid], weights[valid], self.initial_cost_normalization_lower_quantile
+        )
+        upper_gap = self._weighted_quantile(
+            raw_gap[valid], weights[valid], self.initial_cost_normalization_upper_quantile
+        )
+        trimmed = valid & (raw_gap >= lower_gap) & (raw_gap <= upper_gap)
+        if not np.any(trimmed) or weights[trimmed].sum() <= 0.0:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_INVALID
+            return raw_gap
+
+        factor_raw = self._weighted_quantile(raw_gap[trimmed], weights[trimmed], 0.5)
+        if not np.isfinite(factor_raw) or factor_raw <= 0.0:
+            self.initial_cost_normalization_factor = 1.0
+            self.initial_cost_normalization_status = self.NORMALIZATION_STATUS_INVALID
+            return raw_gap
+
+        factor = float(
+            np.clip(
+                factor_raw,
+                self.initial_cost_normalization_min_factor,
+                self.initial_cost_normalization_max_factor,
+            )
+        )
+        self.initial_cost_normalization_factor = factor
+        self.initial_cost_normalization_status = (
+            self.NORMALIZATION_STATUS_CLIPPED
+            if not np.isclose(factor, factor_raw)
+            else self.NORMALIZATION_STATUS_APPLIED
+        )
+        return raw_gap
+
     def compute_price(
         self,
         prev_prices: np.ndarray,
@@ -559,6 +741,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         prev_mc_smooth: np.ndarray | None = None,
         prev_ac_smooth: np.ndarray | None = None,
         prev_normal_output: np.ndarray | None = None,
+        initial_output_weights: np.ndarray | None = None,
         min_inflation: float = -1.0,
         max_inflation: float = 1.0,
     ) -> np.ndarray:
@@ -597,46 +780,6 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         if wage_obligation_preview is None:
             wage_obligation_preview = np.full(prev_prices.shape, np.nan, dtype=float)
 
-        normal_output, normal_output_fallback = self._smooth_with_fallback(
-            np.asarray(pricing_normal_output, dtype=float),
-            prev_normal_output,
-            current_firm_sectors,
-            self.normal_output_smoothing_alpha,
-        )
-        wage_obligation_preview = np.asarray(wage_obligation_preview, dtype=float)
-        pricing_effective_labour_inputs = np.asarray(pricing_effective_labour_inputs, dtype=float)
-        labour_mc = np.divide(
-            wage_obligation_preview,
-            pricing_effective_labour_inputs,
-            out=np.full_like(prev_prices, np.nan, dtype=float),
-            where=np.isfinite(wage_obligation_preview)
-            & (wage_obligation_preview >= 0.0)
-            & np.isfinite(pricing_effective_labour_inputs)
-            & (pricing_effective_labour_inputs > 0.0),
-        )
-        material_mc = np.asarray(pricing_material_mc, dtype=float)
-        mc_raw = material_mc + labour_mc
-        mc_raw[~self._valid_positive(mc_raw)] = np.nan
-        mc_smooth, mc_fallback = self._smooth_with_fallback(
-            mc_raw, prev_mc_smooth, current_firm_sectors, self.mc_smoothing_alpha
-        )
-
-        depreciation_unit_cost = np.asarray(pricing_depreciation_unit_cost, dtype=float).copy()
-        depreciation_unit_cost[~(np.isfinite(depreciation_unit_cost) & (depreciation_unit_cost >= 0.0))] = 0.0
-        ac_raw = mc_raw + depreciation_unit_cost
-        ac_raw[~self._valid_positive(ac_raw)] = np.nan
-        sector_ac_median = self._sector_stat(ac_raw, current_firm_sectors, "median")
-        sector_ac_p95 = self._sector_stat(ac_raw, current_firm_sectors, "p95")
-        ac_current_valid = self._valid_positive(ac_raw)
-        ac_outlier = ac_current_valid & np.isfinite(sector_ac_p95) & (ac_raw > sector_ac_p95)
-        ac_valid = ac_current_valid & ~ac_outlier
-        ac_signal = np.where(ac_valid, ac_raw, np.nan)
-        ac_signal = np.where(ac_outlier, sector_ac_median, ac_signal)
-        ac_smooth, ac_smooth_fallback = self._smooth_with_fallback(
-            ac_signal, prev_ac_smooth, current_firm_sectors, self.ac_smoothing_alpha
-        )
-        ac_fallback = (~ac_valid | (ac_smooth_fallback > 0.0)).astype(float)
-
         average_price_by_firm = prev_average_good_prices[current_firm_sectors]
         cheap = prev_firm_prices < average_price_by_firm
         tight = prev_supply <= prev_demand
@@ -672,14 +815,85 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         )
         markup_mu = np.clip(markup_mu, markup_lower, markup_upper)
 
-        markup_candidate = markup_mu * mc_smooth
-        ac_candidate = self.ac_floor_share * ac_smooth
-        pre_tax_candidate = np.maximum(markup_candidate, ac_candidate)
+        normal_output, normal_output_fallback = self._smooth_with_fallback(
+            np.asarray(pricing_normal_output, dtype=float),
+            prev_normal_output,
+            current_firm_sectors,
+            self.normal_output_smoothing_alpha,
+        )
+        wage_obligation_preview = np.asarray(wage_obligation_preview, dtype=float)
+        pricing_effective_labour_inputs = np.asarray(pricing_effective_labour_inputs, dtype=float)
+        labour_mc = np.divide(
+            wage_obligation_preview,
+            pricing_effective_labour_inputs,
+            out=np.full_like(prev_prices, np.nan, dtype=float),
+            where=np.isfinite(wage_obligation_preview)
+            & (wage_obligation_preview >= 0.0)
+            & np.isfinite(pricing_effective_labour_inputs)
+            & (pricing_effective_labour_inputs > 0.0),
+        )
+        material_mc_unscaled = np.asarray(pricing_material_mc, dtype=float)
+        depreciation_unit_cost_unscaled = np.asarray(pricing_depreciation_unit_cost, dtype=float).copy()
+        depreciation_unit_cost_unscaled[
+            ~(np.isfinite(depreciation_unit_cost_unscaled) & (depreciation_unit_cost_unscaled >= 0.0))
+        ] = 0.0
+
+        mc_raw_unscaled = material_mc_unscaled + labour_mc
+        mc_raw_unscaled[~self._valid_positive(mc_raw_unscaled)] = np.nan
+        mc_smooth_unscaled, _ = self._smooth_with_fallback(
+            mc_raw_unscaled, prev_mc_smooth, current_firm_sectors, self.mc_smoothing_alpha
+        )
+        ac_raw_unscaled = mc_raw_unscaled + depreciation_unit_cost_unscaled
+        ac_raw_unscaled[~self._valid_positive(ac_raw_unscaled)] = np.nan
+        ac_signal_unscaled, _ = self._average_cost_signal(ac_raw_unscaled, current_firm_sectors)
+        ac_smooth_unscaled, _ = self._smooth_with_fallback(
+            ac_signal_unscaled, prev_ac_smooth, current_firm_sectors, self.ac_smoothing_alpha
+        )
+
         previous_pre_tax_price = np.where(
             producer_tax_rates > 0.0,
             prev_prices * (1.0 - producer_tax_rates),
             prev_prices,
         )
+        raw_markup_candidate = markup_mu * mc_smooth_unscaled
+        raw_ac_candidate = self.ac_floor_share * ac_smooth_unscaled
+        raw_pre_tax_candidate = np.maximum(raw_markup_candidate, raw_ac_candidate)
+        normalization_pending = not self._initial_cost_normalization_done
+        normalization_raw_gap = self._maybe_compute_initial_cost_normalization(
+            previous_pre_tax_price=previous_pre_tax_price,
+            raw_pre_tax_candidate=raw_pre_tax_candidate,
+            initial_output_weights=initial_output_weights,
+        )
+
+        cost_normalization_factor = self.initial_cost_normalization_factor
+        material_mc = material_mc_unscaled * cost_normalization_factor
+        labour_mc = labour_mc * cost_normalization_factor
+        depreciation_unit_cost = depreciation_unit_cost_unscaled * cost_normalization_factor
+        prev_mc_for_smoothing = prev_mc_smooth
+        prev_ac_for_smoothing = prev_ac_smooth
+        if normalization_pending and not np.isclose(cost_normalization_factor, 1.0):
+            if prev_mc_smooth is not None and prev_mc_smooth.shape == prev_prices.shape:
+                prev_mc_for_smoothing = np.asarray(prev_mc_smooth, dtype=float) * cost_normalization_factor
+            if prev_ac_smooth is not None and prev_ac_smooth.shape == prev_prices.shape:
+                prev_ac_for_smoothing = np.asarray(prev_ac_smooth, dtype=float) * cost_normalization_factor
+
+        mc_raw = material_mc + labour_mc
+        mc_raw[~self._valid_positive(mc_raw)] = np.nan
+        mc_smooth, mc_fallback = self._smooth_with_fallback(
+            mc_raw, prev_mc_for_smoothing, current_firm_sectors, self.mc_smoothing_alpha
+        )
+
+        ac_raw = mc_raw + depreciation_unit_cost
+        ac_raw[~self._valid_positive(ac_raw)] = np.nan
+        ac_signal, ac_valid = self._average_cost_signal(ac_raw, current_firm_sectors)
+        ac_smooth, ac_smooth_fallback = self._smooth_with_fallback(
+            ac_signal, prev_ac_for_smoothing, current_firm_sectors, self.ac_smoothing_alpha
+        )
+        ac_fallback = (~ac_valid | (ac_smooth_fallback > 0.0)).astype(float)
+
+        markup_candidate = markup_mu * mc_smooth
+        ac_candidate = self.ac_floor_share * ac_smooth
+        pre_tax_candidate = np.maximum(markup_candidate, ac_candidate)
         initial_price_gap = np.divide(
             previous_pre_tax_price,
             pre_tax_candidate,
@@ -717,6 +931,13 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_ac_fallback_binding = ac_fallback.astype(float)
         self.last_pricing_gate_state = gate_state
         self.last_pricing_fallback_code = fallback_code
+        self.last_pricing_cost_normalization_factor = np.full(
+            prev_prices.shape, self.initial_cost_normalization_factor, dtype=float
+        )
+        self.last_pricing_cost_normalization_raw_gap = normalization_raw_gap
+        self.last_pricing_cost_normalization_status = np.full(
+            prev_prices.shape, self.initial_cost_normalization_status, dtype=float
+        )
         return prices
 
 
@@ -767,6 +988,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
         prev_mc_smooth: np.ndarray | None = None,
         prev_ac_smooth: np.ndarray | None = None,
         prev_normal_output: np.ndarray | None = None,
+        initial_output_weights: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:
@@ -795,6 +1017,7 @@ class SectorExogenousPriceSetter(DefaultPriceSetter):
             prev_mc_smooth=prev_mc_smooth,
             prev_ac_smooth=prev_ac_smooth,
             prev_normal_output=prev_normal_output,
+            initial_output_weights=initial_output_weights,
             min_inflation=min_inflation,
             max_inflation=max_inflation,
         )
@@ -862,6 +1085,7 @@ class ExogenousPriceSetter(PriceSetter):
         prev_mc_smooth: np.ndarray | None = None,
         prev_ac_smooth: np.ndarray | None = None,
         prev_normal_output: np.ndarray | None = None,
+        initial_output_weights: np.ndarray | None = None,
         min_inflation: float = -0.1,
         max_inflation: float = 0.1,
     ) -> np.ndarray:

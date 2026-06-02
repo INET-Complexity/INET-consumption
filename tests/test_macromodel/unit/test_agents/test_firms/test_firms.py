@@ -1480,6 +1480,7 @@ class TestFirms:
         test_firms.base_intermediate_inputs_productivity_matrix = intermediate_coefficients
         test_firms.base_capital_input_use_matrix = np.zeros((n_industries, n_industries))
         test_firms.functions["target_production"].target_inventory_to_demand_fraction = 0.1
+        test_firms.functions["target_production"].inventory_adjustment_speed = 1.0
         test_firms.functions["target_production"].financial_constrains_fraction = 0.0
         test_firms.configuration.parameters.firm_activity_finance_revision_mode = "post_credit_cash_budget"
         test_firms.ts.override_current("estimated_demand", np.r_[10.0, np.zeros(n_firms - 1)])

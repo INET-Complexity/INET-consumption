@@ -31,6 +31,7 @@ class TargetProductionSetter(ABC):
 
     Attributes:
         target_inventory_to_demand_fraction (float): Desired inventory-to-expected-demand ratio
+        inventory_adjustment_speed (float): Fraction of the finished-goods inventory gap closed each period
         financial_constrains_fraction (float): Weight of financial constraints on targets
         maximum_debt_to_equity_ratio (float): Maximum allowed debt/equity ratio
         intermediate_inputs_target_considers_labour_inputs (float): Weight of labor constraints on intermediate inputs
@@ -52,11 +53,13 @@ class TargetProductionSetter(ABC):
         capital_inputs_target_considers_labour_inputs: float,
         capital_inputs_target_considers_intermediate_inputs: float,
         capital_inputs_target_considers_capital_inputs: float,
+        inventory_adjustment_speed: float = 1.0,
     ):
         """Initialize the target production setter with configuration parameters.
 
         Args:
             target_inventory_to_demand_fraction (float): Desired inventory ratio
+            inventory_adjustment_speed (float): Fraction of inventory gap to close
             financial_constrains_fraction (float): Weight of financial constraints
             maximum_debt_to_equity_ratio (float): Maximum debt/equity ratio
             intermediate_inputs_target_considers_labour_inputs (float): Labor weight for intermediates
@@ -67,6 +70,7 @@ class TargetProductionSetter(ABC):
             capital_inputs_target_considers_capital_inputs (float): Capital weight for capital
         """
         self.target_inventory_to_demand_fraction = target_inventory_to_demand_fraction
+        self.inventory_adjustment_speed = clip(inventory_adjustment_speed)
         self.financial_constrains_fraction = financial_constrains_fraction
         self.maximum_debt_to_equity_ratio = maximum_debt_to_equity_ratio
 
@@ -93,6 +97,15 @@ class TargetProductionSetter(ABC):
         self.capital_inputs_target_considers_intermediate_inputs = capital_inputs_target_considers_intermediate_inputs
         self.capital_inputs_target_considers_capital_inputs = clip(capital_inputs_target_considers_capital_inputs)
         self.capital_inputs_target_considers_capital_inputs = capital_inputs_target_considers_capital_inputs
+
+    def update_parameters_from_config(self, parameters: dict) -> None:
+        for param, value in parameters.items():
+            if param == "inventory_adjustment_speed":
+                value = clip(value)
+            setattr(self, param, value)
+
+        if "inventory_adjustment_speed" not in parameters:
+            self.inventory_adjustment_speed = 1.0
 
     @abstractmethod
     def compute_target_production(
@@ -220,8 +233,8 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         """Calculate target production levels using the default strategy.
 
         Computes targets based on:
-        1. Expected demand plus a desired inventory buffer linked to expected demand
-        2. Minus opening finished-goods inventory
+        1. Expected demand
+        2. Plus a configurable share of the gap between desired and opening finished-goods inventory
         3. Adjusted for financial constraints if enabled
 
         Args:
@@ -230,10 +243,9 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         Returns:
             np.ndarray: Target production quantities for each firm
         """
-        target_production = (
-            current_estimated_demand
-            + self.target_inventory_to_demand_fraction * current_estimated_demand
-            - previous_inventory
+        desired_inventory = self.target_inventory_to_demand_fraction * current_estimated_demand
+        target_production = current_estimated_demand + self.inventory_adjustment_speed * (
+            desired_inventory - previous_inventory
         )
 
         if self.financial_constrains_fraction != 0.0:

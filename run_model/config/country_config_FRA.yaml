@@ -301,8 +301,9 @@ FRA:
           intermediate_inputs_target_considers_capital_inputs: 0.18  # 1.0
           intermediate_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
           intermediate_inputs_target_considers_labour_inputs: 0.53  # 0.0
+          inventory_adjustment_speed: 1.0
           maximum_debt_to_equity_ratio: 2.0
-          target_inventory_to_demand_fraction: 0.1 # 0.0
+          target_inventory_to_demand_fraction: 0.0 # 0.1
       technical_coefficients_growth:
         name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth

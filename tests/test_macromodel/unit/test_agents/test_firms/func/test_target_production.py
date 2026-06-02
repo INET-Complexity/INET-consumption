@@ -39,10 +39,30 @@ def _compute(setter, **overrides):
     return setter.compute_target_production(**inputs)
 
 
-def test_target_production_uses_demand_linked_inventory_net_formula():
+def test_target_production_default_speed_uses_demand_linked_inventory_net_formula():
     target_production = _compute(_setter())
 
     assert np.allclose(target_production, np.array([90.0]))
+
+
+def test_target_production_inventory_adjustment_speed_partially_closes_inventory_gap():
+    target_production = _compute(_setter(inventory_adjustment_speed=0.25))
+
+    assert np.allclose(target_production, np.array([97.5]))
+
+
+def test_target_production_zero_inventory_adjustment_speed_uses_estimated_demand():
+    target_production = _compute(_setter(inventory_adjustment_speed=0.0))
+
+    assert np.allclose(target_production, np.array([100.0]))
+
+
+def test_target_production_inventory_adjustment_speed_is_clipped():
+    low_speed_target = _compute(_setter(inventory_adjustment_speed=-0.25))
+    high_speed_target = _compute(_setter(inventory_adjustment_speed=1.25))
+
+    assert np.allclose(low_speed_target, np.array([100.0]))
+    assert np.allclose(high_speed_target, np.array([90.0]))
 
 
 def test_target_production_is_floored_when_inventory_exceeds_demand_and_buffer():
@@ -57,10 +77,10 @@ def test_target_production_is_floored_when_inventory_exceeds_demand_and_buffer()
 
 def test_target_production_financial_constraint_penalty_applies_after_inventory_net_formula():
     target_production = _compute(
-        _setter(financial_constrains_fraction=0.5),
+        _setter(financial_constrains_fraction=0.5, inventory_adjustment_speed=0.25),
         previous_loans_applied_for=np.array([10.0]),
         current_firm_equity=np.array([100.0]),
         current_firm_debt=np.array([0.0]),
     )
 
-    assert np.allclose(target_production, np.array([87.5]))
+    assert np.allclose(target_production, np.array([95.0]))

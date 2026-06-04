@@ -277,6 +277,7 @@ class TargetProduction(BaseModel):
     parameters: dict[str, Any] = {
         "maximum_debt_to_equity_ratio": 2.0,
         "target_inventory_to_demand_fraction": 0.0,
+        "inventory_adjustment_speed": 1.0,
         "financial_constrains_fraction": 0.0,
         "intermediate_inputs_target_considers_labour_inputs": 0.0,
         "intermediate_inputs_target_considers_intermediate_inputs": 0.0,

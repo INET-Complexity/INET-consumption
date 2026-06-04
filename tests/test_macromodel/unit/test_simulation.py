@@ -847,6 +847,51 @@ def test_reset_firm_params(datawrapper):
         simulation.iterate()
 
 
+def test_reset_firm_target_production_inventory_adjustment_speed(datawrapper):
+    """Test resetting the target-production inventory adjustment speed."""
+    country_sim_configuration = CountryConfiguration()
+
+    def redo_configuration(
+        country_conf: CountryConfiguration,
+        inventory_adjustment_speed: float,
+    ):
+        new_country_conf_ = deepcopy(country_conf)
+        new_country_conf_.firms.functions.target_production.parameters["inventory_adjustment_speed"] = (
+            inventory_adjustment_speed
+        )
+        return new_country_conf_
+
+    sim_configuration = SimulationConfiguration(country_configurations={"FRA": country_sim_configuration})
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=sim_configuration)
+
+    for _ in range(5):
+        simulation.iterate()
+
+    values = [-0.25, 0.25, 1.25]
+    expected_values = [0.0, 0.25, 1.0]
+
+    for x, expected in zip(values, expected_values):
+        new_country_conf = redo_configuration(country_sim_configuration, x)
+        sim_configuration.country_configurations["FRA"] = new_country_conf
+
+        simulation.reset(sim_configuration)
+        firms = simulation.countries["FRA"].firms
+        func = firms.functions["target_production"]
+
+        assert func.inventory_adjustment_speed == expected
+        simulation.iterate()
+
+    old_country_conf = deepcopy(country_sim_configuration)
+    old_country_conf.firms.functions.target_production.parameters.pop("inventory_adjustment_speed")
+    sim_configuration.country_configurations["FRA"] = old_country_conf
+
+    simulation.reset(sim_configuration)
+    firms = simulation.countries["FRA"].firms
+    func = firms.functions["target_production"]
+
+    assert func.inventory_adjustment_speed == 1.0
+
+
 def test_sector_markup_marginal_cost_price_setter_loads_from_configuration(tmp_path):
     path = tmp_path / "markups.csv"
     path.write_text(

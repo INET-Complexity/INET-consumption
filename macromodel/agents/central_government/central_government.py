@@ -243,6 +243,7 @@ class CentralGovernment(Agent):
     def compute_taxes(
         self,
         current_ind_employee_income: np.ndarray,
+        current_cpi: float,
         current_total_rent_paid: float,
         current_income_financial_assets: np.ndarray,
         current_ind_activity: np.ndarray,
@@ -266,6 +267,7 @@ class CentralGovernment(Agent):
 
         Args:
             current_ind_employee_income (np.ndarray): Employee incomes
+            current_cpi (float): Current consumer price index used to nominalise employee income
             current_total_rent_paid (float): Total rent payments
             current_income_financial_assets (np.ndarray): Financial income
             current_ind_activity (np.ndarray): Individual activity status
@@ -303,13 +305,21 @@ class CentralGovernment(Agent):
         # Taxes on exports
         self.ts.taxes_exports.append([self.states["Export Tax"] * current_total_exports])
 
-        # Total wages of employed individuals
-        tot_wages_employed_ind = np.sum([current_ind_employee_income[current_ind_activity == ActivityStatus.EMPLOYED]])
+        # Employee income is stored net of employee-side labour taxes in base-period units.
+        nominal_net_employee_income = current_cpi * np.sum(
+            current_ind_employee_income[current_ind_activity == ActivityStatus.EMPLOYED]
+        )
+        net_of_employee_taxes = 1 - self.states["Employee Social Insurance Tax"] - self.states["Income Tax"] * (
+            1 - self.states["Employee Social Insurance Tax"]
+        )
+        nominal_gross_employee_income = nominal_net_employee_income / net_of_employee_taxes
 
         # Taxes on income
         self.ts.taxes_income.append(
             [
-                self.states["Income Tax"] * (1 - self.states["Employee Social Insurance Tax"]) * tot_wages_employed_ind
+                self.states["Income Tax"]
+                * (1 - self.states["Employee Social Insurance Tax"])
+                * nominal_gross_employee_income
                 + self.states["Income Tax"] * current_total_rent_paid
                 + self.states["Income Tax"] * current_income_financial_assets.sum(),
             ]
@@ -317,10 +327,10 @@ class CentralGovernment(Agent):
         self.ts.taxes_rental_income.append([self.states["Income Tax"] * current_total_rent_paid])
 
         # Taxes on employer social insurance
-        self.ts.taxes_employer_si.append([self.states["Employer Social Insurance Tax"] * tot_wages_employed_ind])
+        self.ts.taxes_employer_si.append([self.states["Employer Social Insurance Tax"] * nominal_gross_employee_income])
 
         # Taxes on employee social insurance
-        self.ts.taxes_employee_si.append([self.states["Employee Social Insurance Tax"] * tot_wages_employed_ind])
+        self.ts.taxes_employee_si.append([self.states["Employee Social Insurance Tax"] * nominal_gross_employee_income])
 
     def compute_taxes_on_products(self) -> float:
         """Calculate total taxes on products and production.

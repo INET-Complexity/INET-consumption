@@ -1,6 +1,6 @@
 import numpy as np
 
-from macromodel.agents.firms.func.production import BundledLeontief, PureLeontief
+from macromodel.agents.firms.func.production import BundledLeontief, CriticalAndImportantLeontief, PureLeontief
 from macromodel.agents.firms.func.target_intermediate_inputs import (
     BundleWeightedTargetIntermediateInputsSetter,
 )
@@ -97,6 +97,30 @@ class TestProductionSetter:
 
         assert not np.isnan(bundle_productivity).any()
         assert not np.isinf(bundle_productivity).any()
+
+    def test_critical_and_important_leontief_noncritical_inputs_do_not_bind_production(self):
+        production = CriticalAndImportantLeontief()
+        limiting = production.compute_limiting_intermediate_inputs_stock(
+            intermediate_inputs_productivity_matrix=np.array([[1.0, 1.0]]),
+            intermediate_inputs_stock=np.array([[10.0, 0.0]]),
+            intermediate_inputs_utilisation_rate=np.array([1.0, 1.0]),
+            goods_criticality_matrix=np.array([[1.0, 0.0]]),
+            substitution_bundle_matrix=np.eye(2),
+        )
+
+        assert np.allclose(limiting, np.array([10.0]))
+
+    def test_critical_and_important_leontief_consumes_noncritical_io_inputs(self):
+        production = CriticalAndImportantLeontief()
+        used = production.compute_intermediate_inputs_used(
+            realised_production=np.array([10.0]),
+            intermediate_inputs_productivity_matrix=np.array([[2.0, 5.0]]),
+            intermediate_inputs_stock=np.array([[100.0, 100.0]]),
+            goods_criticality_matrix=np.array([[1.0, 0.0]]),
+            substitution_bundle_matrix=np.eye(2),
+        )
+
+        assert np.allclose(used, np.array([[5.0, 2.0]]))
 
     def test_target_intermediate_inputs_bundle_empty(self):
         n_industries = 5

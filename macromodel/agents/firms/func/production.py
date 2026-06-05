@@ -450,14 +450,15 @@ class CriticalAndImportantLeontief(ProductionSetter):
     ) -> np.ndarray:
         """Calculate intermediate inputs used with criticality.
 
-        Uses inputs proportionally to production, but only for
-        critical and important inputs.
+        Uses inputs proportionally to production. Criticality controls whether
+        an input can constrain production, not whether a purchased IO input is
+        physically consumed during production.
 
         Args:
             [same as parent class]
 
         Returns:
-            np.ndarray: Critical intermediate inputs used
+            np.ndarray: Intermediate inputs used
         """
         used_intermediate_inputs = np.divide(
             realised_production[:, None],
@@ -465,7 +466,6 @@ class CriticalAndImportantLeontief(ProductionSetter):
             out=np.zeros_like(intermediate_inputs_productivity_matrix),
             where=intermediate_inputs_productivity_matrix != 0.0,
         )
-        used_intermediate_inputs[goods_criticality_matrix == 0.0] = 0.0
         return used_intermediate_inputs
 
     def compute_capital_inputs_used(

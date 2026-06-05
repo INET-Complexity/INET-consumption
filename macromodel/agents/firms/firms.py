@@ -3186,6 +3186,8 @@ class Firms(Agent):
             intermediate_inputs_stock=self.ts.current("intermediate_inputs_stock"),
             goods_criticality_matrix=self.current_goods_criticality_by_firm(),
             substitution_bundle_matrix=self.substitution_bundles,
+            available_intermediate_inputs=self.ts.current("intermediate_inputs_stock")
+            + self.ts.current("real_amount_bought_as_intermediate_inputs"),
         )
 
     def compute_used_intermediate_inputs_costs(self, current_good_prices: np.ndarray) -> np.ndarray:

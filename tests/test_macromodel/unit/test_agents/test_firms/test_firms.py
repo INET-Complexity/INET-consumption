@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from macromodel.agents.firms.firms import Firms
+from macromodel.agents.firms.func.production import CriticalAndImportantLeontief
 from macromodel.configurations.firms_configuration import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
@@ -436,6 +437,54 @@ class TestFirms:
             a - b,
             np.full(18, 0.5),
         )
+
+    def test__critical_and_important_leontief_uses_current_bought_inputs_without_nan_propagation(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        firm_index = 0
+        output_industry = test_firms.states["Industry"][firm_index]
+        critical_input = output_industry
+        noncritical_input = (output_industry + 1) % n_industries
+
+        production = np.zeros(n_firms)
+        production[firm_index] = 10.0
+        coefficients = np.zeros((n_industries, n_industries))
+        coefficients[critical_input, output_industry] = 2.0
+        coefficients[noncritical_input, output_industry] = 5.0
+        criticality = np.ones((n_firms, n_industries))
+        criticality[firm_index, noncritical_input] = 0.0
+        opening_stock = np.zeros((n_firms, n_industries))
+        opening_stock[firm_index, critical_input] = 5.0
+        opening_stock[firm_index, noncritical_input] = 0.25
+        bought_inputs = np.full((n_firms, n_industries), np.nan)
+        bought_inputs[firm_index, critical_input] = 0.0
+        bought_inputs[firm_index, noncritical_input] = 1.25
+        current_good_prices = np.ones(n_industries)
+        current_good_prices[critical_input] = 3.0
+        current_good_prices[noncritical_input] = 7.0
+
+        test_firms.functions["production"] = CriticalAndImportantLeontief()
+        test_firms.base_intermediate_inputs_productivity_matrix = coefficients
+        test_firms.goods_criticality_matrix = criticality
+        test_firms.ts.override_current("production", production)
+        test_firms.ts.override_current("intermediate_inputs_stock", opening_stock)
+        test_firms.ts.override_current("real_amount_bought_as_intermediate_inputs", bought_inputs)
+
+        used_inputs = test_firms.compute_used_intermediate_inputs()
+        test_firms.ts.override_current("used_intermediate_inputs", used_inputs)
+        used_costs = test_firms.compute_used_intermediate_inputs_costs(current_good_prices)
+        closing_stock = test_firms.compute_intermediate_inputs_stock()
+
+        expected_used = np.zeros((n_firms, n_industries))
+        expected_used[firm_index, critical_input] = 5.0
+        expected_used[firm_index, noncritical_input] = 1.5
+
+        assert not np.isnan(used_inputs).any()
+        assert not np.isnan(closing_stock).any()
+        assert np.allclose(used_inputs, expected_used)
+        assert np.allclose(used_costs[firm_index], 25.5)
+        assert np.allclose(used_costs[np.arange(n_firms) != firm_index], 0.0)
+        assert np.allclose(closing_stock, np.zeros((n_firms, n_industries)))
 
     def test__compute_profits(self, test_firms):
         test_firms.ts.used_intermediate_inputs_costs.append(np.full(18, 10.0))

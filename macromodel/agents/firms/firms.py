@@ -3180,14 +3180,19 @@ class Firms(Agent):
         Returns:
             np.ndarray: Used intermediate inputs for each firm
         """
+        bought_intermediate_inputs = np.nan_to_num(
+            self.ts.current("real_amount_bought_as_intermediate_inputs"),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         return self.functions["production"].compute_intermediate_inputs_used(
             realised_production=self.ts.current("production"),
             intermediate_inputs_productivity_matrix=self.get_effective_intermediate_coefficients(),
             intermediate_inputs_stock=self.ts.current("intermediate_inputs_stock"),
             goods_criticality_matrix=self.current_goods_criticality_by_firm(),
             substitution_bundle_matrix=self.substitution_bundles,
-            available_intermediate_inputs=self.ts.current("intermediate_inputs_stock")
-            + self.ts.current("real_amount_bought_as_intermediate_inputs"),
+            available_intermediate_inputs=self.ts.current("intermediate_inputs_stock") + bought_intermediate_inputs,
         )
 
     def compute_used_intermediate_inputs_costs(self, current_good_prices: np.ndarray) -> np.ndarray:
@@ -3212,11 +3217,17 @@ class Firms(Agent):
         Returns:
             np.ndarray: Updated intermediate input stocks
         """
+        bought_intermediate_inputs = np.nan_to_num(
+            self.ts.current("real_amount_bought_as_intermediate_inputs"),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         return np.maximum(
             0.0,
             self.ts.current("intermediate_inputs_stock")
             - self.ts.current("used_intermediate_inputs")
-            + self.ts.current("real_amount_bought_as_intermediate_inputs"),
+            + bought_intermediate_inputs,
         )
 
     def compute_intermediate_inputs_stock_value(self, current_good_prices: np.ndarray) -> np.ndarray:

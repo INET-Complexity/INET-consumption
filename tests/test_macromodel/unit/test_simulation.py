@@ -16,6 +16,7 @@ from macromodel.simulation import (
     resolve_goods_market_configuration,
 )
 from macromodel.util.function_mapping import functions_from_model, update_functions
+from macromodel.utils.prehooks.household_income_shock import create_household_income_shock_hook
 from macromodel.utils.prehooks.productivity_subsidy import create_productivity_subsidy_hook
 
 
@@ -621,6 +622,48 @@ def test_productivity_subsidy_uses_execution_path(datawrapper):
     assert firms.states["forced_productivity_investment"].sum() == pytest.approx(0.0)
     assert firms.ts.current("executed_productivity_investment").sum() >= 1_000.0
     assert firms.ts.current("executed_tfp_investment").sum() >= 1_000.0
+
+
+def test_household_income_shock_prehook_stages_equal_income_shock(datawrapper):
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    configuration.seed = 0
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    country = simulation.countries["FRA"]
+    income_before = country.households.ts.current("income").copy()
+    deposits_before = country.households.ts.current("wealth_deposits").copy()
+
+    hook = create_household_income_shock_hook(
+        country_code="FRA",
+        target_year=2020,
+        target_month=1,
+        shock_fraction_of_median_income=0.05,
+    )
+
+    hook(simulation, 2019, 10)
+    assert country._staged_household_income_shock is None
+
+    hook(simulation, 2020, 1)
+
+    positive_income = income_before[income_before > 0.0]
+    expected_shock = 0.05 * np.median(positive_income)
+    assert country._staged_household_income_shock.shape == income_before.shape
+    assert np.allclose(country._staged_household_income_shock, expected_shock)
+    np.testing.assert_allclose(country.households.ts.current("income"), income_before)
+    np.testing.assert_allclose(country.households.ts.current("wealth_deposits"), deposits_before)
+
+
+def test_household_income_shock_prehook_fails_when_country_is_missing(datawrapper):
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()})
+    simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    hook = create_household_income_shock_hook(
+        country_code="ESP",
+        target_year=2020,
+        target_month=1,
+        shock_fraction_of_median_income=0.05,
+    )
+
+    with pytest.raises(ValueError, match="cannot find country"):
+        hook(simulation, 2020, 1)
 
 
 def test_check_compatibility(datawrapper):

@@ -214,6 +214,7 @@ class Country:
         self.emission_factors_lcu_ch4 = emission_factors_lcu_ch4
         self.emitting_indices_ch4 = emitting_indices_ch4
         self.use_emission_multiplier = self.configuration.use_emission_multiplier
+        self._clear_household_income_shock()
 
     @classmethod
     def from_pickled_country(
@@ -465,6 +466,39 @@ class Country:
         self.exogenous.reset()
 
         self.configuration = deepcopy(configuration)
+        self._clear_household_income_shock()
+
+    def _clear_household_income_shock(self) -> None:
+        """Clear any staged household income shock used by MPC experiments."""
+        self._staged_household_income_shock: Optional[np.ndarray] = None
+
+    def stage_household_income_shock(self, shock: np.ndarray) -> None:
+        """Stage an income shock for the current MPC experiment iteration.
+
+        The staged shock is added to expected household income during planning
+        and to realised household income during accounting. It is not assigned to
+        a specific fiscal transfer account, so it represents an exogenous
+        household income receipt for MPC measurement.
+        """
+        shock = np.asarray(shock, dtype=float)
+        expected_shape = self.households.ts.current("expected_income").shape
+        if shock.shape != expected_shape:
+            raise ValueError(
+                "Household income shock shape must match expected_income shape: "
+                f"got {shock.shape}, expected {expected_shape}."
+            )
+        if self._staged_household_income_shock is not None:
+            raise ValueError("A household income shock is already staged.")
+
+        self._staged_household_income_shock = shock.copy()
+
+    stage_household_expected_income_shock = stage_household_income_shock
+
+    def _apply_household_income_shock(self, income: np.ndarray) -> np.ndarray:
+        """Add the staged MPC income shock when one is active."""
+        if self._staged_household_income_shock is None:
+            return income
+        return income + self._staged_household_income_shock
 
     def initialisation_phase(self, exchange_rate_usd_to_lcu: float) -> None:
         """Initialize the monthly economic cycle.
@@ -779,7 +813,7 @@ class Country:
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
 
-        expected_household_income = self.households.compute_expected_income()
+        expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
             self.households.ts.override_current("expected_income", expected_household_income)
         else:
@@ -1592,8 +1626,9 @@ class Country:
         self.households.ts.total_income_financial_assets.append(
             [self.households.ts.current("income_financial_assets").sum()]
         )
-        self.households.ts.income.append(self.households.compute_income())
+        self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
+        self._clear_household_income_shock()
 
         # E3. HOUSEHOLD METRICS
         rent_div_income = np.divide(

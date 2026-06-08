@@ -4,8 +4,16 @@ This module provides factory functions to create pre-hooks that can be registere
 with a Simulation object to perform interventions at specific timesteps.
 """
 
+from macromodel.utils.prehooks.household_income_shock import (
+    create_household_expected_income_shock_hook,
+    create_household_income_shock_hook,
+)
 from macromodel.utils.prehooks.productivity_subsidy import (
     create_productivity_subsidy_hook,
 )
 
-__all__ = ["create_productivity_subsidy_hook"]
+__all__ = [
+    "create_household_expected_income_shock_hook",
+    "create_household_income_shock_hook",
+    "create_productivity_subsidy_hook",
+]

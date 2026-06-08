@@ -101,6 +101,35 @@ class TestHouseholds:
         assert target_mortgage[0] == 0.0
         assert target_mortgage[1] == 100000.0
 
+    def test__target_consumption_uses_income_override(self, test_households, monkeypatch):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        income_override = np.full(n_households, 123.0)
+        captured = {}
+
+        def compute_target_consumption(**kwargs):
+            captured.update(kwargs)
+            return np.zeros((n_households, n_industries))
+
+        monkeypatch.setattr(
+            test_households.functions["consumption"],
+            "compute_target_consumption",
+            compute_target_consumption,
+        )
+
+        test_households.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            exogenous_total_consumption=np.array([0.0]),
+            per_capita_unemployment_benefits=0.0,
+            tau_vat=0.0,
+            assume_zero_growth=False,
+            income_override=income_override,
+        )
+
+        np.testing.assert_allclose(captured["income"], income_override)
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

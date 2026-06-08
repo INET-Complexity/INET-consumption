@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import random
 from copy import deepcopy
 from dataclasses import dataclass
@@ -94,6 +95,61 @@ def _resolve_runtime_config(config: NotebookRunConfig) -> tuple[Config, Path, Pa
     cfg.raw_data_path = raw_data_path
     cfg.output_path = output_dir
     return cfg, raw_data_path, output_dir, cfg.config_dir
+
+
+def _filename_only(value: str | Path, field_name: str) -> str:
+    """Return a filename after rejecting values that include directories."""
+    file_name = str(value)
+    if Path(file_name).name != file_name:
+        raise ValueError(f"{field_name} must be a file name, not a path: {file_name}")
+    return file_name
+
+
+def _file_fingerprint(path: Path) -> dict[str, Any]:
+    """Build a lightweight fingerprint for cache invalidation."""
+    stat = path.stat()
+    return {"path": str(path), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+
+
+def _benchmark_data_cache_spec(cfg: Config, raw_data_path: Path, config: NotebookRunConfig) -> dict[str, Any]:
+    """Describe the synthetic benchmark data inputs stored in the pickle cache."""
+    data_config_path = Path(cfg.config_dir) / f"data_config_{cfg.country_iso3}.yaml"
+    country_config_path = Path(cfg.config_dir) / f"country_config_{cfg.country_iso3}.yaml"
+    return {
+        "country_iso3": cfg.country_iso3,
+        "raw_data_path": str(raw_data_path),
+        "single_hfcs_survey": config.single_hfcs_survey,
+        "config_dir": str(cfg.config_dir),
+        "data_config": _file_fingerprint(data_config_path),
+        "country_config": _file_fingerprint(country_config_path),
+    }
+
+
+def _read_json_cache_spec(path: Path) -> dict[str, Any] | None:
+    """Read cache metadata, returning None for missing or malformed metadata."""
+    try:
+        with path.open() as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _write_json_cache_spec(path: Path, spec: Mapping[str, Any]) -> None:
+    """Persist cache metadata beside a pickle cache."""
+    with path.open("w") as f:
+        json.dump(dict(spec), f, indent=2, sort_keys=True)
+
+
+def _benchmark_specs_match(cached_spec: Mapping[str, Any] | None, requested_spec: Mapping[str, Any]) -> bool:
+    """Return True when a benchmark dataframe cache matches the requested scenario."""
+    if not isinstance(cached_spec, Mapping):
+        return False
+    for key, requested_value in requested_spec.items():
+        if key == "n_industries" and requested_value is None:
+            continue
+        if cached_spec.get(key) != requested_value:
+            return False
+    return True
 
 
 def _load_data_config(cfg: Config) -> DataConfiguration:
@@ -329,7 +385,7 @@ def run_single_simulation(
     """Run one simulation and return the model plus canonical output dataframe."""
     cfg, _, output_dir, _ = _resolve_runtime_config(config)
     random.seed(cfg.seed)
-    model_file_name = config.model_file_name or f"simulation_{cfg.country_iso3}.h5"
+    model_file_name = _filename_only(config.model_file_name or f"simulation_{cfg.country_iso3}.h5", "model_file_name")
     model_h5_path = output_dir / model_file_name
 
     simulation_config = SimulationConfiguration(
@@ -353,33 +409,46 @@ def run_benchmark(
     cfg, raw_data_path, output_dir, _ = _resolve_runtime_config(config)
     benchmark_overrides = overrides if overrides is not None else config.benchmark_overrides
     output_dir.mkdir(parents=True, exist_ok=True)
-    data_pkl_path = output_dir / config.benchmark_data_cache_name
-    df_benchmark_path = output_dir / (config.benchmark_df_cache_name or f"{cfg.country_iso3}_df_benchmark.pkl")
-    model_h5_path = output_dir / (config.benchmark_model_file_name or f"{cfg.country_iso3}_benchmark.h5")
+    data_pkl_path = output_dir / _filename_only(config.benchmark_data_cache_name, "benchmark_data_cache_name")
+    data_cache_spec_path = data_pkl_path.with_suffix(data_pkl_path.suffix + ".meta.json")
+    df_benchmark_path = output_dir / _filename_only(
+        config.benchmark_df_cache_name or f"{cfg.country_iso3}_df_benchmark.pkl",
+        "benchmark_df_cache_name",
+    )
+    model_h5_path = output_dir / _filename_only(
+        config.benchmark_model_file_name or f"{cfg.country_iso3}_benchmark.h5",
+        "benchmark_model_file_name",
+    )
+    data_cache_spec = _benchmark_data_cache_spec(cfg, raw_data_path, config)
     benchmark_spec = {
         "country_iso3": cfg.country_iso3,
         "seed": cfg.seed,
         "t_max": cfg.t_max,
         "raw_data_path": str(raw_data_path),
         "single_hfcs_survey": config.single_hfcs_survey,
+        "data_cache_spec": data_cache_spec,
         "n_industries": None,
         "overrides": dict(benchmark_overrides or {}),
     }
 
     if df_benchmark_path.exists() and not config.force_rerun_benchmark:
         df_benchmark = pd.read_pickle(df_benchmark_path)
-        print(f"Loaded cached benchmark dataframe from: {df_benchmark_path}")
-        return BenchmarkResult(
-            model=None,
-            df_benchmark=df_benchmark,
-            model_h5_path=model_h5_path,
-            df_benchmark_path=df_benchmark_path,
-            benchmark_spec=df_benchmark.attrs.get("benchmark_spec", benchmark_spec),
-            loaded_from_cache=True,
-        )
+        cached_benchmark_spec = df_benchmark.attrs.get("benchmark_spec")
+        if _benchmark_specs_match(cached_benchmark_spec, benchmark_spec):
+            print(f"Loaded cached benchmark dataframe from: {df_benchmark_path}")
+            return BenchmarkResult(
+                model=None,
+                df_benchmark=df_benchmark,
+                model_h5_path=model_h5_path,
+                df_benchmark_path=df_benchmark_path,
+                benchmark_spec=dict(cached_benchmark_spec),
+                loaded_from_cache=True,
+            )
+        print(f"Rebuilding stale benchmark dataframe cache: {df_benchmark_path}")
 
     data_config = _load_data_config(cfg)
-    if data_pkl_path.exists() and not config.force_rerun_benchmark:
+    cached_data_spec = _read_json_cache_spec(data_cache_spec_path)
+    if data_pkl_path.exists() and cached_data_spec == data_cache_spec and not config.force_rerun_benchmark:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
         if _requires_cfc_rate_cache_rebuild(data, data_config):
             print(f"Rebuilding stale benchmark CFC-rate data cache: {data_pkl_path}")
@@ -389,14 +458,18 @@ def run_benchmark(
                 single_hfcs_survey=config.single_hfcs_survey,
             )
             data.save(str(data_pkl_path))
+            _write_json_cache_spec(data_cache_spec_path, data_cache_spec)
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
     else:
+        if data_pkl_path.exists() and not config.force_rerun_benchmark:
+            print(f"Rebuilding stale benchmark data cache: {data_pkl_path}")
         data = DataWrapper.from_config(
             configuration=data_config,
             raw_data_path=raw_data_path,
             single_hfcs_survey=config.single_hfcs_survey,
         )
         data.save(str(data_pkl_path))
+        _write_json_cache_spec(data_cache_spec_path, data_cache_spec)
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
 
     benchmark_spec["n_industries"] = data.n_industries

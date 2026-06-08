@@ -243,7 +243,7 @@ def run_mpc_experiment(
     verbose: int = 0,
     batch_size: int = 1,
     distribution_plot_kind: str = "violin",
-    mpc_plot_measure: str = "real",
+    mpc_plot_measure: str | None = None,
     cpi_source: str = "cpi_fixed_basket",
     apply_mpc_filters: bool = True,
     mpc_filter_config: MPCFilterConfig | None = None,
@@ -264,7 +264,7 @@ def run_mpc_experiment(
         raise ValueError("batch_size must be at least 1.")
     if distribution_plot_kind not in PLOT_KINDS:
         raise ValueError(f"distribution_plot_kind must be one of {sorted(PLOT_KINDS)}.")
-    if mpc_plot_measure not in MPC_PLOT_MEASURES:
+    if mpc_plot_measure is not None and mpc_plot_measure not in MPC_PLOT_MEASURES:
         raise ValueError(f"mpc_plot_measure must be one of {sorted(MPC_PLOT_MEASURES)}.")
     if shock_period < 0 or shock_period >= t_max:
         raise ValueError("shock_period must satisfy 0 <= shock_period < t_max.")
@@ -314,6 +314,11 @@ def run_mpc_experiment(
         "target_real_cmpc_4q" if horizon_periods == 4 else f"target_real_cmpc_{horizon_periods}p"
     )
     plotted_mpc_column = cumulative_mpc_column if mpc_plot_measure == "nominal" else real_cumulative_mpc_column
+    plot_mpc_columns = (
+        [plotted_mpc_column]
+        if mpc_plot_measure is not None
+        else [real_cumulative_mpc_column, cumulative_mpc_column]
+    )
 
     panels = []
     for seed in seed_list:
@@ -341,7 +346,7 @@ def run_mpc_experiment(
     filtered_household_panel, filter_report = filter_mpc_panel(
         raw_household_panel,
         filter_config,
-        required_mpc_columns=[plotted_mpc_column],
+        required_mpc_columns=plot_mpc_columns,
     )
     filtered_household_panel = add_mpc_bins(filtered_household_panel)
     raw_summary = summarize_mpc_bins(raw_household_panel, mpc_column=plotted_mpc_column)
@@ -353,15 +358,16 @@ def run_mpc_experiment(
     filter_report.to_csv(analysis_dir / "household_mpc_filter_report.csv", index=False)
     filtered_household_panel.to_csv(analysis_dir / "household_mpc_panel.csv", index=False)
     filtered_summary.to_csv(analysis_dir / "household_mpc_summary.csv", index=False)
-    write_distribution_plots(
-        filtered_household_panel,
-        analysis_dir / "plots",
-        mpc_column=plotted_mpc_column,
-        plot_kind=distribution_plot_kind,
-        y_quantiles=mpc_plot_y_quantiles,
-        y_range=mpc_plot_y_range,
-        winsor_quantiles=mpc_winsor_quantiles,
-    )
+    for plot_mpc_column in plot_mpc_columns:
+        write_distribution_plots(
+            filtered_household_panel,
+            analysis_dir / "plots",
+            mpc_column=plot_mpc_column,
+            plot_kind=distribution_plot_kind,
+            y_quantiles=mpc_plot_y_quantiles,
+            y_range=mpc_plot_y_range,
+            winsor_quantiles=mpc_winsor_quantiles,
+        )
 
     return {
         "baseline_dir": baseline_dir,
@@ -398,8 +404,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mpc-plot-measure",
         choices=("real", "nominal"),
-        default="real",
-        help="MPC measure used in summaries and plots. Real deflates each path by its own CPI.",
+        default=None,
+        help=(
+            "MPC measure used in summaries and plots. By default, summaries use real MPC and plots include both "
+            "real and nominal MPC. Real deflates each path by its own CPI."
+        ),
     )
     parser.add_argument("--cpi-source", default="cpi_fixed_basket", help="Saved economy CPI series for real MPCs.")
     parser.add_argument(

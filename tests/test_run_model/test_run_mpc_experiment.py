@@ -119,7 +119,9 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
     monkeypatch.setattr(
         mpc_runner,
         "summarize_mpc_bins",
-        lambda panel, **kwargs: pd.DataFrame({"rows": [len(panel)], "ids": [",".join(panel["household_id"].astype(str))]}),
+        lambda panel, **kwargs: pd.DataFrame(
+            {"rows": [len(panel)], "ids": [",".join(panel["household_id"].astype(str))]}
+        ),
     )
 
     def fake_write_distribution_plots(panel, output_dir, **kwargs):

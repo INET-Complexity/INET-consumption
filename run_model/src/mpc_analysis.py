@@ -259,9 +259,7 @@ def build_household_mpc_panel(
     panel["real_shock_amount"] = real_shock_amount
     panel["baseline_consumption_impact"] = baseline_consumption[shock_row]
     panel["shock_consumption_impact"] = shock_consumption[shock_row]
-    panel["baseline_consumption_cumulative"] = baseline_consumption[
-        shock_row : shock_row + horizon_periods
-    ].sum(axis=0)
+    panel["baseline_consumption_cumulative"] = baseline_consumption[shock_row : shock_row + horizon_periods].sum(axis=0)
     panel["baseline_consumption_to_income"] = np.divide(
         panel["baseline_consumption_impact"],
         panel["income"],
@@ -510,7 +508,9 @@ def filter_mpc_panel(
     if cfg.income_growth_min is not None:
         apply_column_mask("income_growth_floor", "income_growth", lambda values: values >= float(cfg.income_growth_min))
     if cfg.income_growth_max is not None:
-        apply_column_mask("income_growth_ceiling", "income_growth", lambda values: values <= float(cfg.income_growth_max))
+        apply_column_mask(
+            "income_growth_ceiling", "income_growth", lambda values: values <= float(cfg.income_growth_max)
+        )
     if cfg.max_debt_asset_ratio is not None:
         apply_column_mask(
             "debt_asset_ratio_ceiling",
@@ -657,9 +657,7 @@ def make_distribution_plot(
     winsor_bounds = (
         tuple(plot_values.quantile(list(winsor_quantiles)).astype(float)) if winsor_quantiles is not None else None
     )
-    y_quantile_range = (
-        tuple(plot_values.quantile(list(y_quantiles)).astype(float)) if y_quantiles is not None else None
-    )
+    y_quantile_range = tuple(plot_values.quantile(list(y_quantiles)).astype(float)) if y_quantiles is not None else None
 
     fig = go.Figure()
     category_order = _bin_category_order(plot_panel[bin_column])

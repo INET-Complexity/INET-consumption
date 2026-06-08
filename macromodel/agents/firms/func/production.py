@@ -168,6 +168,7 @@ class ProductionSetter(ABC):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate intermediate inputs consumed in production.
 
@@ -186,6 +187,9 @@ class ProductionSetter(ABC):
             goods_criticality_matrix (np.ndarray): Input criticality levels
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution
                 bundles for goods, allowing substitution between goods in the same bundle
+            available_intermediate_inputs (np.ndarray, optional): Inputs
+                available for current-period use. Defaults to
+                intermediate_inputs_stock when omitted.
 
         Returns:
             np.ndarray: Intermediate inputs used in production
@@ -319,6 +323,7 @@ class PureLeontief(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate intermediate inputs used under Leontief technology.
 
@@ -447,26 +452,31 @@ class CriticalAndImportantLeontief(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate intermediate inputs used with criticality.
 
-        Uses inputs proportionally to production, but only for
-        critical and important inputs.
+        Uses inputs proportionally to production, capped by available stock and
+        current-period purchases. Criticality controls whether an input can
+        constrain production, not whether an available IO input is physically
+        consumed during production.
 
         Args:
             [same as parent class]
 
         Returns:
-            np.ndarray: Critical intermediate inputs used
+            np.ndarray: Intermediate inputs used
         """
-        used_intermediate_inputs = np.divide(
+        if available_intermediate_inputs is None:
+            available_intermediate_inputs = intermediate_inputs_stock
+
+        required_intermediate_inputs = np.divide(
             realised_production[:, None],
             intermediate_inputs_productivity_matrix,
             out=np.zeros_like(intermediate_inputs_productivity_matrix),
             where=intermediate_inputs_productivity_matrix != 0.0,
         )
-        used_intermediate_inputs[goods_criticality_matrix == 0.0] = 0.0
-        return used_intermediate_inputs
+        return np.minimum(required_intermediate_inputs, available_intermediate_inputs)
 
     def compute_capital_inputs_used(
         self,
@@ -478,8 +488,9 @@ class CriticalAndImportantLeontief(ProductionSetter):
     ) -> np.ndarray:
         """Calculate capital input use with criticality.
 
-        Uses capital inputs proportionally to production, but only for
-        critical and important capital goods.
+        Uses available capital inputs proportionally to production. Criticality
+        controls whether a capital good can constrain production, not whether
+        available capital is physically consumed during production.
 
         Args:
             [same as parent class]
@@ -490,8 +501,7 @@ class CriticalAndImportantLeontief(ProductionSetter):
         used_capital_inputs = realised_production[:, None] * capital_input_use_matrix
         used_capital_inputs[used_capital_inputs == np.inf] = 0.0
         used_capital_inputs[used_capital_inputs == -np.inf] = 0.0
-        used_capital_inputs[goods_criticality_matrix == 0.0] = 0.0
-        return used_capital_inputs
+        return np.minimum(used_capital_inputs, capital_inputs_stock)
 
 
 class CriticalLeontief(ProductionSetter):
@@ -567,6 +577,7 @@ class CriticalLeontief(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate critical intermediate inputs used.
 
@@ -683,6 +694,7 @@ class Linear(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         total_used_intermediate_inputs = np.divide(
             realised_production[:, None],
@@ -782,6 +794,7 @@ class UnconstrainedProduction(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         return np.zeros(intermediate_inputs_stock.shape)
 
@@ -942,6 +955,7 @@ class BundledLeontief(ProductionSetter):
         intermediate_inputs_stock: np.ndarray,
         goods_criticality_matrix: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
+        available_intermediate_inputs: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate intermediate inputs used under bundled Leontief technology.
 

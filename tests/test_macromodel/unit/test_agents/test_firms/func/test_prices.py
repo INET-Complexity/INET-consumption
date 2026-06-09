@@ -94,6 +94,7 @@ def test_default_price_setter_ignores_markup_rule_parameters():
         initial_cost_normalization_min_factor=0.5,
         initial_cost_normalization_max_factor=2.0,
         initial_cost_normalization_min_valid_weight_share=0.5,
+        markup_residual_calibration_mode="sector_initial_price_anchor",
     )
 
     assert setter.price_setting_noise_std == pytest.approx(0.05)
@@ -362,6 +363,189 @@ class TestSectorMarkupMarginalCostPriceSetter:
         assert setter.demand_pull_speed == 1.0
         setter = self._make_setter(tmp_path, demand_pull_speed=-1.0)
         assert setter.demand_pull_speed == 0.0
+
+    def test_markup_residual_disabled_preserves_current_behaviour(self, tmp_path):
+        setter = self._make_setter(tmp_path)
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([24.0]),
+            prev_firm_prices=np.array([24.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(12.0)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.2)
+        assert setter.last_pricing_markup_base_mu[0] == pytest.approx(1.2)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.0)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_DISABLED
+
+    def test_markup_residual_low_mc_sector_calibrates_up_to_initial_anchor(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([24.0]),
+            prev_firm_prices=np.array([24.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(24.0)
+        assert setter.last_pricing_markup_base_mu[0] == pytest.approx(1.2)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(2.0)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(2.4)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_APPLIED
+
+    def test_markup_residual_high_mc_sector_calibrates_down_to_initial_anchor(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([11.0]),
+            prev_firm_prices=np.array([11.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(11.0)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(11.0 / 12.0)
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(1.1)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_APPLIED
+
+    def test_markup_residual_uses_output_weighted_sector_anchor(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([20.0, 12.0]),
+            prev_firm_prices=np.array([20.0, 12.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0, 0]),
+            prev_supply=np.ones(2),
+            prev_demand=np.ones(2),
+            curr_unit_costs=np.full(2, 10.0),
+            prev_unit_costs=np.full(2, 10.0),
+            initial_output_weights=np.array([3.0, 1.0]),
+            **self._cost_kwargs(2, mc=np.array([10.0, 20.0])),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        np.testing.assert_allclose(prices, np.array([14.4, 28.8]), rtol=1e-5)
+        assert np.average(prices, weights=np.array([3.0, 1.0])) == pytest.approx(18.0, rel=1e-5)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.2, rel=1e-5)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_APPLIED
+
+    def test_markup_residual_ac_floor_unreachable_uses_min_factor(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([8.0]),
+            prev_firm_prices=np.array([8.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=1.0, ac=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(10.0)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(0.25)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
+
+    def test_markup_residual_clipped_at_upper_guardrail(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([120.0]),
+            prev_firm_prices=np.array([120.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(48.0)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(4.0)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_CLIPPED
+
+    def test_markup_residual_is_reused_after_first_call(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([24.0]),
+            prev_firm_prices=np.array([24.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+        setter.compute_price(**kwargs)
+
+        prices = setter.compute_price(
+            **(
+                kwargs
+                | dict(
+                    prev_prices=np.array([48.0]),
+                    prev_firm_prices=np.array([48.0]),
+                    initial_output_weights=np.array([1.0]),
+                )
+            )
+        )
+
+        assert prices[0] == pytest.approx(24.0)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(2.0)
+
+    def test_markup_residual_invalid_weights_falls_back_to_unit_factor(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([24.0]),
+            prev_firm_prices=np.array([24.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([10.0]),
+            prev_unit_costs=np.array([10.0]),
+            initial_output_weights=np.array([0.0]),
+            **self._cost_kwargs(1, mc=10.0),
+        )
+
+        prices = setter.compute_price(**kwargs)
+
+        assert prices[0] == pytest.approx(12.0)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.0)
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_INVALID
 
     def test_relative_corridor_cap_limits_upper_bound(self, tmp_path):
         path = tmp_path / "wide.csv"
@@ -817,6 +1001,8 @@ class TestSectorMarkupMarginalCostPriceSetter:
                 initial_cost_normalization_lower_quantile=0.9,
                 initial_cost_normalization_upper_quantile=0.1,
             )
+        with pytest.raises(ValueError, match="markup_residual_calibration_mode"):
+            self._make_setter(tmp_path, markup_residual_calibration_mode="unknown")
 
     def test_missing_orbis_file_fails(self, tmp_path):
         with pytest.raises(ValueError, match="Orbis markup file not found"):

@@ -226,6 +226,7 @@ FRA:
           initial_cost_normalization_min_factor: 0.5
           initial_cost_normalization_max_factor: 2.0
           initial_cost_normalization_min_valid_weight_share: 0.5
+          markup_residual_calibration_mode: sector_initial_price_anchor
       production:
         name: CriticalAndImportantLeontief
         path_name: production

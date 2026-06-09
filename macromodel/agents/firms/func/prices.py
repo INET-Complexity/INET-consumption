@@ -153,6 +153,7 @@ _MARKUP_PRICE_COMPATIBILITY_PARAMETERS = {
     "initial_cost_normalization_min_factor",
     "initial_cost_normalization_max_factor",
     "initial_cost_normalization_min_valid_weight_share",
+    "markup_residual_calibration_mode",
 }
 
 
@@ -328,6 +329,21 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
     NORMALIZATION_STATUS_CLIPPED = 2
     NORMALIZATION_STATUS_INVALID = 3
     NORMALIZATION_STATUS_LOW_VALID_WEIGHT = 4
+    MARKUP_RESIDUAL_CALIBRATION_NONE = "none"
+    MARKUP_RESIDUAL_CALIBRATION_SECTOR_INITIAL_PRICE_ANCHOR = "sector_initial_price_anchor"
+    MARKUP_RESIDUAL_CALIBRATION_MODES = {
+        MARKUP_RESIDUAL_CALIBRATION_NONE,
+        MARKUP_RESIDUAL_CALIBRATION_SECTOR_INITIAL_PRICE_ANCHOR,
+    }
+    MARKUP_RESIDUAL_STATUS_DISABLED = 0
+    MARKUP_RESIDUAL_STATUS_APPLIED = 1
+    MARKUP_RESIDUAL_STATUS_CLIPPED = 2
+    MARKUP_RESIDUAL_STATUS_INVALID = 3
+    MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE = 4
+    MARKUP_RESIDUAL_MIN_FACTOR = 0.25
+    MARKUP_RESIDUAL_MAX_FACTOR = 4.0
+    MARKUP_RESIDUAL_SOLVER_TOLERANCE = 1e-6
+    MARKUP_RESIDUAL_SOLVER_MAX_ITERATIONS = 80
 
     def __init__(
         self,
@@ -350,6 +366,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         initial_cost_normalization_min_factor: float = 0.5,
         initial_cost_normalization_max_factor: float = 2.0,
         initial_cost_normalization_min_valid_weight_share: float = 0.5,
+        markup_residual_calibration_mode: str = "none",
     ):
         if mc_smoothing_horizon <= 0:
             raise ValueError("mc_smoothing_horizon must be positive.")
@@ -384,6 +401,10 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             )
         if not (0.0 <= initial_cost_normalization_min_valid_weight_share <= 1.0):
             raise ValueError("initial_cost_normalization_min_valid_weight_share must be in [0, 1].")
+        if markup_residual_calibration_mode not in self.MARKUP_RESIDUAL_CALIBRATION_MODES:
+            raise ValueError(
+                f"markup_residual_calibration_mode must be one of {sorted(self.MARKUP_RESIDUAL_CALIBRATION_MODES)}."
+            )
         self.orbis_markup_path = orbis_markup_path
         self.markup_year = int(markup_year)
         mapping = industry_to_nace_main_section or self._default_industry_mapping()
@@ -409,6 +430,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.initial_cost_normalization_min_valid_weight_share = float(
             initial_cost_normalization_min_valid_weight_share
         )
+        self.markup_residual_calibration_mode = markup_residual_calibration_mode
         self.initial_cost_normalization_factor = 1.0
         self.initial_cost_normalization_status = (
             self.NORMALIZATION_STATUS_DISABLED
@@ -417,6 +439,17 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         )
         self._initial_cost_normalization_done = (
             self.initial_cost_normalization_mode == self.INITIAL_COST_NORMALIZATION_NONE
+        )
+        self.markup_residual_factor_by_industry = np.ones(len(self.industry_to_nace_main_section), dtype=float)
+        self.markup_residual_status_by_industry = np.full(
+            len(self.industry_to_nace_main_section),
+            self.MARKUP_RESIDUAL_STATUS_DISABLED
+            if self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE
+            else self.MARKUP_RESIDUAL_STATUS_INVALID,
+            dtype=float,
+        )
+        self._markup_residual_calibration_done = (
+            self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE
         )
 
         self.markup_lower_by_industry, self.markup_central_by_industry, self.markup_upper_by_industry = (
@@ -544,8 +577,11 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_initial_price_gap = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_normal_output = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_mu = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_base_mu = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_lower = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_upper = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_residual_factor = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_residual_status = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_ac_floor_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_ac_fallback_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_gate_state = np.zeros(prev_prices.shape, dtype=float)
@@ -557,6 +593,111 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_cost_normalization_status = np.full(
             prev_prices.shape, self.initial_cost_normalization_status, dtype=float
         )
+
+    def _candidate_sector_average(
+        self,
+        factor: float,
+        markup_base: np.ndarray,
+        mc_smooth: np.ndarray,
+        ac_candidate: np.ndarray,
+        weights: np.ndarray,
+    ) -> float:
+        candidate = np.maximum(factor * markup_base * mc_smooth, ac_candidate)
+        return float(np.average(candidate, weights=weights))
+
+    def _sector_markup_residual_factor(
+        self,
+        target: float,
+        markup_base: np.ndarray,
+        mc_smooth: np.ndarray,
+        ac_candidate: np.ndarray,
+        weights: np.ndarray,
+    ) -> tuple[float, float]:
+        min_factor = self.MARKUP_RESIDUAL_MIN_FACTOR
+        max_factor = self.MARKUP_RESIDUAL_MAX_FACTOR
+        low_value = self._candidate_sector_average(min_factor, markup_base, mc_smooth, ac_candidate, weights)
+        high_value = self._candidate_sector_average(max_factor, markup_base, mc_smooth, ac_candidate, weights)
+
+        if low_value >= target:
+            ac_floor_value = float(np.average(ac_candidate, weights=weights))
+            status = (
+                self.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
+                if ac_floor_value >= target
+                else self.MARKUP_RESIDUAL_STATUS_CLIPPED
+            )
+            return min_factor, status
+        if high_value <= target:
+            return max_factor, self.MARKUP_RESIDUAL_STATUS_CLIPPED
+
+        lower = min_factor
+        upper = max_factor
+        for _ in range(self.MARKUP_RESIDUAL_SOLVER_MAX_ITERATIONS):
+            mid = 0.5 * (lower + upper)
+            mid_value = self._candidate_sector_average(mid, markup_base, mc_smooth, ac_candidate, weights)
+            if abs(mid_value - target) <= self.MARKUP_RESIDUAL_SOLVER_TOLERANCE * max(1.0, abs(target)):
+                return mid, self.MARKUP_RESIDUAL_STATUS_APPLIED
+            if mid_value < target:
+                lower = mid
+            else:
+                upper = mid
+        return 0.5 * (lower + upper), self.MARKUP_RESIDUAL_STATUS_APPLIED
+
+    def _maybe_calibrate_markup_residual(
+        self,
+        current_firm_sectors: np.ndarray,
+        previous_pre_tax_price: np.ndarray,
+        markup_base_mu: np.ndarray,
+        mc_smooth: np.ndarray,
+        ac_candidate: np.ndarray,
+        initial_output_weights: np.ndarray | None,
+    ) -> None:
+        if self._markup_residual_calibration_done:
+            return
+
+        self._markup_residual_calibration_done = True
+        if self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE:
+            self.markup_residual_factor_by_industry.fill(1.0)
+            self.markup_residual_status_by_industry.fill(self.MARKUP_RESIDUAL_STATUS_DISABLED)
+            return
+
+        if initial_output_weights is None:
+            self.markup_residual_factor_by_industry.fill(1.0)
+            self.markup_residual_status_by_industry.fill(self.MARKUP_RESIDUAL_STATUS_INVALID)
+            return
+
+        weights_all = np.asarray(initial_output_weights, dtype=float)
+        if weights_all.shape != previous_pre_tax_price.shape:
+            self.markup_residual_factor_by_industry.fill(1.0)
+            self.markup_residual_status_by_industry.fill(self.MARKUP_RESIDUAL_STATUS_INVALID)
+            return
+
+        for sector in range(len(self.markup_residual_factor_by_industry)):
+            sector_mask = current_firm_sectors == sector
+            valid = (
+                sector_mask
+                & np.isfinite(weights_all)
+                & (weights_all > 0.0)
+                & self._valid_positive(previous_pre_tax_price)
+                & self._valid_positive(markup_base_mu)
+                & self._valid_positive(mc_smooth)
+                & self._valid_positive(ac_candidate)
+            )
+            if not np.any(valid):
+                self.markup_residual_factor_by_industry[sector] = 1.0
+                self.markup_residual_status_by_industry[sector] = self.MARKUP_RESIDUAL_STATUS_INVALID
+                continue
+
+            weights = weights_all[valid]
+            target = float(np.average(previous_pre_tax_price[valid], weights=weights))
+            factor, status = self._sector_markup_residual_factor(
+                target=target,
+                markup_base=markup_base_mu[valid],
+                mc_smooth=mc_smooth[valid],
+                ac_candidate=ac_candidate[valid],
+                weights=weights,
+            )
+            self.markup_residual_factor_by_industry[sector] = factor
+            self.markup_residual_status_by_industry[sector] = status
 
     @staticmethod
     def _sector_stat(values: np.ndarray, current_firm_sectors: np.ndarray, stat: str) -> np.ndarray:
@@ -804,16 +945,16 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         # Preserve the relative-price gate: only cheap-tight firms raise markups and expensive-slack firms cut.
         demand_pull = np.where(cheap_tight | expensive_slack, demand_pull, 0.0)
 
-        markup_mu = markup_central.copy()
+        markup_base_mu = markup_central.copy()
         positive = demand_pull > 0.0
         negative = demand_pull < 0.0
-        markup_mu[positive] = markup_central[positive] + self.demand_pull_speed * demand_pull[positive] * (
+        markup_base_mu[positive] = markup_central[positive] + self.demand_pull_speed * demand_pull[positive] * (
             markup_upper[positive] - markup_central[positive]
         )
-        markup_mu[negative] = markup_central[negative] + self.demand_pull_speed * demand_pull[negative] * (
+        markup_base_mu[negative] = markup_central[negative] + self.demand_pull_speed * demand_pull[negative] * (
             markup_central[negative] - markup_lower[negative]
         )
-        markup_mu = np.clip(markup_mu, markup_lower, markup_upper)
+        markup_base_mu = np.clip(markup_base_mu, markup_lower, markup_upper)
 
         normal_output, normal_output_fallback = self._smooth_with_fallback(
             np.asarray(pricing_normal_output, dtype=float),
@@ -855,7 +996,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             prev_prices * (1.0 - producer_tax_rates),
             prev_prices,
         )
-        raw_markup_candidate = markup_mu * mc_smooth_unscaled
+        raw_markup_candidate = markup_base_mu * mc_smooth_unscaled
         raw_ac_candidate = self.ac_floor_share * ac_smooth_unscaled
         raw_pre_tax_candidate = np.maximum(raw_markup_candidate, raw_ac_candidate)
         normalization_pending = not self._initial_cost_normalization_done
@@ -891,8 +1032,21 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         )
         ac_fallback = (~ac_valid | (ac_smooth_fallback > 0.0)).astype(float)
 
-        markup_candidate = markup_mu * mc_smooth
         ac_candidate = self.ac_floor_share * ac_smooth
+        self._maybe_calibrate_markup_residual(
+            current_firm_sectors=current_firm_sectors,
+            previous_pre_tax_price=previous_pre_tax_price,
+            markup_base_mu=markup_base_mu,
+            mc_smooth=mc_smooth,
+            ac_candidate=ac_candidate,
+            initial_output_weights=initial_output_weights,
+        )
+        markup_residual_factor = self.markup_residual_factor_by_industry[current_firm_sectors]
+        markup_residual_status = self.markup_residual_status_by_industry[current_firm_sectors]
+        markup_mu = markup_base_mu * markup_residual_factor
+        markup_lower = markup_lower * markup_residual_factor
+        markup_upper = markup_upper * markup_residual_factor
+        markup_candidate = markup_mu * mc_smooth
         pre_tax_candidate = np.maximum(markup_candidate, ac_candidate)
         initial_price_gap = np.divide(
             previous_pre_tax_price,
@@ -925,8 +1079,11 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_initial_price_gap = initial_price_gap
         self.last_pricing_normal_output = normal_output
         self.last_pricing_markup_mu = markup_mu
+        self.last_pricing_markup_base_mu = markup_base_mu
         self.last_pricing_markup_lower = markup_lower
         self.last_pricing_markup_upper = markup_upper
+        self.last_pricing_markup_residual_factor = markup_residual_factor
+        self.last_pricing_markup_residual_status = markup_residual_status
         self.last_pricing_ac_floor_binding = ac_floor_binding.astype(float)
         self.last_pricing_ac_fallback_binding = ac_fallback.astype(float)
         self.last_pricing_gate_state = gate_state

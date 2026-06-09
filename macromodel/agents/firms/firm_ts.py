@@ -37,8 +37,11 @@ class FirmTimeSeries(TimeSeries):
     - pricing_initial_price_gap: Previous pre-tax price divided by the new pre-tax cost candidate
     - pricing_normal_output: Normal output denominator used by pricing
     - pricing_markup_mu: Markup selected before tax gross-up/fallbacks
+    - pricing_markup_base_mu: Orbis/demand-pull markup before residual calibration
     - pricing_markup_lower: Lower markup corridor bound
     - pricing_markup_upper: Upper markup corridor bound
+    - pricing_markup_residual_factor: Sector residual markup calibration factor
+    - pricing_markup_residual_status: Numeric code for residual calibration status
     - pricing_ac_floor_binding: Indicator that the AC floor bound price
     - pricing_ac_fallback_binding: Indicator that AC used sector/previous fallback
     - pricing_gate_state: Numeric code for the demand-pull gate state
@@ -300,8 +303,11 @@ class FirmTimeSeries(TimeSeries):
             pricing_initial_price_gap=np.full(data.shape[0], np.nan),
             pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
             pricing_markup_mu=np.full(data.shape[0], np.nan),
+            pricing_markup_base_mu=np.full(data.shape[0], np.nan),
             pricing_markup_lower=np.full(data.shape[0], np.nan),
             pricing_markup_upper=np.full(data.shape[0], np.nan),
+            pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
+            pricing_markup_residual_status=np.full(data.shape[0], np.nan),
             pricing_ac_floor_binding=np.zeros(data.shape[0]),
             pricing_ac_fallback_binding=np.zeros(data.shape[0]),
             pricing_gate_state=np.zeros(data.shape[0]),
@@ -677,8 +683,11 @@ def create_firms_timeseries(
         pricing_initial_price_gap=np.full(data.shape[0], np.nan),
         pricing_normal_output=np.where(data["Production"].values > 0.0, data["Production"].values, np.nan),
         pricing_markup_mu=np.full(data.shape[0], np.nan),
+        pricing_markup_base_mu=np.full(data.shape[0], np.nan),
         pricing_markup_lower=np.full(data.shape[0], np.nan),
         pricing_markup_upper=np.full(data.shape[0], np.nan),
+        pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
+        pricing_markup_residual_status=np.full(data.shape[0], np.nan),
         pricing_ac_floor_binding=np.zeros(data.shape[0]),
         pricing_ac_fallback_binding=np.zeros(data.shape[0]),
         pricing_gate_state=np.zeros(data.shape[0]),

@@ -952,11 +952,13 @@ def test_sector_markup_marginal_cost_price_setter_loads_from_configuration(tmp_p
         "ac_smoothing_horizon": 8,
         "normal_output_smoothing_horizon": 8,
         "demand_pull_speed": 1.0,
+        "markup_residual_calibration_mode": "sector_initial_price_anchor",
     }
 
     functions = functions_from_model(country_sim_configuration.firms.functions, loc="macromodel.agents.firms")
 
     assert functions["prices"].__class__.__name__ == "SectorMarkupMarginalCostPriceSetter"
+    assert functions["prices"].markup_residual_calibration_mode == "sector_initial_price_anchor"
 
 
 def test_old_sector_markup_unit_cost_price_setter_is_rejected():

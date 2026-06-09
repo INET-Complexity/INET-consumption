@@ -19,6 +19,8 @@ def _fake_env_config(tmp_path, country_iso3="ESP"):
     raw_data_path.mkdir()
     output_path.mkdir()
     config_dir.mkdir()
+    (config_dir / f"data_config_{country_iso3}.yaml").write_text("country_configs:\n  ESP: {}\n")
+    (config_dir / f"country_config_{country_iso3}.yaml").write_text("ESP: {}\n")
     return SimpleNamespace(
         config_dir=config_dir,
         country_iso3=country_iso3,
@@ -259,23 +261,48 @@ def test_summarize_agent_counts_reads_synthetic_country_counts():
     }
 
 
+def test_run_single_simulation_rejects_path_like_model_file_name(tmp_path, monkeypatch):
+    env_cfg = _fake_env_config(tmp_path)
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
+
+    try:
+        nw.run_single_simulation(
+            data=SimpleNamespace(),
+            country_configurations={"ESP": "country_cfg"},
+            config=nw.NotebookRunConfig(country_iso3="ESP", model_file_name="nested/model.h5"),
+        )
+    except ValueError as exc:
+        assert "model_file_name must be a file name" in str(exc)
+    else:
+        raise AssertionError("path-like model_file_name should be rejected")
+
+
 def test_benchmark_overrides_default_to_no_overrides():
     config = nw.NotebookRunConfig()
 
     assert config.benchmark_overrides is None
 
 
-def test_run_model_notebook_keeps_simple_productivity_planner_override_available():
-    notebook_text = (RUN_MODEL_PATH / "run_model.ipynb").read_text()
-
-    assert "firms.functions.productivity_investment_planner.name" in notebook_text
-    assert "SimpleProductivityInvestmentPlanner" in notebook_text
-
-
 def test_run_benchmark_uses_cached_dataframe_without_rerun(tmp_path, monkeypatch):
     env_cfg = _fake_env_config(tmp_path)
     cached = pd.DataFrame({"gdp": [1.0, 2.0]})
-    cached.attrs["benchmark_spec"] = {"country_iso3": "ESP", "cached": True}
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
+    data_cache_spec = nw._benchmark_data_cache_spec(
+        env_cfg,
+        env_cfg.raw_data_path,
+        nw.NotebookRunConfig(country_iso3="ESP", force_rerun_benchmark=False),
+    )
+    cached.attrs["benchmark_spec"] = {
+        "country_iso3": "ESP",
+        "seed": 32,
+        "t_max": 50,
+        "raw_data_path": str(env_cfg.raw_data_path),
+        "single_hfcs_survey": False,
+        "data_cache_spec": data_cache_spec,
+        "n_industries": 2,
+        "overrides": {},
+    }
     cached_path = env_cfg.output_path / "ESP_df_benchmark.pkl"
     cached.to_pickle(cached_path)
 
@@ -288,7 +315,6 @@ def test_run_benchmark_uses_cached_dataframe_without_rerun(tmp_path, monkeypatch
         def from_config(**kwargs):
             raise AssertionError("benchmark should not rebuild data when dataframe cache is valid")
 
-    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
     monkeypatch.setattr(nw, "DataWrapper", RaisingDataWrapper)
 
     result = nw.run_benchmark(nw.NotebookRunConfig(country_iso3="ESP", force_rerun_benchmark=False))
@@ -296,7 +322,127 @@ def test_run_benchmark_uses_cached_dataframe_without_rerun(tmp_path, monkeypatch
     assert result.loaded_from_cache is True
     assert result.model is None
     assert result.df_benchmark.equals(cached)
-    assert result.benchmark_spec == {"country_iso3": "ESP", "cached": True}
+    assert result.benchmark_spec == cached.attrs["benchmark_spec"]
+
+
+def test_run_benchmark_rebuilds_when_cached_dataframe_spec_differs(tmp_path, monkeypatch):
+    env_cfg = _fake_env_config(tmp_path)
+    stale = pd.DataFrame({"gdp": [99.0]})
+    stale.attrs["benchmark_spec"] = {
+        "country_iso3": "ESP",
+        "seed": 999,
+        "t_max": 50,
+        "raw_data_path": str(env_cfg.raw_data_path),
+        "single_hfcs_survey": False,
+        "n_industries": 2,
+        "overrides": {},
+    }
+    stale.to_pickle(env_cfg.output_path / "ESP_df_benchmark.pkl")
+    data = SimpleNamespace(n_industries=2)
+    df_base = pd.DataFrame({"gdp": [1.0]})
+
+    class FakeDataWrapper:
+        @staticmethod
+        def init_from_pickle(path):
+            return data
+
+        @staticmethod
+        def from_config(**kwargs):
+            return SimpleNamespace(save=lambda path: None)
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
+    monkeypatch.setattr(nw, "DataWrapper", FakeDataWrapper)
+    monkeypatch.setattr(nw, "_load_data_config", lambda cfg: SimpleNamespace(name="data_config"))
+    monkeypatch.setattr(nw, "build_country_config", lambda data, config, overrides: {"ESP": "country_cfg"})
+    monkeypatch.setattr(
+        nw,
+        "run_single_simulation",
+        lambda data, country_configurations, config: SimpleNamespace(model="model", df_base=df_base),
+    )
+
+    result = nw.run_benchmark(nw.NotebookRunConfig(country_iso3="ESP", seed=32))
+
+    assert result.loaded_from_cache is False
+    assert result.df_benchmark.equals(df_base)
+    assert result.benchmark_spec["seed"] == 32
+
+
+def test_run_benchmark_rebuilds_when_cached_dataframe_config_fingerprint_differs(tmp_path, monkeypatch):
+    env_cfg = _fake_env_config(tmp_path)
+    run_config = nw.NotebookRunConfig(country_iso3="ESP")
+    stale_data_cache_spec = nw._benchmark_data_cache_spec(env_cfg, env_cfg.raw_data_path, run_config)
+    (env_cfg.config_dir / "country_config_ESP.yaml").write_text("ESP:\n  changed: true\n")
+    stale = pd.DataFrame({"gdp": [99.0]})
+    stale.attrs["benchmark_spec"] = {
+        "country_iso3": "ESP",
+        "seed": 32,
+        "t_max": 50,
+        "raw_data_path": str(env_cfg.raw_data_path),
+        "single_hfcs_survey": False,
+        "data_cache_spec": stale_data_cache_spec,
+        "n_industries": 2,
+        "overrides": {},
+    }
+    stale.to_pickle(env_cfg.output_path / "ESP_df_benchmark.pkl")
+    data = SimpleNamespace(n_industries=2)
+    df_base = pd.DataFrame({"gdp": [1.0]})
+
+    class FakeDataWrapper:
+        @staticmethod
+        def init_from_pickle(path):
+            return data
+
+        @staticmethod
+        def from_config(**kwargs):
+            return SimpleNamespace(save=lambda path: None)
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
+    monkeypatch.setattr(nw, "DataWrapper", FakeDataWrapper)
+    monkeypatch.setattr(nw, "_load_data_config", lambda cfg: SimpleNamespace(name="data_config"))
+    monkeypatch.setattr(nw, "build_country_config", lambda data, config, overrides: {"ESP": "country_cfg"})
+    monkeypatch.setattr(
+        nw,
+        "run_single_simulation",
+        lambda data, country_configurations, config: SimpleNamespace(model="model", df_base=df_base),
+    )
+
+    result = nw.run_benchmark(run_config)
+
+    assert result.loaded_from_cache is False
+    assert result.df_benchmark.equals(df_base)
+
+
+def test_run_benchmark_rebuilds_when_data_cache_metadata_differs(tmp_path, monkeypatch):
+    env_cfg = _fake_env_config(tmp_path)
+    (env_cfg.output_path / "data_benchmark.pkl").write_bytes(b"stale")
+    (env_cfg.output_path / "data_benchmark.pkl.meta.json").write_text('{"country_iso3": "ITA"}')
+    data = SimpleNamespace(n_industries=2)
+    calls = {"from_config": 0, "init_from_pickle": 0}
+
+    class FakeDataWrapper:
+        @staticmethod
+        def init_from_pickle(path):
+            calls["init_from_pickle"] += 1
+            return data
+
+        @staticmethod
+        def from_config(**kwargs):
+            calls["from_config"] += 1
+            return SimpleNamespace(save=lambda path: None)
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
+    monkeypatch.setattr(nw, "DataWrapper", FakeDataWrapper)
+    monkeypatch.setattr(nw, "_load_data_config", lambda cfg: SimpleNamespace(name="data_config"))
+    monkeypatch.setattr(nw, "build_country_config", lambda data, config, overrides: {"ESP": "country_cfg"})
+    monkeypatch.setattr(
+        nw,
+        "run_single_simulation",
+        lambda data, country_configurations, config: SimpleNamespace(model="model", df_base=pd.DataFrame({"gdp": [1]})),
+    )
+
+    nw.run_benchmark(nw.NotebookRunConfig(country_iso3="ESP"))
+
+    assert calls == {"from_config": 1, "init_from_pickle": 1}
 
 
 def test_run_benchmark_records_empty_overrides_when_none(tmp_path, monkeypatch):

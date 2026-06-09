@@ -631,6 +631,7 @@ class Households(Agent):
         initial_prices: Optional[np.ndarray] = None,
         taxes: Optional[np.ndarray] = None,
         initial_taxes: Optional[np.ndarray] = None,
+        income_override: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -668,13 +669,14 @@ class Households(Agent):
                 self.states["consumption_weights_data"],
             ).astype(float)
         else:
+            income = self.ts.current("expected_income") if income_override is None else income_override
             return self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
                 historic_consumption_sum=np.array(self.ts.historic("consumption")),
                 saving_rates=saving_rates,
-                income=self.ts.current("expected_income"),
+                income=income,
                 household_benefits=self.states["Number of Adults"] * per_capita_unemployment_benefits
                 + self.ts.current("expected_income_social_transfers"),
                 consumption_weights=self.consumption_weights,

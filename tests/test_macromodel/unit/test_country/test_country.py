@@ -419,6 +419,45 @@ class TestCountry:
         assert np.allclose(captured["loan_interest_obligation_preview"], loan_interest_preview)
         assert np.allclose(captured["interest_obligation_preview"], loan_interest_preview + deposit_interest_preview)
 
+    def test_household_income_shock_updates_expected_and_realised_income(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        n_individuals = test_country.individuals.ts.current("expected_income").shape[0]
+        base_income = np.full(n_households, 10.0)
+        shock = np.full(n_households, 2.5)
+
+        test_country.stage_household_income_shock(shock)
+
+        monkeypatch.setattr(
+            test_country.individuals, "compute_expected_income", lambda **_kwargs: np.zeros(n_individuals)
+        )
+        monkeypatch.setattr(
+            test_country.households, "compute_employee_income", lambda **_kwargs: np.zeros(n_households)
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_expected_social_transfer_income",
+            lambda **_kwargs: np.zeros(n_households),
+        )
+        monkeypatch.setattr(test_country.households, "compute_rental_income", lambda **_kwargs: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_expected_income_from_financial_assets",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(test_country.households, "compute_expected_income", lambda: base_income)
+        monkeypatch.setattr(test_country.households, "compute_income", lambda: base_income)
+
+        test_country._set_household_income_expectations(replace_current=True)
+
+        np.testing.assert_allclose(test_country.households.ts.current("expected_income"), base_income + shock)
+        assert test_country._staged_household_income_shock is not None
+
+        realised_income = test_country._apply_household_income_shock(test_country.households.compute_income())
+        np.testing.assert_allclose(realised_income, base_income + shock)
+
+        test_country._clear_household_income_shock()
+        assert test_country._staged_household_income_shock is None
+
     def test__housing_market_ratios_are_recorded_after_clearing(self, test_country, monkeypatch):
         calls = []
 

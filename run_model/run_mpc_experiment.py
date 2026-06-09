@@ -315,9 +315,7 @@ def run_mpc_experiment(
     )
     plotted_mpc_column = cumulative_mpc_column if mpc_plot_measure == "nominal" else real_cumulative_mpc_column
     plot_mpc_columns = (
-        [plotted_mpc_column]
-        if mpc_plot_measure is not None
-        else [real_cumulative_mpc_column, cumulative_mpc_column]
+        [plotted_mpc_column] if mpc_plot_measure is not None else [real_cumulative_mpc_column, cumulative_mpc_column]
     )
 
     panels = []

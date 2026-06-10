@@ -49,7 +49,14 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
     data = SimpleNamespace()
     country_cfg = SimpleNamespace()
     shock_specs = (
-        irf_runner.ShockSpec(name="gov", kind="government_consumption", period=0, magnitude=5.0),
+        irf_runner.ShockSpec(
+            name="gov",
+            kind="government_consumption",
+            period=0,
+            magnitude=5.0,
+            duration=2,
+            mode="multiplicative",
+        ),
         irf_runner.ShockSpec(name="tax", kind="income_tax", period=0, magnitude=0.01),
         irf_runner.ShockSpec(name="rate", kind="policy_rate", period=0, magnitude=0.01),
         irf_runner.ShockSpec(name="unemp", kind="unemployment_rate", period=0, magnitude=0.05),
@@ -97,6 +104,7 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
     panel = pd.read_csv(paths["analysis_dir"] / "irf_panel.csv")
     summary = pd.read_csv(paths["analysis_dir"] / "irf_summary.csv")
     run_index = pd.read_csv(paths["analysis_dir"] / "irf_run_index.csv")
+    shock_specs_index = pd.read_csv(paths["analysis_dir"] / "irf_shock_specs.csv")
 
     assert run_calls == [
         (12, None),
@@ -106,6 +114,14 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
         (12, "unemployment_rate"),
     ]
     assert run_index["shock_name"].tolist() == ["gov", "tax", "rate", "unemp"]
+    assert run_index.loc[run_index["shock_name"] == "gov", "shock_duration"].iat[0] == 2
+    assert run_index.loc[run_index["shock_name"] == "gov", "shock_mode"].iat[0] == "multiplicative"
+    assert shock_specs_index.loc[shock_specs_index["shock_name"] == "gov", "shock_duration"].iat[0] == 2
+    assert shock_specs_index.loc[shock_specs_index["shock_name"] == "gov", "shock_mode"].iat[0] == "multiplicative"
+    assert panel.loc[panel["shock_name"] == "gov", "shock_duration"].iat[0] == 2
+    assert panel.loc[panel["shock_name"] == "gov", "shock_mode"].iat[0] == "multiplicative"
+    assert summary.loc[summary["shock_name"] == "gov", "shock_duration"].iat[0] == 2
+    assert summary.loc[summary["shock_name"] == "gov", "shock_mode"].iat[0] == "multiplicative"
     assert (
         panel.loc[
             (panel["shock_name"] == "gov") & (panel["variable"] == "government_consumption") & (panel["horizon"] == 0),
@@ -132,3 +148,20 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
         == 0.05
     )
     assert set(summary["shock_name"]) == {"gov", "tax", "rate", "unemp"}
+
+
+def test_run_irf_experiment_rejects_shock_duration_beyond_horizon(tmp_path):
+    shock_specs = (
+        irf_runner.ShockSpec(name="gov", kind="government_consumption", period=3, magnitude=5.0, duration=2),
+    )
+
+    with pytest.raises(ValueError, match="period plus duration"):
+        irf_runner.run_irf_experiment(
+            seeds=[12],
+            t_max=4,
+            shock_specs=shock_specs,
+            horizon_periods=1,
+            output_dir=tmp_path,
+            country_iso3="FRA",
+            n_jobs=1,
+        )

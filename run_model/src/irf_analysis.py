@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +48,17 @@ MONEY_IRF_VARIABLES = frozenset(
         "gdp_income",
     }
 )
+_SAFE_OUTPUT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _validate_output_name(value: object, *, field_name: str) -> str:
+    text = str(value)
+    if not _SAFE_OUTPUT_NAME.fullmatch(text):
+        raise ValueError(
+            f"{field_name} may only contain letters, digits, underscores, hyphens, and dots, "
+            "and must start with a letter or digit."
+        )
+    return text
 
 
 def _read_h5_array_from_handle(handle: h5py.File, path_template: str, *, country_code: str) -> np.ndarray | None:
@@ -81,6 +93,8 @@ def build_irf_panel(
     shock_magnitude: float,
     horizon_periods: int,
     country_code: str,
+    shock_duration: int = 1,
+    shock_mode: str = "additive",
     variables: tuple[IRFVariable, ...] = DEFAULT_IRF_VARIABLES,
     strict: bool = True,
 ) -> pd.DataFrame:
@@ -125,6 +139,8 @@ def build_irf_panel(
                         "shock_kind": shock_kind,
                         "shock_period": int(shock_period),
                         "shock_magnitude": float(shock_magnitude),
+                        "shock_duration": int(shock_duration),
+                        "shock_mode": shock_mode,
                         "horizon": int(row - shock_period),
                         "row": int(row),
                         "variable": variable.name,
@@ -144,7 +160,15 @@ def summarize_irf_panel(panel: pd.DataFrame) -> pd.DataFrame:
 
     if panel.empty:
         return panel.copy()
-    grouped = panel.groupby(["shock_name", "shock_kind", "variable", "horizon"], dropna=False)
+    panel = panel.copy()
+    if "shock_duration" not in panel:
+        panel["shock_duration"] = 1
+    if "shock_mode" not in panel:
+        panel["shock_mode"] = "additive"
+    grouped = panel.groupby(
+        ["shock_name", "shock_kind", "shock_duration", "shock_mode", "variable", "horizon"],
+        dropna=False,
+    )
     return grouped.agg(
         n=("delta", "size"),
         delta_mean=("delta", "mean"),
@@ -279,6 +303,8 @@ def write_irf_plots(
     for (shock_name, variable), group in summary.groupby(["shock_name", "variable"], dropna=False):
         if variable in skipped:
             continue
+        safe_shock_name = _validate_output_name(shock_name, field_name="shock_name")
+        safe_variable = _validate_output_name(variable, field_name="variable")
         group = group.sort_values("horizon")
         fig = go.Figure()
         fig.add_trace(
@@ -304,4 +330,4 @@ def write_irf_plots(
             xaxis_title="horizon",
             yaxis_title=value_column,
         )
-        fig.write_html(output_path / f"{shock_name}_{variable}_{value_column}.html")
+        fig.write_html(output_path / f"{safe_shock_name}_{safe_variable}_{value_column}.html")

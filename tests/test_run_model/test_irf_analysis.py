@@ -56,12 +56,16 @@ def test_build_irf_panel_computes_delta_and_percent_delta(tmp_path):
         shock_kind="policy_rate",
         shock_period=1,
         shock_magnitude=0.01,
+        shock_duration=2,
+        shock_mode="multiplicative",
         horizon_periods=2,
         country_code="FRA",
         variables=(IRFVariable("consumption", "{country}/households/consumption", "sum"),),
     )
 
     assert panel["horizon"].tolist() == [0, 1]
+    assert panel["shock_duration"].tolist() == [2, 2]
+    assert panel["shock_mode"].tolist() == ["multiplicative", "multiplicative"]
     assert panel["delta"].tolist() == pytest.approx([4.0, 4.0])
     assert panel["pct_delta"].tolist() == pytest.approx([4.0 / 34.0, 4.0 / 36.0])
 
@@ -90,6 +94,8 @@ def test_summarize_irf_panel_aggregates_across_seeds(tmp_path):
 
     assert summary.loc[0, "n"] == 2
     assert summary.loc[0, "delta_mean"] == pytest.approx(3.0)
+    assert summary.loc[0, "shock_duration"] == 1
+    assert summary.loc[0, "shock_mode"] == "additive"
 
 
 def test_default_irf_variables_match_saved_h5_paths(tmp_path):
@@ -193,6 +199,22 @@ def test_pct_irf_plots_skip_rate_variables_by_default(tmp_path):
 
     assert (tmp_path / "rate_household_consumption_pct_delta.html").exists()
     assert not (tmp_path / "rate_policy_rate_pct_delta.html").exists()
+
+
+def test_write_irf_plots_rejects_unsafe_output_names(tmp_path):
+    summary = pd.DataFrame(
+        {
+            "shock_name": ["../bad"],
+            "variable": ["household_consumption"],
+            "horizon": [0],
+            "delta_mean": [1.0],
+            "delta_p10": [0.5],
+            "delta_p90": [1.5],
+        }
+    )
+
+    with pytest.raises(ValueError, match="shock_name"):
+        write_irf_plots(summary, tmp_path, value_column="delta")
 
 
 def test_plot_irfs_filters_and_scales_money_variables():

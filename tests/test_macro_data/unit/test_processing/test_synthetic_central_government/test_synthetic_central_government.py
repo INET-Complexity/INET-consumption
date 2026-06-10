@@ -63,7 +63,11 @@ class TestSyntheticCentralGovernment:
         synthetic_banks = SimpleNamespace(bank_data=pd.DataFrame({"Corporate Taxes Paid": [0.0]}))
         industry_data = {
             "industry_vectors": pd.DataFrame(
-                {"Household Consumption in LCU": [0.0], "Exports in LCU": [0.0], "Household Capital Inputs in LCU": [0.0]}
+                {
+                    "Household Consumption in LCU": [0.0],
+                    "Exports in LCU": [0.0],
+                    "Household Capital Inputs in LCU": [0.0],
+                }
             )
         }
 

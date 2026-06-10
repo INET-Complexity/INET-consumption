@@ -844,6 +844,8 @@ class Country:
             initial_prices=self.firms.ts.initial("price"),
             taxes=current_additional_taxes,
             initial_taxes=initial_additional_taxes,
+            house_price_index=self.economy.ts.current("hpi")[0],
+            house_price_growth=self.economy.ts.current("hpi_inflation")[0],
         )
 
         if replace_current:

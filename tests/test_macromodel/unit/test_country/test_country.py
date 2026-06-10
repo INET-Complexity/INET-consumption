@@ -1,7 +1,9 @@
+import h5py
 import numpy as np
 import pandas as pd
 
 import macromodel.country.country as country_module
+from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
@@ -50,6 +52,46 @@ class TestCountry:
 
     def test__country(self, test_country):
         assert test_country is not None
+
+    def test__set_household_target_demand_uses_credit_augmented_consumption(self, test_country, monkeypatch, tmp_path):
+        test_country.households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+        )
+        captured = {}
+        original = test_country.households.functions["consumption"].compute_target_consumption
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(test_country.households.functions["consumption"], "compute_target_consumption", capture)
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert "house_price_index" in captured
+        assert "house_price_growth" in captured
+        assert "liquid_wealth" in captured
+        assert "illiquid_wealth" in captured
+        assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("wealth_deposits"))
+        assert np.allclose(
+            captured["illiquid_wealth"], test_country.households.ts.current("wealth_other_financial_assets")
+        )
+        assert np.allclose(
+            captured["housing_wealth"],
+            test_country.households.ts.current("wealth_main_residence")
+            + test_country.households.ts.current("wealth_other_properties"),
+        )
+
+        h5_path = tmp_path / "households_target_consumption.h5"
+        with h5py.File(h5_path, "w") as h5_file:
+            country_group = h5_file.create_group("FRA")
+            test_country.households.save_to_h5(country_group)
+            household_group = country_group["households"]
+            assert "formula_implied_mpc" in household_group
+            assert "target_consumption_permanent_income" in household_group
+            assert "target_consumption_partial_adjustment_gap" in household_group
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(
         self, test_country, monkeypatch

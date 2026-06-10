@@ -654,6 +654,8 @@ class Households(Agent):
         taxes: Optional[np.ndarray] = None,
         initial_taxes: Optional[np.ndarray] = None,
         income_override: Optional[np.ndarray] = None,
+        house_price_index: Optional[float] = None,
+        house_price_growth: Optional[float] = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -677,6 +679,8 @@ class Households(Agent):
             initial_prices (Optional[np.ndarray]): Initial prices by industry for CES substitution
             taxes (Optional[np.ndarray]): Current tax rates by industry for CES substitution
             initial_taxes (Optional[np.ndarray]): Initial tax rates by industry for CES substitution
+            house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
+            house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
 
         Returns:
             np.ndarray: Target consumption by household
@@ -686,13 +690,15 @@ class Households(Agent):
 
         # Target consumption
         if assume_zero_growth:
-            return np.outer(
+            target_consumption = np.outer(
                 self.ts.initial("consumption"),
                 self.states["consumption_weights_data"],
             ).astype(float)
+            self._append_target_consumption_diagnostics(None)
+            return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
-            return self.functions["consumption"].compute_target_consumption(
+            target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
@@ -712,7 +718,48 @@ class Households(Agent):
                 taxes=taxes,
                 initial_taxes=initial_taxes,
                 bundle_matrix=self.bundle_matrix,
+                liquid_wealth=self.ts.current("wealth_deposits"),
+                illiquid_wealth=self.ts.current("wealth_other_financial_assets"),
+                housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
+                rent=self.ts.current("rent"),
+                mortgage_debt=self.ts.current("mortgage_debt"),
+                mortgage_payment=self.ts.current("debt_installments"),
+                house_price_index=house_price_index,
+                house_price_growth=house_price_growth,
+                lagged_consumption=self.ts.current("consumption"),
             )
+            self._append_target_consumption_diagnostics(self.functions["consumption"])
+            return target_consumption
+
+    def _append_target_consumption_diagnostics(self, consumption_function: Any | None) -> None:
+        n_households = self.ts.current("n_households")
+        diagnostic_keys = [
+            "target_consumption_lagged_consumption",
+            "target_consumption_long_run",
+            "target_consumption_permanent_income",
+            "target_consumption_liquid_wealth",
+            "target_consumption_illiquid_wealth",
+            "target_consumption_housing_wealth",
+            "target_consumption_rent",
+            "target_consumption_mortgage_debt",
+            "target_consumption_mortgage_payment",
+            "target_consumption_house_price",
+            "target_consumption_uncertainty",
+            "target_consumption_partial_adjustment_gap",
+            "target_consumption_house_price_index",
+        ]
+
+        if consumption_function is None or getattr(consumption_function, "last_target_consumption_components", None) is None:
+            zero_series = np.zeros(n_households)
+            for key in diagnostic_keys:
+                getattr(self.ts, key).append(zero_series.copy())
+            self.ts.formula_implied_mpc.append(np.zeros(n_households))
+            return
+
+        components = consumption_function.last_target_consumption_components
+        for key in diagnostic_keys:
+            getattr(self.ts, key).append(np.asarray(components.get(key, np.zeros(n_households)), dtype=float))
+        self.ts.formula_implied_mpc.append(np.asarray(consumption_function.last_formula_implied_mpc, dtype=float))
 
     def compute_target_investment(
         self,

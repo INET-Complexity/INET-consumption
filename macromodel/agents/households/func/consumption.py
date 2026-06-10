@@ -65,6 +65,20 @@ class HouseholdConsumption(ABC):
         current_time: int,
         take_consumption_weights_by_income_quantile: bool,
         tau_vat: float,
+        prices: np.ndarray = None,
+        initial_prices: np.ndarray = None,
+        taxes: np.ndarray = None,
+        initial_taxes: np.ndarray = None,
+        bundle_matrix: np.ndarray = None,
+        liquid_wealth: np.ndarray = None,
+        illiquid_wealth: np.ndarray = None,
+        housing_wealth: np.ndarray = None,
+        rent: np.ndarray = None,
+        mortgage_debt: np.ndarray = None,
+        mortgage_payment: np.ndarray = None,
+        house_price_index: float | np.ndarray = None,
+        house_price_growth: float | np.ndarray = None,
+        lagged_consumption: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -82,6 +96,20 @@ class HouseholdConsumption(ABC):
             current_time (int): Current period
             take_consumption_weights_by_income_quantile (bool): Use income quintiles
             tau_vat (float): Value added tax rate
+            prices (np.ndarray | None): Current prices by industry for optional CES substitution
+            initial_prices (np.ndarray | None): Initial prices by industry for optional CES substitution
+            taxes (np.ndarray | None): Current tax rates by industry for optional CES substitution
+            initial_taxes (np.ndarray | None): Initial tax rates by industry for optional CES substitution
+            bundle_matrix (np.ndarray | None): Bundle weight matrix for optional CES substitution
+            liquid_wealth (np.ndarray | None): Liquid wealth per household
+            illiquid_wealth (np.ndarray | None): Illiquid financial wealth per household
+            housing_wealth (np.ndarray | None): Housing wealth per household
+            rent (np.ndarray | None): Rent per household
+            mortgage_debt (np.ndarray | None): Mortgage debt per household
+            mortgage_payment (np.ndarray | None): Mortgage payment per household
+            house_price_index (float | np.ndarray | None): House-price index level
+            house_price_growth (float | np.ndarray | None): House-price growth proxy
+            lagged_consumption (np.ndarray | None): Previous-period consumption
 
         Returns:
             np.ndarray: Target consumption by household and industry
@@ -120,6 +148,15 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         taxes: np.ndarray = None,  # Ignored in default consumption
         initial_taxes: np.ndarray = None,  # Ignored in default consumption
         bundle_matrix: np.ndarray = None,  # Ignored in default consumption
+        liquid_wealth: np.ndarray = None,  # Ignored in default consumption
+        illiquid_wealth: np.ndarray = None,  # Ignored in default consumption
+        housing_wealth: np.ndarray = None,  # Ignored in default consumption
+        rent: np.ndarray = None,  # Ignored in default consumption
+        mortgage_debt: np.ndarray = None,  # Ignored in default consumption
+        mortgage_payment: np.ndarray = None,  # Ignored in default consumption
+        house_price_index: float | np.ndarray = None,  # Ignored in default consumption
+        house_price_growth: float | np.ndarray = None,  # Ignored in default consumption
+        lagged_consumption: np.ndarray = None,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
 
@@ -280,6 +317,15 @@ class CESHouseholdConsumption(HouseholdConsumption):
         taxes: np.ndarray = None,
         initial_taxes: np.ndarray = None,
         bundle_matrix: np.ndarray = None,
+        liquid_wealth: np.ndarray = None,  # Ignored in CES consumption
+        illiquid_wealth: np.ndarray = None,  # Ignored in CES consumption
+        housing_wealth: np.ndarray = None,  # Ignored in CES consumption
+        rent: np.ndarray = None,  # Ignored in CES consumption
+        mortgage_debt: np.ndarray = None,  # Ignored in CES consumption
+        mortgage_payment: np.ndarray = None,  # Ignored in CES consumption
+        house_price_index: float | np.ndarray = None,  # Ignored in CES consumption
+        house_price_growth: float | np.ndarray = None,  # Ignored in CES consumption
+        lagged_consumption: np.ndarray = None,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
 
@@ -469,6 +515,214 @@ class CESHouseholdConsumption(HouseholdConsumption):
         return np.maximum(0.0, target_consumption)
 
 
+class CreditAugmentedConsumption(HouseholdConsumption):
+    """Credit-augmented household consumption implementation.
+
+    This rule keeps the existing household consumption hook active while exposing
+    a paper-oriented target-consumption decomposition. The long-run target uses
+    current spendable income plus balance-sheet and housing terms. The final
+    target is a partial adjustment toward that long-run level, and the module
+    records the decomposition and a formula-implied MPC for diagnostics.
+    """
+
+    def __init__(
+        self,
+        consumption_smoothing_fraction: float,
+        consumption_smoothing_window: int,
+        minimum_consumption_fraction: float,
+        elasticity_of_substitution: float = 1.0,
+        permanent_income_propensity: float = 0.85,
+        liquid_wealth_propensity: float = 0.04,
+        illiquid_wealth_propensity: float = 0.02,
+        housing_wealth_propensity: float = 0.02,
+        rent_propensity: float = 0.05,
+        mortgage_debt_propensity: float = 0.03,
+        mortgage_payment_propensity: float = 0.08,
+        house_price_propensity: float = 0.02,
+        uncertainty_propensity: float = 0.0,
+        partial_adjustment_speed: float = 0.5,
+    ):
+        super().__init__(
+            consumption_smoothing_fraction,
+            consumption_smoothing_window,
+            minimum_consumption_fraction,
+            elasticity_of_substitution,
+        )
+        self.permanent_income_propensity = permanent_income_propensity
+        self.liquid_wealth_propensity = liquid_wealth_propensity
+        self.illiquid_wealth_propensity = illiquid_wealth_propensity
+        self.housing_wealth_propensity = housing_wealth_propensity
+        self.rent_propensity = rent_propensity
+        self.mortgage_debt_propensity = mortgage_debt_propensity
+        self.mortgage_payment_propensity = mortgage_payment_propensity
+        self.house_price_propensity = house_price_propensity
+        self.uncertainty_propensity = uncertainty_propensity
+        self.partial_adjustment_speed = partial_adjustment_speed
+        self.last_target_consumption_components: dict[str, np.ndarray] | None = None
+        self.last_formula_implied_mpc: np.ndarray | None = None
+
+    @staticmethod
+    def _as_array(reference: np.ndarray, value: np.ndarray | float | None, default: float = 0.0) -> np.ndarray:
+        if value is None:
+            return np.full_like(reference, default, dtype=float)
+        value_array = np.asarray(value, dtype=float)
+        if value_array.shape == ():
+            return np.full_like(reference, float(value_array), dtype=float)
+        if value_array.shape != reference.shape:
+            return np.broadcast_to(value_array, reference.shape).astype(float)
+        return value_array
+
+    def _evaluate_target(
+        self,
+        income: np.ndarray,
+        lagged_consumption: np.ndarray,
+        liquid_wealth: np.ndarray,
+        illiquid_wealth: np.ndarray,
+        housing_wealth: np.ndarray,
+        rent: np.ndarray,
+        mortgage_debt: np.ndarray,
+        mortgage_payment: np.ndarray,
+        house_price_index: float | np.ndarray | None,
+        house_price_growth: float | np.ndarray | None,
+    ) -> tuple[dict[str, np.ndarray], np.ndarray]:
+        income = np.asarray(income, dtype=float)
+        lagged_consumption = np.asarray(lagged_consumption, dtype=float)
+        liquid_wealth = np.asarray(liquid_wealth, dtype=float)
+        illiquid_wealth = np.asarray(illiquid_wealth, dtype=float)
+        housing_wealth = np.asarray(housing_wealth, dtype=float)
+        rent = np.asarray(rent, dtype=float)
+        mortgage_debt = np.asarray(mortgage_debt, dtype=float)
+        mortgage_payment = np.asarray(mortgage_payment, dtype=float)
+
+        house_price_index_arr = self._as_array(income, house_price_index, default=1.0)
+        house_price_growth_arr = self._as_array(income, house_price_growth, default=0.0)
+
+        permanent_income_term = self.permanent_income_propensity * income
+        liquid_wealth_term = self.liquid_wealth_propensity * np.maximum(liquid_wealth, 0.0)
+        illiquid_wealth_term = self.illiquid_wealth_propensity * np.maximum(illiquid_wealth, 0.0)
+        housing_wealth_term = self.housing_wealth_propensity * np.maximum(housing_wealth, 0.0)
+        rent_term = -self.rent_propensity * np.maximum(rent, 0.0)
+        mortgage_debt_term = -self.mortgage_debt_propensity * np.maximum(mortgage_debt, 0.0)
+        mortgage_payment_term = -self.mortgage_payment_propensity * np.maximum(mortgage_payment, 0.0)
+        house_price_term = self.house_price_propensity * np.maximum(housing_wealth, 0.0) * house_price_growth_arr
+        uncertainty_term = self.uncertainty_propensity * np.zeros_like(income)
+
+        long_run_target = (
+            permanent_income_term
+            + liquid_wealth_term
+            + illiquid_wealth_term
+            + housing_wealth_term
+            + rent_term
+            + mortgage_debt_term
+            + mortgage_payment_term
+            + house_price_term
+            + uncertainty_term
+        )
+        partial_adjustment_gap = self.partial_adjustment_speed * (long_run_target - lagged_consumption)
+        target_total = np.maximum(0.0, lagged_consumption + partial_adjustment_gap)
+
+        components = {
+            "target_consumption_lagged_consumption": lagged_consumption,
+            "target_consumption_long_run": long_run_target,
+            "target_consumption_permanent_income": permanent_income_term,
+            "target_consumption_liquid_wealth": liquid_wealth_term,
+            "target_consumption_illiquid_wealth": illiquid_wealth_term,
+            "target_consumption_housing_wealth": housing_wealth_term,
+            "target_consumption_rent": rent_term,
+            "target_consumption_mortgage_debt": mortgage_debt_term,
+            "target_consumption_mortgage_payment": mortgage_payment_term,
+            "target_consumption_house_price": house_price_term,
+            "target_consumption_uncertainty": uncertainty_term,
+            "target_consumption_partial_adjustment_gap": partial_adjustment_gap,
+            "target_consumption_house_price_index": house_price_index_arr,
+        }
+        return components, target_total
+
+    def compute_target_consumption(
+        self,
+        expected_inflation: float,
+        current_cpi: float,
+        initial_cpi: float,
+        historic_consumption_sum: np.ndarray,
+        saving_rates: np.ndarray,
+        income: np.ndarray,
+        household_benefits: np.ndarray,
+        consumption_weights: np.ndarray,
+        consumption_weights_by_income: np.ndarray,
+        exogenous_total_consumption: np.ndarray,
+        current_time: int,
+        take_consumption_weights_by_income_quantile: bool,
+        tau_vat: float,
+        prices: np.ndarray = None,
+        initial_prices: np.ndarray = None,
+        taxes: np.ndarray = None,
+        initial_taxes: np.ndarray = None,
+        bundle_matrix: np.ndarray = None,
+        liquid_wealth: np.ndarray = None,
+        illiquid_wealth: np.ndarray = None,
+        housing_wealth: np.ndarray = None,
+        rent: np.ndarray = None,
+        mortgage_debt: np.ndarray = None,
+        mortgage_payment: np.ndarray = None,
+        house_price_index: float | np.ndarray = None,
+        house_price_growth: float | np.ndarray = None,
+        lagged_consumption: np.ndarray = None,
+    ) -> np.ndarray:
+        if lagged_consumption is None:
+            lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
+        else:
+            lagged_consumption = np.asarray(lagged_consumption, dtype=float)
+
+        income = np.asarray(income, dtype=float)
+        liquid_wealth = self._as_array(income, liquid_wealth)
+        illiquid_wealth = self._as_array(income, illiquid_wealth)
+        housing_wealth = self._as_array(income, housing_wealth)
+        rent = self._as_array(income, rent)
+        mortgage_debt = self._as_array(income, mortgage_debt)
+        mortgage_payment = self._as_array(income, mortgage_payment)
+
+        components, target_total = self._evaluate_target(
+            income=income,
+            lagged_consumption=lagged_consumption,
+            liquid_wealth=liquid_wealth,
+            illiquid_wealth=illiquid_wealth,
+            housing_wealth=housing_wealth,
+            rent=rent,
+            mortgage_debt=mortgage_debt,
+            mortgage_payment=mortgage_payment,
+            house_price_index=house_price_index,
+            house_price_growth=house_price_growth,
+        )
+
+        perturbation = np.maximum(1.0, np.abs(income) * 1e-4)
+        _, perturbed_target = self._evaluate_target(
+            income=income + perturbation,
+            lagged_consumption=lagged_consumption,
+            liquid_wealth=liquid_wealth,
+            illiquid_wealth=illiquid_wealth,
+            housing_wealth=housing_wealth,
+            rent=rent,
+            mortgage_debt=mortgage_debt,
+            mortgage_payment=mortgage_payment,
+            house_price_index=house_price_index,
+            house_price_growth=house_price_growth,
+        )
+
+        self.last_target_consumption_components = components
+        self.last_formula_implied_mpc = (perturbed_target - target_total) / perturbation
+
+        target_consumption = np.maximum(
+            0.0,
+            1.0
+            / (1 + tau_vat)
+            * np.outer(
+                consumption_weights,
+                target_total,
+            ).T,
+        )
+        return target_consumption
+
+
 class ExogenousHouseholdConsumption(HouseholdConsumption):
     """Exogenous household consumption implementation.
 
@@ -499,6 +753,15 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         taxes: np.ndarray = None,  # Ignored in exogenous consumption
         initial_taxes: np.ndarray = None,  # Ignored in exogenous consumption
         bundle_matrix: np.ndarray = None,  # Ignored in exogenous consumption
+        liquid_wealth: np.ndarray = None,  # Ignored in exogenous consumption
+        illiquid_wealth: np.ndarray = None,  # Ignored in exogenous consumption
+        housing_wealth: np.ndarray = None,  # Ignored in exogenous consumption
+        rent: np.ndarray = None,  # Ignored in exogenous consumption
+        mortgage_debt: np.ndarray = None,  # Ignored in exogenous consumption
+        mortgage_payment: np.ndarray = None,  # Ignored in exogenous consumption
+        house_price_index: float | np.ndarray = None,  # Ignored in exogenous consumption
+        house_price_growth: float | np.ndarray = None,  # Ignored in exogenous consumption
+        lagged_consumption: np.ndarray = None,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.
 

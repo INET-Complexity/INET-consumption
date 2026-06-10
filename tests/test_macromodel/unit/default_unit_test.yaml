@@ -543,7 +543,7 @@ FRA:
       consumption:
         name:
           desc: The function for setting household consumption.
-          options: DefaultHouseholdConsumption
+          options: DefaultHouseholdConsumption,CreditAugmentedConsumption
           type: str
           value: DefaultHouseholdConsumption
         parameters:

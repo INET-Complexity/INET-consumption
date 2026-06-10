@@ -85,11 +85,17 @@ def test_config_loaders_use_country_iso3_paths(tmp_path, monkeypatch):
     (config_dir / "data_config_ESP.yaml").write_text("country_configs:\n  ESP: {}\n")
     cfg = SimpleNamespace(config_dir=config_dir, country_iso3="ESP")
 
-    monkeypatch.setattr(nw, "CountryConfiguration", lambda **kwargs: kwargs)
+    def fake_load_country_configuration(path, country_iso3):
+        return {"path": path, "country_iso3": country_iso3}
+
+    monkeypatch.setattr(nw, "load_country_configuration", fake_load_country_configuration)
     monkeypatch.setattr(nw, "split_country_configs", lambda value: {"split": value})
     monkeypatch.setattr(nw, "DataConfiguration", lambda **kwargs: kwargs)
 
-    assert nw._load_country_config(cfg) == {"marker": 1}
+    assert nw._load_country_config(cfg) == {
+        "path": config_dir / "country_config_ESP.yaml",
+        "country_iso3": "ESP",
+    }
     assert nw._load_data_config(cfg) == {"country_configs": {"split": {"ESP": {}}}}
 
 

@@ -1252,7 +1252,7 @@ class Country:
         """Return supply-adjusted firm-level excess-demand capacity for this country."""
         return self.firms.get_supply_adjusted_excess_demand_capacity()
 
-    def update_realised_metrics(self) -> None:
+    def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.
 
         This method coordinates the comprehensive updating of all economic metrics after markets
@@ -1622,7 +1622,9 @@ class Country:
         self.households.ts.total_income_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
         )
-        self.households.ts.income_financial_assets.append(self.households.compute_income_from_financial_assets())
+        self.households.ts.income_financial_assets.append(
+            self.households.compute_income_from_financial_assets(period_index=period_index)
+        )
         self.households.ts.total_income_financial_assets.append(
             [self.households.ts.current("income_financial_assets").sum()]
         )
@@ -1664,10 +1666,12 @@ class Country:
             readjusted_factors_ch4=readjusted_factors_ch4,
             emitting_indices_ch4=self.emitting_indices_ch4,
         )
-        self.households.update_wealth(
+        illiquid_financial_asset_return_rate = self.households.update_wealth(
             housing_data=self.housing_market.states["properties"],
             tau_cf=self.central_government.states["Capital Formation Tax"],
+            period_index=period_index,
         )
+        self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))
         self.households.ts.net_wealth.append(self.households.compute_net_wealth())
 

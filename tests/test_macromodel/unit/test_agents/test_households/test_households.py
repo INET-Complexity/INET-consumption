@@ -130,6 +130,32 @@ class TestHouseholds:
 
         np.testing.assert_allclose(captured["income"], income_override)
 
+    def test__paper_asset_returns_do_not_override_expected_financial_income(self, test_households, monkeypatch):
+        from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
+
+        n_households = test_households.ts.current("n_households")
+        expected_financial_income = np.full(n_households, 7.0)
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.10,
+            mu_bond=0.02,
+            sigma_eq=0.20,
+            sigma_bond=0.10,
+            rho=0.25,
+            equity_weight=0.75,
+        )
+
+        monkeypatch.setattr(
+            test_households.functions["financial_assets"],
+            "compute_expected_income",
+            lambda **kwargs: expected_financial_income,
+        )
+
+        np.testing.assert_allclose(
+            test_households.compute_expected_income_from_financial_assets(),
+            expected_financial_income,
+        )
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

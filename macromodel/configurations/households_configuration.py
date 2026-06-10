@@ -195,7 +195,7 @@ class WealthFunction(BaseModel):
     """
 
     path_name: str = "wealth"
-    name: Literal["DefaultWealthSetter"] = "DefaultWealthSetter"
+    name: Literal["DefaultWealthSetter", "PaperAssetReturnWealthSetter"] = "DefaultWealthSetter"
     parameters: dict[str, Any] = {
         "other_real_assets_depreciation_rate": 0.05,
     }

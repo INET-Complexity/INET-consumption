@@ -419,3 +419,165 @@ class DefaultWealthSetter(WealthSetter):
             + new_loans
             - tau_cf * np.maximum(0.0, new_real_wealth)
         )
+
+
+class PaperAssetReturnWealthSetter(DefaultWealthSetter):
+    """Default wealth update plus paper-style illiquid financial asset returns."""
+
+    exclude_financial_asset_income_from_saving = True
+    uses_periodic_illiquid_returns = True
+
+    def __init__(
+        self,
+        other_real_assets_depreciation_rate: float,
+        mu_eq: float,
+        mu_bond: float,
+        sigma_eq: float,
+        sigma_bond: float,
+        rho: float,
+        equity_weight: float,
+        draw_scope: str = "country_period",
+    ):
+        super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
+        if draw_scope != "country_period":
+            raise ValueError("PaperAssetReturnWealthSetter only supports draw_scope='country_period'.")
+        if sigma_eq < 0.0 or sigma_bond < 0.0:
+            raise ValueError("sigma_eq and sigma_bond must be non-negative.")
+        if not 0.0 <= equity_weight <= 1.0:
+            raise ValueError("equity_weight must be in [0, 1].")
+        if not -1.0 <= rho <= 1.0:
+            raise ValueError("rho must be in [-1, 1].")
+        self.mu_eq = mu_eq
+        self.mu_bond = mu_bond
+        self.sigma_eq = sigma_eq
+        self.sigma_bond = sigma_bond
+        self.rho = rho
+        self.equity_weight = equity_weight
+        self.draw_scope = draw_scope
+        self._current_illiquid_return_rate: float | None = None
+        self._current_illiquid_return_amount: np.ndarray | None = None
+        self._current_illiquid_return_period: int | None = None
+        self._last_consumed_illiquid_return_period: int | None = None
+        self._current_illiquid_return_consumed = True
+
+    @property
+    def expected_illiquid_log_return(self) -> float:
+        return self.equity_weight * self.mu_eq + (1.0 - self.equity_weight) * self.mu_bond
+
+    @property
+    def illiquid_log_return_variance(self) -> float:
+        bond_weight = 1.0 - self.equity_weight
+        return float(
+            self.equity_weight**2 * self.sigma_eq**2
+            + bond_weight**2 * self.sigma_bond**2
+            + 2.0 * self.equity_weight * bond_weight * self.rho * self.sigma_eq * self.sigma_bond
+        )
+
+    @staticmethod
+    def _simple_return_from_log_return(log_return: float) -> float:
+        return float(np.exp(log_return) - 1.0)
+
+    def expected_illiquid_return_rate(self) -> float:
+        return self._simple_return_from_log_return(
+            self.expected_illiquid_log_return + 0.5 * self.illiquid_log_return_variance
+        )
+
+    def draw_illiquid_return_rate(self) -> float:
+        covariance = np.array(
+            [
+                [self.sigma_eq**2, self.rho * self.sigma_eq * self.sigma_bond],
+                [self.rho * self.sigma_eq * self.sigma_bond, self.sigma_bond**2],
+            ]
+        )
+        log_equity_return, log_bond_return = np.random.multivariate_normal(
+            mean=np.array([self.mu_eq, self.mu_bond]),
+            cov=covariance,
+        )
+        log_return = self.equity_weight * log_equity_return + (1.0 - self.equity_weight) * log_bond_return
+        return self._simple_return_from_log_return(float(log_return))
+
+    @staticmethod
+    def _return_amount(current_wealth_in_other_financial_assets: np.ndarray, return_rate: float) -> np.ndarray:
+        return np.maximum(current_wealth_in_other_financial_assets, 0.0) * return_rate
+
+    def compute_income_from_financial_assets(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
+            if period_index is not None and self._current_illiquid_return_period != period_index:
+                raise ValueError("Previous illiquid financial asset return has not been applied.")
+            return self._current_return_amount_for(current_wealth_in_other_financial_assets)
+        if period_index is not None and self._last_consumed_illiquid_return_period == period_index:
+            raise ValueError("Illiquid financial asset return has already been applied for the current period.")
+        return_rate = self.draw_illiquid_return_rate()
+        return_amount = self._return_amount(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            return_rate=return_rate,
+        )
+        self._current_illiquid_return_rate = return_rate
+        self._current_illiquid_return_amount = return_amount
+        self._current_illiquid_return_period = period_index
+        self._current_illiquid_return_consumed = False
+        return return_amount
+
+    def current_illiquid_return_rate(self) -> float:
+        if self._current_illiquid_return_rate is None:
+            return np.nan
+        return self._current_illiquid_return_rate
+
+    def _current_return_amount_for(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        if self._current_illiquid_return_amount is None or self._current_illiquid_return_consumed:
+            raise ValueError("Illiquid financial asset return has not been drawn for the current period.")
+        if period_index is not None and self._current_illiquid_return_period != period_index:
+            raise ValueError("Stored illiquid financial asset return is for a different period.")
+        if self._current_illiquid_return_amount.shape != current_wealth_in_other_financial_assets.shape:
+            raise ValueError("Stored illiquid return amount does not match household financial-asset shape.")
+        return self._current_illiquid_return_amount
+
+    def use_up_wealth(
+        self,
+        used_up_wealth: np.ndarray,
+        current_wealth_in_deposits: np.ndarray,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        post_return_other_financial_assets = current_wealth_in_other_financial_assets + self._current_return_amount_for(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
+        available_other_financial_assets = np.maximum(post_return_other_financial_assets, 0.0)
+        used_up_wealth_in_other_financial_assets = np.minimum(available_other_financial_assets, used_up_wealth)
+        used_up_wealth_in_deposits = np.minimum(
+            current_wealth_in_deposits,
+            used_up_wealth - used_up_wealth_in_other_financial_assets,
+        )
+        return (
+            used_up_wealth_in_deposits,
+            used_up_wealth_in_other_financial_assets,
+        )
+
+    def compute_wealth_in_other_financial_assets(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        new_wealth_in_other_financial_assets: np.ndarray,
+        used_up_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        updated_wealth = (
+            current_wealth_in_other_financial_assets
+            + self._current_return_amount_for(
+                current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+                period_index=period_index,
+            )
+            + new_wealth_in_other_financial_assets
+            - used_up_wealth_in_other_financial_assets
+        )
+        self._last_consumed_illiquid_return_period = period_index
+        self._current_illiquid_return_consumed = True
+        return updated_wealth

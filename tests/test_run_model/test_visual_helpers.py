@@ -66,6 +66,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "firm_insolvency_rate": [0.001, 0.002, 0.003],
         "bank_insolvency_rate": [0.0, 0.0, 0.01],
         "household_insolvency_rate": [0.01, 0.011, 0.012],
+        "illiquid_financial_asset_return_rate": [np.nan, 0.02, -0.01],
         "total_growth": [0.0, 0.02, 0.03],
         "estimated_growth": [0.01, 0.02, 0.03],
         "cpi_transaction": [1.0, 1.01, 1.02],
@@ -154,6 +155,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "firm_insolvency_rate",
         "bank_insolvency_rate",
         "household_insolvency_rate",
+        "illiquid_financial_asset_return_rate",
         "total_growth",
         "estimated_growth",
         "cpi_transaction",
@@ -183,6 +185,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     }
     assert expected_columns.issubset(output.columns)
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
+    assert output["illiquid_financial_asset_return_rate"].tolist()[1:] == [0.02, -0.01]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
     assert output["num_insolvent_firms_by_sector"].tolist() == [[1, 2], [3, 4], [5, 6]]
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]

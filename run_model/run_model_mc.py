@@ -22,7 +22,7 @@ from src.monte_carlo import run_seeded_monte_carlo  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
 from macro_data.configuration import DataConfiguration, split_country_configs  # noqa: E402
-from macromodel.configurations import CountryConfiguration  # noqa: E402
+from macromodel.configurations import CountryConfiguration, load_country_configuration  # noqa: E402
 
 logging.getLogger().setLevel(logging.ERROR)
 
@@ -232,9 +232,10 @@ def main(
     creator.save(str(data_pkl_path))
     data = DataWrapper.init_from_pickle(str(data_pkl_path))
 
-    with (cfg.config_dir / f"country_config_{cfg.country_iso3}.yaml").open() as f:
-        country_config_dict = yaml.safe_load(f)
-    country_cfg = CountryConfiguration(**country_config_dict[cfg.country_iso3])
+    country_cfg = load_country_configuration(
+        cfg.config_dir / f"country_config_{cfg.country_iso3}.yaml",
+        country_iso3=cfg.country_iso3,
+    )
 
     synthetic_country = data.synthetic_countries[cfg.country_iso3]
     country_cfg = align_country_configuration_to_data(

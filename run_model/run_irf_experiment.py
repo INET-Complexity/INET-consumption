@@ -149,8 +149,36 @@ def _run_seed(
             output_dir=shocks_dir / spec.name,
             shock_spec=spec,
         )
-        rows.append({"seed": int(seed), "shock_name": spec.name, "baseline_h5": baseline_h5, "shock_h5": shock_h5})
+        rows.append(
+            {
+                "seed": int(seed),
+                "shock_name": spec.name,
+                "shock_kind": spec.kind,
+                "shock_period": spec.period,
+                "shock_magnitude": spec.magnitude,
+                "shock_duration": spec.duration,
+                "shock_mode": spec.mode,
+                "baseline_h5": baseline_h5,
+                "shock_h5": shock_h5,
+            }
+        )
     return rows
+
+
+def _shock_specs_frame(shock_specs: tuple[ShockSpec, ...]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "shock_name": spec.name,
+                "shock_kind": spec.kind,
+                "shock_period": spec.period,
+                "shock_magnitude": spec.magnitude,
+                "shock_duration": spec.duration,
+                "shock_mode": spec.mode,
+            }
+            for spec in shock_specs
+        ]
+    )
 
 
 def run_irf_experiment(
@@ -183,7 +211,9 @@ def run_irf_experiment(
         raise ValueError("batch_size must be at least 1.")
     if horizon_periods <= 0:
         raise ValueError("horizon_periods must be positive.")
-    if any(spec.period + horizon_periods > t_max for spec in shock_specs):
+    if any(spec.period + spec.duration > t_max for spec in shock_specs):
+        raise ValueError("A shock period plus duration extends beyond the simulation horizon.")
+    if any(spec.period + 1 + horizon_periods > t_max + 1 for spec in shock_specs):
         raise ValueError("A shock period plus horizon extends beyond available HDF5 rows.")
 
     output_dir = Path(output_dir)
@@ -201,6 +231,7 @@ def run_irf_experiment(
     shocks_dir = output_dir / "shocks"
     analysis_dir = output_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
+    _shock_specs_frame(shock_specs).to_csv(analysis_dir / "irf_shock_specs.csv", index=False)
 
     run_rows_nested = Parallel(n_jobs=n_jobs, backend=backend, verbose=verbose, batch_size=batch_size)(
         delayed(_run_seed)(
@@ -232,6 +263,8 @@ def run_irf_experiment(
                 shock_kind=spec.kind,
                 shock_period=spec.period + 1,
                 shock_magnitude=spec.magnitude,
+                shock_duration=spec.duration,
+                shock_mode=spec.mode,
                 horizon_periods=horizon_periods,
                 country_code=country_code,
             )

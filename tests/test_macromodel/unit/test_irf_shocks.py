@@ -1,9 +1,9 @@
 from types import SimpleNamespace
 
 import numpy as np
-import pandas as pd
 import pytest
 
+from macromodel.agents.government_entities.func.consumption import ExpectedGrowthGovernmentConsumptionSetter
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation
@@ -19,6 +19,43 @@ from macromodel.utils.prehooks.irf_shocks import (
 class DummyPolicyRate:
     def compute_rate(self, *, shock=0.0, **_kwargs):
         return 0.02
+
+
+class DummyGovernmentConsumptionSetter:
+    def compute_target_consumption(self, **_kwargs):
+        return np.array([20.0, 30.0, 50.0])
+
+
+def _compute_government_target(setter):
+    return setter.compute_target_consumption(
+        previous_desired_government_consumption=np.array([20.0, 30.0, 50.0]),
+        model=None,
+        historic_total_consumption=None,
+        initial_good_prices=np.ones(3),
+        current_good_prices=np.array([2.0, 1.0, 3.0]),
+        expected_growth=0.02,
+        expected_inflation=0.05,
+        current_time=1,
+        exogenous_total_consumption=None,
+        forecasting_window=1,
+    )
+
+
+def _government_consumption_simulation():
+    setter = ExpectedGrowthGovernmentConsumptionSetter(
+        consistency=1.0,
+        default_growth=0.99,
+        sectoral_weights="initial_fixed",
+    )
+    government_entities = SimpleNamespace(functions={"consumption": setter})
+    country = SimpleNamespace(government_entities=government_entities)
+    return SimpleNamespace(countries={"FRA": country}), setter
+
+
+@pytest.mark.parametrize("name", ["../bad", "/bad", ".hidden", "bad/name", "bad name"])
+def test_shock_spec_rejects_unsafe_names(name):
+    with pytest.raises(ValueError, match="ShockSpec.name"):
+        ShockSpec(name=name, kind="policy_rate", period=0, magnitude=0.01)
 
 
 def test_policy_rate_shock_converts_annual_rate_points_to_period_rate_points():
@@ -73,24 +110,73 @@ def test_tax_rate_shock_restores_baseline_after_duration():
     assert government.states["Income Tax"] == pytest.approx(0.20)
 
 
-def test_government_consumption_shock_targets_realised_response_rows():
-    spec = ShockSpec(
-        name="gov",
-        kind="government_consumption",
-        period=1,
-        magnitude=0.10,
-        duration=2,
-        mode="multiplicative",
-    )
-    national_accounts = pd.DataFrame({"Real Government Consumption (Value)": [100.0, 110.0, 120.0, 130.0]})
-    country = SimpleNamespace(exogenous=SimpleNamespace(national_accounts_during=national_accounts))
-    simulation = SimpleNamespace(countries={"FRA": country})
+def test_government_consumption_shock_adds_to_default_target_setter():
+    spec = ShockSpec(name="gov", kind="government_consumption", period=0, magnitude=10.0)
+    simulation, setter = _government_consumption_simulation()
+    hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    baseline = _compute_government_target(setter)
+    hook(simulation, 2020, 1)
+    shocked = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
+
+    np.testing.assert_allclose(shocked.sum() - baseline.sum(), 10.0)
+    np.testing.assert_allclose(shocked / shocked.sum(), baseline / baseline.sum())
+
+
+def test_government_consumption_additive_shock_supports_public_setter_contract_only():
+    spec = ShockSpec(name="gov", kind="government_consumption", period=0, magnitude=10.0)
+    government_entities = SimpleNamespace(functions={"consumption": DummyGovernmentConsumptionSetter()})
+    simulation = SimpleNamespace(countries={"FRA": SimpleNamespace(government_entities=government_entities)})
     hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
 
     hook(simulation, 2020, 1)
-    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0, 130.0])
+    shocked = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
+
+    np.testing.assert_allclose(shocked, [22.0, 33.0, 55.0])
+
+
+def test_government_consumption_shock_scales_default_target_setter():
+    spec = ShockSpec(
+        name="gov",
+        kind="government_consumption",
+        period=0,
+        magnitude=0.10,
+        mode="multiplicative",
+    )
+    simulation, setter = _government_consumption_simulation()
+    hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    baseline = _compute_government_target(setter)
+    hook(simulation, 2020, 1)
+    shocked = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
+
+    np.testing.assert_allclose(shocked, baseline * 1.10)
+
+
+def test_government_consumption_shock_window_only_affects_active_period():
+    spec = ShockSpec(name="gov", kind="government_consumption", period=1, magnitude=10.0)
+    simulation, setter = _government_consumption_simulation()
+    hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    baseline = _compute_government_target(setter)
+    hook(simulation, 2020, 1)
+    inactive = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
     hook(simulation, 2020, 4)
-    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 132.0, 143.0])
+    active = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
+
+    np.testing.assert_allclose(inactive, baseline)
+    assert active.sum() > baseline.sum()
+
+
+def test_government_consumption_negative_additive_shock_clamps_at_zero():
+    spec = ShockSpec(name="gov", kind="government_consumption", period=0, magnitude=-200.0)
+    simulation, _setter = _government_consumption_simulation()
+    hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    hook(simulation, 2020, 1)
+    shocked = _compute_government_target(simulation.countries["FRA"].government_entities.functions["consumption"])
+
+    np.testing.assert_allclose(shocked, np.zeros(3))
 
 
 def test_unemployment_rate_shock_separates_sampled_employed_workers():

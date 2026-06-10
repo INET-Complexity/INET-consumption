@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import blake2b
@@ -19,6 +20,7 @@ ShockKind = Literal[
     "policy_rate",
     "unemployment_rate",
 ]
+_SAFE_SHOCK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True)
@@ -35,12 +37,66 @@ class ShockSpec:
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("ShockSpec.name must be non-empty.")
+        if not _SAFE_SHOCK_NAME.fullmatch(self.name):
+            raise ValueError(
+                "ShockSpec.name may only contain letters, digits, underscores, hyphens, and dots, "
+                "and must start with a letter or digit."
+            )
         if self.period < 0:
             raise ValueError("ShockSpec.period must be non-negative.")
         if self.duration < 1:
             raise ValueError("ShockSpec.duration must be at least 1.")
         if self.mode not in {"additive", "multiplicative"}:
             raise ValueError("ShockSpec.mode must be 'additive' or 'multiplicative'.")
+
+
+class _GovernmentConsumptionShockProxy:
+    """Government-consumption setter wrapper that shocks desired consumption targets."""
+
+    def __init__(self, wrapped, spec: ShockSpec) -> None:
+        self.wrapped = wrapped
+        self.spec = spec
+        self.active = False
+
+    def compute_target_consumption(
+        self,
+        *,
+        previous_desired_government_consumption,
+        model,
+        historic_total_consumption,
+        initial_good_prices,
+        current_good_prices,
+        expected_growth,
+        expected_inflation,
+        current_time,
+        exogenous_total_consumption,
+        forecasting_window,
+        assume_zero_noise=False,
+    ):
+        target = self.wrapped.compute_target_consumption(
+            previous_desired_government_consumption=previous_desired_government_consumption,
+            model=model,
+            historic_total_consumption=historic_total_consumption,
+            initial_good_prices=initial_good_prices,
+            current_good_prices=current_good_prices,
+            expected_growth=expected_growth,
+            expected_inflation=expected_inflation,
+            current_time=current_time,
+            exogenous_total_consumption=exogenous_total_consumption,
+            forecasting_window=forecasting_window,
+            assume_zero_noise=assume_zero_noise,
+        )
+        if not self.active:
+            return target
+        target = np.asarray(target, dtype=float)
+        if self.spec.mode == "multiplicative":
+            return np.maximum(0.0, target * (1.0 + float(self.spec.magnitude)))
+
+        magnitude = float(self.spec.magnitude)
+        if magnitude == 0.0:
+            return target
+        delta = abs(magnitude) * _nonnegative_weights(target)
+        return np.maximum(0.0, target + np.sign(magnitude) * delta)
 
 
 class _PolicyRateShockProxy:
@@ -89,6 +145,15 @@ def _shock_values(values: np.ndarray, *, spec: ShockSpec) -> np.ndarray:
     return values + float(spec.magnitude)
 
 
+def _nonnegative_weights(values: np.ndarray) -> np.ndarray:
+    weights = np.asarray(values, dtype=float)
+    weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
+    weights_sum = weights.sum()
+    if weights_sum <= 0.0:
+        return np.full(weights.shape, 1.0 / len(weights))
+    return weights / weights_sum
+
+
 def _stable_shock_seed(base_seed: int | None, spec: ShockSpec, period: int) -> int:
     seed_material = f"{base_seed or 0}:{spec.name}:{spec.kind}:{spec.period}:{spec.duration}:{period}".encode()
     digest = blake2b(seed_material, digest_size=8).digest()
@@ -125,33 +190,23 @@ def create_government_consumption_shock_hook(
     time_unit: int,
     spec: ShockSpec,
 ) -> Callable[[Simulation, int, int], None]:
-    """Create a prehook that shocks exogenous real government consumption."""
+    """Create a prehook that shocks model government desired consumption."""
 
     if spec.kind != "government_consumption":
         raise ValueError("Government consumption hook requires kind='government_consumption'.")
-    original_values: np.ndarray | None = None
 
     def government_consumption_shock_hook(simulation: Simulation, year: int, month: int) -> None:
-        nonlocal original_values
         if country_code not in simulation.countries:
             raise ValueError(f"Government consumption shock cannot find country '{country_code}'.")
         country = simulation.countries[country_code]
-        column = "Real Government Consumption (Value)"
-        if column not in country.exogenous.national_accounts_during.columns:
-            raise ValueError(f"Cannot shock government consumption: missing exogenous column {column!r}.")
-        if original_values is None:
-            original_values = country.exogenous.national_accounts_during[column].to_numpy(dtype=float).copy()
-        country.exogenous.national_accounts_during.loc[:, column] = original_values
-        if not _active_period(spec, initial_year, time_unit, year, month):
-            return
-        # The exogenous government-consumption path includes the initial HDF5
-        # row. Simulation period p is realised in HDF5 row p + 1.
-        start = spec.period + 1
-        stop = min(start + spec.duration, len(original_values))
-        shocked = original_values.copy()
-        shocked[start:stop] = _shock_values(shocked[start:stop], spec=spec)
-        country.exogenous.national_accounts_during.loc[:, column] = shocked
-        logging.info("Applied government consumption shock %s at %s-%s", spec.name, year, month)
+        consumption_functions = country.government_entities.functions
+        current = consumption_functions["consumption"]
+        if not isinstance(current, _GovernmentConsumptionShockProxy):
+            current = _GovernmentConsumptionShockProxy(current, spec)
+            consumption_functions["consumption"] = current
+        current.active = _active_period(spec, initial_year, time_unit, year, month)
+        if current.active:
+            logging.info("Applied government consumption shock %s at %s-%s", spec.name, year, month)
 
     return government_consumption_shock_hook
 

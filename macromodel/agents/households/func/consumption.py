@@ -641,10 +641,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         mortgage_debt_term_real = -self.mortgage_debt_propensity * mortgage_debt_ratio * real_spendable_income
         mortgage_payment_term_real = -self.mortgage_payment_propensity * np.maximum(real_mortgage_payment, 0.0)
         house_price_term_real = (
-            self.house_price_propensity
-            * housing_wealth_ratio
-            * house_price_growth_arr
-            * real_spendable_income
+            self.house_price_propensity * housing_wealth_ratio * house_price_growth_arr * real_spendable_income
         )
         interest_rate_cashflow_term_real = np.zeros_like(real_spendable_income)
         if self.interest_rate_cashflow_propensity is not None:
@@ -665,9 +662,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             + interest_rate_cashflow_term_real
             + uncertainty_term_real
         )
-        partial_adjustment_gap_real = self.partial_adjustment_speed * (
-            long_run_target_real - real_lagged_consumption
-        )
+        partial_adjustment_gap_real = self.partial_adjustment_speed * (long_run_target_real - real_lagged_consumption)
         target_total_real = np.maximum(0.0, real_lagged_consumption + partial_adjustment_gap_real)
         target_total = target_total_real * nominalizer
 

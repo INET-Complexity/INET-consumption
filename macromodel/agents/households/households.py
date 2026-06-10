@@ -702,7 +702,9 @@ class Households(Agent):
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
-            mortgage_payment = np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
+            mortgage_payment = (
+                np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
+            )
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
@@ -774,7 +776,10 @@ class Households(Agent):
         n_households = self.ts.current("n_households")
         diagnostic_keys = self._target_consumption_diagnostic_keys()
 
-        if consumption_function is None or getattr(consumption_function, "last_target_consumption_components", None) is None:
+        if (
+            consumption_function is None
+            or getattr(consumption_function, "last_target_consumption_components", None) is None
+        ):
             zero_series = np.zeros(n_households)
             for key in diagnostic_keys:
                 if replace_current:

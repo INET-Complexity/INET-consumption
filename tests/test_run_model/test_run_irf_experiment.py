@@ -106,20 +106,29 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
         (12, "unemployment_rate"),
     ]
     assert run_index["shock_name"].tolist() == ["gov", "tax", "rate", "unemp"]
-    assert panel.loc[
-        (panel["shock_name"] == "gov") & (panel["variable"] == "government_consumption") & (panel["horizon"] == 0),
-        "delta",
-    ].iat[0] == 5.0
-    assert panel.loc[
-        (panel["shock_name"] == "tax") & (panel["variable"] == "household_income") & (panel["horizon"] == 0),
-        "delta",
-    ].iat[0] == -3.0
+    assert (
+        panel.loc[
+            (panel["shock_name"] == "gov") & (panel["variable"] == "government_consumption") & (panel["horizon"] == 0),
+            "delta",
+        ].iat[0]
+        == 5.0
+    )
+    assert (
+        panel.loc[
+            (panel["shock_name"] == "tax") & (panel["variable"] == "household_income") & (panel["horizon"] == 0),
+            "delta",
+        ].iat[0]
+        == -3.0
+    )
     assert panel.loc[
         (panel["shock_name"] == "rate") & (panel["variable"] == "policy_rate") & (panel["horizon"] == 0),
         "delta",
     ].iat[0] == pytest.approx(0.01)
-    assert panel.loc[
-        (panel["shock_name"] == "unemp") & (panel["variable"] == "unemployment_rate") & (panel["horizon"] == 0),
-        "delta",
-    ].iat[0] == 0.05
+    assert (
+        panel.loc[
+            (panel["shock_name"] == "unemp") & (panel["variable"] == "unemployment_rate") & (panel["horizon"] == 0),
+            "delta",
+        ].iat[0]
+        == 0.05
+    )
     assert set(summary["shock_name"]) == {"gov", "tax", "rate", "unemp"}

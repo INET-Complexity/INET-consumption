@@ -44,7 +44,7 @@ class ShockSpec:
 
 
 class _PolicyRateShockProxy:
-    """Policy-rate function wrapper that injects a time-varying additive shock."""
+    """Policy-rate function wrapper that injects a period-rate additive shock."""
 
     def __init__(self, wrapped) -> None:
         self.wrapped = wrapped
@@ -74,6 +74,12 @@ def _year_month_to_period(initial_year: int, time_unit: int, year: int, month: i
 def _active_period(spec: ShockSpec, initial_year: int, time_unit: int, year: int, month: int) -> bool:
     period = _year_month_to_period(initial_year, time_unit, year, month)
     return spec.period <= period < spec.period + spec.duration
+
+
+def _periods_per_year(time_unit: int) -> int:
+    if time_unit <= 0 or 12 % time_unit != 0:
+        raise ValueError("time_unit must be a positive divisor of 12.")
+    return 12 // int(time_unit)
 
 
 def _shock_values(values: np.ndarray, *, spec: ShockSpec) -> np.ndarray:
@@ -186,12 +192,13 @@ def create_policy_rate_shock_hook(
     time_unit: int,
     spec: ShockSpec,
 ) -> Callable[[Simulation, int, int], None]:
-    """Create a prehook that adds an additive shock to the policy-rate rule."""
+    """Create a prehook that adds an annualized rate-point shock to policy rates."""
 
     if spec.kind != "policy_rate":
         raise ValueError("Policy-rate hook requires kind='policy_rate'.")
     if spec.mode != "additive":
-        raise ValueError("Policy-rate shocks are additive rate-point shocks.")
+        raise ValueError("Policy-rate shocks are additive annual rate-point shocks.")
+    period_shock = float(spec.magnitude) / float(_periods_per_year(time_unit))
 
     def policy_rate_shock_hook(simulation: Simulation, year: int, month: int) -> None:
         if country_code not in simulation.countries:
@@ -201,9 +208,16 @@ def create_policy_rate_shock_hook(
         if not isinstance(current, _PolicyRateShockProxy):
             current = _PolicyRateShockProxy(current)
             policy_functions["policy_rate"] = current
-        current.shock = float(spec.magnitude) if _active_period(spec, initial_year, time_unit, year, month) else 0.0
+        current.shock = period_shock if _active_period(spec, initial_year, time_unit, year, month) else 0.0
         if current.shock:
-            logging.info("Applied policy-rate shock %s at %s-%s: %s", spec.name, year, month, current.shock)
+            logging.info(
+                "Applied policy-rate shock %s at %s-%s: annual=%s period=%s",
+                spec.name,
+                year,
+                month,
+                spec.magnitude,
+                current.shock,
+            )
 
     return policy_rate_shock_hook
 

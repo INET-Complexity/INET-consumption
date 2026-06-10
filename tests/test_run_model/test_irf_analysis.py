@@ -10,7 +10,13 @@ RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
-from src.irf_analysis import DEFAULT_IRF_VARIABLES, IRFVariable, build_irf_panel, summarize_irf_panel  # noqa: E402
+from src.irf_analysis import (  # noqa: E402
+    DEFAULT_IRF_VARIABLES,
+    IRFVariable,
+    build_irf_panel,
+    summarize_irf_panel,
+    write_irf_plots,
+)
 
 
 def _write_h5(path: Path, *, values: np.ndarray) -> None:
@@ -18,10 +24,12 @@ def _write_h5(path: Path, *, values: np.ndarray) -> None:
         handle.create_dataset("FRA/households/consumption", data=values)
 
 
-def _write_default_irf_h5(path: Path, *, baseline: bool) -> None:
+def _write_default_irf_h5(path: Path, *, baseline: bool, omitted_variable: str | None = None) -> None:
     offset = 0.0 if baseline else 10.0
     with h5py.File(path, "w") as handle:
         for index, variable in enumerate(DEFAULT_IRF_VARIABLES, start=1):
+            if variable.name == omitted_variable:
+                continue
             dataset_path = variable.h5_path.format(country="FRA")
             values = np.array(
                 [
@@ -120,3 +128,67 @@ def test_default_irf_variables_match_saved_h5_paths(tmp_path):
     assert set(panel["variable"]) == set(expected_saved_paths)
     assert len(panel) == len(expected_saved_paths) * 2
     assert panel["delta"].tolist() == pytest.approx([10.0] * len(panel))
+
+
+def test_build_irf_panel_raises_when_default_variable_is_missing(tmp_path):
+    baseline = tmp_path / "baseline.h5"
+    shock = tmp_path / "shock.h5"
+    _write_default_irf_h5(baseline, baseline=True, omitted_variable="gdp_income")
+    _write_default_irf_h5(shock, baseline=False)
+
+    with pytest.raises(ValueError, match="gdp_income"):
+        build_irf_panel(
+            baseline_h5=baseline,
+            shock_h5=shock,
+            seed=12,
+            shock_name="test",
+            shock_kind="policy_rate",
+            shock_period=1,
+            shock_magnitude=0.01,
+            horizon_periods=2,
+            country_code="FRA",
+        )
+
+
+def test_build_irf_panel_can_skip_missing_optional_variables(tmp_path):
+    baseline = tmp_path / "baseline.h5"
+    shock = tmp_path / "shock.h5"
+    _write_h5(baseline, values=np.array([[10.0], [10.0]]))
+    _write_h5(shock, values=np.array([[10.0], [12.0]]))
+
+    panel = build_irf_panel(
+        baseline_h5=baseline,
+        shock_h5=shock,
+        seed=12,
+        shock_name="test",
+        shock_kind="policy_rate",
+        shock_period=1,
+        shock_magnitude=0.01,
+        horizon_periods=1,
+        country_code="FRA",
+        variables=(
+            IRFVariable("consumption", "{country}/households/consumption", "sum"),
+            IRFVariable("missing", "{country}/missing", "sum"),
+        ),
+        strict=False,
+    )
+
+    assert panel["variable"].tolist() == ["consumption"]
+
+
+def test_pct_irf_plots_skip_rate_variables_by_default(tmp_path):
+    summary = pd.DataFrame(
+        {
+            "shock_name": ["rate", "rate"],
+            "variable": ["household_consumption", "policy_rate"],
+            "horizon": [0, 0],
+            "pct_delta_mean": [0.1, 0.2],
+            "pct_delta_p10": [0.05, 0.15],
+            "pct_delta_p90": [0.15, 0.25],
+        }
+    )
+
+    write_irf_plots(summary, tmp_path, value_column="pct_delta")
+
+    assert (tmp_path / "rate_household_consumption_pct_delta.html").exists()
+    assert not (tmp_path / "rate_policy_rate_pct_delta.html").exists()

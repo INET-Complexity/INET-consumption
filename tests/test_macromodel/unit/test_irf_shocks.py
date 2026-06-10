@@ -5,6 +5,8 @@ import pandas as pd
 import pytest
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
+from macromodel.configurations import CountryConfiguration, SimulationConfiguration
+from macromodel.simulation import Simulation
 from macromodel.utils.prehooks.irf_shocks import (
     ShockSpec,
     create_government_consumption_shock_hook,
@@ -19,7 +21,7 @@ class DummyPolicyRate:
         return 0.02
 
 
-def test_policy_rate_shock_adds_rate_points_only_during_active_period():
+def test_policy_rate_shock_converts_annual_rate_points_to_period_rate_points():
     spec = ShockSpec(name="rate", kind="policy_rate", period=1, magnitude=0.01)
     central_bank = SimpleNamespace(functions={"policy_rate": DummyPolicyRate()})
     simulation = SimpleNamespace(countries={"FRA": SimpleNamespace(central_bank=central_bank)})
@@ -28,9 +30,35 @@ def test_policy_rate_shock_adds_rate_points_only_during_active_period():
     hook(simulation, 2020, 1)
     assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.02)
     hook(simulation, 2020, 4)
-    assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.03)
+    assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.0225)
     hook(simulation, 2020, 7)
     assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.02)
+
+
+def test_policy_rate_shock_perturbs_real_simulation_policy_rate(datawrapper):
+    spec = ShockSpec(name="rate", kind="policy_rate", period=0, magnitude=0.01)
+    configuration = SimulationConfiguration(
+        country_configurations={"FRA": CountryConfiguration()},
+        seed=12,
+        t_max=2,
+    )
+    baseline = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    shocked = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
+    shocked.prehooks.append(
+        create_policy_rate_shock_hook(
+            country_code="FRA",
+            initial_year=datawrapper.configuration.year,
+            time_unit=datawrapper.time_unit,
+            spec=spec,
+        )
+    )
+
+    baseline.run()
+    shocked.run()
+
+    baseline_policy_rate = baseline.countries["FRA"].central_bank.ts.historic("policy_rate")[1][0]
+    shocked_policy_rate = shocked.countries["FRA"].central_bank.ts.historic("policy_rate")[1][0]
+    assert shocked_policy_rate - baseline_policy_rate == pytest.approx(0.01 / 4.0)
 
 
 def test_tax_rate_shock_restores_baseline_after_duration():
@@ -60,13 +88,9 @@ def test_government_consumption_shock_targets_realised_response_rows():
     hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
 
     hook(simulation, 2020, 1)
-    np.testing.assert_allclose(
-        national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0, 130.0]
-    )
+    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0, 130.0])
     hook(simulation, 2020, 4)
-    np.testing.assert_allclose(
-        national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 132.0, 143.0]
-    )
+    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 132.0, 143.0])
 
 
 def test_unemployment_rate_shock_separates_sampled_employed_workers():

@@ -34,6 +34,7 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("gdp_income", "{country}/economy/gdp_income", "first"),
     IRFVariable("unemployment_rate", "{country}/economy/unemployment_rate", "first"),
 )
+RATE_IRF_VARIABLES = frozenset({"policy_rate", "unemployment_rate"})
 
 
 def _read_h5_array_from_handle(handle: h5py.File, path_template: str, *, country_code: str) -> np.ndarray | None:
@@ -69,6 +70,7 @@ def build_irf_panel(
     horizon_periods: int,
     country_code: str,
     variables: tuple[IRFVariable, ...] = DEFAULT_IRF_VARIABLES,
+    strict: bool = True,
 ) -> pd.DataFrame:
     """Build a long impulse-response panel from paired baseline and shocked HDF5s."""
 
@@ -78,11 +80,19 @@ def build_irf_panel(
         raise ValueError("horizon_periods must be positive.")
 
     rows: list[dict[str, float | int | str]] = []
+    missing: list[str] = []
     with h5py.File(baseline_h5, "r") as baseline_handle, h5py.File(shock_h5, "r") as shock_handle:
         for variable in variables:
+            dataset_path = variable.h5_path.format(country=country_code)
             baseline_raw = _read_h5_array_from_handle(baseline_handle, variable.h5_path, country_code=country_code)
             shock_raw = _read_h5_array_from_handle(shock_handle, variable.h5_path, country_code=country_code)
             if baseline_raw is None or shock_raw is None:
+                missing_sides = []
+                if baseline_raw is None:
+                    missing_sides.append("baseline")
+                if shock_raw is None:
+                    missing_sides.append("shock")
+                missing.append(f"{variable.name} at {dataset_path} missing from {', '.join(missing_sides)}")
                 continue
             baseline = _as_series(baseline_raw, transform=variable.transform)
             shocked = _as_series(shock_raw, transform=variable.transform)
@@ -112,6 +122,8 @@ def build_irf_panel(
                         "pct_delta": pct_delta,
                     }
                 )
+    if strict and missing:
+        raise ValueError("Missing IRF HDF5 variables: " + "; ".join(missing))
     return pd.DataFrame(rows)
 
 
@@ -134,7 +146,13 @@ def summarize_irf_panel(panel: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
 
-def write_irf_plots(summary: pd.DataFrame, output_dir: str | Path, *, value_column: str = "delta") -> None:
+def write_irf_plots(
+    summary: pd.DataFrame,
+    output_dir: str | Path,
+    *,
+    value_column: str = "delta",
+    skip_variables: frozenset[str] | set[str] | tuple[str, ...] | None = None,
+) -> None:
     """Write one Plotly IRF chart per shock and variable."""
 
     if value_column not in {"delta", "pct_delta"}:
@@ -143,10 +161,13 @@ def write_irf_plots(summary: pd.DataFrame, output_dir: str | Path, *, value_colu
     output_path.mkdir(parents=True, exist_ok=True)
     if summary.empty:
         return
+    skipped = RATE_IRF_VARIABLES if skip_variables is None and value_column == "pct_delta" else (skip_variables or ())
     mean_col = f"{value_column}_mean"
     p10_col = f"{value_column}_p10"
     p90_col = f"{value_column}_p90"
     for (shock_name, variable), group in summary.groupby(["shock_name", "variable"], dropna=False):
+        if variable in skipped:
+            continue
         group = group.sort_values("horizon")
         fig = go.Figure()
         fig.add_trace(

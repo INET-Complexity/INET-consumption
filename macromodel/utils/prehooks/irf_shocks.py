@@ -101,6 +101,11 @@ def _firm_employee_counts(corresponding_firm: np.ndarray, n_firms: int) -> np.nd
     return np.bincount(valid_firms, minlength=int(n_firms))
 
 
+def _as_scalar_int(value) -> int:
+    values = np.asarray(value)
+    return int(values.reshape(-1)[0]) if values.ndim else int(values)
+
+
 def _remove_from_firm_employment(firm_employments: list, *, firm_id: int, individual_id: int) -> None:
     employment = firm_employments[int(firm_id)]
     try:
@@ -254,7 +259,7 @@ def create_unemployment_rate_shock_hook(
         activity = country.individuals.states["Activity Status"]
         corresponding_firm = country.individuals.states["Corresponding Firm ID"]
         firm_employments = country.firms.states["Employments"]
-        n_firms = int(country.firms.ts.current("n_firms")[0])
+        n_firms = _as_scalar_int(country.firms.ts.current("n_firms"))
         firm_counts = _firm_employee_counts(corresponding_firm, n_firms)
         employed = activity == ActivityStatus.EMPLOYED
         unemployed = activity == ActivityStatus.UNEMPLOYED

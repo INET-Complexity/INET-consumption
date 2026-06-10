@@ -29,8 +29,10 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("desired_government_consumption", "{country}/government_entities/desired_consumption_in_lcu", "sum"),
     IRFVariable("policy_rate", "{country}/central_Bank/policy_rate", "first"),
     IRFVariable("cpi", "{country}/economy/cpi_fixed_basket", "first"),
-    IRFVariable("gdp", "{country}/economy/gdp", "first"),
-    IRFVariable("unemployment_rate", "{country}/exogenous/unemployment_rate", "first"),
+    IRFVariable("gdp_output", "{country}/economy/gdp_output", "first"),
+    IRFVariable("gdp_expenditure", "{country}/economy/gdp_expenditure", "first"),
+    IRFVariable("gdp_income", "{country}/economy/gdp_income", "first"),
+    IRFVariable("unemployment_rate", "{country}/economy/unemployment_rate", "first"),
 )
 
 

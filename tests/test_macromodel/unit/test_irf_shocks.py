@@ -4,11 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.utils.prehooks.irf_shocks import (
     ShockSpec,
     create_government_consumption_shock_hook,
     create_policy_rate_shock_hook,
     create_tax_rate_shock_hook,
+    create_unemployment_rate_shock_hook,
 )
 
 
@@ -61,3 +63,35 @@ def test_government_consumption_shock_changes_exogenous_path_only_while_active()
     np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0])
     hook(simulation, 2020, 4)
     np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 121.0, 132.0])
+
+
+def test_unemployment_rate_shock_separates_sampled_employed_workers():
+    spec = ShockSpec(name="unemp", kind="unemployment_rate", period=0, magnitude=0.25)
+    individuals = SimpleNamespace(
+        states={
+            "Activity Status": np.array(
+                [
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.EMPLOYED,
+                    ActivityStatus.UNEMPLOYED,
+                ],
+                dtype=object,
+            ),
+            "Corresponding Firm ID": np.array([0, 0, 1, -1]),
+            "Started New Job": np.array([False, False, False, False]),
+            "Offered Wage of Accepted Job": np.array([10.0, 10.0, 10.0, 0.0]),
+        }
+    )
+    firms = SimpleNamespace(states={"Employments": [[0, 1], [2]]}, ts=SimpleNamespace(current=lambda _name: [2]))
+    country = SimpleNamespace(individuals=individuals, firms=firms)
+    simulation = SimpleNamespace(countries={"FRA": country}, random_seed=12)
+    hook = create_unemployment_rate_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    hook(simulation, 2020, 1)
+
+    unemployed = individuals.states["Activity Status"] == ActivityStatus.UNEMPLOYED
+    assert unemployed.sum() == 2
+    assert individuals.states["Corresponding Firm ID"][unemployed].tolist() == [-1, -1]
+    assert len(firms.states["Employments"][0]) == 1
+    assert firms.states["Employments"][1] == [2]

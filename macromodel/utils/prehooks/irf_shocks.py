@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from hashlib import blake2b
 from typing import Literal
 
 import numpy as np
 
+from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.simulation import Simulation
 
 ShockKind = Literal[
@@ -79,6 +81,30 @@ def _shock_values(values: np.ndarray, *, spec: ShockSpec) -> np.ndarray:
     if spec.mode == "multiplicative":
         return values * (1.0 + float(spec.magnitude))
     return values + float(spec.magnitude)
+
+
+def _stable_shock_seed(base_seed: int | None, spec: ShockSpec, period: int) -> int:
+    seed_material = f"{base_seed or 0}:{spec.name}:{spec.kind}:{spec.period}:{spec.duration}:{period}".encode()
+    digest = blake2b(seed_material, digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="little", signed=False) % (2**32)
+
+
+def _firm_employee_counts(corresponding_firm: np.ndarray, n_firms: int) -> np.ndarray:
+    valid_firms = np.asarray(corresponding_firm, dtype=int)
+    valid_firms = valid_firms[valid_firms >= 0]
+    return np.bincount(valid_firms, minlength=int(n_firms))
+
+
+def _remove_from_firm_employment(firm_employments: list, *, firm_id: int, individual_id: int) -> None:
+    employment = firm_employments[int(firm_id)]
+    try:
+        employment.remove(int(individual_id))
+        return
+    except AttributeError:
+        pass
+    except ValueError:
+        return
+    firm_employments[int(firm_id)] = [worker for worker in employment if int(worker) != int(individual_id)]
 
 
 def create_government_consumption_shock_hook(
@@ -187,28 +213,68 @@ def create_unemployment_rate_shock_hook(
     time_unit: int,
     spec: ShockSpec,
 ) -> Callable[[Simulation, int, int], None]:
-    """Create a prehook that shocks the exogenous unemployment-rate path."""
+    """Create a prehook that separates sampled employed workers.
+
+    For ``mode='additive'``, ``magnitude`` is an unemployment-rate point shock:
+    ``0.01`` attempts to separate about 1 percent of the labour force. For
+    ``mode='multiplicative'``, ``magnitude`` is the share of currently employed
+    workers to separate. The normal labour market can rehire separated workers,
+    so the realised unemployment-rate IRF remains endogenous.
+    """
 
     if spec.kind != "unemployment_rate":
         raise ValueError("Unemployment-rate hook requires kind='unemployment_rate'.")
-    original_values: np.ndarray | None = None
+    if spec.magnitude <= 0.0:
+        raise ValueError("Unemployment-rate shock magnitude must be strictly positive.")
+    applied_periods: set[int] = set()
 
     def unemployment_rate_shock_hook(simulation: Simulation, year: int, month: int) -> None:
-        nonlocal original_values
         if country_code not in simulation.countries:
             raise ValueError(f"Unemployment-rate shock cannot find country '{country_code}'.")
-        country = simulation.countries[country_code]
-        if original_values is None:
-            original_values = country.exogenous.unemployment_rate_during.to_numpy(dtype=float).copy()
-        country.exogenous.unemployment_rate_during.iloc[:, :] = original_values
-        if not _active_period(spec, initial_year, time_unit, year, month):
+        period = _year_month_to_period(initial_year, time_unit, year, month)
+        if period in applied_periods or not _active_period(spec, initial_year, time_unit, year, month):
             return
-        start = spec.period
-        stop = min(spec.period + spec.duration, len(original_values))
-        shocked = original_values.copy()
-        shocked[start:stop] = _shock_values(shocked[start:stop], spec=spec)
-        country.exogenous.unemployment_rate_during.iloc[:, :] = shocked
-        logging.info("Applied unemployment-rate shock %s at %s-%s", spec.name, year, month)
+        country = simulation.countries[country_code]
+        activity = country.individuals.states["Activity Status"]
+        corresponding_firm = country.individuals.states["Corresponding Firm ID"]
+        firm_employments = country.firms.states["Employments"]
+        n_firms = int(country.firms.ts.current("n_firms")[0])
+        firm_counts = _firm_employee_counts(corresponding_firm, n_firms)
+        employed = activity == ActivityStatus.EMPLOYED
+        unemployed = activity == ActivityStatus.UNEMPLOYED
+        labour_force = int(np.sum(employed | unemployed))
+        employed_ids = np.flatnonzero(employed & (corresponding_firm >= 0) & (firm_counts[corresponding_firm] > 1))
+        if labour_force == 0 or employed_ids.size == 0:
+            applied_periods.add(period)
+            return
+
+        if spec.mode == "multiplicative":
+            n_to_separate = int(np.ceil(float(spec.magnitude) * float(np.sum(employed))))
+        else:
+            n_to_separate = int(np.ceil(float(spec.magnitude) * float(labour_force)))
+        n_to_separate = max(0, min(n_to_separate, int(employed_ids.size)))
+        if n_to_separate == 0:
+            applied_periods.add(period)
+            return
+
+        rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, period))
+        separated_ids = rng.choice(employed_ids, size=n_to_separate, replace=False)
+        for individual_id in separated_ids:
+            firm_id = int(corresponding_firm[int(individual_id)])
+            activity[int(individual_id)] = ActivityStatus.UNEMPLOYED
+            corresponding_firm[int(individual_id)] = -1
+            _remove_from_firm_employment(firm_employments, firm_id=firm_id, individual_id=int(individual_id))
+
+        country.individuals.states["Started New Job"][separated_ids] = False
+        country.individuals.states["Offered Wage of Accepted Job"][separated_ids] = 0.0
+        applied_periods.add(period)
+        logging.info(
+            "Applied unemployment separation shock %s at %s-%s: separated=%s",
+            spec.name,
+            year,
+            month,
+            n_to_separate,
+        )
 
     return unemployment_rate_shock_hook
 

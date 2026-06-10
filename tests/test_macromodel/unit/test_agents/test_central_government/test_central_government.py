@@ -131,6 +131,45 @@ class TestCentralGovernment:
     #     #     226.37, abs=1e-1
     #     # )
 
+    def test__compute_taxes_grosses_up_net_employee_income_for_labour_taxes(self, test_central_government):
+        test_central_government.states["Income Tax"] = 0.2
+        test_central_government.states["Employee Social Insurance Tax"] = 0.1
+        test_central_government.states["Employer Social Insurance Tax"] = 0.3
+        test_central_government.states["Value-added Tax"] = 0.0
+        test_central_government.states["Capital Formation Tax"] = 0.0
+        test_central_government.states["Export Tax"] = 0.0
+        test_central_government.states["Profit Tax"] = 0.0
+
+        net_employee_income = 72.0
+        unemployed_employee_income = 100.0
+        net_factor = 1 - 0.1 - 0.2 * (1 - 0.1)
+        gross_employee_income = net_employee_income / net_factor
+
+        rent_paid = 10.0
+        financial_income = np.array([5.0, 15.0])
+
+        test_central_government.compute_taxes(
+            current_ind_employee_income=np.array([net_employee_income, unemployed_employee_income]),
+            current_total_rent_paid=rent_paid,
+            current_income_financial_assets=financial_income,
+            current_ind_activity=np.array([ActivityStatus.EMPLOYED, ActivityStatus.UNEMPLOYED]),
+            current_ind_realised_cons=np.array([50.0, 100.0]),
+            current_bank_profits=np.array([10.0]),
+            current_firm_production=np.array([200.0]),
+            current_firm_price=np.array([1.0]),
+            current_firm_profits=np.array([20.0]),
+            current_firm_industries=np.array([0]),
+            current_household_new_real_wealth=np.array([15.0]),
+            taxes_less_subsidies_rates=np.array([0.0]),
+            current_total_exports=100.0,
+        )
+
+        expected_income_tax = 0.2 * (1 - 0.1) * gross_employee_income + 0.2 * rent_paid + 0.2 * financial_income.sum()
+        assert np.isclose(test_central_government.ts.current("taxes_income")[0], expected_income_tax)
+        assert np.isclose(test_central_government.ts.current("taxes_employee_si")[0], 0.1 * gross_employee_income)
+        assert np.isclose(test_central_government.ts.current("taxes_employer_si")[0], 0.3 * gross_employee_income)
+        assert np.isclose(test_central_government.ts.current("taxes_rental_income")[0], 0.2 * rent_paid)
+
     def test__current_policy_rate_debt_interest_preserves_legacy_rule(self):
         rule = CurrentPolicyRateDebtInterest()
         assert (

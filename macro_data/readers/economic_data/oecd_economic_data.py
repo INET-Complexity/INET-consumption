@@ -126,6 +126,8 @@ force_tau_income = {
     "KHM": 0.0,
     "CHN": 0.1,
     "CRI": 0.0,
+    # France 2014 OECD TABLE_I6, ALL_IN_RATE_MAR_TWO_CH.
+    "FRA": 0.2191,
     "HRV": 0.2,
     "CHL": 0.0,
     "CYP": 0.2,
@@ -586,6 +588,8 @@ class OECDEconData:
 
         if isinstance(country, Region):
             country = country.parent_country
+        if isinstance(country, Country):
+            country = country.value
 
         if country in force_tau_income:
             return force_tau_income[country]

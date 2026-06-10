@@ -214,25 +214,22 @@ def build_household_account_panel(
     panel["runtime_total_debt_components"] = panel["runtime_mortgage_debt"] + panel["runtime_consumption_loan_debt"]
     panel["runtime_net_wealth_identity"] = panel["runtime_total_assets"] - panel["runtime_total_debt_components"]
 
-    nominal_columns = (
-        list(PAPER_ACCOUNT_COLUMNS)
-        + [
-            "model_spendable_income",
-            "runtime_consumption",
-            "runtime_wealth_deposits",
-            "runtime_wealth_other_financial_assets",
-            "runtime_wealth_main_residence",
-            "runtime_wealth_other_properties",
-            "runtime_mortgage_debt",
-            "runtime_consumption_loan_debt",
-            "runtime_debt",
-            "runtime_net_wealth",
-            "runtime_gross_assets",
-            "runtime_other_real_assets",
-            "runtime_total_assets",
-            "runtime_total_debt_components",
-        ]
-    )
+    nominal_columns = list(PAPER_ACCOUNT_COLUMNS) + [
+        "model_spendable_income",
+        "runtime_consumption",
+        "runtime_wealth_deposits",
+        "runtime_wealth_other_financial_assets",
+        "runtime_wealth_main_residence",
+        "runtime_wealth_other_properties",
+        "runtime_mortgage_debt",
+        "runtime_consumption_loan_debt",
+        "runtime_debt",
+        "runtime_net_wealth",
+        "runtime_gross_assets",
+        "runtime_other_real_assets",
+        "runtime_total_assets",
+        "runtime_total_debt_components",
+    ]
     for column in nominal_columns:
         panel[f"real_{column}_fixed_cpi"] = panel[column] / panel["cpi_fixed_basket"]
         panel[f"real_{column}_transaction_cpi"] = panel[column] / panel["cpi_transaction"]
@@ -299,8 +296,14 @@ def build_reconciliation(panel: pd.DataFrame, metadata: dict[str, object]) -> pd
         ("mean_runtime_minus_paper_assets", float(runtime_paper_assets_gap.mean())),
         ("mean_runtime_minus_paper_debt", float(runtime_paper_debt_gap.mean())),
         ("mean_runtime_minus_paper_net_wealth", float((panel["runtime_net_wealth"] - panel["nw"]).mean())),
-        ("mean_consumption_loan_debt_minus_paper_db", float((panel["runtime_consumption_loan_debt"] - panel["db"]).mean())),
-        ("max_abs_runtime_debt_component_gap", float((panel["runtime_debt"] - panel["runtime_total_debt_components"]).abs().max())),
+        (
+            "mean_consumption_loan_debt_minus_paper_db",
+            float((panel["runtime_consumption_loan_debt"] - panel["db"]).mean()),
+        ),
+        (
+            "max_abs_runtime_debt_component_gap",
+            float((panel["runtime_debt"] - panel["runtime_total_debt_components"]).abs().max()),
+        ),
         (
             "max_abs_runtime_net_wealth_identity_gap",
             float((panel["runtime_net_wealth"] - panel["runtime_net_wealth_identity"]).abs().max()),

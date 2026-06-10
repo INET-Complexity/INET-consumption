@@ -45,7 +45,7 @@ def test_tax_rate_shock_restores_baseline_after_duration():
     assert government.states["Income Tax"] == pytest.approx(0.20)
 
 
-def test_government_consumption_shock_changes_exogenous_path_only_while_active():
+def test_government_consumption_shock_targets_realised_response_rows():
     spec = ShockSpec(
         name="gov",
         kind="government_consumption",
@@ -54,15 +54,19 @@ def test_government_consumption_shock_changes_exogenous_path_only_while_active()
         duration=2,
         mode="multiplicative",
     )
-    national_accounts = pd.DataFrame({"Real Government Consumption (Value)": [100.0, 110.0, 120.0]})
+    national_accounts = pd.DataFrame({"Real Government Consumption (Value)": [100.0, 110.0, 120.0, 130.0]})
     country = SimpleNamespace(exogenous=SimpleNamespace(national_accounts_during=national_accounts))
     simulation = SimpleNamespace(countries={"FRA": country})
     hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
 
     hook(simulation, 2020, 1)
-    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0])
+    np.testing.assert_allclose(
+        national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 120.0, 130.0]
+    )
     hook(simulation, 2020, 4)
-    np.testing.assert_allclose(national_accounts["Real Government Consumption (Value)"], [100.0, 121.0, 132.0])
+    np.testing.assert_allclose(
+        national_accounts["Real Government Consumption (Value)"], [100.0, 110.0, 132.0, 143.0]
+    )
 
 
 def test_unemployment_rate_shock_separates_sampled_employed_workers():

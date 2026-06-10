@@ -133,8 +133,10 @@ def create_government_consumption_shock_hook(
         country.exogenous.national_accounts_during.loc[:, column] = original_values
         if not _active_period(spec, initial_year, time_unit, year, month):
             return
-        start = spec.period
-        stop = min(spec.period + spec.duration, len(original_values))
+        # The exogenous government-consumption path includes the initial HDF5
+        # row. Simulation period p is realised in HDF5 row p + 1.
+        start = spec.period + 1
+        stop = min(start + spec.duration, len(original_values))
         shocked = original_values.copy()
         shocked[start:stop] = _shock_values(shocked[start:stop], spec=spec)
         country.exogenous.national_accounts_during.loc[:, column] = shocked

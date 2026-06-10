@@ -846,6 +846,7 @@ class Country:
             initial_taxes=initial_additional_taxes,
             house_price_index=self.economy.ts.current("hpi")[0],
             house_price_growth=self.economy.ts.current("hpi_inflation")[0],
+            mortgage_payment=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
         )
 
         if replace_current:

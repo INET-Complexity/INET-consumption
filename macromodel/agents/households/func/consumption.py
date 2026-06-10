@@ -519,10 +519,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     """Credit-augmented household consumption implementation.
 
     This rule keeps the existing household consumption hook active while exposing
-    a paper-oriented target-consumption decomposition. The long-run target uses
-    current spendable income plus balance-sheet and housing terms. The final
-    target is a partial adjustment toward that long-run level, and the module
-    records the decomposition and a formula-implied MPC for diagnostics.
+    a paper-oriented target-consumption decomposition. The provisional long-run
+    target uses real spendable income and real balance-sheet ratios over income.
+    Stage 3 learning and interest-rate inputs that are not available yet are
+    retained as explicit zero placeholders in the decomposition.
     """
 
     def __init__(
@@ -531,15 +531,16 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         consumption_smoothing_window: int,
         minimum_consumption_fraction: float,
         elasticity_of_substitution: float = 1.0,
-        permanent_income_propensity: float = 0.85,
+        permanent_income_propensity: float = 1.0,
         liquid_wealth_propensity: float = 0.04,
         illiquid_wealth_propensity: float = 0.02,
         housing_wealth_propensity: float = 0.02,
-        rent_propensity: float = 0.05,
+        rent_propensity: float = 1.0,
         mortgage_debt_propensity: float = 0.03,
-        mortgage_payment_propensity: float = 0.08,
+        mortgage_payment_propensity: float = 1.0,
         house_price_propensity: float = 0.02,
-        uncertainty_propensity: float = 0.0,
+        interest_rate_cashflow_propensity: float | None = None,
+        uncertainty_propensity: float | None = None,
         partial_adjustment_speed: float = 0.5,
     ):
         super().__init__(
@@ -556,6 +557,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.mortgage_debt_propensity = mortgage_debt_propensity
         self.mortgage_payment_propensity = mortgage_payment_propensity
         self.house_price_propensity = house_price_propensity
+        self.interest_rate_cashflow_propensity = interest_rate_cashflow_propensity
         self.uncertainty_propensity = uncertainty_propensity
         self.partial_adjustment_speed = partial_adjustment_speed
         self.last_target_consumption_components: dict[str, np.ndarray] | None = None
@@ -575,6 +577,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     def _evaluate_target(
         self,
         income: np.ndarray,
+        household_benefits: np.ndarray,
         lagged_consumption: np.ndarray,
         liquid_wealth: np.ndarray,
         illiquid_wealth: np.ndarray,
@@ -584,8 +587,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         mortgage_payment: np.ndarray,
         house_price_index: float | np.ndarray | None,
         house_price_growth: float | np.ndarray | None,
+        current_cpi: float,
+        initial_cpi: float,
+        expected_inflation: float,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
+        household_benefits = np.asarray(household_benefits, dtype=float)
         lagged_consumption = np.asarray(lagged_consumption, dtype=float)
         liquid_wealth = np.asarray(liquid_wealth, dtype=float)
         illiquid_wealth = np.asarray(illiquid_wealth, dtype=float)
@@ -597,43 +604,77 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         house_price_index_arr = self._as_array(income, house_price_index, default=1.0)
         house_price_growth_arr = self._as_array(income, house_price_growth, default=0.0)
 
-        permanent_income_term = self.permanent_income_propensity * income
-        liquid_wealth_term = self.liquid_wealth_propensity * np.maximum(liquid_wealth, 0.0)
-        illiquid_wealth_term = self.illiquid_wealth_propensity * np.maximum(illiquid_wealth, 0.0)
-        housing_wealth_term = self.housing_wealth_propensity * np.maximum(housing_wealth, 0.0)
-        rent_term = -self.rent_propensity * np.maximum(rent, 0.0)
-        mortgage_debt_term = -self.mortgage_debt_propensity * np.maximum(mortgage_debt, 0.0)
-        mortgage_payment_term = -self.mortgage_payment_propensity * np.maximum(mortgage_payment, 0.0)
-        house_price_term = self.house_price_propensity * np.maximum(housing_wealth, 0.0) * house_price_growth_arr
-        uncertainty_term = self.uncertainty_propensity * np.zeros_like(income)
+        cpi_ratio = current_cpi / initial_cpi if initial_cpi != 0.0 else 1.0
+        deflator = max(float(cpi_ratio), np.finfo(float).eps)
+        nominalizer = deflator * (1.0 + expected_inflation)
 
-        long_run_target = (
-            permanent_income_term
-            + liquid_wealth_term
-            + illiquid_wealth_term
-            + housing_wealth_term
-            + rent_term
-            + mortgage_debt_term
-            + mortgage_payment_term
-            + house_price_term
-            + uncertainty_term
+        real_spendable_income = np.maximum((income + household_benefits) / deflator, 0.0)
+        real_income_denominator = np.maximum(real_spendable_income, 1.0)
+        real_lagged_consumption = np.maximum(lagged_consumption / deflator, 0.0)
+        real_liquid_wealth = liquid_wealth / deflator
+        real_illiquid_wealth = illiquid_wealth / deflator
+        real_housing_wealth = housing_wealth / deflator
+        real_rent = rent / deflator
+        real_mortgage_debt = mortgage_debt / deflator
+        real_mortgage_payment = mortgage_payment / deflator
+
+        liquid_wealth_ratio = np.maximum(real_liquid_wealth, 0.0) / real_income_denominator
+        illiquid_wealth_ratio = np.maximum(real_illiquid_wealth, 0.0) / real_income_denominator
+        housing_wealth_ratio = np.maximum(real_housing_wealth, 0.0) / real_income_denominator
+        mortgage_debt_ratio = np.maximum(real_mortgage_debt, 0.0) / real_income_denominator
+
+        permanent_income_term_real = self.permanent_income_propensity * real_spendable_income
+        liquid_wealth_term_real = self.liquid_wealth_propensity * liquid_wealth_ratio * real_spendable_income
+        illiquid_wealth_term_real = self.illiquid_wealth_propensity * illiquid_wealth_ratio * real_spendable_income
+        housing_wealth_term_real = self.housing_wealth_propensity * housing_wealth_ratio * real_spendable_income
+        rent_term_real = -self.rent_propensity * np.maximum(real_rent, 0.0)
+        mortgage_debt_term_real = -self.mortgage_debt_propensity * mortgage_debt_ratio * real_spendable_income
+        mortgage_payment_term_real = -self.mortgage_payment_propensity * np.maximum(real_mortgage_payment, 0.0)
+        house_price_term_real = (
+            self.house_price_propensity
+            * housing_wealth_ratio
+            * house_price_growth_arr
+            * real_spendable_income
         )
-        partial_adjustment_gap = self.partial_adjustment_speed * (long_run_target - lagged_consumption)
-        target_total = np.maximum(0.0, lagged_consumption + partial_adjustment_gap)
+        interest_rate_cashflow_term_real = np.zeros_like(real_spendable_income)
+        if self.interest_rate_cashflow_propensity is not None:
+            interest_rate_cashflow_term_real *= self.interest_rate_cashflow_propensity
+        uncertainty_term_real = np.zeros_like(real_spendable_income)
+        if self.uncertainty_propensity is not None:
+            uncertainty_term_real *= self.uncertainty_propensity
+
+        long_run_target_real = (
+            permanent_income_term_real
+            + liquid_wealth_term_real
+            + illiquid_wealth_term_real
+            + housing_wealth_term_real
+            + rent_term_real
+            + mortgage_debt_term_real
+            + mortgage_payment_term_real
+            + house_price_term_real
+            + interest_rate_cashflow_term_real
+            + uncertainty_term_real
+        )
+        partial_adjustment_gap_real = self.partial_adjustment_speed * (
+            long_run_target_real - real_lagged_consumption
+        )
+        target_total_real = np.maximum(0.0, real_lagged_consumption + partial_adjustment_gap_real)
+        target_total = target_total_real * nominalizer
 
         components = {
             "target_consumption_lagged_consumption": lagged_consumption,
-            "target_consumption_long_run": long_run_target,
-            "target_consumption_permanent_income": permanent_income_term,
-            "target_consumption_liquid_wealth": liquid_wealth_term,
-            "target_consumption_illiquid_wealth": illiquid_wealth_term,
-            "target_consumption_housing_wealth": housing_wealth_term,
-            "target_consumption_rent": rent_term,
-            "target_consumption_mortgage_debt": mortgage_debt_term,
-            "target_consumption_mortgage_payment": mortgage_payment_term,
-            "target_consumption_house_price": house_price_term,
-            "target_consumption_uncertainty": uncertainty_term,
-            "target_consumption_partial_adjustment_gap": partial_adjustment_gap,
+            "target_consumption_long_run": long_run_target_real * nominalizer,
+            "target_consumption_permanent_income": permanent_income_term_real * nominalizer,
+            "target_consumption_liquid_wealth": liquid_wealth_term_real * nominalizer,
+            "target_consumption_illiquid_wealth": illiquid_wealth_term_real * nominalizer,
+            "target_consumption_housing_wealth": housing_wealth_term_real * nominalizer,
+            "target_consumption_rent": rent_term_real * nominalizer,
+            "target_consumption_mortgage_debt": mortgage_debt_term_real * nominalizer,
+            "target_consumption_mortgage_payment": mortgage_payment_term_real * nominalizer,
+            "target_consumption_house_price": house_price_term_real * nominalizer,
+            "target_consumption_interest_rate_cashflow": interest_rate_cashflow_term_real * nominalizer,
+            "target_consumption_uncertainty": uncertainty_term_real * nominalizer,
+            "target_consumption_partial_adjustment_gap": partial_adjustment_gap_real * nominalizer,
             "target_consumption_house_price_index": house_price_index_arr,
         }
         return components, target_total
@@ -674,6 +715,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_consumption = np.asarray(lagged_consumption, dtype=float)
 
         income = np.asarray(income, dtype=float)
+        household_benefits = self._as_array(income, household_benefits)
         liquid_wealth = self._as_array(income, liquid_wealth)
         illiquid_wealth = self._as_array(income, illiquid_wealth)
         housing_wealth = self._as_array(income, housing_wealth)
@@ -683,6 +725,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
         components, target_total = self._evaluate_target(
             income=income,
+            household_benefits=household_benefits,
             lagged_consumption=lagged_consumption,
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
@@ -692,11 +735,15 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             mortgage_payment=mortgage_payment,
             house_price_index=house_price_index,
             house_price_growth=house_price_growth,
+            current_cpi=current_cpi,
+            initial_cpi=initial_cpi,
+            expected_inflation=expected_inflation,
         )
 
         perturbation = np.maximum(1.0, np.abs(income) * 1e-4)
         _, perturbed_target = self._evaluate_target(
             income=income + perturbation,
+            household_benefits=household_benefits,
             lagged_consumption=lagged_consumption,
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
@@ -706,6 +753,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             mortgage_payment=mortgage_payment,
             house_price_index=house_price_index,
             house_price_growth=house_price_growth,
+            current_cpi=current_cpi,
+            initial_cpi=initial_cpi,
+            expected_inflation=expected_inflation,
         )
 
         self.last_target_consumption_components = components

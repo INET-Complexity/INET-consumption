@@ -126,6 +126,7 @@ def create_households_timeseries(
         target_consumption_mortgage_debt=np.zeros(len(data)),
         target_consumption_mortgage_payment=np.zeros(len(data)),
         target_consumption_house_price=np.zeros(len(data)),
+        target_consumption_interest_rate_cashflow=np.zeros(len(data)),
         target_consumption_uncertainty=np.zeros(len(data)),
         target_consumption_partial_adjustment_gap=np.zeros(len(data)),
         target_consumption_house_price_index=np.zeros(len(data)),

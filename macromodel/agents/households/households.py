@@ -656,6 +656,7 @@ class Households(Agent):
         income_override: Optional[np.ndarray] = None,
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
+        mortgage_payment: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -681,6 +682,7 @@ class Households(Agent):
             initial_taxes (Optional[np.ndarray]): Initial tax rates by industry for CES substitution
             house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
             house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
+            mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
 
         Returns:
             np.ndarray: Target consumption by household
@@ -698,6 +700,7 @@ class Households(Agent):
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
+            mortgage_payment = np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -723,7 +726,7 @@ class Households(Agent):
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
                 rent=self.ts.current("rent"),
                 mortgage_debt=self.ts.current("mortgage_debt"),
-                mortgage_payment=self.ts.current("debt_installments"),
+                mortgage_payment=mortgage_payment,
                 house_price_index=house_price_index,
                 house_price_growth=house_price_growth,
                 lagged_consumption=self.ts.current("consumption"),
@@ -744,6 +747,7 @@ class Households(Agent):
             "target_consumption_mortgage_debt",
             "target_consumption_mortgage_payment",
             "target_consumption_house_price",
+            "target_consumption_interest_rate_cashflow",
             "target_consumption_uncertainty",
             "target_consumption_partial_adjustment_gap",
             "target_consumption_house_price_index",

@@ -61,12 +61,18 @@ class TestCountry:
         )
         captured = {}
         original = test_country.households.functions["consumption"].compute_target_consumption
+        mortgage_payment = np.full(test_country.households.ts.current("n_households"), 123.0)
 
         def capture(**kwargs):
             captured.update(kwargs)
             return original(**kwargs)
 
         monkeypatch.setattr(test_country.households.functions["consumption"], "compute_target_consumption", capture)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: mortgage_payment,
+        )
 
         test_country._set_household_target_demand(replace_current=False)
 
@@ -83,6 +89,7 @@ class TestCountry:
             test_country.households.ts.current("wealth_main_residence")
             + test_country.households.ts.current("wealth_other_properties"),
         )
+        assert np.allclose(captured["mortgage_payment"], mortgage_payment)
 
         h5_path = tmp_path / "households_target_consumption.h5"
         with h5py.File(h5_path, "w") as h5_file:
@@ -91,6 +98,7 @@ class TestCountry:
             household_group = country_group["households"]
             assert "formula_implied_mpc" in household_group
             assert "target_consumption_permanent_income" in household_group
+            assert "target_consumption_interest_rate_cashflow" in household_group
             assert "target_consumption_partial_adjustment_gap" in household_group
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(

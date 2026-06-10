@@ -51,8 +51,8 @@ class _PolicyRateShockProxy:
         self.shock = 0.0
 
     def compute_rate(self, *args, **kwargs):
-        kwargs["shock"] = float(kwargs.get("shock", 0.0)) + float(self.shock)
-        return self.wrapped.compute_rate(*args, **kwargs)
+        base_rate = self.wrapped.compute_rate(*args, **kwargs)
+        return base_rate + float(self.shock)
 
 
 def _period_to_year_month(initial_year: int, time_unit: int, period: int) -> tuple[int, int]:

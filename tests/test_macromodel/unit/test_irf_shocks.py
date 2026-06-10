@@ -16,7 +16,7 @@ from macromodel.utils.prehooks.irf_shocks import (
 
 class DummyPolicyRate:
     def compute_rate(self, *, shock=0.0, **_kwargs):
-        return 0.02 + shock
+        return 0.02
 
 
 def test_policy_rate_shock_adds_rate_points_only_during_active_period():

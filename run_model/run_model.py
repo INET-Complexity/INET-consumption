@@ -22,7 +22,7 @@ from src.visual_helpers import build_macro_output_df  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
 from macro_data.configuration import DataConfiguration, split_country_configs  # noqa: E402
-from macromodel.configurations import CountryConfiguration, SimulationConfiguration  # noqa: E402
+from macromodel.configurations import SimulationConfiguration, load_country_configuration  # noqa: E402
 from macromodel.simulation import Simulation  # noqa: E402
 
 logging.getLogger().setLevel(logging.ERROR)
@@ -127,9 +127,10 @@ def main(
     national_accounts = synthetic_country.exogenous_data.national_accounts
 
     # Load country configuration
-    with (cfg.config_dir / f"country_config_{cfg.country_iso3}.yaml").open() as f:
-        country_config_dict = yaml.safe_load(f)
-    country_cfg = CountryConfiguration(**country_config_dict[cfg.country_iso3])
+    country_cfg = load_country_configuration(
+        cfg.config_dir / f"country_config_{cfg.country_iso3}.yaml",
+        country_iso3=cfg.country_iso3,
+    )
 
     country_cfg = align_country_configuration_to_data(
         country_cfg,

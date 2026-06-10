@@ -4,11 +4,10 @@ from typing import Callable, Optional, Protocol, Self
 
 import numpy as np
 import torch
-import yaml
 from joblib import Parallel, delayed
 
 from macro_data import DataWrapper
-from macromodel.configurations import CountryConfiguration, SimulationConfiguration
+from macromodel.configurations import CountryConfiguration, SimulationConfiguration, load_country_configuration
 from macromodel.simulation import Simulation
 
 
@@ -100,14 +99,12 @@ class Sampler:
             countries = list(data.synthetic_countries.keys())
 
         if country_conf_path is not None:
-            with open(country_conf_path, "r") as f:
-                country_conf_dict = yaml.safe_load(f)
-
-            country_conf = CountryConfiguration(**country_conf_dict)
-
+            country_configurations = {
+                country: load_country_configuration(country_conf_path, country_iso3=country) for country in countries
+            }
         else:
             country_conf = CountryConfiguration.n_industry_default(data.n_industries)
-        country_configurations = {country: country_conf for country in countries}
+            country_configurations = {country: country_conf for country in countries}
 
         configuration = SimulationConfiguration(country_configurations=country_configurations, t_max=15, seed=0)
 

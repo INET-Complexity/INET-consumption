@@ -217,6 +217,7 @@ def create_economy_timeseries(
         firm_insolvency_rate=[np.nan],
         bank_insolvency_rate=[np.nan],
         household_insolvency_rate=[np.nan],
+        illiquid_financial_asset_return_rate=[np.nan],
         #
         total_growth=[initial_total_growth],
         estimated_growth=[np.nan],

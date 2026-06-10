@@ -1073,6 +1073,7 @@ def build_macro_output_df(model, country_code):
         "firm_insolvency_rate",
         "bank_insolvency_rate",
         "household_insolvency_rate",
+        "illiquid_financial_asset_return_rate",
         "total_growth",
         "estimated_growth",
         "cpi_transaction",

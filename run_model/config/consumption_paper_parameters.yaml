@@ -1,0 +1,11 @@
+stage_1:
+  asset_returns:
+    paper_stochastic_v1:
+      other_real_assets_depreciation_rate: 0.05
+      mu_eq: 0.0029
+      mu_bond: 0.0081
+      sigma_eq: 0.0935
+      sigma_bond: 0.0316
+      rho: -0.2585
+      equity_weight: 0.5
+      draw_scope: country_period

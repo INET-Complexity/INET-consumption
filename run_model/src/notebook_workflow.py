@@ -16,7 +16,7 @@ from src.visual_helpers import build_macro_output_df
 
 from macro_data import DataWrapper
 from macro_data.configuration import DataConfiguration, split_country_configs
-from macromodel.configurations import CountryConfiguration, SimulationConfiguration
+from macromodel.configurations import CountryConfiguration, SimulationConfiguration, load_country_configuration
 from macromodel.simulation import Simulation
 
 RUN_MODEL_DIR = Path(__file__).resolve().parents[1]
@@ -162,9 +162,7 @@ def _load_data_config(cfg: Config) -> DataConfiguration:
 
 def _load_country_config(cfg: Config) -> CountryConfiguration:
     config_path = Path(cfg.config_dir) / f"country_config_{cfg.country_iso3}.yaml"
-    with config_path.open() as f:
-        country_config_dict = yaml.safe_load(f)
-    return CountryConfiguration(**country_config_dict[cfg.country_iso3])
+    return load_country_configuration(config_path, country_iso3=cfg.country_iso3)
 
 
 def _parse_override_path(path: str) -> tuple[str, ...]:

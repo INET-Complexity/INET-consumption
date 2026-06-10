@@ -468,7 +468,7 @@ FRA:
       wealth:
         name:
           desc: The function used for updating household wealth.
-          options: DefaultWealthSetter
+          options: DefaultWealthSetter,PaperAssetReturnWealthSetter
           type: str
           value: DefaultWealthSetter
         parameters:

@@ -482,7 +482,7 @@ class Simulation:
         # After goods market clearing
         self.rest_of_the_world.record_bought_goods()
         for country in self.countries.values():
-            country.update_realised_metrics()
+            country.update_realised_metrics(period_index=t)
             country.update_population_structure()
 
         # Execute post-hooks after all metrics are updated

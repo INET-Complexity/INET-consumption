@@ -525,13 +525,19 @@ class Households(Agent):
         Returns:
             np.ndarray: Expected financial income by household
         """
+        wealth_function = self.functions["wealth"]
+        paper_expected_income = getattr(wealth_function, "compute_expected_income_from_financial_assets", None)
+        if paper_expected_income is not None:
+            return paper_expected_income(
+                current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
+            )
         return self.functions["financial_assets"].compute_expected_income(
             income_coefficient=self.states["coefficient_fa_income"],
             initial_other_financial_assets=self.ts.initial("wealth_other_financial_assets"),
             current_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
         )
 
-    def compute_income_from_financial_assets(self) -> np.ndarray:
+    def compute_income_from_financial_assets(self, period_index: int | None = None) -> np.ndarray:
         """Calculate current income from financial assets.
 
         Computes actual financial income based on:
@@ -542,11 +548,27 @@ class Households(Agent):
         Returns:
             np.ndarray: Current financial income by household
         """
+        wealth_function = self.functions["wealth"]
+        paper_income = getattr(wealth_function, "compute_income_from_financial_assets", None)
+        if paper_income is not None:
+            kwargs = {
+                "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
+            }
+            if getattr(wealth_function, "uses_periodic_illiquid_returns", False):
+                kwargs["period_index"] = period_index
+            return paper_income(**kwargs)
         return self.functions["financial_assets"].compute_income(
             income_coefficient=self.states["coefficient_fa_income"],
             initial_other_financial_assets=self.ts.initial("wealth_other_financial_assets"),
             current_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
         )
+
+    def current_illiquid_financial_asset_return_rate(self) -> float:
+        """Return the current aggregate illiquid financial asset return rate, if available."""
+        current_rate = getattr(self.functions["wealth"], "current_illiquid_return_rate", None)
+        if current_rate is None:
+            return np.nan
+        return current_rate()
 
     def compute_expected_income(self) -> np.ndarray:
         """Calculate total expected income.
@@ -1243,7 +1265,7 @@ class Households(Agent):
         self.ts.total_investment_before_vat.append([self.ts.current("investment").sum()])
         self.ts.industry_investment.append(self.ts.current("investment").sum(axis=0))
 
-    def update_wealth(self, housing_data: pd.DataFrame, tau_cf: float) -> None:
+    def update_wealth(self, housing_data: pd.DataFrame, tau_cf: float, period_index: int | None = None) -> float:
         """Update household wealth positions.
 
         Updates:
@@ -1278,10 +1300,14 @@ class Households(Agent):
         )
 
         # New financial wealth
+        income_for_residual_saving = self.ts.current("income")
+        if getattr(self.functions["wealth"], "exclude_financial_asset_income_from_saving", False):
+            income_for_residual_saving = income_for_residual_saving - self.ts.current("income_financial_assets")
+
         new_wealth = np.maximum(
             0.0,
             (
-                self.ts.current("income")
+                income_for_residual_saving
                 - self.ts.current("rent")
                 - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
             ),
@@ -1299,25 +1325,29 @@ class Households(Agent):
         used_up_wealth = -np.minimum(
             0.0,
             (
-                self.ts.current("income")
+                income_for_residual_saving
                 - self.ts.current("rent")
                 - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
             ),
         )
+        use_up_wealth_kwargs = {
+            "used_up_wealth": used_up_wealth,
+            "current_wealth_in_deposits": self.ts.current("wealth_deposits"),
+            "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
+        }
+        if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
+            use_up_wealth_kwargs["period_index"] = period_index
         (
             used_up_wealth_in_deposits,
             used_up_wealth_in_other_financial_assets,
-        ) = self.functions["wealth"].use_up_wealth(
-            used_up_wealth=used_up_wealth,
-            current_wealth_in_deposits=self.ts.current("wealth_deposits"),
-            current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
-        )
+        ) = self.functions["wealth"].use_up_wealth(**use_up_wealth_kwargs)
 
         # Update other financial assets
         self.ts.wealth_other_financial_assets.append(
             self.compute_wealth_of_other_financial_assets(
                 new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
                 used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
+                period_index=period_index,
             )
         )
         self.ts.total_wealth_other_financial_assets.append([self.ts.current("wealth_other_financial_assets").sum()])
@@ -1339,6 +1369,7 @@ class Households(Agent):
 
         # Compute total wealth
         self.ts.wealth.append(self.ts.current("wealth_real_assets") + self.ts.current("wealth_financial_assets"))
+        return self.current_illiquid_financial_asset_return_rate()
 
     def compute_wealth_of_the_main_residence(self, housing_data: pd.DataFrame) -> np.ndarray:
         """Calculate main residence wealth.
@@ -1407,6 +1438,7 @@ class Households(Agent):
         self,
         new_wealth_in_other_financial_assets: float,
         used_up_wealth_in_other_financial_assets: float,
+        period_index: int | None = None,
     ) -> np.ndarray:
         """Calculate other financial asset wealth.
 
@@ -1422,11 +1454,14 @@ class Households(Agent):
         Returns:
             np.ndarray: Financial asset value by household
         """
-        return self.functions["wealth"].compute_wealth_in_other_financial_assets(
-            current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
-            new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
-            used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
-        )
+        kwargs = {
+            "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
+            "new_wealth_in_other_financial_assets": new_wealth_in_other_financial_assets,
+            "used_up_wealth_in_other_financial_assets": used_up_wealth_in_other_financial_assets,
+        }
+        if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
+            kwargs["period_index"] = period_index
+        return self.functions["wealth"].compute_wealth_in_other_financial_assets(**kwargs)
 
     def compute_wealth_in_deposits(
         self,

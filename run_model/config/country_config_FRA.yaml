@@ -124,10 +124,11 @@ FRA:
         parameters:
           down_payment_fraction: 1.0
       wealth:
-        name: DefaultWealthSetter
+        name: PaperAssetReturnWealthSetter
         path_name: wealth
         parameters:
-          other_real_assets_depreciation_rate: 0.05
+          paper_parameter_file: consumption_paper_parameters.yaml
+          paper_parameter_ref: stage_1.asset_returns.paper_stochastic_v1
     parameters:
       take_consumption_weights_by_income_quantile: false
     substitution_bundles:

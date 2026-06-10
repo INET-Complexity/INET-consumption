@@ -74,6 +74,7 @@ var_mapping = {
     "PG0510": "Income from Unemployment Benefits",  # Unemployment benefits
     "DA1110": "Value of the Main Residence",  # Primary home value
     "DA1120": "Value of other Properties",  # Other real estate
+    "DA1122": "Value of Other Non-Business Real Estate",  # Non-business other real estate
     "DA1130": "Value of Household Vehicles",  # Vehicle assets
     "DA1131": "Value of Household Valuables",  # Valuable items
     "DA1140": "Value of Self-Employment Businesses",  # Business assets
@@ -86,8 +87,10 @@ var_mapping = {
     "DA2107": "Money owed to Households",  # Receivables
     "DA2108": "Other Assets",  # Miscellaneous assets
     "DA2109": "Voluntary Pension",  # Private pension
+    "DL1100": "Outstanding Balance of Mortgage Debt",  # Mortgage debt
     "DL1110": "Outstanding Balance of HMR Mortgages",  # Home mortgage
     "DL1120": "Outstanding Balance of Mortgages on other Properties",  # Other mortgages
+    "DL1200": "Outstanding Balance of Non-Mortgage Debt",  # Non-mortgage debt
     "DL1210": "Outstanding Balance of Credit Line",  # Credit lines
     "DL1220": "Outstanding Balance of Credit Card Debt",  # Credit card debt
     "DL1230": "Outstanding Balance of other Non-Mortgage Loans",  # Other loans
@@ -123,6 +126,7 @@ var_numerical = [
     "Income from Unemployment Benefits",  # Unemployment support
     "Value of the Main Residence",  # Home value
     "Value of other Properties",  # Other property value
+    "Value of Other Non-Business Real Estate",  # Non-business other real estate
     "Value of Household Vehicles",  # Vehicle worth
     "Value of Household Valuables",  # Valuables worth
     "Value of Self-Employment Businesses",  # Business value
@@ -135,8 +139,10 @@ var_numerical = [
     "Money owed to Households",  # Receivables
     "Other Assets",  # Other assets
     "Voluntary Pension",  # Private pension
+    "Outstanding Balance of Mortgage Debt",  # Mortgage debt
     "Outstanding Balance of HMR Mortgages",  # Home loan
     "Outstanding Balance of Mortgages on other Properties",  # Other mortgages
+    "Outstanding Balance of Non-Mortgage Debt",  # Non-mortgage debt
     "Outstanding Balance of Credit Line",  # Credit line
     "Outstanding Balance of Credit Card Debt",  # Card debt
     "Outstanding Balance of other Non-Mortgage Loans",  # Other debt

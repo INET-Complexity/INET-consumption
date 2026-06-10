@@ -75,6 +75,7 @@ CONVERT_HH_COLS = [
     "Income",
     "Value of the Main Residence",
     "Value of other Properties",
+    "Value of Other Non-Business Real Estate",
     "Value of Household Vehicles",
     "Value of Household Valuables",
     "Value of Self-Employment Businesses",
@@ -83,17 +84,113 @@ CONVERT_HH_COLS = [
     "Bonds",
     "Value of Private Businesses",
     "Shares",
+    "Managed Accounts",
     "Money owed to Households",
     "Other Assets",
     "Voluntary Pension",
+    "Outstanding Balance of Mortgage Debt",
     "Outstanding Balance of HMR Mortgages",
     "Outstanding Balance of Mortgages on other Properties",
+    "Outstanding Balance of Non-Mortgage Debt",
     "Outstanding Balance of Credit Line",
     "Outstanding Balance of Credit Card Debt",
     "Outstanding Balance of other Non-Mortgage Loans",
 ]
 
 CONVERT_IND_COLS = ["Employee Income", "Income from Unemployment Benefits", "Income"]
+
+
+def _numeric_series(data: pd.DataFrame, aliases: list[str], *, required: bool = True) -> pd.Series:
+    for column in aliases:
+        if column in data.columns:
+            return pd.to_numeric(data[column], errors="coerce").fillna(0.0)
+    if required:
+        raise KeyError(f"Missing required household account column. Tried: {aliases}")
+    return pd.Series(0.0, index=data.index, dtype="float64")
+
+
+def _has_any_column(data: pd.DataFrame, aliases: list[str]) -> bool:
+    return any(column in data.columns for column in aliases)
+
+
+def _sum_account_components(data: pd.DataFrame, aliases_by_component: list[list[str]]) -> pd.Series:
+    total = pd.Series(0.0, index=data.index, dtype="float64")
+    for aliases in aliases_by_component:
+        total = total + _numeric_series(data, aliases)
+    return total
+
+
+def compute_notebook_household_accounts(data: pd.DataFrame) -> pd.DataFrame:
+    """Compute notebook-style household account variables without mutating data.
+
+    The definitions follow ``consumption-notebooks/build_variab_from_HFCS.py``:
+    liquid assets are deposits, illiquid financial assets exclude private
+    business wealth, housing assets use non-business other real estate, and
+    non-mortgage debt follows the HFCS aggregate when available.
+
+    Use this on raw reader or sampled household data, before ``restrict()`` and
+    before runtime wealth construction drops or collapses source fields. If the
+    aggregate non-mortgage debt column is absent, the component fallback must
+    run before ``compute_household_wealth()`` because that pipeline zeroes
+    credit line and credit-card balances.
+    """
+
+    lfa = _numeric_series(data, ["Wealth in Deposits", "DA2101"])
+    ifa = _sum_account_components(
+        data,
+        [
+            ["Mutual Funds", "DA2102"],
+            ["Bonds", "DA2103"],
+            ["Shares", "DA2105"],
+            ["Managed Accounts", "DA2106"],
+            ["Money owed to Households", "DA2107"],
+            ["Other Assets", "DA2108"],
+            ["Voluntary Pension", "DA2109"],
+        ],
+    )
+    ha = _numeric_series(data, ["Value of the Main Residence", "DA1110"]) + _numeric_series(
+        data,
+        [
+            "Value of Other Non-Business Real Estate",
+            "Value of other Non-Business Real Estate",
+            "DA1122",
+        ],
+    )
+    mortgage_debt_aliases = ["Outstanding Balance of Mortgage Debt", "DL1100"]
+    if _has_any_column(data, mortgage_debt_aliases):
+        mr = _numeric_series(data, mortgage_debt_aliases)
+    else:
+        mr = _sum_account_components(
+            data,
+            [
+                ["Outstanding Balance of HMR Mortgages", "DL1110"],
+                ["Outstanding Balance of Mortgages on other Properties", "DL1120"],
+            ],
+        )
+
+    non_mortgage_debt_aliases = ["Outstanding Balance of Non-Mortgage Debt", "DL1200"]
+    if _has_any_column(data, non_mortgage_debt_aliases):
+        db = _numeric_series(data, non_mortgage_debt_aliases)
+    else:
+        db = _sum_account_components(
+            data,
+            [
+                ["Outstanding Balance of Credit Line", "DL1210"],
+                ["Outstanding Balance of Credit Card Debt", "DL1220"],
+                ["Outstanding Balance of other Non-Mortgage Loans", "DL1230"],
+            ],
+        )
+    return pd.DataFrame(
+        {
+            "lfa": lfa,
+            "ifa": ifa,
+            "ha": ha,
+            "mr": mr,
+            "db": db,
+            "nw": lfa + ifa + ha - mr - db,
+        },
+        index=data.index,
+    )
 
 
 class SyntheticHFCSPopulation(SyntheticPopulation):
@@ -259,10 +356,12 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
 
         if exch_rate != 1.0:
             # make sure all the columns are floats
-            household_data.loc[:, CONVERT_HH_COLS] = household_data.loc[:, CONVERT_HH_COLS].astype(float)
-            individual_data.loc[:, CONVERT_IND_COLS] = individual_data.loc[:, CONVERT_IND_COLS].astype(float)
-            household_data.loc[:, CONVERT_HH_COLS] *= exch_rate
-            individual_data.loc[:, CONVERT_IND_COLS] *= exch_rate
+            convert_hh_cols = [col for col in CONVERT_HH_COLS if col in household_data.columns]
+            convert_ind_cols = [col for col in CONVERT_IND_COLS if col in individual_data.columns]
+            household_data.loc[:, convert_hh_cols] = household_data.loc[:, convert_hh_cols].astype(float)
+            individual_data.loc[:, convert_ind_cols] = individual_data.loc[:, convert_ind_cols].astype(float)
+            household_data.loc[:, convert_hh_cols] *= exch_rate
+            individual_data.loc[:, convert_ind_cols] *= exch_rate
 
         household_data = household_data.loc[household_data["Corresponding Individuals ID"].notna()]
 

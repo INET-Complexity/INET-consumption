@@ -36,12 +36,11 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
 )
 
 
-def _read_h5_array(h5_path: str | Path, path_template: str, *, country_code: str) -> np.ndarray | None:
+def _read_h5_array_from_handle(handle: h5py.File, path_template: str, *, country_code: str) -> np.ndarray | None:
     dataset_path = path_template.format(country=country_code)
-    with h5py.File(h5_path, "r") as handle:
-        if dataset_path not in handle:
-            return None
-        return np.asarray(handle[dataset_path], dtype=float)
+    if dataset_path not in handle:
+        return None
+    return np.asarray(handle[dataset_path], dtype=float)
 
 
 def _as_series(values: np.ndarray, *, transform: str) -> np.ndarray:
@@ -79,39 +78,40 @@ def build_irf_panel(
         raise ValueError("horizon_periods must be positive.")
 
     rows: list[dict[str, float | int | str]] = []
-    for variable in variables:
-        baseline_raw = _read_h5_array(baseline_h5, variable.h5_path, country_code=country_code)
-        shock_raw = _read_h5_array(shock_h5, variable.h5_path, country_code=country_code)
-        if baseline_raw is None or shock_raw is None:
-            continue
-        baseline = _as_series(baseline_raw, transform=variable.transform)
-        shocked = _as_series(shock_raw, transform=variable.transform)
-        if baseline.shape != shocked.shape:
-            raise ValueError(f"{variable.name} shape mismatch: {baseline.shape} != {shocked.shape}.")
-        stop = min(shock_period + horizon_periods, baseline.shape[0])
-        if stop <= shock_period:
-            raise ValueError(f"Requested horizon starts beyond saved rows for {variable.name}.")
-        for row in range(shock_period, stop):
-            baseline_value = float(baseline[row])
-            shock_value = float(shocked[row])
-            delta = shock_value - baseline_value
-            pct_delta = np.nan if baseline_value == 0.0 else delta / baseline_value
-            rows.append(
-                {
-                    "seed": int(seed),
-                    "shock_name": shock_name,
-                    "shock_kind": shock_kind,
-                    "shock_period": int(shock_period),
-                    "shock_magnitude": float(shock_magnitude),
-                    "horizon": int(row - shock_period),
-                    "row": int(row),
-                    "variable": variable.name,
-                    "baseline": baseline_value,
-                    "shock": shock_value,
-                    "delta": delta,
-                    "pct_delta": pct_delta,
-                }
-            )
+    with h5py.File(baseline_h5, "r") as baseline_handle, h5py.File(shock_h5, "r") as shock_handle:
+        for variable in variables:
+            baseline_raw = _read_h5_array_from_handle(baseline_handle, variable.h5_path, country_code=country_code)
+            shock_raw = _read_h5_array_from_handle(shock_handle, variable.h5_path, country_code=country_code)
+            if baseline_raw is None or shock_raw is None:
+                continue
+            baseline = _as_series(baseline_raw, transform=variable.transform)
+            shocked = _as_series(shock_raw, transform=variable.transform)
+            if baseline.shape != shocked.shape:
+                raise ValueError(f"{variable.name} shape mismatch: {baseline.shape} != {shocked.shape}.")
+            stop = min(shock_period + horizon_periods, baseline.shape[0])
+            if stop <= shock_period:
+                raise ValueError(f"Requested horizon starts beyond saved rows for {variable.name}.")
+            for row in range(shock_period, stop):
+                baseline_value = float(baseline[row])
+                shock_value = float(shocked[row])
+                delta = shock_value - baseline_value
+                pct_delta = np.nan if baseline_value == 0.0 else delta / baseline_value
+                rows.append(
+                    {
+                        "seed": int(seed),
+                        "shock_name": shock_name,
+                        "shock_kind": shock_kind,
+                        "shock_period": int(shock_period),
+                        "shock_magnitude": float(shock_magnitude),
+                        "horizon": int(row - shock_period),
+                        "row": int(row),
+                        "variable": variable.name,
+                        "baseline": baseline_value,
+                        "shock": shock_value,
+                        "delta": delta,
+                        "pct_delta": pct_delta,
+                    }
+                )
     return pd.DataFrame(rows)
 
 

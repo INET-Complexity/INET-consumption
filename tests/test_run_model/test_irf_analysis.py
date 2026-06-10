@@ -14,6 +14,7 @@ from src.irf_analysis import (  # noqa: E402
     DEFAULT_IRF_VARIABLES,
     IRFVariable,
     build_irf_panel,
+    plot_irfs,
     summarize_irf_panel,
     write_irf_plots,
 )
@@ -192,3 +193,48 @@ def test_pct_irf_plots_skip_rate_variables_by_default(tmp_path):
 
     assert (tmp_path / "rate_household_consumption_pct_delta.html").exists()
     assert not (tmp_path / "rate_policy_rate_pct_delta.html").exists()
+
+
+def test_plot_irfs_filters_and_scales_money_variables():
+    summary = pd.DataFrame(
+        {
+            "shock_name": ["rate", "rate", "tax"],
+            "shock_kind": ["policy_rate", "policy_rate", "income_tax"],
+            "variable": ["household_consumption", "policy_rate", "household_consumption"],
+            "horizon": [0, 0, 0],
+            "delta_mean": [2e9, 0.0025, -1e9],
+            "delta_p10": [1e9, 0.0015, -2e9],
+            "delta_p90": [3e9, 0.0035, 0.0],
+            "pct_delta_mean": [0.02, 0.10, -0.01],
+            "pct_delta_p10": [0.01, 0.05, -0.02],
+            "pct_delta_p90": [0.03, 0.15, 0.0],
+        }
+    )
+
+    fig = plot_irfs(summary, shocks="rate", variables="household_consumption")
+
+    assert fig.data[0].name == "rate: household_consumption"
+    assert list(fig.data[0].y) == pytest.approx([2.0])
+    assert fig.layout.yaxis.title.text == "Delta, billion LCU"
+
+
+def test_plot_irfs_can_plot_percent_deviations():
+    summary = pd.DataFrame(
+        {
+            "shock_name": ["rate"],
+            "shock_kind": ["policy_rate"],
+            "variable": ["household_consumption"],
+            "horizon": [0],
+            "delta_mean": [2e9],
+            "delta_p10": [1e9],
+            "delta_p90": [3e9],
+            "pct_delta_mean": [0.02],
+            "pct_delta_p10": [0.01],
+            "pct_delta_p90": [0.03],
+        }
+    )
+
+    fig = plot_irfs(summary, shocks="rate", variables="household_consumption", percent=True)
+
+    assert list(fig.data[0].y) == pytest.approx([0.02])
+    assert fig.layout.yaxis.title.text == "Percent deviation"

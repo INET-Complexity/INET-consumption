@@ -35,6 +35,18 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("unemployment_rate", "{country}/economy/unemployment_rate", "first"),
 )
 RATE_IRF_VARIABLES = frozenset({"policy_rate", "unemployment_rate"})
+MONEY_IRF_VARIABLES = frozenset(
+    {
+        "household_consumption",
+        "target_household_consumption",
+        "household_income",
+        "government_consumption",
+        "desired_government_consumption",
+        "gdp_output",
+        "gdp_expenditure",
+        "gdp_income",
+    }
+)
 
 
 def _read_h5_array_from_handle(handle: h5py.File, path_template: str, *, country_code: str) -> np.ndarray | None:
@@ -144,6 +156,105 @@ def summarize_irf_panel(panel: pd.DataFrame) -> pd.DataFrame:
         pct_delta_p10=("pct_delta", lambda values: values.quantile(0.10)),
         pct_delta_p90=("pct_delta", lambda values: values.quantile(0.90)),
     ).reset_index()
+
+
+def _as_filter_values(values: str | list[str] | tuple[str, ...] | set[str] | None) -> list[str] | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        return [values]
+    return list(values)
+
+
+def _load_irf_summary(summary: pd.DataFrame | str | Path) -> pd.DataFrame:
+    if isinstance(summary, pd.DataFrame):
+        return summary.copy()
+    path = Path(summary)
+    if path.is_dir():
+        path = path / "irf_summary.csv"
+    return pd.read_csv(path)
+
+
+def plot_irfs(
+    summary: pd.DataFrame | str | Path,
+    *,
+    shocks: str | list[str] | tuple[str, ...] | set[str] | None = None,
+    variables: str | list[str] | tuple[str, ...] | set[str] | None = None,
+    percent: bool = False,
+    scale_money: bool = True,
+    money_scale: float = 1e9,
+    money_unit: str = "billion LCU",
+    title: str | None = None,
+) -> go.Figure:
+    """Build one notebook-friendly IRF figure for selected shocks and variables.
+
+    Args:
+        summary: IRF summary DataFrame, path to ``irf_summary.csv``, or analysis directory.
+        shocks: Shock name or names to include. Defaults to all shocks.
+        variables: Variable name or names to include. Defaults to all variables.
+        percent: Plot percentage deviations instead of absolute deltas.
+        scale_money: Divide monetary aggregate deltas by ``money_scale`` for readability.
+        money_scale: Scale applied to monetary aggregate deltas when ``scale_money=True``.
+        money_unit: Axis unit label for scaled monetary aggregate deltas.
+        title: Optional Plotly title.
+    """
+
+    data = _load_irf_summary(summary)
+    shock_filter = _as_filter_values(shocks)
+    variable_filter = _as_filter_values(variables)
+    if shock_filter is not None:
+        data = data[data["shock_name"].isin(shock_filter)]
+    if variable_filter is not None:
+        data = data[data["variable"].isin(variable_filter)]
+    if data.empty:
+        raise ValueError("No IRF rows match the requested shocks and variables.")
+
+    value_prefix = "pct_delta" if percent else "delta"
+    mean_col = f"{value_prefix}_mean"
+    p10_col = f"{value_prefix}_p10"
+    p90_col = f"{value_prefix}_p90"
+    data = data.sort_values(["shock_name", "variable", "horizon"]).copy()
+    data["plot_mean"] = data[mean_col].astype(float)
+    data["plot_p10"] = data[p10_col].astype(float)
+    data["plot_p90"] = data[p90_col].astype(float)
+
+    yaxis_title = "Percent deviation" if percent else "Delta"
+    if not percent and scale_money:
+        money_mask = data["variable"].isin(MONEY_IRF_VARIABLES)
+        data.loc[money_mask, ["plot_mean", "plot_p10", "plot_p90"]] /= float(money_scale)
+        if money_mask.all():
+            yaxis_title = f"Delta, {money_unit}"
+        elif money_mask.any():
+            yaxis_title = f"Delta, mixed units; monetary variables in {money_unit}"
+
+    fig = go.Figure()
+    for (shock_name, variable), group in data.groupby(["shock_name", "variable"], sort=False):
+        label = f"{shock_name}: {variable}"
+        fig.add_trace(
+            go.Scatter(
+                x=group["horizon"],
+                y=group["plot_mean"],
+                mode="lines+markers",
+                name=label,
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=pd.concat([group["horizon"], group["horizon"].iloc[::-1]]),
+                y=pd.concat([group["plot_p90"], group["plot_p10"].iloc[::-1]]),
+                fill="toself",
+                line={"color": "rgba(0,0,0,0)"},
+                name=f"{label} p10-p90",
+                showlegend=False,
+            )
+        )
+    fig.update_layout(
+        title_text=title or ("IRF percent deviations" if percent else "IRF deltas"),
+        template="plotly_white",
+        xaxis_title="horizon",
+        yaxis_title=yaxis_title,
+    )
+    return fig
 
 
 def write_irf_plots(

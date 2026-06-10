@@ -657,6 +657,7 @@ class Households(Agent):
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
         mortgage_payment: Optional[np.ndarray] = None,
+        replace_current_diagnostics: bool = False,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -683,6 +684,7 @@ class Households(Agent):
             house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
             house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
             mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
+            replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
 
         Returns:
             np.ndarray: Target consumption by household
@@ -696,11 +698,14 @@ class Households(Agent):
                 self.ts.initial("consumption"),
                 self.states["consumption_weights_data"],
             ).astype(float)
-            self._append_target_consumption_diagnostics(None)
+            self._append_target_consumption_diagnostics(None, replace_current=replace_current_diagnostics)
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
             mortgage_payment = np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
+            tenure_status = self.states["Tenure Status of the Main Residence"]
+            owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
+            mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -727,16 +732,21 @@ class Households(Agent):
                 rent=self.ts.current("rent"),
                 mortgage_debt=self.ts.current("mortgage_debt"),
                 mortgage_payment=mortgage_payment,
+                owner_occupied=owner_occupied,
+                mortgagor=mortgagor,
                 house_price_index=house_price_index,
                 house_price_growth=house_price_growth,
                 lagged_consumption=self.ts.current("consumption"),
             )
-            self._append_target_consumption_diagnostics(self.functions["consumption"])
+            self._append_target_consumption_diagnostics(
+                self.functions["consumption"],
+                replace_current=replace_current_diagnostics,
+            )
             return target_consumption
 
-    def _append_target_consumption_diagnostics(self, consumption_function: Any | None) -> None:
-        n_households = self.ts.current("n_households")
-        diagnostic_keys = [
+    @staticmethod
+    def _target_consumption_diagnostic_keys() -> list[str]:
+        return [
             "target_consumption_lagged_consumption",
             "target_consumption_long_run",
             "target_consumption_permanent_income",
@@ -751,19 +761,44 @@ class Households(Agent):
             "target_consumption_uncertainty",
             "target_consumption_partial_adjustment_gap",
             "target_consumption_house_price_index",
+            "target_consumption_owner_occupied",
+            "target_consumption_mortgagor",
         ]
+
+    def _append_target_consumption_diagnostics(
+        self,
+        consumption_function: Any | None,
+        *,
+        replace_current: bool = False,
+    ) -> None:
+        n_households = self.ts.current("n_households")
+        diagnostic_keys = self._target_consumption_diagnostic_keys()
 
         if consumption_function is None or getattr(consumption_function, "last_target_consumption_components", None) is None:
             zero_series = np.zeros(n_households)
             for key in diagnostic_keys:
-                getattr(self.ts, key).append(zero_series.copy())
-            self.ts.formula_implied_mpc.append(np.zeros(n_households))
+                if replace_current:
+                    self.ts.override_current(key, zero_series.copy())
+                else:
+                    getattr(self.ts, key).append(zero_series.copy())
+            if replace_current:
+                self.ts.override_current("formula_implied_mpc", np.zeros(n_households))
+            else:
+                self.ts.formula_implied_mpc.append(np.zeros(n_households))
             return
 
         components = consumption_function.last_target_consumption_components
         for key in diagnostic_keys:
-            getattr(self.ts, key).append(np.asarray(components.get(key, np.zeros(n_households)), dtype=float))
-        self.ts.formula_implied_mpc.append(np.asarray(consumption_function.last_formula_implied_mpc, dtype=float))
+            value = np.asarray(components.get(key, np.zeros(n_households)), dtype=float)
+            if replace_current:
+                self.ts.override_current(key, value)
+            else:
+                getattr(self.ts, key).append(value)
+        formula_implied_mpc = np.asarray(consumption_function.last_formula_implied_mpc, dtype=float)
+        if replace_current:
+            self.ts.override_current("formula_implied_mpc", formula_implied_mpc)
+        else:
+            self.ts.formula_implied_mpc.append(formula_implied_mpc)
 
     def compute_target_investment(
         self,

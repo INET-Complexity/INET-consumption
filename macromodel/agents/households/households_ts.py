@@ -130,6 +130,8 @@ def create_households_timeseries(
         target_consumption_uncertainty=np.zeros(len(data)),
         target_consumption_partial_adjustment_gap=np.zeros(len(data)),
         target_consumption_house_price_index=np.zeros(len(data)),
+        target_consumption_owner_occupied=np.zeros(len(data)),
+        target_consumption_mortgagor=np.zeros(len(data)),
         formula_implied_mpc=np.zeros(len(data)),
         amount_bought=np.full(len(data), np.nan),
         consumption=data["Consumption"].values,

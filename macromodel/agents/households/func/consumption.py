@@ -76,6 +76,8 @@ class HouseholdConsumption(ABC):
         rent: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
+        owner_occupied: np.ndarray = None,
+        mortgagor: np.ndarray = None,
         house_price_index: float | np.ndarray = None,
         house_price_growth: float | np.ndarray = None,
         lagged_consumption: np.ndarray = None,
@@ -107,6 +109,8 @@ class HouseholdConsumption(ABC):
             rent (np.ndarray | None): Rent per household
             mortgage_debt (np.ndarray | None): Mortgage debt per household
             mortgage_payment (np.ndarray | None): Mortgage payment per household
+            owner_occupied (np.ndarray | None): Owner-occupied main-residence flag
+            mortgagor (np.ndarray | None): Active mortgage flag
             house_price_index (float | np.ndarray | None): House-price index level
             house_price_growth (float | np.ndarray | None): House-price growth proxy
             lagged_consumption (np.ndarray | None): Previous-period consumption
@@ -154,6 +158,8 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         rent: np.ndarray = None,  # Ignored in default consumption
         mortgage_debt: np.ndarray = None,  # Ignored in default consumption
         mortgage_payment: np.ndarray = None,  # Ignored in default consumption
+        owner_occupied: np.ndarray = None,  # Ignored in default consumption
+        mortgagor: np.ndarray = None,  # Ignored in default consumption
         house_price_index: float | np.ndarray = None,  # Ignored in default consumption
         house_price_growth: float | np.ndarray = None,  # Ignored in default consumption
         lagged_consumption: np.ndarray = None,  # Ignored in default consumption
@@ -323,6 +329,8 @@ class CESHouseholdConsumption(HouseholdConsumption):
         rent: np.ndarray = None,  # Ignored in CES consumption
         mortgage_debt: np.ndarray = None,  # Ignored in CES consumption
         mortgage_payment: np.ndarray = None,  # Ignored in CES consumption
+        owner_occupied: np.ndarray = None,  # Ignored in CES consumption
+        mortgagor: np.ndarray = None,  # Ignored in CES consumption
         house_price_index: float | np.ndarray = None,  # Ignored in CES consumption
         house_price_growth: float | np.ndarray = None,  # Ignored in CES consumption
         lagged_consumption: np.ndarray = None,  # Ignored in CES consumption
@@ -577,7 +585,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     def _evaluate_target(
         self,
         income: np.ndarray,
-        household_benefits: np.ndarray,
         lagged_consumption: np.ndarray,
         liquid_wealth: np.ndarray,
         illiquid_wealth: np.ndarray,
@@ -585,6 +592,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         rent: np.ndarray,
         mortgage_debt: np.ndarray,
         mortgage_payment: np.ndarray,
+        owner_occupied: np.ndarray,
+        mortgagor: np.ndarray,
         house_price_index: float | np.ndarray | None,
         house_price_growth: float | np.ndarray | None,
         current_cpi: float,
@@ -592,7 +601,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         expected_inflation: float,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
-        household_benefits = np.asarray(household_benefits, dtype=float)
         lagged_consumption = np.asarray(lagged_consumption, dtype=float)
         liquid_wealth = np.asarray(liquid_wealth, dtype=float)
         illiquid_wealth = np.asarray(illiquid_wealth, dtype=float)
@@ -600,6 +608,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         rent = np.asarray(rent, dtype=float)
         mortgage_debt = np.asarray(mortgage_debt, dtype=float)
         mortgage_payment = np.asarray(mortgage_payment, dtype=float)
+        owner_occupied = np.asarray(owner_occupied, dtype=float)
+        mortgagor = np.asarray(mortgagor, dtype=float)
 
         house_price_index_arr = self._as_array(income, house_price_index, default=1.0)
         house_price_growth_arr = self._as_array(income, house_price_growth, default=0.0)
@@ -608,7 +618,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         deflator = max(float(cpi_ratio), np.finfo(float).eps)
         nominalizer = deflator * (1.0 + expected_inflation)
 
-        real_spendable_income = np.maximum((income + household_benefits) / deflator, 0.0)
+        real_spendable_income = np.maximum(income / deflator, 0.0)
         real_income_denominator = np.maximum(real_spendable_income, 1.0)
         real_lagged_consumption = np.maximum(lagged_consumption / deflator, 0.0)
         real_liquid_wealth = liquid_wealth / deflator
@@ -676,6 +686,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_uncertainty": uncertainty_term_real * nominalizer,
             "target_consumption_partial_adjustment_gap": partial_adjustment_gap_real * nominalizer,
             "target_consumption_house_price_index": house_price_index_arr,
+            "target_consumption_owner_occupied": owner_occupied,
+            "target_consumption_mortgagor": mortgagor,
         }
         return components, target_total
 
@@ -705,6 +717,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         rent: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
+        owner_occupied: np.ndarray = None,
+        mortgagor: np.ndarray = None,
         house_price_index: float | np.ndarray = None,
         house_price_growth: float | np.ndarray = None,
         lagged_consumption: np.ndarray = None,
@@ -715,17 +729,17 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_consumption = np.asarray(lagged_consumption, dtype=float)
 
         income = np.asarray(income, dtype=float)
-        household_benefits = self._as_array(income, household_benefits)
         liquid_wealth = self._as_array(income, liquid_wealth)
         illiquid_wealth = self._as_array(income, illiquid_wealth)
         housing_wealth = self._as_array(income, housing_wealth)
         rent = self._as_array(income, rent)
         mortgage_debt = self._as_array(income, mortgage_debt)
         mortgage_payment = self._as_array(income, mortgage_payment)
+        owner_occupied = self._as_array(income, owner_occupied)
+        mortgagor = self._as_array(income, mortgagor)
 
         components, target_total = self._evaluate_target(
             income=income,
-            household_benefits=household_benefits,
             lagged_consumption=lagged_consumption,
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
@@ -733,6 +747,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             rent=rent,
             mortgage_debt=mortgage_debt,
             mortgage_payment=mortgage_payment,
+            owner_occupied=owner_occupied,
+            mortgagor=mortgagor,
             house_price_index=house_price_index,
             house_price_growth=house_price_growth,
             current_cpi=current_cpi,
@@ -743,7 +759,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         perturbation = np.maximum(1.0, np.abs(income) * 1e-4)
         _, perturbed_target = self._evaluate_target(
             income=income + perturbation,
-            household_benefits=household_benefits,
             lagged_consumption=lagged_consumption,
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
@@ -751,6 +766,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             rent=rent,
             mortgage_debt=mortgage_debt,
             mortgage_payment=mortgage_payment,
+            owner_occupied=owner_occupied,
+            mortgagor=mortgagor,
             house_price_index=house_price_index,
             house_price_growth=house_price_growth,
             current_cpi=current_cpi,
@@ -809,6 +826,8 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         rent: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_debt: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_payment: np.ndarray = None,  # Ignored in exogenous consumption
+        owner_occupied: np.ndarray = None,  # Ignored in exogenous consumption
+        mortgagor: np.ndarray = None,  # Ignored in exogenous consumption
         house_price_index: float | np.ndarray = None,  # Ignored in exogenous consumption
         house_price_growth: float | np.ndarray = None,  # Ignored in exogenous consumption
         lagged_consumption: np.ndarray = None,  # Ignored in exogenous consumption

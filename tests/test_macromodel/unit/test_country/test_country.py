@@ -80,6 +80,8 @@ class TestCountry:
         assert "house_price_growth" in captured
         assert "liquid_wealth" in captured
         assert "illiquid_wealth" in captured
+        assert "owner_occupied" in captured
+        assert "mortgagor" in captured
         assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("wealth_deposits"))
         assert np.allclose(
             captured["illiquid_wealth"], test_country.households.ts.current("wealth_other_financial_assets")
@@ -90,6 +92,19 @@ class TestCountry:
             + test_country.households.ts.current("wealth_other_properties"),
         )
         assert np.allclose(captured["mortgage_payment"], mortgage_payment)
+        assert np.allclose(
+            captured["owner_occupied"],
+            np.isin(test_country.households.states["Tenure Status of the Main Residence"], [1, 2, 4]),
+        )
+        assert np.allclose(captured["mortgagor"], test_country.households.ts.current("mortgage_debt") > 0.0)
+
+        diagnostic_len = len(test_country.households.ts.historic("formula_implied_mpc"))
+        target_len = len(test_country.households.ts.historic("target_consumption"))
+        test_country._set_household_target_demand(replace_current=True)
+        assert len(test_country.households.ts.historic("formula_implied_mpc")) == diagnostic_len
+        assert len(test_country.households.ts.historic("target_consumption_permanent_income")) == diagnostic_len
+        assert len(test_country.households.ts.historic("target_consumption_owner_occupied")) == diagnostic_len
+        assert len(test_country.households.ts.historic("target_consumption")) == target_len
 
         h5_path = tmp_path / "households_target_consumption.h5"
         with h5py.File(h5_path, "w") as h5_file:
@@ -100,6 +115,8 @@ class TestCountry:
             assert "target_consumption_permanent_income" in household_group
             assert "target_consumption_interest_rate_cashflow" in household_group
             assert "target_consumption_partial_adjustment_gap" in household_group
+            assert "target_consumption_owner_occupied" in household_group
+            assert "target_consumption_mortgagor" in household_group
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(
         self, test_country, monkeypatch

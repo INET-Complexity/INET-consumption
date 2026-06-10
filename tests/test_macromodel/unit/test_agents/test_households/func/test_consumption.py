@@ -465,6 +465,8 @@ class TestCreditAugmentedHouseholdConsumption:
             rent=rent,
             mortgage_debt=mortgage_debt,
             mortgage_payment=mortgage_payment,
+            owner_occupied=np.ones(n_households),
+            mortgagor=np.ones(n_households),
             house_price_index=1.1,
             house_price_growth=house_price_growth,
             lagged_consumption=historic_consumption_sum[-1],
@@ -483,8 +485,10 @@ class TestCreditAugmentedHouseholdConsumption:
         assert "target_consumption_interest_rate_cashflow" in components
         np.testing.assert_allclose(components["target_consumption_interest_rate_cashflow"], 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_owner_occupied"], 1.0)
+        np.testing.assert_allclose(components["target_consumption_mortgagor"], 1.0)
 
-    def test_compute_target_consumption_uses_real_income_normalized_terms(self):
+    def test_compute_target_consumption_uses_spendable_income_without_double_counting_benefits(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -523,13 +527,15 @@ class TestCreditAugmentedHouseholdConsumption:
             rent=np.array([10.0]),
             mortgage_debt=np.array([40.0]),
             mortgage_payment=np.array([6.0]),
+            owner_occupied=np.array([1.0]),
+            mortgagor=np.array([1.0]),
             house_price_index=1.2,
             house_price_growth=0.05,
             lagged_consumption=np.array([80.0]),
         )
 
         components = consumption_obj.last_target_consumption_components
-        np.testing.assert_allclose(components["target_consumption_permanent_income"], 132.0)
+        np.testing.assert_allclose(components["target_consumption_permanent_income"], 110.0)
         np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 6.6)
         np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 6.6)
         np.testing.assert_allclose(components["target_consumption_housing_wealth"], 39.6)

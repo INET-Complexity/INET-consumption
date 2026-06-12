@@ -80,11 +80,31 @@ class TestCountry:
         assert "house_price_growth" in captured
         assert "liquid_wealth" in captured
         assert "illiquid_wealth" in captured
+        assert "lagged_income" in captured
+        assert "lagged_cpi" in captured
+        assert "lagged_liquid_wealth" in captured
+        assert "lagged_illiquid_wealth" in captured
+        assert "lagged_mortgage_debt" in captured
+        assert "lagged_consumption_loan_debt" in captured
+        assert "lagged_house_price_index" in captured
+        assert "real_borrowing_rate" in captured
+        assert "consumer_debt_rate_delta" in captured
         assert "owner_occupied" in captured
         assert "mortgagor" in captured
         assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("wealth_deposits"))
+        assert np.allclose(captured["lagged_income"], test_country.households.ts.prev("expected_income"))
+        assert np.allclose(captured["lagged_liquid_wealth"], test_country.households.ts.prev("wealth_deposits"))
         assert np.allclose(
             captured["illiquid_wealth"], test_country.households.ts.current("wealth_other_financial_assets")
+        )
+        assert np.allclose(
+            captured["lagged_illiquid_wealth"],
+            test_country.households.ts.prev("wealth_other_financial_assets"),
+        )
+        assert np.allclose(captured["lagged_mortgage_debt"], test_country.households.ts.prev("mortgage_debt"))
+        assert np.allclose(
+            captured["lagged_consumption_loan_debt"],
+            test_country.households.ts.prev("consumption_loan_debt"),
         )
         assert np.allclose(
             captured["housing_wealth"],
@@ -100,11 +120,14 @@ class TestCountry:
 
         diagnostic_len = len(test_country.households.ts.historic("formula_implied_mpc"))
         target_len = len(test_country.households.ts.historic("target_consumption"))
+        subsistence_len = len(test_country.economy.ts.historic("subsistence_consumption"))
         test_country._set_household_target_demand(replace_current=True)
         assert len(test_country.households.ts.historic("formula_implied_mpc")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption_permanent_income")) == diagnostic_len
+        assert len(test_country.households.ts.historic("target_consumption_real_net_liquid_assets")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption_owner_occupied")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption")) == target_len
+        assert len(test_country.economy.ts.historic("subsistence_consumption")) == subsistence_len
 
         h5_path = tmp_path / "households_target_consumption.h5"
         with h5py.File(h5_path, "w") as h5_file:
@@ -113,10 +136,40 @@ class TestCountry:
             household_group = country_group["households"]
             assert "formula_implied_mpc" in household_group
             assert "target_consumption_permanent_income" in household_group
+            assert "target_consumption_real_income" in household_group
+            assert "target_consumption_lagged_real_income" in household_group
+            assert "target_consumption_real_net_liquid_assets" in household_group
+            assert "target_consumption_real_lagged_house_price" in household_group
             assert "target_consumption_interest_rate_cashflow" in household_group
             assert "target_consumption_partial_adjustment_gap" in household_group
             assert "target_consumption_owner_occupied" in household_group
             assert "target_consumption_mortgagor" in household_group
+            assert "subsistence_consumption_floor" not in household_group
+            assert "subsistence_consumption_support" not in household_group
+
+    def test__select_net_smic_base_uses_insee_annual_table(self, monkeypatch):
+        table = pd.Series([1234.0], index=pd.Index([2014], name="year"))
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+
+        assert country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0) == 1234.0
+
+    def test__select_net_smic_base_falls_back_only_when_year_missing(self, monkeypatch):
+        table = pd.Series([1234.0], index=pd.Index([2015], name="year"))
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+
+        assert country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0) == 99.0
+
+    def test__subsistence_consumption_updates_with_quarterly_cpi(self):
+        consumption_units = np.array([1.0, 1.5, 2.0])
+
+        subsistence_consumption = country_module.Country._compute_subsistence_consumption_from_units(
+            net_smic_base=100.0,
+            current_cpi=1.1,
+            initial_cpi=1.0,
+            consumption_units=consumption_units,
+        )
+
+        np.testing.assert_allclose(subsistence_consumption, [55.0, 82.5, 110.0])
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(
         self, test_country, monkeypatch

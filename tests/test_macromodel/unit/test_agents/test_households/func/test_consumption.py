@@ -415,21 +415,25 @@ class TestCESHouseholdConsumption:
 
 
 class TestCreditAugmentedHouseholdConsumption:
-    def test_compute_target_consumption_records_decomposition_and_mpc(self):
+    def test_compute_target_consumption_records_log_linear_decomposition_and_mpc(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
             minimum_consumption_fraction=0.0,
-            partial_adjustment_speed=0.5,
+            partial_adjustment_speed=1.0,
+            liquid_wealth_propensity=0.1,
+            illiquid_wealth_propensity=0.2,
+            housing_wealth_propensity=0.3,
+            house_price_propensity=0.0,
         )
 
-        n_households = 3
-        n_industries = 4
+        n_households = 1
+        n_industries = 1
 
         historic_consumption_sum = np.array(
             [
-                np.full(n_households, 80.0),
-                np.full(n_households, 100.0),
+                np.full(n_households, 40.0),
+                np.full(n_households, 50.0),
             ]
         )
         saving_rates = np.zeros(n_households)
@@ -437,13 +441,12 @@ class TestCreditAugmentedHouseholdConsumption:
         household_benefits = np.zeros(n_households)
         consumption_weights = np.full(n_industries, 1.0 / n_industries)
         consumption_weights_by_income = np.zeros((n_industries, n_households))
-        liquid_wealth = np.full(n_households, 50.0)
-        illiquid_wealth = np.full(n_households, 40.0)
+        liquid_wealth = np.full(n_households, 999.0)
+        illiquid_wealth = np.full(n_households, 999.0)
         housing_wealth = np.full(n_households, 120.0)
         rent = np.full(n_households, 10.0)
-        mortgage_debt = np.full(n_households, 20.0)
+        mortgage_debt = np.full(n_households, 999.0)
         mortgage_payment = np.full(n_households, 5.0)
-        house_price_growth = 0.1
 
         result = consumption_obj.compute_target_consumption(
             expected_inflation=0.0,
@@ -468,8 +471,14 @@ class TestCreditAugmentedHouseholdConsumption:
             owner_occupied=np.ones(n_households),
             mortgagor=np.ones(n_households),
             house_price_index=1.1,
-            house_price_growth=house_price_growth,
+            house_price_growth=0.1,
             lagged_consumption=historic_consumption_sum[-1],
+            lagged_income=np.array([80.0]),
+            lagged_liquid_wealth=np.array([60.0]),
+            lagged_illiquid_wealth=np.array([30.0]),
+            lagged_mortgage_debt=np.array([40.0]),
+            lagged_consumption_loan_debt=np.array([10.0]),
+            lagged_house_price_index=1.0,
         )
 
         assert result.shape == (n_households, n_industries)
@@ -483,38 +492,45 @@ class TestCreditAugmentedHouseholdConsumption:
         assert "target_consumption_permanent_income" in components
         assert "target_consumption_partial_adjustment_gap" in components
         assert "target_consumption_interest_rate_cashflow" in components
+        np.testing.assert_allclose(components["target_consumption_real_income"], 100.0)
+        np.testing.assert_allclose(components["target_consumption_lagged_real_income"], 80.0)
+        np.testing.assert_allclose(components["target_consumption_real_lagged_consumption"], 50.0)
+        np.testing.assert_allclose(components["target_consumption_real_net_liquid_assets"], 10.0)
+        np.testing.assert_allclose(components["target_consumption_real_illiquid_financial_assets"], 30.0)
+        np.testing.assert_allclose(components["target_consumption_real_housing_wealth"], 120.0)
+        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.01)
+        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.06)
+        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.45)
+        np.testing.assert_allclose(result.sum(axis=1), 100.0 * np.exp(0.52))
         np.testing.assert_allclose(components["target_consumption_interest_rate_cashflow"], 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_rent"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_mortgage_debt"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_mortgage_payment"], 0.0)
         np.testing.assert_allclose(components["target_consumption_owner_occupied"], 1.0)
         np.testing.assert_allclose(components["target_consumption_mortgagor"], 1.0)
 
-    def test_compute_target_consumption_uses_spendable_income_without_double_counting_benefits(self):
+    def test_compute_target_consumption_excludes_benefits_rent_and_scheduled_mortgage_from_target(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
             minimum_consumption_fraction=0.0,
             partial_adjustment_speed=1.0,
-            permanent_income_propensity=1.0,
             liquid_wealth_propensity=0.1,
             illiquid_wealth_propensity=0.2,
             housing_wealth_propensity=0.3,
-            rent_propensity=1.0,
-            mortgage_debt_propensity=0.4,
-            mortgage_payment_propensity=1.0,
-            house_price_propensity=0.5,
+            house_price_propensity=0.0,
         )
 
         income = np.array([100.0])
-        household_benefits = np.array([20.0])
         consumption_weights = np.array([1.0])
-        consumption_obj.compute_target_consumption(
+        base_args = dict(
             expected_inflation=0.1,
             current_cpi=2.0,
             initial_cpi=1.0,
             historic_consumption_sum=np.array([[80.0]]),
             saving_rates=np.zeros(1),
             income=income,
-            household_benefits=household_benefits,
             consumption_weights=consumption_weights,
             consumption_weights_by_income=np.zeros((1, 1)),
             exogenous_total_consumption=np.zeros(1),
@@ -524,22 +540,38 @@ class TestCreditAugmentedHouseholdConsumption:
             liquid_wealth=np.array([60.0]),
             illiquid_wealth=np.array([30.0]),
             housing_wealth=np.array([120.0]),
-            rent=np.array([10.0]),
             mortgage_debt=np.array([40.0]),
-            mortgage_payment=np.array([6.0]),
             owner_occupied=np.array([1.0]),
             mortgagor=np.array([1.0]),
             house_price_index=1.2,
             house_price_growth=0.05,
             lagged_consumption=np.array([80.0]),
+            lagged_income=np.array([160.0]),
+            lagged_cpi=2.0,
+            lagged_liquid_wealth=np.array([60.0]),
+            lagged_illiquid_wealth=np.array([30.0]),
+            lagged_mortgage_debt=np.array([40.0]),
+            lagged_consumption_loan_debt=np.array([10.0]),
+            lagged_house_price_index=1.0,
         )
 
+        low_cost_result = consumption_obj.compute_target_consumption(
+            **base_args,
+            household_benefits=np.array([20.0]),
+            rent=np.array([10.0]),
+            mortgage_payment=np.array([6.0]),
+        )
+        high_cost_result = consumption_obj.compute_target_consumption(
+            **base_args,
+            household_benefits=np.array([2_000.0]),
+            rent=np.array([1_000.0]),
+            mortgage_payment=np.array([600.0]),
+        )
         components = consumption_obj.last_target_consumption_components
-        np.testing.assert_allclose(components["target_consumption_permanent_income"], 110.0)
-        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 6.6)
-        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 6.6)
-        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 39.6)
-        np.testing.assert_allclose(components["target_consumption_rent"], -11.0)
-        np.testing.assert_allclose(components["target_consumption_mortgage_debt"], -17.6)
-        np.testing.assert_allclose(components["target_consumption_mortgage_payment"], -6.6)
-        np.testing.assert_allclose(components["target_consumption_house_price"], 3.3)
+        np.testing.assert_allclose(low_cost_result, high_cost_result)
+        np.testing.assert_allclose(components["target_consumption_real_income"], 50.0)
+        np.testing.assert_allclose(components["target_consumption_permanent_income"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_rent"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_mortgage_payment"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_rent_diagnostic"], 1_000.0)
+        np.testing.assert_allclose(components["target_consumption_mortgage_payment_diagnostic"], 600.0)

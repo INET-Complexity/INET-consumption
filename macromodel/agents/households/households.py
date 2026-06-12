@@ -332,6 +332,14 @@ class Households(Agent):
                 for hh_id in range(ts.current("n_households"))
             ]
         )
+        # Stage 2 proxy: consumption units are computed from initial household ages.
+        states["Consumption Units"] = np.array(
+            [
+                Households._compute_consumption_units_from_ages(individual_ages[states["corr_individuals"][hh_id]])
+                for hh_id in range(ts.current("n_households"))
+            ],
+            dtype=float,
+        )
 
         # Corresponding renters
         states["corr_renters"] = [[int(x) for x in sublist if not pd.isna(x)] for sublist in corr_renters]
@@ -654,8 +662,15 @@ class Households(Agent):
         taxes: Optional[np.ndarray] = None,
         initial_taxes: Optional[np.ndarray] = None,
         income_override: Optional[np.ndarray] = None,
+        lagged_income_override: Optional[np.ndarray] = None,
+        lagged_cpi: Optional[float] = None,
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
+        lagged_house_price_index: Optional[float] = None,
+        real_borrowing_rate: Optional[float] = None,
+        consumer_debt_rate_delta: Optional[float] = None,
+        permanent_income_log_ratio: Optional[np.ndarray] = None,
+        uncertainty_delta: Optional[np.ndarray] = None,
         mortgage_payment: Optional[np.ndarray] = None,
         replace_current_diagnostics: bool = False,
     ) -> np.ndarray:
@@ -681,8 +696,15 @@ class Households(Agent):
             initial_prices (Optional[np.ndarray]): Initial prices by industry for CES substitution
             taxes (Optional[np.ndarray]): Current tax rates by industry for CES substitution
             initial_taxes (Optional[np.ndarray]): Initial tax rates by industry for CES substitution
+            lagged_income_override (Optional[np.ndarray]): Explicit previous spendable-income base for shock tests
+            lagged_cpi (Optional[float]): Previous consumer CPI level for lagged real inputs
             house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
             house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
+            lagged_house_price_index (Optional[float]): Lagged HPI index level for the paper house-price term
+            real_borrowing_rate (Optional[float]): Explicit real-rate proxy; defaults to zero placeholder
+            consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
+            permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
+            uncertainty_delta (Optional[np.ndarray]): Explicit uncertainty placeholder
             mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
 
@@ -702,6 +724,7 @@ class Households(Agent):
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
+            lagged_income = self.ts.prev("expected_income") if lagged_income_override is None else lagged_income_override
             mortgage_payment = (
                 np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
             )
@@ -738,7 +761,18 @@ class Households(Agent):
                 mortgagor=mortgagor,
                 house_price_index=house_price_index,
                 house_price_growth=house_price_growth,
-                lagged_consumption=self.ts.current("consumption"),
+                lagged_consumption=self.ts.prev("consumption"),
+                lagged_income=lagged_income,
+                lagged_cpi=lagged_cpi,
+                lagged_liquid_wealth=self.ts.prev("wealth_deposits"),
+                lagged_illiquid_wealth=self.ts.prev("wealth_other_financial_assets"),
+                lagged_mortgage_debt=self.ts.prev("mortgage_debt"),
+                lagged_consumption_loan_debt=self.ts.prev("consumption_loan_debt"),
+                lagged_house_price_index=lagged_house_price_index,
+                real_borrowing_rate=real_borrowing_rate,
+                permanent_income_log_ratio=permanent_income_log_ratio,
+                consumer_debt_rate_delta=consumer_debt_rate_delta,
+                uncertainty_delta=uncertainty_delta,
             )
             self._append_target_consumption_diagnostics(
                 self.functions["consumption"],
@@ -750,19 +784,38 @@ class Households(Agent):
     def _target_consumption_diagnostic_keys() -> list[str]:
         return [
             "target_consumption_lagged_consumption",
+            "target_consumption_real_income",
+            "target_consumption_lagged_real_income",
+            "target_consumption_real_lagged_consumption",
             "target_consumption_long_run",
+            "target_consumption_log_long_run",
             "target_consumption_permanent_income",
             "target_consumption_liquid_wealth",
             "target_consumption_illiquid_wealth",
             "target_consumption_housing_wealth",
+            "target_consumption_real_net_liquid_assets",
+            "target_consumption_real_illiquid_financial_assets",
+            "target_consumption_real_housing_wealth",
+            "target_consumption_real_consumer_debt",
             "target_consumption_rent",
             "target_consumption_mortgage_debt",
             "target_consumption_mortgage_payment",
+            "target_consumption_rent_diagnostic",
+            "target_consumption_mortgage_debt_diagnostic",
+            "target_consumption_mortgage_payment_diagnostic",
             "target_consumption_house_price",
             "target_consumption_interest_rate_cashflow",
             "target_consumption_uncertainty",
             "target_consumption_partial_adjustment_gap",
+            "target_consumption_income_growth",
             "target_consumption_house_price_index",
+            "target_consumption_lagged_house_price_index",
+            "target_consumption_real_lagged_house_price",
+            "target_consumption_real_borrowing_rate",
+            "target_consumption_permanent_income_log_ratio",
+            "target_consumption_consumer_debt_rate_delta",
+            "target_consumption_interest_rate_cashflow_index",
+            "target_consumption_uncertainty_delta",
             "target_consumption_owner_occupied",
             "target_consumption_mortgagor",
         ]
@@ -804,6 +857,49 @@ class Households(Agent):
             self.ts.override_current("formula_implied_mpc", formula_implied_mpc)
         else:
             self.ts.formula_implied_mpc.append(formula_implied_mpc)
+
+    @staticmethod
+    def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
+        """Return paper-style household consumption units from member ages.
+
+        The data available here has ages, not the paper's exact adult/child
+        dependency state. Stage 2 uses age >= 14 for the 0.5 CU additional-member
+        category and age < 14 for the 0.3 CU child category.
+        """
+        ages = np.asarray(ages, dtype=float)
+        if len(ages) == 0:
+            return 1.0
+        older_members = int(np.sum(ages >= 14.0))
+        younger_children = int(np.sum(ages < 14.0))
+        return 1.0 + 0.5 * max(0, older_members - 1) + 0.3 * younger_children
+
+    def _current_consumption_units(self) -> np.ndarray:
+        return np.asarray(
+            self.states.get("Consumption Units", np.ones(self.ts.current("n_households"))),
+            dtype=float,
+        )
+
+    def _apply_subsistence_consumption_floor_to_goods_budget(
+        self,
+        goods_budget: np.ndarray,
+        subsistence_consumption: np.ndarray | None,
+    ) -> np.ndarray:
+        """Top up goods demand to the CU-adjusted subsistence floor.
+
+        This is a feasibility-layer adjustment, not a behavioural target clamp.
+        Exact fiscal transfer booking is not wired here; this only enforces
+        feasibility against the country/economy-level subsistence series.
+        """
+        adjusted_budget = np.asarray(goods_budget, dtype=float).copy()
+        if subsistence_consumption is None:
+            return adjusted_budget
+        floor = np.asarray(subsistence_consumption, dtype=float)
+        target_consumption = np.asarray(self.ts.current("target_consumption"), dtype=float)
+        current_consumption_budget = target_consumption.sum(axis=1)
+        top_up = np.maximum(0.0, floor - current_consumption_budget)
+        if np.any(top_up > 0.0):
+            adjusted_budget += np.outer(top_up, self.consumption_weights)
+        return adjusted_budget
 
     def compute_target_investment(
         self,
@@ -1177,6 +1273,7 @@ class Households(Agent):
     def prepare_goods_market_clearing(
         self,
         exchange_rate_usd_to_lcu: float,
+        subsistence_consumption: np.ndarray | None = None,
     ) -> None:
         """Prepare for goods market clearing.
 
@@ -1192,10 +1289,10 @@ class Households(Agent):
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
         # Prepare goods market clearing
-        self.prepare_buying_goods()
+        self.prepare_buying_goods(subsistence_consumption=subsistence_consumption)
         self.prepare_selling_goods()
 
-    def prepare_buying_goods(self) -> None:
+    def prepare_buying_goods(self, subsistence_consumption: np.ndarray | None = None) -> None:
         """Prepare goods purchase decisions.
 
         Sets up buying based on:
@@ -1203,10 +1300,14 @@ class Households(Agent):
         - Target investment
         - Exchange rates
         """
+        goods_budget = self._apply_subsistence_consumption_floor_to_goods_budget(
+            self.ts.current("target_consumption") + self.ts.current("target_investment"),
+            subsistence_consumption,
+        )
         self.set_goods_to_buy(
             1.0
             / self.exchange_rate_usd_to_lcu
-            * (self.ts.current("target_consumption") + self.ts.current("target_investment"))
+            * goods_budget
         )
 
     def prepare_selling_goods(self) -> None:

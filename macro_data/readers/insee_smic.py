@@ -5,12 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 DEFAULT_INSEE_SMIC_CSV = (
-    Path(__file__).resolve().parents[2]
-    / "run_model"
-    / "data"
-    / "raw_data"
-    / "INSEE"
-    / "SMIC_monthly_values.csv"
+    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "INSEE" / "SMIC_monthly_values.csv"
 )
 
 
@@ -32,4 +27,3 @@ def load_insee_smic_annual_table(path: str | Path = DEFAULT_INSEE_SMIC_CSV) -> p
     annual["net_monthly_smic"] = pd.to_numeric(annual["net_monthly_smic"], errors="raise")
     annual = annual.drop_duplicates(subset="year", keep="first").sort_values("year")
     return annual.set_index("year")["net_monthly_smic"].rename("net_monthly_smic")
-

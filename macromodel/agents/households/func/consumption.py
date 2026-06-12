@@ -704,9 +704,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_lagged_house_price = np.maximum(lagged_house_price_index_arr / lagged_deflator, self.house_price_floor)
 
         net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / real_spendable_income
-        illiquid_assets_term = (
-            self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_spendable_income
-        )
+        illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_spendable_income
         house_price_term = self.house_price_propensity * np.log(real_lagged_house_price / real_lagged_income)
         housing_wealth_term = self.housing_wealth_propensity * real_housing_wealth / real_lagged_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
@@ -842,7 +840,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         rent = self._as_array(income, rent)
         mortgage_debt = self._as_array(income, mortgage_debt)
         mortgage_payment = self._as_array(income, mortgage_payment)
-        lagged_liquid_wealth = self._as_array(income, lagged_liquid_wealth if lagged_liquid_wealth is not None else liquid_wealth)
+        lagged_liquid_wealth = self._as_array(
+            income, lagged_liquid_wealth if lagged_liquid_wealth is not None else liquid_wealth
+        )
         lagged_illiquid_wealth = self._as_array(
             income,
             lagged_illiquid_wealth if lagged_illiquid_wealth is not None else illiquid_wealth,
@@ -883,7 +883,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             expected_inflation=expected_inflation,
         )
 
-        current_deflator = max(float(current_cpi) / (float(initial_cpi) if initial_cpi != 0.0 else 1.0), self.price_floor)
+        current_deflator = max(
+            float(current_cpi) / (float(initial_cpi) if initial_cpi != 0.0 else 1.0), self.price_floor
+        )
         real_income_perturbation = np.maximum(1.0, np.abs(income / current_deflator) * 1e-4)
         nominal_income_perturbation = real_income_perturbation * current_deflator
         _, perturbed_target = self._evaluate_target(

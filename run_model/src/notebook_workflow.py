@@ -393,7 +393,9 @@ def run_single_simulation(
         seed=cfg.seed,
     )
     data_paths = DataPaths.default_paths(raw_data_path, [data.configuration.year])
-    model = Simulation.from_datawrapper(datawrapper=data, simulation_configuration=simulation_config, data_paths=data_paths)
+    model = Simulation.from_datawrapper(
+        datawrapper=data, simulation_configuration=simulation_config, data_paths=data_paths
+    )
     model.run()
     model.save(save_dir=output_dir, file_name=model_h5_path.name)
     df_base = build_macro_output_df(model, country_code=cfg.country_iso3)

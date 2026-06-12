@@ -884,6 +884,7 @@ class Households(Agent):
     def _compute_subsistence_consumption_shortfall(
         self,
         subsistence_consumption: np.ndarray | None,
+        target_consumption: np.ndarray,
     ) -> np.ndarray:
         """Compute the CU-adjusted subsistence shortfall as a diagnostic.
 
@@ -895,8 +896,7 @@ class Households(Agent):
         if subsistence_consumption is None:
             return np.zeros(n_households, dtype=float)
         floor = np.asarray(subsistence_consumption, dtype=float)
-        target_consumption = np.asarray(self.ts.current("target_consumption"), dtype=float)
-        current_consumption_budget = target_consumption.sum(axis=1)
+        current_consumption_budget = np.asarray(target_consumption, dtype=float).sum(axis=1)
         return np.maximum(0.0, floor - current_consumption_budget)
 
     def compute_target_investment(
@@ -1294,7 +1294,9 @@ class Households(Agent):
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
         # Compute subsistence shortfall diagnostic (no effect on clearing budget)
-        shortfall = self._compute_subsistence_consumption_shortfall(subsistence_consumption)
+        shortfall = self._compute_subsistence_consumption_shortfall(
+            subsistence_consumption, self.ts.current("target_consumption")
+        )
 
         # Prepare goods market clearing
         self.prepare_buying_goods()

@@ -3,8 +3,8 @@
 import numpy as np
 import pandas as pd
 
-from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macro_data.readers.income_belief_priors import lookup_income_belief_priors
+from macromodel.agents.individuals.individual_properties import ActivityStatus
 
 AGE_GROUPS = ["18-34", "35-49", "50-70", "71-85"]
 AGE_GROUP_BOUNDS = [18, 35, 50, 71, 86]  # right-open bins; ages clipped to [18, 85]

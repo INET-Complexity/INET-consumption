@@ -1,8 +1,8 @@
 import pytest
 
 from macro_data.readers.income_belief_priors import (
-    lookup_income_belief_priors,
     load_income_belief_priors_table,
+    lookup_income_belief_priors,
 )
 
 

@@ -748,15 +748,13 @@ class Households(Agent):
             if getattr(consumption_function, "uses_income_belief_learning", False) and (
                 permanent_income_log_ratio is None or uncertainty_delta is None
             ):
-                learning_outputs = self.compute_income_belief_learning_outputs(
-                    current_income=income,
-                    lagged_income=lagged_income,
+                learning_inputs = self.current_income_belief_learning_inputs(
                     common_permanent_income_log_ratio=common_permanent_income_log_ratio,
                 )
                 if permanent_income_log_ratio is None:
-                    permanent_income_log_ratio = learning_outputs.permanent_income_log_ratio
+                    permanent_income_log_ratio = learning_inputs["permanent_income_log_ratio"]
                 if uncertainty_delta is None:
-                    uncertainty_delta = learning_outputs.uncertainty_delta
+                    uncertainty_delta = learning_inputs["uncertainty_delta"]
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -806,14 +804,14 @@ class Households(Agent):
             )
             return target_consumption
 
-    def compute_income_belief_learning_outputs(
+    def update_income_belief_learning_state(
         self,
         *,
         current_income: np.ndarray,
         lagged_income: np.ndarray,
         common_permanent_income_log_ratio: np.ndarray | float | None = None,
     ) -> IncomeBeliefLearningOutputs:
-        """Compute optional income-belief inputs without persisting belief state."""
+        """Advance optional income-belief state without recording time series."""
         priors = self.states.get("income_belief_priors")
         if priors is None:
             raise ValueError(
@@ -834,7 +832,38 @@ class Households(Agent):
         runtime_state["kalman_gain"] = outputs.kalman_gain.copy()
         runtime_state["income_signal"] = outputs.income_signal.copy()
         runtime_state["prediction_error"] = outputs.prediction_error.copy()
+        runtime_state["permanent_income_log_ratio"] = outputs.permanent_income_log_ratio.copy()
+        runtime_state["uncertainty_delta"] = outputs.uncertainty_delta.copy()
         return outputs
+
+    def current_income_belief_learning_inputs(
+        self,
+        *,
+        common_permanent_income_log_ratio: np.ndarray | float | None = None,
+    ) -> dict[str, np.ndarray]:
+        """Read latest optional learning inputs for planning without updating beliefs."""
+        priors = self.states.get("income_belief_priors")
+        if priors is None:
+            raise ValueError(
+                "Income-belief learning was requested by the consumption rule, "
+                "but households.states['income_belief_priors'] is not available."
+            )
+        runtime_state = self._income_belief_runtime_state(priors)
+        rho = np.asarray(priors["income_belief_rho"], dtype=float)
+        common_component = 0.0 if common_permanent_income_log_ratio is None else np.asarray(
+            common_permanent_income_log_ratio,
+            dtype=float,
+        )
+        permanent_income_log_ratio = runtime_state["posterior_mean"] / np.maximum(1.0 - rho, 1e-12)
+        permanent_income_log_ratio = permanent_income_log_ratio + common_component
+        uncertainty_delta = runtime_state.get("uncertainty_delta")
+        if uncertainty_delta is None:
+            uncertainty_delta = np.zeros_like(runtime_state["posterior_variance"])
+            runtime_state["uncertainty_delta"] = uncertainty_delta
+        return {
+            "permanent_income_log_ratio": permanent_income_log_ratio,
+            "uncertainty_delta": uncertainty_delta,
+        }
 
     def _income_belief_runtime_state(self, priors: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Return mutable posterior state, seeded from static priors once."""

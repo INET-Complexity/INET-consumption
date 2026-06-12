@@ -1721,6 +1721,11 @@ class Country:
             [self.households.ts.current("income_financial_assets").sum()]
         )
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
+        if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
+            self.households.update_income_belief_learning_state(
+                current_income=self.households.ts.current("income"),
+                lagged_income=self.households.ts.prev("income"),
+            )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()
 

@@ -47,6 +47,7 @@ def compute_income_belief_learning_outputs(
     prior_variance: np.ndarray | None = None,
     common_permanent_income_log_ratio: float | np.ndarray | None = None,
     income_floor: float = 1e-12,
+    rho_denominator_floor: float = 1e-12,
 ) -> IncomeBeliefLearningOutputs:
     """Return one-period Bayesian income-learning outputs for households.
 
@@ -85,9 +86,13 @@ def compute_income_belief_learning_outputs(
     process_variance = _household_array(priors, "sigma2_v", n_households)
     signal_variance = _household_array(priors, "sigma2_xi", n_households)
 
+    common_component = 0.0 if common_permanent_income_log_ratio is None else np.asarray(
+        common_permanent_income_log_ratio,
+        dtype=float,
+    )
     income_signal = np.log(np.maximum(current_income, income_floor)) - np.log(
         np.maximum(lagged_income, income_floor)
-    )
+    ) - common_component
     predicted_mean = rho * prior_mean
     predicted_variance = np.maximum((rho**2) * prior_variance + process_variance, 0.0)
     prediction_error = income_signal - predicted_mean
@@ -102,8 +107,8 @@ def compute_income_belief_learning_outputs(
     posterior_variance = np.maximum((1.0 - kalman_gain) * predicted_variance, 0.0)
     uncertainty_delta = posterior_variance - prior_variance
 
-    common_component = 0.0 if common_permanent_income_log_ratio is None else common_permanent_income_log_ratio
-    permanent_income_log_ratio = posterior_mean + np.asarray(common_component, dtype=float)
+    rho_denominator = np.maximum(1.0 - rho, rho_denominator_floor)
+    permanent_income_log_ratio = posterior_mean / rho_denominator + common_component
 
     return IncomeBeliefLearningOutputs(
         permanent_income_log_ratio=permanent_income_log_ratio,

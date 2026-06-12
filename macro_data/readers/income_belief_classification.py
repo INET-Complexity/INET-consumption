@@ -9,6 +9,8 @@ from macro_data.readers.income_belief_priors import lookup_income_belief_priors
 AGE_GROUPS = ["18-34", "35-49", "50-70", "71-85"]
 AGE_GROUP_BOUNDS = [18, 35, 50, 71, 86]  # right-open bins; ages clipped to [18, 85]
 
+# FIRM_INVESTOR/BANK_INVESTOR are mapped to "retired" as a simplification: the priors
+# table has no dedicated category for these statuses and they are not wage earners.
 _EMPLOYMENT_STATUS_MAP = {
     ActivityStatus.EMPLOYED: "employed",
     ActivityStatus.UNEMPLOYED: "unemployed",
@@ -67,14 +69,18 @@ def compute_household_income_beliefs(
         for field in BELIEF_FIELDS:
             member_values[field][mask] = priors[field]
 
+    if household_id.size and (household_id.min() < 0 or household_id.max() >= n_households):
+        raise ValueError("individuals_household_id contains values outside [0, n_households)")
+
     household_total_income = np.bincount(household_id, weights=income, minlength=n_households)
     member_count = np.bincount(household_id, minlength=n_households)
     total_income_per_member = household_total_income[household_id]
+    member_count_per_member = np.maximum(member_count[household_id], 1)
     has_income = total_income_per_member > 0
     weights = np.where(
         has_income,
         income / np.where(has_income, total_income_per_member, 1.0),
-        1.0 / member_count[household_id],
+        1.0 / member_count_per_member,
     )
 
     result = {}

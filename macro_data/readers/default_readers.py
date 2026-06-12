@@ -91,6 +91,9 @@ class DataPaths:
         emissions_path (Path): Path to emissions data
         insee_smic_path (Optional[Path]): Path to INSEE monthly SMIC values (FRA calibration)
         income_belief_priors_path (Optional[Path]): Path to the income-belief priors table (Stage 3 calibration)
+
+    Note: leaving ``insee_smic_path`` or ``income_belief_priors_path`` as ``None`` makes the
+    corresponding reader fall back to its own module-level default CSV path.
     """
 
     goods_criticality_path: Path

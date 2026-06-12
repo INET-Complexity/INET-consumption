@@ -32,9 +32,7 @@ def _household_array(priors: dict[str, np.ndarray], key: str, n_households: int)
         raise ValueError(f"Income-belief priors missing required key {key!r}.")
     value = np.asarray(priors[key], dtype=float)
     if value.shape != (n_households,):
-        raise ValueError(
-            f"Income-belief prior {key!r} must have shape ({n_households},), got {value.shape}."
-        )
+        raise ValueError(f"Income-belief prior {key!r} must have shape ({n_households},), got {value.shape}.")
     return value
 
 
@@ -86,13 +84,19 @@ def compute_income_belief_learning_outputs(
     process_variance = _household_array(priors, "sigma2_v", n_households)
     signal_variance = _household_array(priors, "sigma2_xi", n_households)
 
-    common_component = 0.0 if common_permanent_income_log_ratio is None else np.asarray(
-        common_permanent_income_log_ratio,
-        dtype=float,
+    common_component = (
+        0.0
+        if common_permanent_income_log_ratio is None
+        else np.asarray(
+            common_permanent_income_log_ratio,
+            dtype=float,
+        )
     )
-    income_signal = np.log(np.maximum(current_income, income_floor)) - np.log(
-        np.maximum(lagged_income, income_floor)
-    ) - common_component
+    income_signal = (
+        np.log(np.maximum(current_income, income_floor))
+        - np.log(np.maximum(lagged_income, income_floor))
+        - common_component
+    )
     predicted_mean = rho * prior_mean
     predicted_variance = np.maximum((rho**2) * prior_variance + process_variance, 0.0)
     prediction_error = income_signal - predicted_mean

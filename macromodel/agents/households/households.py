@@ -850,9 +850,13 @@ class Households(Agent):
             )
         runtime_state = self._income_belief_runtime_state(priors)
         rho = np.asarray(priors["income_belief_rho"], dtype=float)
-        common_component = 0.0 if common_permanent_income_log_ratio is None else np.asarray(
-            common_permanent_income_log_ratio,
-            dtype=float,
+        common_component = (
+            0.0
+            if common_permanent_income_log_ratio is None
+            else np.asarray(
+                common_permanent_income_log_ratio,
+                dtype=float,
+            )
         )
         permanent_income_log_ratio = runtime_state["posterior_mean"] / np.maximum(1.0 - rho, 1e-12)
         permanent_income_log_ratio = permanent_income_log_ratio + common_component

@@ -77,12 +77,8 @@ def test__compute_household_income_beliefs_income_weighted_average(priors_table)
     assert result["income_belief_p"][0] == pytest.approx(
         w1 * employed_3549["mean_income_uncertainty_var_prior"] + w2 * retired_5070["mean_income_uncertainty_var_prior"]
     )
-    assert result["sigma2_xi"][0] == pytest.approx(
-        w1 * employed_3549["sigma2_xi"] + w2 * retired_5070["sigma2_xi"]
-    )
-    assert result["sigma2_v"][0] == pytest.approx(
-        w1 * employed_3549["sigma2_v"] + w2 * retired_5070["sigma2_v"]
-    )
+    assert result["sigma2_xi"][0] == pytest.approx(w1 * employed_3549["sigma2_xi"] + w2 * retired_5070["sigma2_xi"])
+    assert result["sigma2_v"][0] == pytest.approx(w1 * employed_3549["sigma2_v"] + w2 * retired_5070["sigma2_v"])
 
 
 def test__compute_household_income_beliefs_equal_weight_fallback_when_zero_income(priors_table):

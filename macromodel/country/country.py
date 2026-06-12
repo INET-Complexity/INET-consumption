@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from macro_data import SyntheticCountry
+from macro_data.readers.insee_smic import load_insee_smic_annual_table
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -388,6 +389,22 @@ class Country:
             time_unit=time_unit,
             initial_sectoral_household_consumption=initial_consumption_by_industry.values.flatten(),
         )
+        net_smic_base = cls._select_net_smic_base(
+            initial_year=initial_year,
+            fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],
+            country_name=country_name,
+        )
+        economy.ts.override_current("net_smic_base", [net_smic_base])
+        economy.ts.override_current(
+            "subsistence_consumption",
+            cls._compute_subsistence_consumption_from_units(
+                net_smic_base=net_smic_base,
+                current_cpi=economy.current_consumer_price_level(),
+                initial_cpi=economy.initial_consumer_price_level(),
+                consumption_units=households._current_consumption_units(),
+                time_unit=time_unit,
+            ),
+        )
 
         labour_market = LabourMarket.from_agents(
             individuals=individuals,
@@ -435,6 +452,51 @@ class Country:
             emission_factors_lcu_ch4=emission_factors_lcu_ch4,
             emitting_indices_ch4=emitting_indices_ch4,
         )
+
+    @staticmethod
+    def _select_net_smic_base(initial_year: int, fallback_net_smic: float, country_name: str) -> float:
+        if country_name != "FRA":
+            return float(fallback_net_smic)
+        try:
+            annual_smic = load_insee_smic_annual_table()
+        except (OSError, ValueError):
+            return float(fallback_net_smic)
+        if initial_year in annual_smic.index:
+            value = annual_smic.loc[initial_year]
+            if pd.isna(value):
+                return float(fallback_net_smic)
+            return float(value)
+        return float(fallback_net_smic)
+
+    @staticmethod
+    def _compute_subsistence_consumption_from_units(
+        *,
+        net_smic_base: float,
+        current_cpi: float,
+        initial_cpi: float,
+        consumption_units: np.ndarray,
+        time_unit: int,
+    ) -> np.ndarray:
+        initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
+        net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
+        net_smic_period_t = net_smic_monthly_t * (float(time_unit) / 12.0)
+        return 0.5 * net_smic_period_t * np.asarray(consumption_units, dtype=float)
+
+    def _update_subsistence_consumption(self, *, replace_current: bool) -> None:
+        net_smic_base = self.economy.ts.current("net_smic_base")[0]
+        subsistence_consumption = self._compute_subsistence_consumption_from_units(
+            net_smic_base=net_smic_base,
+            current_cpi=self.economy.current_consumer_price_level(),
+            initial_cpi=self.economy.initial_consumer_price_level(),
+            consumption_units=self.households._current_consumption_units(),
+            time_unit=self.economy.time_unit,
+        )
+        if replace_current:
+            self.economy.ts.override_current("net_smic_base", [net_smic_base])
+            self.economy.ts.override_current("subsistence_consumption", subsistence_consumption)
+        else:
+            self.economy.ts.net_smic_base.append([net_smic_base])
+            self.economy.ts.subsistence_consumption.append(subsistence_consumption)
 
     def reset(self, configuration: CountryConfiguration) -> None:
         """Reset the country economy to its initial state.
@@ -820,6 +882,8 @@ class Country:
             self.households.ts.expected_income.append(expected_household_income)
 
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
+        self._update_subsistence_consumption(replace_current=replace_current)
+
         # Household target consumption
         # Note: For CES substitution, we track additional taxes (like carbon tax) similar to firms
         # Currently no additional taxes are implemented, so both initial and current are zero
@@ -844,6 +908,14 @@ class Country:
             initial_prices=self.firms.ts.initial("price"),
             taxes=current_additional_taxes,
             initial_taxes=initial_additional_taxes,
+            house_price_index=self.economy.ts.current("hpi")[0],
+            house_price_growth=self.economy.ts.current("hpi_inflation")[0],
+            lagged_cpi=self.economy.ts.prev(self.economy.consumer_price_level_series_name())[0],
+            lagged_house_price_index=self.economy.ts.prev("hpi")[0],
+            real_borrowing_rate=0.0,
+            consumer_debt_rate_delta=0.0,
+            mortgage_payment=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
+            replace_current_diagnostics=replace_current,
         )
 
         if replace_current:
@@ -1160,9 +1232,11 @@ class Country:
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
-        self.households.prepare_goods_market_clearing(
+        subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
+            subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
         )
+        self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
         self.government_entities.prepare_goods_market_clearing(
             n_industries=self.economy.n_industries,
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,

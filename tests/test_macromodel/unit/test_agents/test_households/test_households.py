@@ -105,6 +105,10 @@ class TestHouseholds:
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
         income_override = np.full(n_households, 123.0)
+        lagged_income = np.full(n_households, 77.0)
+        current_income = np.full(n_households, 88.0)
+        test_households.ts.expected_income.append(lagged_income)
+        test_households.ts.expected_income.append(current_income)
         captured = {}
 
         def compute_target_consumption(**kwargs):
@@ -129,6 +133,32 @@ class TestHouseholds:
         )
 
         np.testing.assert_allclose(captured["income"], income_override)
+        np.testing.assert_allclose(captured["lagged_income"], lagged_income)
+
+    def test__prepare_goods_market_clearing_reports_subsistence_shortfall_without_altering_demand(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        target_consumption = np.full((n_households, n_industries), 1.0)
+        target_investment = np.zeros((n_households, n_industries))
+        current_consumption_budget = target_consumption.sum(axis=1)
+        floor = current_consumption_budget + 10.0
+
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        test_households.ts.override_current("target_investment", target_investment)
+        test_households.exchange_rate_usd_to_lcu = 1.0
+
+        shortfall = test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=floor,
+        )
+
+        goods_to_buy = test_households.transactor_buyer_states["Initial Goods"]
+        expected_goods_budget = target_consumption + target_investment
+        np.testing.assert_allclose(test_households.ts.current("target_consumption"), target_consumption)
+        np.testing.assert_allclose(goods_to_buy.sum(axis=1), expected_goods_budget.sum(axis=1))
+        np.testing.assert_allclose(shortfall, floor - current_consumption_budget)
 
     def test__paper_asset_returns_do_not_override_expected_financial_income(self, test_households, monkeypatch):
         from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter

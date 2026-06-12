@@ -332,6 +332,14 @@ class Households(Agent):
                 for hh_id in range(ts.current("n_households"))
             ]
         )
+        # Stage 2 proxy: consumption units are computed from initial household ages.
+        states["Consumption Units"] = np.array(
+            [
+                Households._compute_consumption_units_from_ages(individual_ages[states["corr_individuals"][hh_id]])
+                for hh_id in range(ts.current("n_households"))
+            ],
+            dtype=float,
+        )
 
         # Corresponding renters
         states["corr_renters"] = [[int(x) for x in sublist if not pd.isna(x)] for sublist in corr_renters]
@@ -654,6 +662,17 @@ class Households(Agent):
         taxes: Optional[np.ndarray] = None,
         initial_taxes: Optional[np.ndarray] = None,
         income_override: Optional[np.ndarray] = None,
+        lagged_income_override: Optional[np.ndarray] = None,
+        lagged_cpi: Optional[float] = None,
+        house_price_index: Optional[float] = None,
+        house_price_growth: Optional[float] = None,
+        lagged_house_price_index: Optional[float] = None,
+        real_borrowing_rate: Optional[float] = None,
+        consumer_debt_rate_delta: Optional[float] = None,
+        permanent_income_log_ratio: Optional[np.ndarray] = None,
+        uncertainty_delta: Optional[np.ndarray] = None,
+        mortgage_payment: Optional[np.ndarray] = None,
+        replace_current_diagnostics: bool = False,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -677,6 +696,17 @@ class Households(Agent):
             initial_prices (Optional[np.ndarray]): Initial prices by industry for CES substitution
             taxes (Optional[np.ndarray]): Current tax rates by industry for CES substitution
             initial_taxes (Optional[np.ndarray]): Initial tax rates by industry for CES substitution
+            lagged_income_override (Optional[np.ndarray]): Explicit previous spendable-income base for shock tests
+            lagged_cpi (Optional[float]): Previous consumer CPI level for lagged real inputs
+            house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
+            house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
+            lagged_house_price_index (Optional[float]): Lagged HPI index level for the paper house-price term
+            real_borrowing_rate (Optional[float]): Explicit real-rate proxy; defaults to zero placeholder
+            consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
+            permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
+            uncertainty_delta (Optional[np.ndarray]): Explicit uncertainty placeholder
+            mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
+            replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
 
         Returns:
             np.ndarray: Target consumption by household
@@ -686,13 +716,24 @@ class Households(Agent):
 
         # Target consumption
         if assume_zero_growth:
-            return np.outer(
+            target_consumption = np.outer(
                 self.ts.initial("consumption"),
                 self.states["consumption_weights_data"],
             ).astype(float)
+            self._append_target_consumption_diagnostics(None, replace_current=replace_current_diagnostics)
+            return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
-            return self.functions["consumption"].compute_target_consumption(
+            lagged_income = (
+                self.ts.prev("expected_income") if lagged_income_override is None else lagged_income_override
+            )
+            mortgage_payment = (
+                np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
+            )
+            tenure_status = self.states["Tenure Status of the Main Residence"]
+            owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
+            mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
+            target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
@@ -712,7 +753,151 @@ class Households(Agent):
                 taxes=taxes,
                 initial_taxes=initial_taxes,
                 bundle_matrix=self.bundle_matrix,
+                liquid_wealth=self.ts.current("wealth_deposits"),
+                illiquid_wealth=self.ts.current("wealth_other_financial_assets"),
+                housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
+                rent=self.ts.current("rent"),
+                mortgage_debt=self.ts.current("mortgage_debt"),
+                mortgage_payment=mortgage_payment,
+                owner_occupied=owner_occupied,
+                mortgagor=mortgagor,
+                house_price_index=house_price_index,
+                house_price_growth=house_price_growth,
+                lagged_consumption=self.ts.prev("consumption"),
+                lagged_income=lagged_income,
+                lagged_cpi=lagged_cpi,
+                lagged_liquid_wealth=self.ts.prev("wealth_deposits"),
+                lagged_illiquid_wealth=self.ts.prev("wealth_other_financial_assets"),
+                lagged_mortgage_debt=self.ts.prev("mortgage_debt"),
+                lagged_consumption_loan_debt=self.ts.prev("consumption_loan_debt"),
+                lagged_house_price_index=lagged_house_price_index,
+                real_borrowing_rate=real_borrowing_rate,
+                permanent_income_log_ratio=permanent_income_log_ratio,
+                consumer_debt_rate_delta=consumer_debt_rate_delta,
+                uncertainty_delta=uncertainty_delta,
             )
+            self._append_target_consumption_diagnostics(
+                self.functions["consumption"],
+                replace_current=replace_current_diagnostics,
+            )
+            return target_consumption
+
+    @staticmethod
+    def _target_consumption_diagnostic_keys() -> list[str]:
+        return [
+            "target_consumption_lagged_consumption",
+            "target_consumption_real_income",
+            "target_consumption_lagged_real_income",
+            "target_consumption_real_lagged_consumption",
+            "target_consumption_long_run",
+            "target_consumption_log_long_run",
+            "target_consumption_permanent_income",
+            "target_consumption_liquid_wealth",
+            "target_consumption_illiquid_wealth",
+            "target_consumption_housing_wealth",
+            "target_consumption_real_net_liquid_assets",
+            "target_consumption_real_illiquid_financial_assets",
+            "target_consumption_real_housing_wealth",
+            "target_consumption_real_consumer_debt",
+            "target_consumption_rent",
+            "target_consumption_mortgage_debt",
+            "target_consumption_mortgage_payment",
+            "target_consumption_rent_diagnostic",
+            "target_consumption_mortgage_debt_diagnostic",
+            "target_consumption_mortgage_payment_diagnostic",
+            "target_consumption_house_price",
+            "target_consumption_interest_rate_cashflow",
+            "target_consumption_uncertainty",
+            "target_consumption_partial_adjustment_gap",
+            "target_consumption_income_growth",
+            "target_consumption_house_price_index",
+            "target_consumption_lagged_house_price_index",
+            "target_consumption_real_lagged_house_price",
+            "target_consumption_real_borrowing_rate",
+            "target_consumption_permanent_income_log_ratio",
+            "target_consumption_consumer_debt_rate_delta",
+            "target_consumption_interest_rate_cashflow_index",
+            "target_consumption_uncertainty_delta",
+            "target_consumption_owner_occupied",
+            "target_consumption_mortgagor",
+        ]
+
+    def _append_target_consumption_diagnostics(
+        self,
+        consumption_function: Any | None,
+        *,
+        replace_current: bool = False,
+    ) -> None:
+        n_households = self.ts.current("n_households")
+        diagnostic_keys = self._target_consumption_diagnostic_keys()
+
+        if (
+            consumption_function is None
+            or getattr(consumption_function, "last_target_consumption_components", None) is None
+        ):
+            zero_series = np.zeros(n_households)
+            for key in diagnostic_keys:
+                if replace_current:
+                    self.ts.override_current(key, zero_series.copy())
+                else:
+                    getattr(self.ts, key).append(zero_series.copy())
+            if replace_current:
+                self.ts.override_current("formula_implied_mpc", np.zeros(n_households))
+            else:
+                self.ts.formula_implied_mpc.append(np.zeros(n_households))
+            return
+
+        components = consumption_function.last_target_consumption_components
+        for key in diagnostic_keys:
+            value = np.asarray(components.get(key, np.zeros(n_households)), dtype=float)
+            if replace_current:
+                self.ts.override_current(key, value)
+            else:
+                getattr(self.ts, key).append(value)
+        formula_implied_mpc = np.asarray(consumption_function.last_formula_implied_mpc, dtype=float)
+        if replace_current:
+            self.ts.override_current("formula_implied_mpc", formula_implied_mpc)
+        else:
+            self.ts.formula_implied_mpc.append(formula_implied_mpc)
+
+    @staticmethod
+    def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
+        """Return paper-style household consumption units from member ages.
+
+        The data available here has ages, not the paper's exact adult/child
+        dependency state. Stage 2 uses age >= 14 for the 0.5 CU additional-member
+        category and age < 14 for the 0.3 CU child category.
+        """
+        ages = np.asarray(ages, dtype=float)
+        if len(ages) == 0:
+            return 1.0
+        older_members = int(np.sum(ages >= 14.0))
+        younger_children = int(np.sum(ages < 14.0))
+        return 1.0 + 0.5 * max(0, older_members - 1) + 0.3 * younger_children
+
+    def _current_consumption_units(self) -> np.ndarray:
+        return np.asarray(
+            self.states.get("Consumption Units", np.ones(self.ts.current("n_households"))),
+            dtype=float,
+        )
+
+    def _compute_subsistence_consumption_shortfall(
+        self,
+        subsistence_consumption: np.ndarray | None,
+        target_consumption: np.ndarray,
+    ) -> np.ndarray:
+        """Compute the CU-adjusted subsistence shortfall as a diagnostic.
+
+        This is a feasibility-layer diagnostic only: it records how far actual
+        target consumption falls below the subsistence floor, but has no
+        behavioural effect on goods-market clearing.
+        """
+        n_households = int(self.ts.current("n_households"))
+        if subsistence_consumption is None:
+            return np.zeros(n_households, dtype=float)
+        floor = np.asarray(subsistence_consumption, dtype=float)
+        current_consumption_budget = np.asarray(target_consumption, dtype=float).sum(axis=1)
+        return np.maximum(0.0, floor - current_consumption_budget)
 
     def compute_target_investment(
         self,
@@ -1086,7 +1271,8 @@ class Households(Agent):
     def prepare_goods_market_clearing(
         self,
         exchange_rate_usd_to_lcu: float,
-    ) -> None:
+        subsistence_consumption: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Prepare for goods market clearing.
 
         Sets up market participation through:
@@ -1096,13 +1282,27 @@ class Households(Agent):
 
         Args:
             exchange_rate_usd_to_lcu (float): USD to local currency rate
+            subsistence_consumption (np.ndarray | None): CU-adjusted subsistence
+                floor used only to compute a diagnostic shortfall series.
+
+        Returns:
+            np.ndarray: Per-household subsistence consumption shortfall
+                (floor minus current consumption budget, clipped at zero).
+                Diagnostic only; has no effect on goods-market clearing.
         """
         # Exchange rates
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
+        # Compute subsistence shortfall diagnostic (no effect on clearing budget)
+        shortfall = self._compute_subsistence_consumption_shortfall(
+            subsistence_consumption, self.ts.current("target_consumption")
+        )
+
         # Prepare goods market clearing
         self.prepare_buying_goods()
         self.prepare_selling_goods()
+
+        return shortfall
 
     def prepare_buying_goods(self) -> None:
         """Prepare goods purchase decisions.
@@ -1112,11 +1312,8 @@ class Households(Agent):
         - Target investment
         - Exchange rates
         """
-        self.set_goods_to_buy(
-            1.0
-            / self.exchange_rate_usd_to_lcu
-            * (self.ts.current("target_consumption") + self.ts.current("target_investment"))
-        )
+        goods_budget = self.ts.current("target_consumption") + self.ts.current("target_investment")
+        self.set_goods_to_buy(1.0 / self.exchange_rate_usd_to_lcu * goods_budget)
 
     def prepare_selling_goods(self) -> None:
         """Prepare goods sale decisions.

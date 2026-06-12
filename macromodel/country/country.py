@@ -413,18 +413,16 @@ class Country:
             ),
         )
 
-        income_belief_priors_table = load_income_belief_priors_table(INCOME_BELIEF_PRIORS_CSV)
-        income_beliefs = compute_household_income_beliefs(
-            individuals_age=individuals.states["Age"],
-            individuals_activity_status=individuals.states["Activity Status"],
-            individuals_household_id=individuals.states["Corresponding Household ID"],
-            individuals_income=individuals.ts.current("employee_income"),
-            n_households=households.ts.current("n_households"),
-            priors_table=income_belief_priors_table,
-        )
-        households.ts.override_current("income_belief_mu", income_beliefs["income_belief_mu"])
-        households.ts.override_current("income_belief_p", income_beliefs["income_belief_p"])
-        households.ts.override_current("income_belief_rho", income_beliefs["income_belief_rho"])
+        if getattr(households.functions["consumption"], "uses_income_belief_learning", False):
+            income_belief_priors_table = load_income_belief_priors_table(INCOME_BELIEF_PRIORS_CSV)
+            households.states["income_belief_priors"] = compute_household_income_beliefs(
+                individuals_age=individuals.states["Age"],
+                individuals_activity_status=individuals.states["Activity Status"],
+                individuals_household_id=individuals.states["Corresponding Household ID"],
+                individuals_income=individuals.ts.current("employee_income"),
+                n_households=households.ts.current("n_households"),
+                priors_table=income_belief_priors_table,
+            )
 
         labour_market = LabourMarket.from_agents(
             individuals=individuals,
@@ -1723,6 +1721,11 @@ class Country:
             [self.households.ts.current("income_financial_assets").sum()]
         )
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
+        if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
+            self.households.update_income_belief_learning_state(
+                current_income=self.households.ts.current("income"),
+                lagged_income=self.households.ts.prev("income"),
+            )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()
 

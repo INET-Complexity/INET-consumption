@@ -53,7 +53,7 @@ class TestCountry:
     def test__country(self, test_country):
         assert test_country is not None
 
-    def test__income_belief_fields_initialized(self, datawrapper):
+    def test__income_belief_fields_not_persisted_by_default(self, datawrapper, tmp_path):
         synthetic_country = datawrapper.synthetic_countries["FRA"]
         country_configuration = CountryConfiguration()
 
@@ -92,18 +92,77 @@ class TestCountry:
         )
 
         households = country.households
+        assert "income_belief_priors" not in households.states
+        assert "income_belief_mu" not in households.ts.get_keys()
+        assert "income_belief_p" not in households.ts.get_keys()
+        assert "income_belief_rho" not in households.ts.get_keys()
+
+        h5_path = tmp_path / "default_households_no_belief_ts.h5"
+        with h5py.File(h5_path, "w") as h5_file:
+            country_group = h5_file.create_group("FRA")
+            households.save_to_h5(country_group)
+            household_group = country_group["households"]
+            assert "income_belief_mu" not in household_group
+            assert "income_belief_p" not in household_group
+            assert "income_belief_rho" not in household_group
+
+    def test__income_belief_priors_initialized_as_static_state_for_opt_in_rule(self, datawrapper):
+        synthetic_country = datawrapper.synthetic_countries["FRA"]
+        country_configuration = CountryConfiguration()
+        country_configuration.households.functions.consumption.name = "CreditAugmentedConsumption"
+        country_configuration.households.functions.consumption.parameters = {
+            **country_configuration.households.functions.consumption.parameters,
+            "uses_income_belief_learning": True,
+        }
+
+        exchange_rates_config = ExchangeRatesConfiguration()
+        exchange_rates_df = datawrapper.exchange_rates
+        initial_year = 2014
+        country_names = ["FRA"]
+
+        exchange_rates = ExchangeRates.from_data(
+            exchange_rates_data=exchange_rates_df,
+            exchange_rate_config=exchange_rates_config,
+            initial_year=initial_year,
+            country_names=country_names,
+        )
+
+        emission_factors = np.array(
+            [
+                datawrapper.emission_factors["coal"],
+                datawrapper.emission_factors["gas"],
+                datawrapper.emission_factors["oil"],
+            ]
+        )
+
+        country = Country.from_pickled_country(
+            synthetic_country=synthetic_country,
+            country_configuration=country_configuration,
+            exchange_rates=exchange_rates,
+            country_name="FRA",
+            all_country_names=["FRA", "ROW"],
+            industries=datawrapper.industries,
+            initial_year=datawrapper.configuration.year,
+            t_max=12,
+            time_unit=datawrapper.time_unit,
+            running_multiple_countries=False,
+            emission_factors_usd=emission_factors,
+        )
+
+        households = country.households
         n_households = households.ts.current("n_households")
+        priors = households.states["income_belief_priors"]
 
-        mu = households.ts.current("income_belief_mu")
-        p = households.ts.current("income_belief_p")
-        rho = households.ts.current("income_belief_rho")
-
-        assert mu.shape == (n_households,)
-        assert p.shape == (n_households,)
-        assert rho.shape == (n_households,)
-
-        assert np.all(p >= 0)
-        assert np.allclose(rho, 0.9518878627264576)
+        assert priors["income_belief_mu"].shape == (n_households,)
+        assert priors["income_belief_p"].shape == (n_households,)
+        assert priors["income_belief_rho"].shape == (n_households,)
+        assert priors["sigma2_xi"].shape == (n_households,)
+        assert priors["sigma2_v"].shape == (n_households,)
+        assert np.all(priors["income_belief_p"] >= 0)
+        assert np.allclose(priors["income_belief_rho"], 0.9518878627264576)
+        assert "income_belief_mu" not in households.ts.get_keys()
+        assert "income_belief_p" not in households.ts.get_keys()
+        assert "income_belief_rho" not in households.ts.get_keys()
 
     def test__set_household_target_demand_uses_credit_augmented_consumption(self, test_country, monkeypatch, tmp_path):
         test_country.households.functions["consumption"] = CreditAugmentedConsumption(

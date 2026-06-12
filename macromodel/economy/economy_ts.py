@@ -231,6 +231,7 @@ def create_economy_timeseries(
         estimated_hpi_inflation=np.array([np.nan]),
         net_smic_base=[np.nan],
         subsistence_consumption=np.zeros_like(initial_real_rent_paid, dtype=float),
+        subsistence_consumption_shortfall=np.zeros_like(initial_real_rent_paid, dtype=float),
         #
         total_real_rent_paid=[initial_real_rent_paid.sum()],
         total_imp_rent_paid=[initial_imp_rent_paid.sum()],

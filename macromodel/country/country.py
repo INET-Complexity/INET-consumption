@@ -392,6 +392,7 @@ class Country:
         net_smic_base = cls._select_net_smic_base(
             initial_year=initial_year,
             fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],
+            country_name=country_name,
         )
         economy.ts.override_current("net_smic_base", [net_smic_base])
         economy.ts.override_current(
@@ -401,6 +402,7 @@ class Country:
                 current_cpi=economy.current_consumer_price_level(),
                 initial_cpi=economy.initial_consumer_price_level(),
                 consumption_units=households._current_consumption_units(),
+                time_unit=time_unit,
             ),
         )
 
@@ -452,10 +454,18 @@ class Country:
         )
 
     @staticmethod
-    def _select_net_smic_base(initial_year: int, fallback_net_smic: float) -> float:
-        annual_smic = load_insee_smic_annual_table()
+    def _select_net_smic_base(initial_year: int, fallback_net_smic: float, country_name: str) -> float:
+        if country_name != "FRA":
+            return float(fallback_net_smic)
+        try:
+            annual_smic = load_insee_smic_annual_table()
+        except (OSError, ValueError):
+            return float(fallback_net_smic)
         if initial_year in annual_smic.index:
-            return float(annual_smic.loc[initial_year])
+            value = annual_smic.loc[initial_year]
+            if pd.isna(value):
+                return float(fallback_net_smic)
+            return float(value)
         return float(fallback_net_smic)
 
     @staticmethod
@@ -465,10 +475,12 @@ class Country:
         current_cpi: float,
         initial_cpi: float,
         consumption_units: np.ndarray,
+        time_unit: int,
     ) -> np.ndarray:
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
-        net_smic_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
-        return 0.5 * net_smic_t * np.asarray(consumption_units, dtype=float)
+        net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
+        net_smic_period_t = net_smic_monthly_t * (float(time_unit) / 12.0)
+        return 0.5 * net_smic_period_t * np.asarray(consumption_units, dtype=float)
 
     def _update_subsistence_consumption(self, *, replace_current: bool) -> None:
         net_smic_base = self.economy.ts.current("net_smic_base")[0]
@@ -477,6 +489,7 @@ class Country:
             current_cpi=self.economy.current_consumer_price_level(),
             initial_cpi=self.economy.initial_consumer_price_level(),
             consumption_units=self.households._current_consumption_units(),
+            time_unit=self.economy.time_unit,
         )
         if replace_current:
             self.economy.ts.override_current("net_smic_base", [net_smic_base])
@@ -1219,10 +1232,11 @@ class Country:
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
-        self.households.prepare_goods_market_clearing(
+        subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
         )
+        self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
         self.government_entities.prepare_goods_market_clearing(
             n_industries=self.economy.n_industries,
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,

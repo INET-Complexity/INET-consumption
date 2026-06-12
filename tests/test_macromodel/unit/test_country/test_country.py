@@ -151,13 +151,50 @@ class TestCountry:
         table = pd.Series([1234.0], index=pd.Index([2014], name="year"))
         monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
 
-        assert country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0) == 1234.0
+        assert (
+            country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
+            == 1234.0
+        )
 
     def test__select_net_smic_base_falls_back_only_when_year_missing(self, monkeypatch):
         table = pd.Series([1234.0], index=pd.Index([2015], name="year"))
         monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
 
-        assert country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0) == 99.0
+        assert (
+            country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
+            == 99.0
+        )
+
+    def test__select_net_smic_base_skips_insee_table_for_non_fra(self, monkeypatch):
+        def _raise():
+            raise AssertionError("INSEE SMIC table should not be loaded for non-FRA countries")
+
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", _raise)
+
+        assert (
+            country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="ROW")
+            == 99.0
+        )
+
+    def test__select_net_smic_base_falls_back_when_value_is_nan(self, monkeypatch):
+        table = pd.Series([np.nan], index=pd.Index([2014], name="year"))
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+
+        assert (
+            country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
+            == 99.0
+        )
+
+    def test__select_net_smic_base_falls_back_on_load_error(self, monkeypatch):
+        def _raise():
+            raise OSError("missing file")
+
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", _raise)
+
+        assert (
+            country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
+            == 99.0
+        )
 
     def test__subsistence_consumption_updates_with_quarterly_cpi(self):
         consumption_units = np.array([1.0, 1.5, 2.0])
@@ -167,9 +204,24 @@ class TestCountry:
             current_cpi=1.1,
             initial_cpi=1.0,
             consumption_units=consumption_units,
+            time_unit=12,
         )
 
         np.testing.assert_allclose(subsistence_consumption, [55.0, 82.5, 110.0])
+
+    def test__subsistence_consumption_scales_with_time_unit(self):
+        consumption_units = np.array([1.0])
+
+        subsistence_consumption = country_module.Country._compute_subsistence_consumption_from_units(
+            net_smic_base=100.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            consumption_units=consumption_units,
+            time_unit=3,
+        )
+
+        # Monthly net SMIC of 100 scaled to a quarterly period (time_unit=3 months)
+        np.testing.assert_allclose(subsistence_consumption, [0.5 * 100.0 * (3 / 12)])
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(
         self, test_country, monkeypatch

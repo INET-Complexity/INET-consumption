@@ -724,7 +724,9 @@ class Households(Agent):
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
-            lagged_income = self.ts.prev("expected_income") if lagged_income_override is None else lagged_income_override
+            lagged_income = (
+                self.ts.prev("expected_income") if lagged_income_override is None else lagged_income_override
+            )
             mortgage_payment = (
                 np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
             )
@@ -879,27 +881,23 @@ class Households(Agent):
             dtype=float,
         )
 
-    def _apply_subsistence_consumption_floor_to_goods_budget(
+    def _compute_subsistence_consumption_shortfall(
         self,
-        goods_budget: np.ndarray,
         subsistence_consumption: np.ndarray | None,
     ) -> np.ndarray:
-        """Top up goods demand to the CU-adjusted subsistence floor.
+        """Compute the CU-adjusted subsistence shortfall as a diagnostic.
 
-        This is a feasibility-layer adjustment, not a behavioural target clamp.
-        Exact fiscal transfer booking is not wired here; this only enforces
-        feasibility against the country/economy-level subsistence series.
+        This is a feasibility-layer diagnostic only: it records how far actual
+        target consumption falls below the subsistence floor, but has no
+        behavioural effect on goods-market clearing.
         """
-        adjusted_budget = np.asarray(goods_budget, dtype=float).copy()
+        n_households = int(self.ts.current("n_households"))
         if subsistence_consumption is None:
-            return adjusted_budget
+            return np.zeros(n_households, dtype=float)
         floor = np.asarray(subsistence_consumption, dtype=float)
         target_consumption = np.asarray(self.ts.current("target_consumption"), dtype=float)
         current_consumption_budget = target_consumption.sum(axis=1)
-        top_up = np.maximum(0.0, floor - current_consumption_budget)
-        if np.any(top_up > 0.0):
-            adjusted_budget += np.outer(top_up, self.consumption_weights)
-        return adjusted_budget
+        return np.maximum(0.0, floor - current_consumption_budget)
 
     def compute_target_investment(
         self,
@@ -1274,7 +1272,7 @@ class Households(Agent):
         self,
         exchange_rate_usd_to_lcu: float,
         subsistence_consumption: np.ndarray | None = None,
-    ) -> None:
+    ) -> np.ndarray:
         """Prepare for goods market clearing.
 
         Sets up market participation through:
@@ -1284,15 +1282,27 @@ class Households(Agent):
 
         Args:
             exchange_rate_usd_to_lcu (float): USD to local currency rate
+            subsistence_consumption (np.ndarray | None): CU-adjusted subsistence
+                floor used only to compute a diagnostic shortfall series.
+
+        Returns:
+            np.ndarray: Per-household subsistence consumption shortfall
+                (floor minus current consumption budget, clipped at zero).
+                Diagnostic only; has no effect on goods-market clearing.
         """
         # Exchange rates
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
+        # Compute subsistence shortfall diagnostic (no effect on clearing budget)
+        shortfall = self._compute_subsistence_consumption_shortfall(subsistence_consumption)
+
         # Prepare goods market clearing
-        self.prepare_buying_goods(subsistence_consumption=subsistence_consumption)
+        self.prepare_buying_goods()
         self.prepare_selling_goods()
 
-    def prepare_buying_goods(self, subsistence_consumption: np.ndarray | None = None) -> None:
+        return shortfall
+
+    def prepare_buying_goods(self) -> None:
         """Prepare goods purchase decisions.
 
         Sets up buying based on:
@@ -1300,15 +1310,8 @@ class Households(Agent):
         - Target investment
         - Exchange rates
         """
-        goods_budget = self._apply_subsistence_consumption_floor_to_goods_budget(
-            self.ts.current("target_consumption") + self.ts.current("target_investment"),
-            subsistence_consumption,
-        )
-        self.set_goods_to_buy(
-            1.0
-            / self.exchange_rate_usd_to_lcu
-            * goods_budget
-        )
+        goods_budget = self.ts.current("target_consumption") + self.ts.current("target_investment")
+        self.set_goods_to_buy(1.0 / self.exchange_rate_usd_to_lcu * goods_budget)
 
     def prepare_selling_goods(self) -> None:
         """Prepare goods sale decisions.

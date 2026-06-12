@@ -10,6 +10,7 @@ from joblib import Parallel, delayed
 from src.visual_helpers import build_macro_output_df
 
 from macro_data import DataWrapper
+from macro_data.readers.default_readers import DataPaths
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation
 
@@ -71,6 +72,7 @@ def _run_single_seed(
     country_code: str,
     simulation_configuration: Optional[SimulationConfiguration] = None,
     save_h5_dir: str | Path | None = None,
+    data_paths: Optional[DataPaths] = None,
 ) -> tuple[int, pd.DataFrame]:
     """Run one seeded simulation and extract macro output time series."""
     country_payload = _dump_country_configurations(country_configurations)
@@ -96,6 +98,7 @@ def _run_single_seed(
     model = Simulation.from_datawrapper(
         datawrapper=datawrapper,
         simulation_configuration=configuration,
+        data_paths=data_paths,
     )
     model.run()
 
@@ -128,6 +131,7 @@ def _run_seed_batch(
     country_code: str,
     simulation_configuration: Optional[SimulationConfiguration] = None,
     save_h5_dir: str | Path | None = None,
+    data_paths: Optional[DataPaths] = None,
 ) -> list[tuple[int, pd.DataFrame]]:
     """Run a batch of seeds sequentially inside one worker process."""
     return [
@@ -139,6 +143,7 @@ def _run_seed_batch(
             country_code=country_code,
             simulation_configuration=simulation_configuration,
             save_h5_dir=save_h5_dir,
+            data_paths=data_paths,
         )
         for seed in seeds
     ]
@@ -157,6 +162,7 @@ def run_seeded_monte_carlo(
     verbose: int = 0,
     batch_size: int = 1,
     save_h5_dir: str | Path | None = None,
+    data_paths: Optional[DataPaths] = None,
 ) -> MonteCarloResult:
     """Run the model in parallel over a predefined list of random seeds.
 
@@ -189,6 +195,10 @@ def run_seeded_monte_carlo(
         Optional directory for per-seed HDF5 outputs. When omitted, the existing
         Monte Carlo behavior is unchanged and only the combined dataframe is
         returned.
+    data_paths:
+        Optional raw-data path registry used to locate calibration files (INSEE SMIC,
+        income-belief priors) at country construction. When None, the readers fall back
+        to their module-level default paths.
 
     Returns
     -------
@@ -217,6 +227,7 @@ def run_seeded_monte_carlo(
             country_code=country_code,
             simulation_configuration=simulation_configuration,
             save_h5_dir=save_h5_dir,
+            data_paths=data_paths,
         )
         for seed_batch in seed_batches
     )

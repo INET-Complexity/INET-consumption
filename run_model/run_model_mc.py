@@ -22,6 +22,7 @@ from src.monte_carlo import run_seeded_monte_carlo  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
 from macro_data.configuration import DataConfiguration, split_country_configs  # noqa: E402
+from macro_data.readers.default_readers import DataPaths  # noqa: E402
 from macromodel.configurations import CountryConfiguration, load_country_configuration  # noqa: E402
 
 logging.getLogger().setLevel(logging.ERROR)
@@ -285,6 +286,7 @@ def main(
         }
     )
 
+    data_paths = DataPaths.default_paths(raw_data_path, [data_config.year])
     mc = run_seeded_monte_carlo(
         datawrapper=data,
         country_configurations=country_configurations,
@@ -296,6 +298,7 @@ def main(
         verbose=verbose,
         batch_size=batch_size,
         save_h5_dir=save_h5_dir,
+        data_paths=data_paths,
     )
     mc.to_pickle(str(output_path))
 

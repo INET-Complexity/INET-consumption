@@ -25,6 +25,7 @@ from src.irf_analysis import build_irf_panel, summarize_irf_panel, write_irf_plo
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
+from macro_data.readers.default_readers import DataPaths  # noqa: E402
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration  # noqa: E402
 from macromodel.simulation import Simulation  # noqa: E402
 from macromodel.utils.prehooks.irf_shocks import ShockSpec, create_irf_shock_hook  # noqa: E402
@@ -53,7 +54,7 @@ def _prepare_irf_inputs(
     config_dir: str | Path | None,
     force_rebuild_data: bool,
     single_hfcs_survey: bool,
-) -> tuple[NotebookRunConfig, DataWrapper, dict[str, CountryConfiguration], str]:
+) -> tuple[NotebookRunConfig, DataWrapper, dict[str, CountryConfiguration], str, Path]:
     run_config = NotebookRunConfig(
         seed=int(seed),
         t_max=int(t_max),
@@ -66,7 +67,7 @@ def _prepare_irf_inputs(
     )
     prepared = prepare_data(run_config)
     country_configurations = build_country_config(data=prepared.data, config=run_config)
-    return run_config, prepared.data, country_configurations, prepared.cfg.country_iso3
+    return run_config, prepared.data, country_configurations, prepared.cfg.country_iso3, prepared.raw_data_path
 
 
 def _build_simulation(
@@ -75,6 +76,7 @@ def _build_simulation(
     country_configurations: dict[str, CountryConfiguration],
     seed: int,
     t_max: int,
+    data_paths: DataPaths | None = None,
 ) -> Simulation:
     configuration = SimulationConfiguration.model_validate(
         {
@@ -83,7 +85,7 @@ def _build_simulation(
             "seed": int(seed),
         }
     )
-    return Simulation.from_datawrapper(datawrapper=data, simulation_configuration=configuration)
+    return Simulation.from_datawrapper(datawrapper=data, simulation_configuration=configuration, data_paths=data_paths)
 
 
 def _run_one(
@@ -95,12 +97,14 @@ def _run_one(
     t_max: int,
     output_dir: Path,
     shock_spec: ShockSpec | None,
+    data_paths: DataPaths | None = None,
 ) -> Path:
     model = _build_simulation(
         data=data,
         country_configurations=country_configurations,
         seed=seed,
         t_max=t_max,
+        data_paths=data_paths,
     )
     if shock_spec is not None:
         model.prehooks.append(
@@ -128,6 +132,7 @@ def _run_seed(
     baseline_dir: Path,
     shocks_dir: Path,
     shock_specs: tuple[ShockSpec, ...],
+    data_paths: DataPaths | None = None,
 ) -> list[dict[str, object]]:
     baseline_h5 = _run_one(
         data=data,
@@ -137,6 +142,7 @@ def _run_seed(
         t_max=t_max,
         output_dir=baseline_dir,
         shock_spec=None,
+        data_paths=data_paths,
     )
     rows: list[dict[str, object]] = []
     for spec in shock_specs:
@@ -148,6 +154,7 @@ def _run_seed(
             t_max=t_max,
             output_dir=shocks_dir / spec.name,
             shock_spec=spec,
+            data_paths=data_paths,
         )
         rows.append(
             {
@@ -217,7 +224,7 @@ def run_irf_experiment(
         raise ValueError("A shock period plus horizon extends beyond available HDF5 rows.")
 
     output_dir = Path(output_dir)
-    _run_config, data, country_configurations, country_code = _prepare_irf_inputs(
+    _run_config, data, country_configurations, country_code, resolved_raw_data_path = _prepare_irf_inputs(
         seed=seed_list[0],
         t_max=t_max,
         country_iso3=country_iso3,
@@ -227,6 +234,7 @@ def run_irf_experiment(
         force_rebuild_data=force_rebuild_data,
         single_hfcs_survey=single_hfcs_survey,
     )
+    data_paths = DataPaths.default_paths(resolved_raw_data_path, [data.configuration.year])
     baseline_dir = output_dir / "baseline"
     shocks_dir = output_dir / "shocks"
     analysis_dir = output_dir / "analysis"
@@ -243,6 +251,7 @@ def run_irf_experiment(
             baseline_dir=baseline_dir,
             shocks_dir=shocks_dir,
             shock_specs=shock_specs,
+            data_paths=data_paths,
         )
         for seed in seed_list
     )

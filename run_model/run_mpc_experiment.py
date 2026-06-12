@@ -37,6 +37,7 @@ from src.mpc_analysis import (  # noqa: E402
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
+from macro_data.readers.default_readers import DataPaths  # noqa: E402
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration  # noqa: E402
 from macromodel.simulation import Simulation  # noqa: E402
 from macromodel.utils.prehooks.household_income_shock import create_household_income_shock_hook  # noqa: E402
@@ -98,7 +99,7 @@ def _prepare_mpc_inputs(
     config_dir: str | Path | None,
     force_rebuild_data: bool,
     single_hfcs_survey: bool,
-) -> tuple[NotebookRunConfig, DataWrapper, dict[str, CountryConfiguration], str]:
+) -> tuple[NotebookRunConfig, DataWrapper, dict[str, CountryConfiguration], str, Path]:
     """Reuse notebook data preparation and country-config alignment for MPC runs."""
     run_config = _build_run_config(
         seed=seed,
@@ -115,7 +116,7 @@ def _prepare_mpc_inputs(
     country_cfg = country_configurations[prepared.cfg.country_iso3]
     if country_cfg.assume_zero_growth:
         raise ValueError("MPC experiments require assume_zero_growth=False because target consumption ignores income.")
-    return run_config, prepared.data, country_configurations, prepared.cfg.country_iso3
+    return run_config, prepared.data, country_configurations, prepared.cfg.country_iso3, prepared.raw_data_path
 
 
 def _run_one(
@@ -129,6 +130,7 @@ def _run_one(
     shock: bool,
     shock_period: int,
     shock_fraction: float,
+    data_paths: DataPaths | None = None,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
 
@@ -144,7 +146,7 @@ def _run_one(
             "seed": int(seed),
         }
     )
-    model = Simulation.from_datawrapper(datawrapper=data, simulation_configuration=configuration)
+    model = Simulation.from_datawrapper(datawrapper=data, simulation_configuration=configuration, data_paths=data_paths)
 
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
@@ -198,6 +200,7 @@ def _run_seed_pair(
     shock_dir: Path,
     shock_period: int,
     shock_fraction: float,
+    data_paths: DataPaths | None = None,
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed."""
     baseline_metadata = _run_one(
@@ -210,6 +213,7 @@ def _run_seed_pair(
         shock=False,
         shock_period=shock_period,
         shock_fraction=shock_fraction,
+        data_paths=data_paths,
     )
     _run_one(
         data=data,
@@ -221,6 +225,7 @@ def _run_seed_pair(
         shock=True,
         shock_period=shock_period,
         shock_fraction=shock_fraction,
+        data_paths=data_paths,
     )
     return baseline_metadata
 
@@ -273,7 +278,7 @@ def run_mpc_experiment(
     if shock_row + horizon_periods > t_max + 1:
         raise ValueError("shock_period + horizon_periods extends beyond available HDF5 rows.")
 
-    _run_config, data, country_configurations, country_code = _prepare_mpc_inputs(
+    _run_config, data, country_configurations, country_code, resolved_raw_data_path = _prepare_mpc_inputs(
         seed=seed_list[0],
         t_max=t_max,
         country_iso3=country_iso3,
@@ -283,6 +288,7 @@ def run_mpc_experiment(
         force_rebuild_data=force_rebuild_data,
         single_hfcs_survey=single_hfcs_survey,
     )
+    data_paths = DataPaths.default_paths(resolved_raw_data_path, [data.configuration.year])
 
     baseline_dir = output_dir / "baseline"
     shock_dir = output_dir / "shock"
@@ -300,6 +306,7 @@ def run_mpc_experiment(
             shock_dir=shock_dir,
             shock_period=shock_period,
             shock_fraction=shock_fraction,
+            data_paths=data_paths,
         )
         for seed in seed_list
     )

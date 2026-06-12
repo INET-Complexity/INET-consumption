@@ -9,6 +9,7 @@ import pandas as pd
 from src.monte_carlo import MonteCarloResult, run_seeded_monte_carlo
 
 from macro_data import DataWrapper
+from macro_data.readers.default_readers import DataPaths
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 
 
@@ -133,6 +134,7 @@ def run_parameter_sensitivity(
     backend: str = "loky",
     verbose: int = 0,
     batch_size: int = 1,
+    data_paths: DataPaths | None = None,
 ) -> SensitivityResult:
     """Run seeded Monte Carlo simulations for a range of values of one parameter.
 
@@ -169,6 +171,7 @@ def run_parameter_sensitivity(
             backend=backend,
             verbose=verbose,
             batch_size=batch_size,
+            data_paths=data_paths,
         )
         by_value[value] = mc_result
         combined_by_value[value] = mc_result.combined

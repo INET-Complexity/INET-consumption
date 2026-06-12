@@ -32,6 +32,7 @@ to their behavioral rules and interactions.
 
 import logging
 from copy import deepcopy
+from pathlib import Path
 from typing import Optional
 
 import h5py
@@ -39,6 +40,8 @@ import numpy as np
 import pandas as pd
 
 from macro_data import SyntheticCountry
+from macro_data.readers.income_belief_classification import compute_household_income_beliefs
+from macro_data.readers.income_belief_priors import load_income_belief_priors_table
 from macro_data.readers.insee_smic import load_insee_smic_annual_table
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
@@ -59,6 +62,10 @@ from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.util.get_histogram import get_histogram
+
+INCOME_BELIEF_PRIORS_CSV = (
+    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
 
 
 class Country:
@@ -405,6 +412,19 @@ class Country:
                 time_unit=time_unit,
             ),
         )
+
+        income_belief_priors_table = load_income_belief_priors_table(INCOME_BELIEF_PRIORS_CSV)
+        income_beliefs = compute_household_income_beliefs(
+            individuals_age=individuals.states["Age"],
+            individuals_activity_status=individuals.states["Activity Status"],
+            individuals_household_id=individuals.states["Corresponding Household ID"],
+            individuals_income=individuals.ts.current("employee_income"),
+            n_households=households.ts.current("n_households"),
+            priors_table=income_belief_priors_table,
+        )
+        households.ts.override_current("income_belief_mu", income_beliefs["income_belief_mu"])
+        households.ts.override_current("income_belief_p", income_beliefs["income_belief_p"])
+        households.ts.override_current("income_belief_rho", income_beliefs["income_belief_rho"])
 
         labour_market = LabourMarket.from_agents(
             individuals=individuals,

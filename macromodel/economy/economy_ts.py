@@ -218,6 +218,8 @@ def create_economy_timeseries(
         bank_insolvency_rate=[np.nan],
         household_insolvency_rate=[np.nan],
         illiquid_financial_asset_return_rate=[np.nan],
+        net_smic_base=[np.nan],
+        subsistence_consumption=np.zeros_like(initial_real_rent_paid, dtype=float),
         #
         total_growth=[initial_total_growth],
         estimated_growth=[np.nan],

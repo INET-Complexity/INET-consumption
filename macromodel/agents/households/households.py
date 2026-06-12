@@ -143,6 +143,8 @@ class Households(Agent):
             self.bundle_matrix = None
 
         self.emission_fractions = emission_fractions
+        self._consumption_units_dirty = True
+        self._consumption_unit_composition_signature: tuple[tuple[int, int], ...] | None = None
 
     @classmethod
     def from_pickled_agent(
@@ -350,7 +352,7 @@ class Households(Agent):
 
         # TODO: corresponding additionally owned houses is not used
 
-        return cls(
+        households = cls(
             country_name,
             all_country_names,
             len(industries),
@@ -365,6 +367,8 @@ class Households(Agent):
             configuration.substitution_bundles,
             emission_fractions=emission_fractions,
         )
+        households.refresh_consumption_units_if_needed(individual_ages)
+        return households
 
     def reset(self, configuration: HouseholdsConfiguration) -> None:
         """Reset household agent to initial state.
@@ -1267,6 +1271,55 @@ class Households(Agent):
             np.ndarray: Total interest paid by household
         """
         return self.ts.current("interest_paid_on_loans") + self.ts.current("interest_paid_on_deposits")
+
+    @staticmethod
+    def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
+        """Return household consumption units from member ages."""
+        ages = np.asarray(ages, dtype=float)
+        if len(ages) == 0:
+            return 1.0
+        older_members = int(np.sum(ages >= 14.0))
+        younger_children = int(np.sum(ages < 14.0))
+        return 1.0 + 0.5 * max(0, older_members - 1) + 0.3 * younger_children
+
+    @staticmethod
+    def _consumption_unit_signature_from_ages(ages: np.ndarray) -> tuple[int, int]:
+        ages = np.asarray(ages, dtype=float)
+        return int(np.sum(ages >= 14.0)), int(np.sum(ages < 14.0))
+
+    def _household_consumption_unit_signature(self, individual_ages: np.ndarray) -> tuple[tuple[int, int], ...]:
+        ages = np.asarray(individual_ages, dtype=float)
+        return tuple(
+            self._consumption_unit_signature_from_ages(ages[np.asarray(corr_individuals, dtype=int)])
+            for corr_individuals in self.states["corr_individuals"]
+        )
+
+    def mark_consumption_units_dirty(self) -> None:
+        self._consumption_units_dirty = True
+
+    def refresh_consumption_units_if_needed(self, individual_ages: np.ndarray) -> bool:
+        """Refresh household consumption units when age-band composition changes."""
+        signature = self._household_consumption_unit_signature(individual_ages)
+        if not self._consumption_units_dirty and signature == self._consumption_unit_composition_signature:
+            return False
+
+        ages = np.asarray(individual_ages, dtype=float)
+        self.states["Consumption Units"] = np.array(
+            [
+                self._compute_consumption_units_from_ages(ages[np.asarray(corr_individuals, dtype=int)])
+                for corr_individuals in self.states["corr_individuals"]
+            ],
+            dtype=float,
+        )
+        self._consumption_unit_composition_signature = signature
+        self._consumption_units_dirty = False
+        return True
+
+    def current_consumption_units(self) -> np.ndarray:
+        return np.asarray(
+            self.states.get("Consumption Units", np.ones(self.ts.current("n_households"))),
+            dtype=float,
+        )
 
     def prepare_goods_market_clearing(
         self,

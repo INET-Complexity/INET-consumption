@@ -32,6 +32,7 @@ to their behavioral rules and interactions.
 
 import logging
 from copy import deepcopy
+from pathlib import Path
 from typing import Optional
 
 import h5py
@@ -61,6 +62,10 @@ from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.util.get_histogram import get_histogram
+
+INCOME_BELIEF_PRIORS_CSV = (
+    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
 
 
 class Country:
@@ -408,7 +413,7 @@ class Country:
             ),
         )
 
-        income_belief_priors_table = load_income_belief_priors_table()
+        income_belief_priors_table = load_income_belief_priors_table(INCOME_BELIEF_PRIORS_CSV)
         income_beliefs = compute_household_income_beliefs(
             individuals_age=individuals.states["Age"],
             individuals_activity_status=individuals.states["Activity Status"],

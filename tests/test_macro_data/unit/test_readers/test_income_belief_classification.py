@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -9,10 +11,14 @@ from macro_data.readers.income_belief_classification import (
 from macro_data.readers.income_belief_priors import load_income_belief_priors_table
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 
+PRIORS_CSV_PATH = (
+    Path(__file__).resolve().parents[4] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
+
 
 @pytest.fixture(scope="module")
 def priors_table():
-    return load_income_belief_priors_table()
+    return load_income_belief_priors_table(PRIORS_CSV_PATH)
 
 
 def test__classify_age_group_bins_and_clips():

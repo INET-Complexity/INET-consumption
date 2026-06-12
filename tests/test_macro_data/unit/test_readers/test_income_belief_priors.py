@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from macro_data.readers.income_belief_priors import (
@@ -5,16 +7,20 @@ from macro_data.readers.income_belief_priors import (
     lookup_income_belief_priors,
 )
 
+PRIORS_CSV_PATH = (
+    Path(__file__).resolve().parents[4] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
+
 
 def test__load_income_belief_priors_table_has_twelve_rows():
-    table = load_income_belief_priors_table()
+    table = load_income_belief_priors_table(PRIORS_CSV_PATH)
     assert len(table) == 12
     assert set(table.index.get_level_values("employment_status")) == {"employed", "retired", "unemployed"}
     assert set(table.index.get_level_values("age_group")) == {"18-34", "35-49", "50-70", "71-85"}
 
 
 def test__unemployed_71_85_falls_back_to_unemployed_50_70():
-    table = load_income_belief_priors_table()
+    table = load_income_belief_priors_table(PRIORS_CSV_PATH)
     fallback = table.loc[("unemployed", "50-70")]
     target = table.loc[("unemployed", "71-85")]
     for column in ["mean_income_uncertainty_var_prior", "sigma2_xi", "sigma2_v"]:
@@ -24,7 +30,7 @@ def test__unemployed_71_85_falls_back_to_unemployed_50_70():
 
 
 def test__lookup_income_belief_priors_returns_expected_values():
-    table = load_income_belief_priors_table()
+    table = load_income_belief_priors_table(PRIORS_CSV_PATH)
     priors = lookup_income_belief_priors("employed", "35-49", table)
     assert priors["rho"] == 0.9518878627264576
     assert priors["mu_1_0"] == pytest.approx(0.01008815296089871)

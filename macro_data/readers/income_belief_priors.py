@@ -4,14 +4,10 @@ from pathlib import Path
 
 import pandas as pd
 
-DEFAULT_INCOME_BELIEF_PRIORS_CSV = (
-    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
-)
-
 _FALLBACK_COLUMNS = ["mean_income_uncertainty_var_prior", "sigma2_xi", "sigma2_v"]
 
 
-def load_income_belief_priors_table(path: str | Path = DEFAULT_INCOME_BELIEF_PRIORS_CSV) -> pd.DataFrame:
+def load_income_belief_priors_table(path: str | Path) -> pd.DataFrame:
     """Load the employment_status x age_group income-belief priors table.
 
     The ``unemployed``/``71-85`` row is missing ``mean_income_uncertainty_var_prior``,

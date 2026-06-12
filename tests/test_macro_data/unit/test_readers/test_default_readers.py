@@ -1,10 +1,18 @@
 from datetime import date
+from pathlib import Path
 
 import numpy as np
 
 from macro_data.configuration.countries import Country
-from macro_data.readers.default_readers import prune_icio_dict
+from macro_data.readers.default_readers import DataPaths, prune_icio_dict
 from macro_data.readers.exogenous_data import create_all_exogenous_data
+
+
+def test__default_paths_resolves_calibration_paths():
+    raw_data_path = Path("/tmp/raw_data")
+    paths = DataPaths.default_paths(raw_data_path, icio_years=[2014])
+    assert paths.insee_smic_path == raw_data_path / "INSEE" / "SMIC_monthly_values.csv"
+    assert paths.income_belief_priors_path == raw_data_path / "CES" / "FR_priors_table5.csv"
 
 
 def test__prune_icio_dict():

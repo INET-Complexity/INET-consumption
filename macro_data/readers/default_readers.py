@@ -89,6 +89,8 @@ class DataPaths:
         compustat_firms_quarterly_path (Path): Path to quarterly Compustat firms data
         compustat_banks_path (Path): Path to Compustat banks data
         emissions_path (Path): Path to emissions data
+        insee_smic_path (Optional[Path]): Path to INSEE monthly SMIC values (FRA calibration)
+        income_belief_priors_path (Optional[Path]): Path to the income-belief priors table (Stage 3 calibration)
     """
 
     goods_criticality_path: Path
@@ -113,6 +115,8 @@ class DataPaths:
     emissions_fraction_path: Optional[Path] = None
     ch4_emissions_path: Optional[Path] = None
     firm_prices_path: Optional[Path] = None
+    insee_smic_path: Optional[Path] = None
+    income_belief_priors_path: Optional[Path] = None
 
     @classmethod
     def default_paths(cls, raw_data_path: Path, icio_years: Iterable[int]):
@@ -150,6 +154,8 @@ class DataPaths:
             / "emission_factors"
             / "EN-GHG_EconSectByGas-CA_Emissions_2014_2023_v4.csv",
             firm_prices_path=raw_data_path / "cims_prices" / "firm_prices.csv",
+            insee_smic_path=raw_data_path / "INSEE" / "SMIC_monthly_values.csv",
+            income_belief_priors_path=raw_data_path / "CES" / "FR_priors_table5.csv",
         )
 
     # @classmethod

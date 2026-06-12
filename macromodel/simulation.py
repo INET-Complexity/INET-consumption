@@ -22,6 +22,7 @@ from numba import njit
 
 from macro_data import DataWrapper
 from macro_data.configuration import CountryDataConfiguration
+from macro_data.readers.default_readers import DataPaths
 from macromodel.configurations import CountryConfiguration, GoodsMarketConfiguration, SimulationConfiguration
 from macromodel.country import Country
 from macromodel.country.regional_aggregator import RegionalAggregator
@@ -140,6 +141,7 @@ class Simulation:
         cls,
         datawrapper: DataWrapper,
         simulation_configuration: SimulationConfiguration,
+        data_paths: Optional[DataPaths] = None,
     ):
         """Initialize a simulation from preprocessed economic data.
 
@@ -150,6 +152,9 @@ class Simulation:
         Args:
             datawrapper (DataWrapper): Preprocessed economic data for all countries
             simulation_configuration (SimulationConfiguration): Configuration parameters for the simulation
+            data_paths (Optional[DataPaths]): Raw-data path registry used to locate calibration
+                files (INSEE SMIC, income-belief priors) read at country construction. When None,
+                the readers fall back to their module-level default paths.
 
         Returns:
             Simulation: A new simulation instance initialized with the provided data
@@ -235,6 +240,7 @@ class Simulation:
                 time_unit=datawrapper.time_unit,
                 running_multiple_countries=running_multi_country,
                 emission_factors_usd=emission_factors,
+                data_paths=data_paths,
             )
             for country_name in countries_without_row
         }

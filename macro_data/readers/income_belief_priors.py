@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pandas as pd
 
-DEFAULT_INCOME_BELIEF_PRIORS_CSV = Path(__file__).resolve().parent / "data" / "CES" / "FR_priors_table5.csv"
+DEFAULT_INCOME_BELIEF_PRIORS_CSV = (
+    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
 
 _FALLBACK_COLUMNS = ["mean_income_uncertainty_var_prior", "sigma2_xi", "sigma2_v"]
 

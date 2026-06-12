@@ -42,8 +42,29 @@ class TestHouseholds:
             "Tenure Status of the Main Residence",
             "corr_individuals",
             "corr_renters",
+            "Consumption Units",
         ]:
             assert state in test_households.states.keys()
+
+    def test__consumption_units_refresh_only_when_age_band_composition_changes(self, test_households):
+        max_individual_id = max(
+            max(corr_individuals) for corr_individuals in test_households.states["corr_individuals"]
+        )
+        individual_ages = np.full(max_individual_id + 1, 30.0)
+        test_households.states["corr_individuals"][0] = np.array([0, 1, 2])
+        individual_ages[[0, 1, 2]] = [30.0, 13.0, 10.0]
+
+        test_households.mark_consumption_units_dirty()
+        assert test_households.refresh_consumption_units_if_needed(individual_ages)
+        assert test_households.states["Consumption Units"][0] == 1.6
+
+        individual_ages[0] = 31.0
+        assert not test_households.refresh_consumption_units_if_needed(individual_ages)
+        assert test_households.states["Consumption Units"][0] == 1.6
+
+        individual_ages[1] = 14.0
+        assert test_households.refresh_consumption_units_if_needed(individual_ages)
+        assert test_households.states["Consumption Units"][0] == 1.8
 
     def test__initial_main_residence_wealth_matches_owner_tenure_state(self, test_households):
         owns_main_residence = np.isin(test_households.states["Tenure Status of the Main Residence"], [1, 2, 4]) & (

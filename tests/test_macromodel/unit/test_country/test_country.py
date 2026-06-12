@@ -260,16 +260,34 @@ class TestCountry:
 
     def test__select_net_smic_base_uses_insee_annual_table(self, monkeypatch):
         table = pd.Series([1234.0], index=pd.Index([2014], name="year"))
-        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda path=None: table)
 
         assert (
             country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
             == 1234.0
         )
 
+    def test__select_net_smic_base_forwards_smic_path(self, monkeypatch):
+        table = pd.Series([1234.0], index=pd.Index([2014], name="year"))
+        captured = {}
+
+        def _capture(path=None):
+            captured["path"] = path
+            return table
+
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", _capture)
+
+        country_module.Country._select_net_smic_base(
+            initial_year=2014,
+            fallback_net_smic=99.0,
+            country_name="FRA",
+            smic_path="/custom/SMIC.csv",
+        )
+        assert captured["path"] == "/custom/SMIC.csv"
+
     def test__select_net_smic_base_falls_back_only_when_year_missing(self, monkeypatch):
         table = pd.Series([1234.0], index=pd.Index([2015], name="year"))
-        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda path=None: table)
 
         assert (
             country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
@@ -277,7 +295,7 @@ class TestCountry:
         )
 
     def test__select_net_smic_base_skips_insee_table_for_non_fra(self, monkeypatch):
-        def _raise():
+        def _raise(path=None):
             raise AssertionError("INSEE SMIC table should not be loaded for non-FRA countries")
 
         monkeypatch.setattr(country_module, "load_insee_smic_annual_table", _raise)
@@ -289,7 +307,7 @@ class TestCountry:
 
     def test__select_net_smic_base_falls_back_when_value_is_nan(self, monkeypatch):
         table = pd.Series([np.nan], index=pd.Index([2014], name="year"))
-        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda: table)
+        monkeypatch.setattr(country_module, "load_insee_smic_annual_table", lambda path=None: table)
 
         assert (
             country_module.Country._select_net_smic_base(initial_year=2014, fallback_net_smic=99.0, country_name="FRA")
@@ -297,7 +315,7 @@ class TestCountry:
         )
 
     def test__select_net_smic_base_falls_back_on_load_error(self, monkeypatch):
-        def _raise():
+        def _raise(path=None):
             raise OSError("missing file")
 
         monkeypatch.setattr(country_module, "load_insee_smic_annual_table", _raise)

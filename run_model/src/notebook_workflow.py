@@ -16,6 +16,7 @@ from src.visual_helpers import build_macro_output_df
 
 from macro_data import DataWrapper
 from macro_data.configuration import DataConfiguration, split_country_configs
+from macro_data.readers.default_readers import DataPaths
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration, load_country_configuration
 from macromodel.simulation import Simulation
 
@@ -381,7 +382,7 @@ def run_single_simulation(
     config: NotebookRunConfig,
 ) -> SimulationRunResult:
     """Run one simulation and return the model plus canonical output dataframe."""
-    cfg, _, output_dir, _ = _resolve_runtime_config(config)
+    cfg, raw_data_path, output_dir, _ = _resolve_runtime_config(config)
     random.seed(cfg.seed)
     model_file_name = _filename_only(config.model_file_name or f"simulation_{cfg.country_iso3}.h5", "model_file_name")
     model_h5_path = output_dir / model_file_name
@@ -391,7 +392,10 @@ def run_single_simulation(
         t_max=cfg.t_max,
         seed=cfg.seed,
     )
-    model = Simulation.from_datawrapper(datawrapper=data, simulation_configuration=simulation_config)
+    data_paths = DataPaths.default_paths(raw_data_path, [data.configuration.year])
+    model = Simulation.from_datawrapper(
+        datawrapper=data, simulation_configuration=simulation_config, data_paths=data_paths
+    )
     model.run()
     model.save(save_dir=output_dir, file_name=model_h5_path.name)
     df_base = build_macro_output_df(model, country_code=cfg.country_iso3)

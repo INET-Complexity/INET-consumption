@@ -13,7 +13,7 @@ import run_mpc_experiment as mpc_runner  # noqa: E402
 
 def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
     """The notebook-facing API should expose the same seed parallelism as the CLI."""
-    data = SimpleNamespace()
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
     calls = []
     plot_calls = []
@@ -26,6 +26,7 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
             data,
             {"ESP": country_cfg},
             "ESP",
+            tmp_path,
         ),
     )
 
@@ -95,7 +96,7 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
 
 
 def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, monkeypatch):
-    data = SimpleNamespace()
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
     plot_panels = []
 
@@ -107,6 +108,7 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
             data,
             {"ESP": country_cfg},
             "ESP",
+            tmp_path,
         ),
     )
     monkeypatch.setattr(
@@ -167,7 +169,7 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
 
 
 def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, monkeypatch):
-    data = SimpleNamespace()
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
     plot_calls = []
 
@@ -179,6 +181,7 @@ def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, mon
             data,
             {"ESP": country_cfg},
             "ESP",
+            tmp_path,
         ),
     )
     monkeypatch.setattr(

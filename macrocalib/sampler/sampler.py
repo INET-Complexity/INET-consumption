@@ -7,6 +7,7 @@ import torch
 from joblib import Parallel, delayed
 
 from macro_data import DataWrapper
+from macro_data.readers.default_readers import DataPaths
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration, load_country_configuration
 from macromodel.simulation import Simulation
 
@@ -47,12 +48,14 @@ class Sampler:
         n_cores: int,
         configuration_updater: Callable[[SimulationConfiguration, np.ndarray], SimulationConfiguration],
         observer: Callable[[Simulation], np.ndarray],
+        data_paths: Optional[DataPaths] = None,
     ):
         self.base_configuration = simulation_configuration
         self.n_cores = n_cores
         self.datawrapper = datawrapper
         self.configuration_updater = configuration_updater
         self.observer = observer
+        self.data_paths = data_paths
 
     @classmethod
     def default(
@@ -63,6 +66,7 @@ class Sampler:
         country_conf_path: Optional[Path | str] = None,
         n_cores: Optional[int] = None,
         countries: Optional[list[str]] = None,
+        raw_data_path: Optional[Path | str] = None,
     ) -> Self:
         """
         A default constructor for the sampler.
@@ -87,11 +91,19 @@ class Sampler:
             Number of cores to use during the sampling. Defaults to half the number of cores in the machine.
         countries : Optional[list[str]], optional
             List of countries to use in the simulation, by default None.
+        raw_data_path : Optional[Path | str], optional
+            Path to the raw data directory used to resolve calibration files (INSEE SMIC,
+            income-belief priors) via ``DataPaths``. When None, readers fall back to their
+            module-level default paths. Note this means two ``Sampler`` instances built from
+            the same pickle can resolve different SMIC/priors files depending on whether
+            ``raw_data_path`` was passed.
         """
         if isinstance(pickle_path, str):
             pickle_path = Path(pickle_path)
         if isinstance(country_conf_path, str):
             country_conf_path = Path(country_conf_path)
+        if isinstance(raw_data_path, str):
+            raw_data_path = Path(raw_data_path)
 
         data = DataWrapper.init_from_pickle(path=pickle_path)
 
@@ -111,12 +123,17 @@ class Sampler:
         if n_cores is None:
             n_cores = os.cpu_count() // 2
 
+        data_paths = (
+            DataPaths.default_paths(raw_data_path, [data.configuration.year]) if raw_data_path is not None else None
+        )
+
         return cls(
             simulation_configuration=configuration,
             datawrapper=data,
             n_cores=n_cores,
             configuration_updater=configuration_updater,
             observer=observer,
+            data_paths=data_paths,
         )
 
     def instantiate_model(self) -> Simulation:
@@ -126,6 +143,7 @@ class Sampler:
         model = Simulation.from_datawrapper(
             datawrapper=self.datawrapper,
             simulation_configuration=self.base_configuration,
+            data_paths=self.data_paths,
         )
         return model
 

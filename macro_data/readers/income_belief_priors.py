@@ -4,15 +4,24 @@ from pathlib import Path
 
 import pandas as pd
 
+DEFAULT_INCOME_BELIEF_PRIORS_CSV = (
+    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
+)
+
 _FALLBACK_COLUMNS = ["mean_income_uncertainty_var_prior", "sigma2_xi", "sigma2_v"]
 
 
-def load_income_belief_priors_table(path: str | Path) -> pd.DataFrame:
+def load_income_belief_priors_table(path: str | Path | None = None) -> pd.DataFrame:
     """Load the employment_status x age_group income-belief priors table.
+
+    ``path`` defaults to :data:`DEFAULT_INCOME_BELIEF_PRIORS_CSV` when ``None`` so callers
+    that resolve the path from a :class:`DataPaths` registry can pass ``None`` as a fallback.
 
     The ``unemployed``/``71-85`` row is missing ``mean_income_uncertainty_var_prior``,
     ``sigma2_xi`` and ``sigma2_v``; these are filled from the ``unemployed``/``50-70`` row.
     """
+    if path is None:
+        path = DEFAULT_INCOME_BELIEF_PRIORS_CSV
     table = pd.read_csv(path)
     fallback_row = table.loc[(table["employment_status"] == "unemployed") & (table["age_group"] == "50-70")].iloc[0]
     target_index = table.index[(table["employment_status"] == "unemployed") & (table["age_group"] == "71-85")]

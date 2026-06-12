@@ -9,12 +9,17 @@ DEFAULT_INSEE_SMIC_CSV = (
 )
 
 
-def load_insee_smic_annual_table(path: str | Path = DEFAULT_INSEE_SMIC_CSV) -> pd.Series:
+def load_insee_smic_annual_table(path: str | Path | None = None) -> pd.Series:
     """Load annual net monthly SMIC values from an INSEE monthly CSV.
+
+    ``path`` defaults to :data:`DEFAULT_INSEE_SMIC_CSV` when ``None`` so callers that
+    resolve the path from a :class:`DataPaths` registry can pass ``None`` as a fallback.
 
     The INSEE file is monthly. For model annual bases, only December rows
     (``YYYY-12``) are retained.
     """
+    if path is None:
+        path = DEFAULT_INSEE_SMIC_CSV
     raw = pd.read_csv(
         path,
         sep=";",

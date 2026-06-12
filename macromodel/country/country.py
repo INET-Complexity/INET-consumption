@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 
 from macro_data import SyntheticCountry
+from macro_data.readers.default_readers import DataPaths
 from macro_data.readers.income_belief_classification import compute_household_income_beliefs
 from macro_data.readers.income_belief_priors import load_income_belief_priors_table
 from macro_data.readers.insee_smic import load_insee_smic_annual_table
@@ -62,10 +63,6 @@ from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.util.get_histogram import get_histogram
-
-INCOME_BELIEF_PRIORS_CSV = (
-    Path(__file__).resolve().parents[2] / "run_model" / "data" / "raw_data" / "CES" / "FR_priors_table5.csv"
-)
 
 
 class Country:
@@ -238,6 +235,7 @@ class Country:
         time_unit: int,
         running_multiple_countries: bool,
         emission_factors_usd: np.ndarray,
+        data_paths: Optional[DataPaths] = None,
     ) -> "Country":
         """Create a Country instance from preprocessed synthetic data.
 
@@ -400,6 +398,7 @@ class Country:
             initial_year=initial_year,
             fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],
             country_name=country_name,
+            smic_path=data_paths.insee_smic_path if data_paths is not None else None,
         )
         economy.ts.override_current("net_smic_base", [net_smic_base])
         economy.ts.override_current(
@@ -414,7 +413,13 @@ class Country:
         )
 
         if getattr(households.functions["consumption"], "uses_income_belief_learning", False):
-            income_belief_priors_table = load_income_belief_priors_table(INCOME_BELIEF_PRIORS_CSV)
+            income_belief_priors_path = (
+                data_paths.income_belief_priors_path if (data_paths is not None and country_name == "FRA") else None
+            )
+            try:
+                income_belief_priors_table = load_income_belief_priors_table(income_belief_priors_path)
+            except (OSError, ValueError):
+                income_belief_priors_table = load_income_belief_priors_table(None)
             households.states["income_belief_priors"] = compute_household_income_beliefs(
                 individuals_age=individuals.states["Age"],
                 individuals_activity_status=individuals.states["Activity Status"],
@@ -472,11 +477,16 @@ class Country:
         )
 
     @staticmethod
-    def _select_net_smic_base(initial_year: int, fallback_net_smic: float, country_name: str) -> float:
+    def _select_net_smic_base(
+        initial_year: int,
+        fallback_net_smic: float,
+        country_name: str,
+        smic_path: Optional[str | Path] = None,
+    ) -> float:
         if country_name != "FRA":
             return float(fallback_net_smic)
         try:
-            annual_smic = load_insee_smic_annual_table()
+            annual_smic = load_insee_smic_annual_table(smic_path)
         except (OSError, ValueError):
             return float(fallback_net_smic)
         if initial_year in annual_smic.index:

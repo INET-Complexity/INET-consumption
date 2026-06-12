@@ -46,7 +46,7 @@ def _write_irf_smoke_h5(path: Path, *, shock_kind: str | None = None) -> None:
 
 
 def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_path, monkeypatch):
-    data = SimpleNamespace()
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace()
     shock_specs = (
         irf_runner.ShockSpec(
@@ -71,6 +71,7 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
             data,
             {"FRA": country_cfg},
             "FRA",
+            tmp_path,
         ),
     )
 

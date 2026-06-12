@@ -22,6 +22,7 @@ from src.visual_helpers import build_macro_output_df  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
 from macro_data.configuration import DataConfiguration, split_country_configs  # noqa: E402
+from macro_data.readers.default_readers import DataPaths  # noqa: E402
 from macromodel.configurations import SimulationConfiguration, load_country_configuration  # noqa: E402
 from macromodel.simulation import Simulation  # noqa: E402
 
@@ -186,9 +187,11 @@ def main(
         seed=cfg.seed,
     )
 
+    data_paths = DataPaths.default_paths(raw_data_path, [data_config.year])
     model = Simulation.from_datawrapper(
         datawrapper=data,
         simulation_configuration=configuration,
+        data_paths=data_paths,
     )
 
     warnings.simplefilter("always", RuntimeWarning)

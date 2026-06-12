@@ -413,9 +413,13 @@ class Country:
         )
 
         if getattr(households.functions["consumption"], "uses_income_belief_learning", False):
-            income_belief_priors_table = load_income_belief_priors_table(
-                data_paths.income_belief_priors_path if data_paths is not None else None
+            income_belief_priors_path = (
+                data_paths.income_belief_priors_path if (data_paths is not None and country_name == "FRA") else None
             )
+            try:
+                income_belief_priors_table = load_income_belief_priors_table(income_belief_priors_path)
+            except (OSError, ValueError):
+                income_belief_priors_table = load_income_belief_priors_table(None)
             households.states["income_belief_priors"] = compute_household_income_beliefs(
                 individuals_age=individuals.states["Age"],
                 individuals_activity_status=individuals.states["Activity Status"],

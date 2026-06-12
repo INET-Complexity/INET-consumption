@@ -94,7 +94,9 @@ class Sampler:
         raw_data_path : Optional[Path | str], optional
             Path to the raw data directory used to resolve calibration files (INSEE SMIC,
             income-belief priors) via ``DataPaths``. When None, readers fall back to their
-            module-level default paths.
+            module-level default paths. Note this means two ``Sampler`` instances built from
+            the same pickle can resolve different SMIC/priors files depending on whether
+            ``raw_data_path`` was passed.
         """
         if isinstance(pickle_path, str):
             pickle_path = Path(pickle_path)

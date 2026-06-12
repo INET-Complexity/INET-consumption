@@ -30,6 +30,10 @@ from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
+from macromodel.agents.households.income_belief_learning import (
+    IncomeBeliefLearningOutputs,
+    compute_income_belief_learning_outputs,
+)
 from macromodel.agents.households.utils.create_bundle_matrix import create_bundle_matrix
 from macromodel.configurations import HouseholdsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
@@ -675,6 +679,7 @@ class Households(Agent):
         consumer_debt_rate_delta: Optional[float] = None,
         permanent_income_log_ratio: Optional[np.ndarray] = None,
         uncertainty_delta: Optional[np.ndarray] = None,
+        common_permanent_income_log_ratio: Optional[np.ndarray | float] = None,
         mortgage_payment: Optional[np.ndarray] = None,
         replace_current_diagnostics: bool = False,
     ) -> np.ndarray:
@@ -709,6 +714,8 @@ class Households(Agent):
             consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
             permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
             uncertainty_delta (Optional[np.ndarray]): Explicit uncertainty placeholder
+            common_permanent_income_log_ratio (Optional[np.ndarray | float]): Separately supplied macro
+                permanent-income component for opt-in learning rules
             mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
 
@@ -737,6 +744,19 @@ class Households(Agent):
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
+            consumption_function = self.functions["consumption"]
+            if getattr(consumption_function, "uses_income_belief_learning", False) and (
+                permanent_income_log_ratio is None or uncertainty_delta is None
+            ):
+                learning_outputs = self.compute_income_belief_learning_outputs(
+                    current_income=income,
+                    lagged_income=lagged_income,
+                    common_permanent_income_log_ratio=common_permanent_income_log_ratio,
+                )
+                if permanent_income_log_ratio is None:
+                    permanent_income_log_ratio = learning_outputs.permanent_income_log_ratio
+                if uncertainty_delta is None:
+                    uncertainty_delta = learning_outputs.uncertainty_delta
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -785,6 +805,55 @@ class Households(Agent):
                 replace_current=replace_current_diagnostics,
             )
             return target_consumption
+
+    def compute_income_belief_learning_outputs(
+        self,
+        *,
+        current_income: np.ndarray,
+        lagged_income: np.ndarray,
+        common_permanent_income_log_ratio: np.ndarray | float | None = None,
+    ) -> IncomeBeliefLearningOutputs:
+        """Compute optional income-belief inputs without persisting belief state."""
+        priors = self.states.get("income_belief_priors")
+        if priors is None:
+            raise ValueError(
+                "Income-belief learning was requested by the consumption rule, "
+                "but households.states['income_belief_priors'] is not available."
+            )
+        runtime_state = self._income_belief_runtime_state(priors)
+        outputs = compute_income_belief_learning_outputs(
+            current_income=current_income,
+            lagged_income=lagged_income,
+            priors=priors,
+            prior_mean=runtime_state["posterior_mean"],
+            prior_variance=runtime_state["posterior_variance"],
+            common_permanent_income_log_ratio=common_permanent_income_log_ratio,
+        )
+        runtime_state["posterior_mean"] = outputs.posterior_mean.copy()
+        runtime_state["posterior_variance"] = outputs.posterior_variance.copy()
+        runtime_state["kalman_gain"] = outputs.kalman_gain.copy()
+        runtime_state["income_signal"] = outputs.income_signal.copy()
+        runtime_state["prediction_error"] = outputs.prediction_error.copy()
+        return outputs
+
+    def _income_belief_runtime_state(self, priors: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+        """Return mutable posterior state, seeded from static priors once."""
+        n_households = int(self.ts.current("n_households"))
+        runtime_state = self.states.get("income_belief_runtime_state")
+        if runtime_state is None:
+            runtime_state = {
+                "posterior_mean": np.asarray(priors["income_belief_mu"], dtype=float).copy(),
+                "posterior_variance": np.asarray(priors["income_belief_p"], dtype=float).copy(),
+            }
+            self.states["income_belief_runtime_state"] = runtime_state
+        for key in ["posterior_mean", "posterior_variance"]:
+            value = np.asarray(runtime_state[key], dtype=float)
+            if value.shape != (n_households,):
+                raise ValueError(
+                    f"income_belief_runtime_state[{key!r}] must have shape ({n_households},), got {value.shape}."
+                )
+            runtime_state[key] = value
+        return runtime_state
 
     @staticmethod
     def _target_consumption_diagnostic_keys() -> list[str]:

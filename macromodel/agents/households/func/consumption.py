@@ -32,10 +32,14 @@ class HouseholdConsumption(ABC):
     - Tax considerations
 
     Attributes:
+        uses_income_belief_learning (bool): Whether this rule requests optional
+            income-belief learning inputs from the household wrapper.
         consumption_smoothing_fraction (float): Weight on historical consumption
         consumption_smoothing_window (int): Periods for smoothing calculation
         minimum_consumption_fraction (float): Floor on consumption/income ratio
     """
+
+    uses_income_belief_learning = False
 
     def __init__(
         self,
@@ -592,6 +596,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         income_floor: float = 1e-12,
         consumption_floor: float = 1e-12,
         house_price_floor: float = 1e-12,
+        uses_income_belief_learning: bool = False,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -618,6 +623,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.income_floor = income_floor
         self.consumption_floor = consumption_floor
         self.house_price_floor = house_price_floor
+        self.uses_income_belief_learning = uses_income_belief_learning
         self.last_target_consumption_components: dict[str, np.ndarray] | None = None
         self.last_formula_implied_mpc: np.ndarray | None = None
 

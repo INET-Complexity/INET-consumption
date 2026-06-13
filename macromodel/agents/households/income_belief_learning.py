@@ -1,9 +1,4 @@
-"""Opt-in household income-belief learning helpers.
-
-The learning block is deliberately pure: it derives consumption-rule inputs
-from static priors and current model state, but it does not write household
-time-series state. Consumption rules opt in by requesting these outputs.
-"""
+"""Opt-in household income-belief learning helpers."""
 
 from dataclasses import dataclass
 
@@ -12,10 +7,8 @@ import numpy as np
 
 @dataclass(frozen=True)
 class IncomeBeliefLearningOutputs:
-    """Outputs consumed by opt-in consumption rules."""
+    """One-period Kalman update outputs for income-belief diagnostics."""
 
-    permanent_income_log_ratio: np.ndarray
-    uncertainty_delta: np.ndarray
     prior_mean: np.ndarray
     prior_variance: np.ndarray
     predicted_mean: np.ndarray
@@ -23,8 +16,11 @@ class IncomeBeliefLearningOutputs:
     posterior_mean: np.ndarray
     posterior_variance: np.ndarray
     kalman_gain: np.ndarray
+    realised_income_growth: np.ndarray
+    common_income_growth_signal: float
     income_signal: np.ndarray
     prediction_error: np.ndarray
+    floor_used: np.ndarray
 
 
 def _household_array(priors: dict[str, np.ndarray], key: str, n_households: int) -> np.ndarray:
@@ -36,6 +32,14 @@ def _household_array(priors: dict[str, np.ndarray], key: str, n_households: int)
     return value
 
 
+def _scalar_rho(priors: dict[str, np.ndarray], n_households: int) -> float:
+    rho_values = _household_array(priors, "income_belief_rho", n_households)
+    rho = float(rho_values[0])
+    if not np.allclose(rho_values, rho):
+        raise ValueError("Increment 2 expects income_belief_rho to be constant across households.")
+    return rho
+
+
 def compute_income_belief_learning_outputs(
     *,
     current_income: np.ndarray,
@@ -43,19 +47,13 @@ def compute_income_belief_learning_outputs(
     priors: dict[str, np.ndarray],
     prior_mean: np.ndarray | None = None,
     prior_variance: np.ndarray | None = None,
-    common_permanent_income_log_ratio: float | np.ndarray | None = None,
     income_floor: float = 1e-12,
-    rho_denominator_floor: float = 1e-12,
 ) -> IncomeBeliefLearningOutputs:
     """Return one-period Bayesian income-learning outputs for households.
 
-    ``priors`` is expected to contain household-level arrays from
-    ``compute_household_income_beliefs``: initial ``income_belief_mu`` and
-    ``income_belief_p``, plus ``income_belief_rho``, ``sigma2_xi`` and
-    ``sigma2_v``. ``sigma2_v`` is the process variance, and ``sigma2_xi`` is
-    the signal/observation variance. The optional common component is added
-    after the household update so macro permanent-income forecasting remains
-    separately supplied.
+    ``current_income`` and ``lagged_income`` must already be real household
+    income at ``t`` and ``t-4``. Increment 2 updates posterior beliefs only;
+    final permanent-income and uncertainty terms are intentionally deferred.
     """
     current_income = np.asarray(current_income, dtype=float)
     lagged_income = np.asarray(lagged_income, dtype=float)
@@ -80,23 +78,16 @@ def compute_income_belief_learning_outputs(
         prior_variance = np.asarray(prior_variance, dtype=float)
         if prior_variance.shape != (n_households,):
             raise ValueError(f"prior_variance must have shape ({n_households},), got {prior_variance.shape}.")
-    rho = _household_array(priors, "income_belief_rho", n_households)
+    rho = _scalar_rho(priors, n_households)
     process_variance = _household_array(priors, "sigma2_v", n_households)
     signal_variance = _household_array(priors, "sigma2_xi", n_households)
 
-    common_component = (
-        0.0
-        if common_permanent_income_log_ratio is None
-        else np.asarray(
-            common_permanent_income_log_ratio,
-            dtype=float,
-        )
-    )
-    income_signal = (
-        np.log(np.maximum(current_income, income_floor))
-        - np.log(np.maximum(lagged_income, income_floor))
-        - common_component
-    )
+    floor_used = (current_income <= income_floor) | (lagged_income <= income_floor)
+    log_current_income = np.log(np.maximum(current_income, income_floor))
+    log_lagged_income = np.log(np.maximum(lagged_income, income_floor))
+    realised_income_growth = log_current_income - log_lagged_income
+    common_income_growth_signal = float(log_current_income.mean() - log_lagged_income.mean())
+    income_signal = realised_income_growth - common_income_growth_signal
     predicted_mean = rho * prior_mean
     predicted_variance = np.maximum((rho**2) * prior_variance + process_variance, 0.0)
     prediction_error = income_signal - predicted_mean
@@ -109,14 +100,8 @@ def compute_income_belief_learning_outputs(
     )
     posterior_mean = predicted_mean + kalman_gain * prediction_error
     posterior_variance = np.maximum((1.0 - kalman_gain) * predicted_variance, 0.0)
-    uncertainty_delta = posterior_variance - prior_variance
-
-    rho_denominator = np.maximum(1.0 - rho, rho_denominator_floor)
-    permanent_income_log_ratio = posterior_mean / rho_denominator + common_component
 
     return IncomeBeliefLearningOutputs(
-        permanent_income_log_ratio=permanent_income_log_ratio,
-        uncertainty_delta=uncertainty_delta,
         prior_mean=prior_mean,
         prior_variance=prior_variance,
         predicted_mean=predicted_mean,
@@ -124,6 +109,9 @@ def compute_income_belief_learning_outputs(
         posterior_mean=posterior_mean,
         posterior_variance=posterior_variance,
         kalman_gain=kalman_gain,
+        realised_income_growth=realised_income_growth,
+        common_income_growth_signal=common_income_growth_signal,
         income_signal=income_signal,
         prediction_error=prediction_error,
+        floor_used=floor_used,
     )

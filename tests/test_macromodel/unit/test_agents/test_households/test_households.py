@@ -193,11 +193,11 @@ class TestHouseholds:
         assert captured["uncertainty_delta"] is None
         assert "income_belief_runtime_state" not in test_households.states
 
-    def test__target_consumption_reads_runtime_learning_state_for_opt_in_rule(self, test_households):
+    def test__target_consumption_does_not_auto_wire_runtime_learning_state_for_opt_in_rule(self, test_households):
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
-        lagged_income = np.full(n_households, 100.0)
-        current_income = np.full(n_households, 110.0)
+        lagged_income = np.linspace(100.0, 120.0, n_households)
+        current_income = lagged_income * np.linspace(1.05, 1.15, n_households)
         test_households.ts.expected_income.append(lagged_income)
         test_households.ts.expected_income.append(current_income)
         test_households.states["income_belief_priors"] = {
@@ -222,7 +222,6 @@ class TestHouseholds:
         test_households.update_income_belief_learning_state(
             current_income=current_income,
             lagged_income=lagged_income,
-            common_permanent_income_log_ratio=0.25,
         )
 
         test_households.compute_target_consumption(
@@ -233,24 +232,22 @@ class TestHouseholds:
             per_capita_unemployment_benefits=0.0,
             tau_vat=0.0,
             assume_zero_growth=False,
-            common_permanent_income_log_ratio=0.25,
         )
 
-        expected_signal = np.log(110.0) - np.log(100.0) - 0.25
+        expected_growth = np.log(current_income) - np.log(lagged_income)
+        expected_signal = expected_growth - expected_growth.mean()
         expected_kalman_gain = 1.0 / 4.0
         expected_posterior_mean = expected_kalman_gain * expected_signal
         expected_posterior_variance = 0.75
-        expected_permanent_income = 0.25 + expected_posterior_mean / 0.5
-        np.testing.assert_allclose(captured["permanent_income_log_ratio"], expected_permanent_income)
-        np.testing.assert_allclose(captured["uncertainty_delta"], expected_posterior_variance)
+        assert captured["permanent_income_log_ratio"] is None
+        assert captured["uncertainty_delta"] is None
         runtime_state = test_households.states["income_belief_runtime_state"]
+        assert set(runtime_state) == {"posterior_mean", "posterior_variance"}
         np.testing.assert_allclose(runtime_state["posterior_mean"], expected_posterior_mean)
         np.testing.assert_allclose(runtime_state["posterior_variance"], expected_posterior_variance)
-        np.testing.assert_allclose(runtime_state["kalman_gain"], expected_kalman_gain)
-        np.testing.assert_allclose(runtime_state["prediction_error"], expected_signal)
         state_after_planning = {key: value.copy() for key, value in runtime_state.items()}
 
-        next_income = np.full(n_households, 121.0)
+        next_income = current_income * np.linspace(1.02, 1.08, n_households)
         test_households.ts.expected_income.append(next_income)
         test_households.compute_target_consumption(
             expected_inflation=0.0,
@@ -279,21 +276,22 @@ class TestHouseholds:
             assume_zero_growth=False,
         )
 
-        next_signal = np.log(121.0) - np.log(110.0)
+        next_growth = np.log(next_income) - np.log(current_income)
+        next_signal = next_growth - next_growth.mean()
         next_predicted_mean = 0.5 * expected_posterior_mean
         next_predicted_variance = 0.25 * expected_posterior_variance + 1.0
         next_kalman_gain = next_predicted_variance / (next_predicted_variance + 3.0)
         next_posterior_mean = next_predicted_mean + next_kalman_gain * (next_signal - next_predicted_mean)
         next_posterior_variance = (1.0 - next_kalman_gain) * next_predicted_variance
-        np.testing.assert_allclose(captured["permanent_income_log_ratio"], next_posterior_mean / 0.5)
-        np.testing.assert_allclose(captured["uncertainty_delta"], next_posterior_variance - expected_posterior_variance)
+        assert captured["permanent_income_log_ratio"] is None
+        assert captured["uncertainty_delta"] is None
         np.testing.assert_allclose(runtime_state["posterior_mean"], next_posterior_mean)
         np.testing.assert_allclose(runtime_state["posterior_variance"], next_posterior_variance)
 
-    def test__credit_augmented_consumption_can_opt_in_to_learning_outputs(self, test_households):
+    def test__credit_augmented_consumption_keeps_stage_3_terms_default_for_increment_2(self, test_households):
         n_households = test_households.ts.current("n_households")
-        lagged_income = np.full(n_households, 100.0)
-        current_income = np.full(n_households, 110.0)
+        lagged_income = np.linspace(100.0, 120.0, n_households)
+        current_income = lagged_income * np.linspace(1.05, 1.15, n_households)
         test_households.ts.expected_income.append(lagged_income)
         test_households.ts.expected_income.append(current_income)
         test_households.states["income_belief_priors"] = {
@@ -325,10 +323,8 @@ class TestHouseholds:
         )
 
         components = test_households.functions["consumption"].last_target_consumption_components
-        expected_signal = np.log(110.0) - np.log(100.0)
-        expected_permanent_income = 0.5 * expected_signal
-        np.testing.assert_allclose(components["target_consumption_permanent_income"], expected_permanent_income)
-        np.testing.assert_allclose(components["target_consumption_uncertainty_delta"], 0.75)
+        np.testing.assert_allclose(components["target_consumption_permanent_income"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_uncertainty_delta"], 0.0)
         assert "income_belief_runtime_state" in test_households.states
 
     def test__prepare_goods_market_clearing_reports_subsistence_shortfall_without_altering_demand(

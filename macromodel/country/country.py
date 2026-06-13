@@ -1732,9 +1732,13 @@ class Country:
         )
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
+            cpi_series = self.economy.consumer_price_level_series_name()
+            lagged_real_income = None
+            if len(self.households.ts.historic("income")) >= 5 and len(self.economy.ts.historic(cpi_series)) >= 5:
+                lagged_real_income = self.households.ts.dicts["income"][-5] / self.economy.ts.dicts[cpi_series][-5][0]
             self.households.update_income_belief_learning_state(
-                current_income=self.households.ts.current("income"),
-                lagged_income=self.households.ts.prev("income"),
+                current_income=self.households.ts.current("income") / self.economy.ts.current(cpi_series)[0],
+                lagged_income=lagged_real_income,
             )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()

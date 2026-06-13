@@ -1,15 +1,16 @@
 import numpy as np
+import pytest
 
 from macromodel.agents.households.income_belief_learning import compute_income_belief_learning_outputs
 
 
 def test__income_belief_learning_outputs_use_correct_variance_mapping_and_prediction_error():
-    current_income = np.array([110.0, 90.0])
-    lagged_income = np.array([100.0, 100.0])
+    current_income = np.array([110.0, 88.0])
+    lagged_income = np.array([100.0, 80.0])
     priors = {
         "income_belief_mu": np.array([0.1, -0.2]),
         "income_belief_p": np.array([0.5, 0.2]),
-        "income_belief_rho": np.array([0.8, 0.5]),
+        "income_belief_rho": np.array([0.8, 0.8]),
         "sigma2_xi": np.array([3.0, 1.5]),
         "sigma2_v": np.array([2.0, 1.0]),
     }
@@ -18,18 +19,22 @@ def test__income_belief_learning_outputs_use_correct_variance_mapping_and_predic
         current_income=current_income,
         lagged_income=lagged_income,
         priors=priors,
-        common_permanent_income_log_ratio=0.2,
     )
 
-    expected_signal = np.log(current_income) - np.log(lagged_income) - 0.2
-    expected_predicted_mean = priors["income_belief_rho"] * priors["income_belief_mu"]
-    expected_predicted_variance = (priors["income_belief_rho"] ** 2) * priors["income_belief_p"] + priors["sigma2_v"]
+    expected_growth = np.log(current_income) - np.log(lagged_income)
+    expected_common_growth = np.log(current_income).mean() - np.log(lagged_income).mean()
+    expected_signal = expected_growth - expected_common_growth
+    expected_predicted_mean = 0.8 * priors["income_belief_mu"]
+    expected_predicted_variance = (0.8**2) * priors["income_belief_p"] + priors["sigma2_v"]
     expected_prediction_error = expected_signal - expected_predicted_mean
     expected_kalman_gain = expected_predicted_variance / (expected_predicted_variance + priors["sigma2_xi"])
     expected_posterior_mean = expected_predicted_mean + expected_kalman_gain * expected_prediction_error
     expected_posterior_variance = (1.0 - expected_kalman_gain) * expected_predicted_variance
 
+    np.testing.assert_allclose(outputs.realised_income_growth, expected_growth)
+    assert outputs.common_income_growth_signal == pytest.approx(expected_common_growth)
     np.testing.assert_allclose(outputs.income_signal, expected_signal)
+    assert outputs.income_signal.mean() == pytest.approx(0.0)
     np.testing.assert_allclose(outputs.predicted_mean, expected_predicted_mean)
     np.testing.assert_allclose(outputs.predicted_variance, expected_predicted_variance)
     np.testing.assert_allclose(outputs.prediction_error, expected_prediction_error)
@@ -38,11 +43,7 @@ def test__income_belief_learning_outputs_use_correct_variance_mapping_and_predic
     assert np.all(outputs.kalman_gain <= 1.0)
     np.testing.assert_allclose(outputs.posterior_mean, expected_posterior_mean)
     np.testing.assert_allclose(outputs.posterior_variance, expected_posterior_variance)
-    np.testing.assert_allclose(outputs.uncertainty_delta, expected_posterior_variance - priors["income_belief_p"])
-    np.testing.assert_allclose(
-        outputs.permanent_income_log_ratio,
-        0.2 + outputs.posterior_mean / (1.0 - priors["income_belief_rho"]),
-    )
+    assert not outputs.floor_used.any()
 
 
 def test__income_belief_learning_accepts_updated_prior_state():
@@ -64,7 +65,7 @@ def test__income_belief_learning_accepts_updated_prior_state():
 
     expected_predicted_mean = 0.2
     expected_predicted_variance = 1.0625
-    expected_signal = np.log(1.2)
+    expected_signal = 0.0
     expected_prediction_error = expected_signal - expected_predicted_mean
     expected_kalman_gain = expected_predicted_variance / (expected_predicted_variance + 2.0)
     np.testing.assert_allclose(outputs.prior_mean, 0.4)
@@ -74,4 +75,42 @@ def test__income_belief_learning_accepts_updated_prior_state():
     np.testing.assert_allclose(outputs.prediction_error, expected_prediction_error)
     np.testing.assert_allclose(outputs.kalman_gain, expected_kalman_gain)
     expected_posterior_variance = (1.0 - expected_kalman_gain) * expected_predicted_variance
-    np.testing.assert_allclose(outputs.uncertainty_delta, expected_posterior_variance - 0.25)
+    np.testing.assert_allclose(outputs.posterior_variance, expected_posterior_variance)
+
+
+def test__income_belief_learning_rejects_non_constant_rho():
+    priors = {
+        "income_belief_mu": np.array([0.0, 0.0]),
+        "income_belief_p": np.array([0.0, 0.0]),
+        "income_belief_rho": np.array([0.5, 0.6]),
+        "sigma2_xi": np.array([2.0, 2.0]),
+        "sigma2_v": np.array([1.0, 1.0]),
+    }
+
+    with pytest.raises(ValueError, match="income_belief_rho"):
+        compute_income_belief_learning_outputs(
+            current_income=np.array([120.0, 110.0]),
+            lagged_income=np.array([100.0, 100.0]),
+            priors=priors,
+        )
+
+
+def test__income_belief_learning_handles_zero_income_floor():
+    priors = {
+        "income_belief_mu": np.array([0.0, 0.0]),
+        "income_belief_p": np.array([0.0, 0.0]),
+        "income_belief_rho": np.array([0.5, 0.5]),
+        "sigma2_xi": np.array([2.0, 2.0]),
+        "sigma2_v": np.array([1.0, 1.0]),
+    }
+
+    outputs = compute_income_belief_learning_outputs(
+        current_income=np.array([0.0, 110.0]),
+        lagged_income=np.array([100.0, 0.0]),
+        priors=priors,
+    )
+
+    assert outputs.floor_used.all()
+    assert np.isfinite(outputs.income_signal).all()
+    assert np.isfinite(outputs.posterior_mean).all()
+    assert np.isfinite(outputs.posterior_variance).all()

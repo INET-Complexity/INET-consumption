@@ -7,6 +7,7 @@ from macro_data.readers.permanent_income_forecast import (
     RAW_VARIABLE_ORDER,
     load_permanent_income_forecast_hac_covariance,
     load_permanent_income_forecast_inputs,
+    load_permanent_income_forecast_residual_variance,
     load_permanent_income_forecast_table,
 )
 
@@ -14,6 +15,7 @@ from macro_data.readers.permanent_income_forecast import (
 def _write_forecast_fixtures(tmp_path):
     table_path = tmp_path / "FR_table.json"
     cov_path = tmp_path / "FR_cov_hac.json"
+    residual_variance_path = tmp_path / "FR_sigma2_u.json"
 
     table_payload = {
         "coef": {},
@@ -41,11 +43,12 @@ def _write_forecast_fixtures(tmp_path):
 
     table_path.write_text(json.dumps(table_payload))
     cov_path.write_text(json.dumps(covariance_payload))
-    return table_path, cov_path
+    residual_variance_path.write_text(json.dumps(7.517963432790559e-06))
+    return table_path, cov_path, residual_variance_path
 
 
 def test__load_permanent_income_forecast_table_maps_to_simulation_names(tmp_path):
-    table_path, _ = _write_forecast_fixtures(tmp_path)
+    table_path, _, _ = _write_forecast_fixtures(tmp_path)
     table = load_permanent_income_forecast_table(table_path)
     assert list(table.index) == [
         "constant",
@@ -75,7 +78,7 @@ def test__load_permanent_income_forecast_table_maps_to_simulation_names(tmp_path
 
 
 def test__load_permanent_income_forecast_hac_covariance_maps_to_simulation_names(tmp_path):
-    _, cov_path = _write_forecast_fixtures(tmp_path)
+    _, cov_path, _ = _write_forecast_fixtures(tmp_path)
     covariance = load_permanent_income_forecast_hac_covariance(cov_path)
     assert covariance.shape == (20, 20)
     assert list(covariance.index) == list(covariance.columns)
@@ -85,8 +88,18 @@ def test__load_permanent_income_forecast_hac_covariance_maps_to_simulation_names
 
 
 def test__load_permanent_income_forecast_inputs_combines_payloads(tmp_path):
-    table_path, cov_path = _write_forecast_fixtures(tmp_path)
-    inputs = load_permanent_income_forecast_inputs(table_path, cov_path)
+    table_path, cov_path, residual_variance_path = _write_forecast_fixtures(tmp_path)
+    inputs = load_permanent_income_forecast_inputs(table_path, cov_path, residual_variance_path)
     assert inputs.diagnostics["hac_lags"] == 8
+    assert inputs.residual_variance == pytest.approx(7.517963432790559e-06)
     assert inputs.coefficient_table.loc["covid19", "p_hac"] == pytest.approx(3.01)
-    assert inputs.hac_covariance.loc["log_real_fx_rate_ma4_l5", "log_real_fx_rate_ma4_l5"] == pytest.approx(20.0)
+    assert inputs.hac_covariance.loc[
+        "log_real_fx_rate_ma4_l5",
+        "log_real_fx_rate_ma4_l5",
+    ] == pytest.approx(20.0)
+
+
+def test__load_permanent_income_forecast_residual_variance_reads_scalar(tmp_path):
+    _, _, residual_variance_path = _write_forecast_fixtures(tmp_path)
+    residual_variance = load_permanent_income_forecast_residual_variance(residual_variance_path)
+    assert residual_variance == pytest.approx(7.517963432790559e-06)

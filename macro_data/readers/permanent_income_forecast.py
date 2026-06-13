@@ -59,7 +59,8 @@ class PermanentIncomeForecastInputs:
 
     coefficient_table: pd.DataFrame
     hac_covariance: pd.DataFrame
-    diagnostics: dict[str, float | int]
+    residual_variance: float
+    diagnostics: dict[str, float | int | str]
 
 
 def _load_json(path: str | Path) -> dict:
@@ -101,13 +102,22 @@ def load_permanent_income_forecast_hac_covariance(path: str | Path) -> pd.DataFr
     return raw
 
 
+def load_permanent_income_forecast_residual_variance(path: str | Path) -> float:
+    """Load the scalar residual variance s_u^2 from the regression export."""
+    return float(_load_json(path))
+
+
 def load_permanent_income_forecast_inputs(
     table_path: str | Path,
     cov_path: str | Path,
+    residual_variance_path: str | Path,
 ) -> PermanentIncomeForecastInputs:
     """Load and normalize the common permanent-income forecast inputs."""
     table = load_permanent_income_forecast_table(table_path)
     covariance = load_permanent_income_forecast_hac_covariance(cov_path)
+    residual_variance = load_permanent_income_forecast_residual_variance(
+        residual_variance_path
+    )
     diagnostics = {
         "table_label": "tab:permanent_income_estimation",
         "nobs": 94,
@@ -121,5 +131,6 @@ def load_permanent_income_forecast_inputs(
     return PermanentIncomeForecastInputs(
         coefficient_table=table,
         hac_covariance=covariance,
+        residual_variance=residual_variance,
         diagnostics=diagnostics,
     )

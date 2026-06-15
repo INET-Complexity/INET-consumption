@@ -96,10 +96,23 @@ def compute_income_belief_learning_outputs(
         predicted_variance,
         innovation_variance,
         out=np.zeros_like(predicted_variance),
-        where=innovation_variance > 0.0,
+        where=np.isfinite(innovation_variance) & (innovation_variance > 0.0),
     )
-    posterior_mean = predicted_mean + kalman_gain * prediction_error
-    posterior_variance = np.maximum((1.0 - kalman_gain) * predicted_variance, 0.0)
+    with np.errstate(invalid="ignore"):
+        posterior_mean = predicted_mean + kalman_gain * prediction_error
+        posterior_variance = np.maximum((1.0 - kalman_gain) * predicted_variance, 0.0)
+
+    # Spec step 9: non-finite outputs fall back to the previous posterior
+    # (mu) or previous/zero-floored posterior variance (p), rather than
+    # propagating NaN/inf into runtime state.
+    non_finite_mean = ~np.isfinite(posterior_mean)
+    if non_finite_mean.any():
+        fallback_mean = np.where(np.isfinite(prior_mean), prior_mean, 0.0)
+        posterior_mean = np.where(non_finite_mean, fallback_mean, posterior_mean)
+    non_finite_variance = ~np.isfinite(posterior_variance)
+    if non_finite_variance.any():
+        fallback_variance = np.where(np.isfinite(prior_variance), prior_variance, 0.0)
+        posterior_variance = np.where(non_finite_variance, fallback_variance, posterior_variance)
 
     return IncomeBeliefLearningOutputs(
         prior_mean=prior_mean,

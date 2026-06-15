@@ -91,6 +91,9 @@ class DataPaths:
         emissions_path (Path): Path to emissions data
         insee_smic_path (Optional[Path]): Path to INSEE monthly SMIC values (FRA calibration)
         income_belief_priors_path (Optional[Path]): Path to the income-belief priors table (Stage 3 calibration)
+        permanent_income_forecast_table_path (Path): Path to the common permanent-income coefficient table
+        permanent_income_forecast_covariance_path (Path): Path to the common permanent-income HAC covariance matrix
+        permanent_income_forecast_residual_variance_path (Path): Path to the common permanent-income residual variance
 
     Note: leaving ``insee_smic_path`` or ``income_belief_priors_path`` as ``None`` makes the
     corresponding reader fall back to its own module-level default CSV path.
@@ -120,6 +123,9 @@ class DataPaths:
     firm_prices_path: Optional[Path] = None
     insee_smic_path: Optional[Path] = None
     income_belief_priors_path: Optional[Path] = None
+    permanent_income_forecast_table_path: Path | None = None
+    permanent_income_forecast_covariance_path: Path | None = None
+    permanent_income_forecast_residual_variance_path: Path | None = None
 
     @classmethod
     def default_paths(cls, raw_data_path: Path, icio_years: Iterable[int]):
@@ -159,6 +165,9 @@ class DataPaths:
             firm_prices_path=raw_data_path / "cims_prices" / "firm_prices.csv",
             insee_smic_path=raw_data_path / "INSEE" / "SMIC_monthly_values.csv",
             income_belief_priors_path=raw_data_path / "CES" / "FR_priors_table5.csv",
+            permanent_income_forecast_table_path=raw_data_path / "permanent_income" / "FR_table.json",
+            permanent_income_forecast_covariance_path=raw_data_path / "permanent_income" / "FR_cov_hac.json",
+            permanent_income_forecast_residual_variance_path=raw_data_path / "permanent_income" / "FR_sigma2_u.json",
         )
 
     # @classmethod

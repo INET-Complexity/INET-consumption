@@ -61,8 +61,9 @@ class PermanentIncomeSimulationSources:
     """Simulation-source inputs used by the Stage 3 X-mapping helper.
 
     The history arrays must be quarterly and ordered from the simulation's first
-    quarter through ``current_period``. Rates are model decimal rates; the mapper
-    converts them to the notebook percentage convention where needed.
+    quarter through ``current_period``. ``real_pc_income`` must already be the
+    notebook/export real per-capita income index scale. Policy rates are model
+    decimal rates; unemployment rates are percentages on ``[0, 100]``.
     """
 
     current_period: str | pd.Period | pd.Timestamp
@@ -129,17 +130,10 @@ def _as_1d_float_history(values: Sequence[float], name: str) -> np.ndarray:
     return arr
 
 
-def _rebased_log_income_history(
-    real_pc_income: np.ndarray,
-    *,
-    design_anchor_log_income: float,
-    anchor_position: int,
-) -> np.ndarray:
+def _log_income_index_history(real_pc_income: np.ndarray) -> np.ndarray:
     if np.any(real_pc_income <= 0.0):
-        raise ValueError("real_pc_income history must be strictly positive for log/index rebasing.")
-    anchor_index_level = float(np.exp(design_anchor_log_income))
-    real_pc_income_index = anchor_index_level * real_pc_income / real_pc_income[anchor_position]
-    return np.log(real_pc_income_index)
+        raise ValueError("real_pc_income index history must be strictly positive.")
+    return np.log(real_pc_income)
 
 
 def _fisher_real_short_rate_percent(
@@ -171,13 +165,9 @@ def _ma4_lag_from_history(values: np.ndarray, lag: int) -> float | None:
 
 
 def _unemployment_percent_history(unemployment_rate: np.ndarray) -> np.ndarray:
-    if np.any(unemployment_rate < 0.0):
-        raise ValueError("unemployment_rate history must be non-negative.")
-    finite_max = float(unemployment_rate.max())
-    out = unemployment_rate * 100.0 if finite_max <= 1.0 else unemployment_rate
-    if np.any(out > 100.0):
-        raise ValueError("unemployment_rate history must be either decimal [0, 1] or percent [0, 100].")
-    return out
+    if np.any((unemployment_rate < 0.0) | (unemployment_rate > 100.0)):
+        raise ValueError("unemployment_rate history must be percentages on [0, 100].")
+    return unemployment_rate
 
 
 def _splittrend_pdv(
@@ -204,12 +194,13 @@ def build_permanent_income_forecast_regressors(
     horizon_q: int = 40,
     delta_q: float = 0.95,
     policy_rate_periods_per_year: int = 4,
-    income_index_base_period: str | int | pd.Period | pd.Timestamp | None = None,
 ) -> pd.Series:
     """Build canonical forecast-reader regressors from simulation-source values.
 
     Endogenous lagged terms use the design matrix during warm-up and switch to
     simulation history only once the required lag window is fully available.
+    ``start_period`` anchors the X timeline and trend only; income histories are
+    expected to already use the notebook/export index convention.
     """
     current_period = _quarter_period(sources.current_period)
     real_pc_income = _as_1d_float_history(sources.real_pc_income, "real_pc_income")
@@ -230,18 +221,7 @@ def build_permanent_income_forecast_regressors(
     initial_period = periods[0]
     current_design = _design_row(design_matrix, current_period)
     initial_design = _design_row(design_matrix, initial_period)
-    income_anchor_period = _quarter_period(income_index_base_period if income_index_base_period is not None else start_period)
-    if income_anchor_period in periods:
-        anchor_position = int(periods.get_loc(income_anchor_period))
-        anchor_design = _design_row(design_matrix, income_anchor_period)
-    else:
-        anchor_position = 0
-        anchor_design = initial_design
-    log_income_history = _rebased_log_income_history(
-        real_pc_income,
-        design_anchor_log_income=float(anchor_design["log_real_pc_income"]),
-        anchor_position=anchor_position,
-    )
+    log_income_history = _log_income_index_history(real_pc_income)
 
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
     values["constant"] = 1.0

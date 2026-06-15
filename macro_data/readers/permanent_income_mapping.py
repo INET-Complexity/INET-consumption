@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 import numpy as np
@@ -263,3 +264,38 @@ def build_permanent_income_forecast_regressors(
         values[name] = float(initial_design[name])
 
     return pd.Series(values, index=FORECAST_READER_VARIABLE_ORDER, dtype=float, name=current_period)
+
+
+def load_permanent_income_design_matrix(path: str | Path) -> pd.DataFrame:
+    """Load the raw permanent-income design matrix export.
+
+    Exported from ``consumption-notebooks/data/pi_est/FR/design_matrix.csv``
+    (``permanent_income_estimation.ipynb``). Returns the design matrix with
+    notebook/export column names and a ``date`` column intact, ready to be
+    passed into :func:`design_matrix_to_forecast_reader_names`.
+    """
+    df = pd.read_csv(path)
+    unnamed_columns = [col for col in df.columns if str(col).startswith("Unnamed")]
+    if unnamed_columns:
+        df = df.drop(columns=unnamed_columns)
+    if "const" not in df.columns:
+        df["const"] = 1.0
+    return df
+
+
+def rebase_real_pc_income_index(
+    real_pc_income_levels: np.ndarray,
+    base_period_index: int,
+    index_base_value: float = 100.0,
+) -> np.ndarray:
+    """Rebase a real per-capita income level history to the notebook's index convention.
+
+    Implements ``index_base_value * real_pc / real_pc[base_period_index]``.
+    """
+    levels = np.asarray(real_pc_income_levels, dtype=float)
+    if levels.ndim != 1 or levels.size == 0:
+        raise ValueError("real_pc_income_levels must be a non-empty 1D array.")
+    base_value = levels[base_period_index]
+    if not np.isfinite(base_value) or base_value == 0.0:
+        raise ValueError("real_pc_income_levels base period value must be finite and non-zero.")
+    return index_base_value * levels / base_value

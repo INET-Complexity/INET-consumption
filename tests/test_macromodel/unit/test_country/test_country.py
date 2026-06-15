@@ -1,12 +1,55 @@
+from pathlib import Path
+from unittest.mock import patch
+
 import h5py
 import numpy as np
 import pandas as pd
 
 import macromodel.country.country as country_module
+from macro_data.readers.permanent_income_forecast import (
+    PermanentIncomeForecastInputs,
+    load_permanent_income_forecast_hac_covariance,
+    load_permanent_income_forecast_inputs,
+    load_permanent_income_forecast_residual_variance,
+    load_permanent_income_forecast_table,
+)
+from macro_data.readers.permanent_income_forecast import (
+    forecast_common_permanent_income as pure_forecast_common_permanent_income,
+)
+from macro_data.readers.permanent_income_mapping import (
+    design_matrix_to_forecast_reader_names,
+    load_permanent_income_design_matrix,
+)
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
+
+PERMANENT_INCOME_DATA_PATH = (
+    Path(__file__).resolve().parents[4] / "run_model" / "data" / "raw_data" / "permanent_income"
+)
+
+
+def _load_permanent_income_forecast_inputs_for_test():
+    """Load FR permanent-income forecast inputs, symmetrizing the HAC covariance.
+
+    The checked-in ``FR_cov_hac.json`` round-trips with ~1e-10 asymmetry from JSON
+    float serialization, just above the loader's strict 1e-10 tolerance. Symmetrize
+    here so the wrapper tests can exercise the real fixture data without touching
+    the unrelated data-quality issue.
+    """
+    table = load_permanent_income_forecast_table(PERMANENT_INCOME_DATA_PATH / "FR_table.json")
+    covariance = load_permanent_income_forecast_hac_covariance(PERMANENT_INCOME_DATA_PATH / "FR_cov_hac.json")
+    covariance = (covariance + covariance.T) / 2.0
+    residual_variance = load_permanent_income_forecast_residual_variance(
+        PERMANENT_INCOME_DATA_PATH / "FR_sigma2_u.json"
+    )
+    return PermanentIncomeForecastInputs(
+        coefficient_table=table,
+        hac_covariance=covariance,
+        residual_variance=residual_variance,
+        diagnostics={},
+    )
 
 
 class TestCountry:
@@ -826,3 +869,69 @@ class TestCountry:
         preview = test_country.compute_pre_credit_production_tax_obligation_preview()
 
         assert np.allclose(preview, 0.25 * target_production * prices * 1.5)
+
+    def test__forecast_common_permanent_income_returns_none_without_cached_inputs(self, test_country):
+        assert test_country._permanent_income_forecast_inputs is None
+        assert test_country._permanent_income_design_matrix is None
+
+        assert test_country.forecast_common_permanent_income() is None
+
+    def test__forecast_common_permanent_income_matches_pure_function_and_is_side_effect_free(self, test_country):
+        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
+        design_matrix = design_matrix_to_forecast_reader_names(
+            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
+        )
+
+        test_country.start_period = pd.Period("2014Q1", freq="Q")
+        test_country._permanent_income_forecast_inputs = forecast_inputs
+        test_country._permanent_income_design_matrix = design_matrix
+
+        households_income_before = test_country.households.ts.dicts["income"][-1].copy()
+        economy_keys_before = set(test_country.economy.ts.get_keys())
+        households_keys_before = set(test_country.households.ts.get_keys())
+
+        result = test_country.forecast_common_permanent_income()
+
+        assert result is not None
+
+        sources = test_country._permanent_income_simulation_sources()
+        x_t = country_module.build_permanent_income_forecast_regressors(
+            sources=sources,
+            design_matrix=design_matrix,
+            start_period=test_country.start_period,
+        )
+        expected = pure_forecast_common_permanent_income(x_t, forecast_inputs)
+
+        assert result.point_forecast == expected.point_forecast
+        assert result.forecast_variance == expected.forecast_variance
+
+        # Side-effect free: no mutation of household/economy state or learning fields.
+        assert np.array_equal(test_country.households.ts.dicts["income"][-1], households_income_before)
+        assert set(test_country.economy.ts.get_keys()) == economy_keys_before
+        assert set(test_country.households.ts.get_keys()) == households_keys_before
+        assert "income_belief_mu" not in test_country.households.ts.get_keys()
+        assert "income_belief_p" not in test_country.households.ts.get_keys()
+
+    def test__forecast_common_permanent_income_loaders_called_at_most_once(self, test_country):
+        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
+        design_matrix = design_matrix_to_forecast_reader_names(
+            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
+        )
+
+        test_country.start_period = pd.Period("2014Q1", freq="Q")
+        test_country._permanent_income_forecast_inputs = forecast_inputs
+        test_country._permanent_income_design_matrix = design_matrix
+
+        with (
+            patch.object(
+                country_module, "load_permanent_income_forecast_inputs", wraps=load_permanent_income_forecast_inputs
+            ) as mock_load_inputs,
+            patch.object(
+                country_module, "load_permanent_income_design_matrix", wraps=load_permanent_income_design_matrix
+            ) as mock_load_design_matrix,
+        ):
+            for _ in range(3):
+                assert test_country.forecast_common_permanent_income() is not None
+
+        mock_load_inputs.assert_not_called()
+        mock_load_design_matrix.assert_not_called()

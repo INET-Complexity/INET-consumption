@@ -94,6 +94,7 @@ class DataPaths:
         permanent_income_forecast_table_path (Path): Path to the common permanent-income coefficient table
         permanent_income_forecast_covariance_path (Path): Path to the common permanent-income HAC covariance matrix
         permanent_income_forecast_residual_variance_path (Path): Path to the common permanent-income residual variance
+        permanent_income_design_matrix_path (Optional[Path]): Path to the common permanent-income design matrix export
 
     Note: leaving ``insee_smic_path`` or ``income_belief_priors_path`` as ``None`` makes the
     corresponding reader fall back to its own module-level default CSV path.
@@ -126,6 +127,7 @@ class DataPaths:
     permanent_income_forecast_table_path: Path | None = None
     permanent_income_forecast_covariance_path: Path | None = None
     permanent_income_forecast_residual_variance_path: Path | None = None
+    permanent_income_design_matrix_path: Path | None = None
 
     @classmethod
     def default_paths(cls, raw_data_path: Path, icio_years: Iterable[int]):
@@ -168,6 +170,7 @@ class DataPaths:
             permanent_income_forecast_table_path=raw_data_path / "permanent_income" / "FR_table.json",
             permanent_income_forecast_covariance_path=raw_data_path / "permanent_income" / "FR_cov_hac.json",
             permanent_income_forecast_residual_variance_path=raw_data_path / "permanent_income" / "FR_sigma2_u.json",
+            permanent_income_design_matrix_path=raw_data_path / "permanent_income" / "FR_design_matrix.csv",
         )
 
     # @classmethod

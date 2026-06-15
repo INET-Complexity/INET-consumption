@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -5,9 +7,21 @@ import pytest
 from macro_data.readers.permanent_income_forecast import RAW_VARIABLE_ORDER
 from macro_data.readers.permanent_income_mapping import (
     FORECAST_READER_TO_NOTEBOOK_EXPORT_NAME,
+    FROZEN_EXOGENOUS_FORECAST_READER_NAMES,
     PermanentIncomeSimulationSources,
     build_permanent_income_forecast_regressors,
     design_matrix_to_forecast_reader_names,
+    load_permanent_income_design_matrix,
+    rebase_real_pc_income_index,
+)
+
+FR_DESIGN_MATRIX_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "run_model"
+    / "data"
+    / "raw_data"
+    / "permanent_income"
+    / "FR_design_matrix.csv"
 )
 
 
@@ -217,6 +231,67 @@ def test__unemployment_rate_is_converted_from_share_to_percent():
 
     assert x_t["unemp_rate_ma4_l1"] == pytest.approx(np.linspace(0.05, 0.08, 8)[-5:-1].mean() * 100.0)
     assert x_t["unemp_rate_ma4_l1"] > 1.0
+
+
+def test__rebase_real_pc_income_index_hand_computed():
+    levels = np.array([200.0, 202.0, 204.0, 196.0])
+
+    rebased = rebase_real_pc_income_index(levels, base_period_index=0)
+
+    assert rebased == pytest.approx([100.0, 101.0, 102.0, 98.0])
+
+
+def test__rebase_real_pc_income_index_non_zero_base_index():
+    levels = np.array([50.0, 100.0, 150.0])
+
+    rebased = rebase_real_pc_income_index(levels, base_period_index=1, index_base_value=50.0)
+
+    assert rebased == pytest.approx([25.0, 50.0, 75.0])
+
+
+def test__load_permanent_income_design_matrix_loads_fr_csv_and_converts():
+    design_matrix = load_permanent_income_design_matrix(FR_DESIGN_MATRIX_PATH)
+
+    assert "date" in design_matrix.columns
+    assert "log_y" in design_matrix.columns
+    assert not any(str(col).startswith("Unnamed") for col in design_matrix.columns)
+    assert len(design_matrix) == 144
+
+    converted = design_matrix_to_forecast_reader_names(design_matrix)
+    assert isinstance(converted.index, pd.PeriodIndex)
+    assert "log_real_pc_income" in converted.columns
+    assert pd.Period("2014Q1", freq="Q") in converted.index
+    assert pd.Period("2014Q4", freq="Q") in converted.index
+
+
+def test__build_permanent_income_forecast_regressors_matches_fr_design_matrix_reference_rows():
+    design_matrix = load_permanent_income_design_matrix(FR_DESIGN_MATRIX_PATH)
+    converted = design_matrix_to_forecast_reader_names(design_matrix)
+    initial_row = converted.loc[pd.Period("2014Q1", freq="Q")]
+
+    for current_period_label in ("2014Q1", "2014Q4"):
+        current_period = pd.Period(current_period_label, freq="Q")
+        history_length = (current_period.year - 2014) * 4 + (current_period.quarter - 1) + 1
+
+        x_t = build_permanent_income_forecast_regressors(
+            sources=PermanentIncomeSimulationSources(
+                current_period=current_period,
+                real_pc_income=np.full(history_length, 100.0),
+                policy_rate=np.full(history_length, 0.01),
+                cpi_fixed_basket=np.full(history_length, 100.0),
+                unemployment_rate=np.full(history_length, 0.05),
+            ),
+            design_matrix=design_matrix,
+            start_period="2014Q1",
+        )
+
+        for name in FROZEN_EXOGENOUS_FORECAST_READER_NAMES:
+            assert x_t[name] == pytest.approx(float(initial_row[name])), name
+
+        expected_trend = (current_period.year - 2014) * 4 + (current_period.quarter - 1)
+        assert x_t["time_trend"] == pytest.approx(expected_trend)
+        assert x_t["covid19"] == pytest.approx(0.0)
+        assert x_t["split_trend_from_2009q4_discounted_present_value"] != pytest.approx(0.0)
 
 
 def test__unemployment_rate_outside_unit_interval_raises():

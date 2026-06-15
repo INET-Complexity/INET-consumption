@@ -21,6 +21,7 @@ class IncomeBeliefLearningOutputs:
     income_signal: np.ndarray
     prediction_error: np.ndarray
     floor_used: np.ndarray
+    posterior_fallback_used: np.ndarray
 
 
 def _household_array(priors: dict[str, np.ndarray], key: str, n_households: int) -> np.ndarray:
@@ -92,6 +93,10 @@ def compute_income_belief_learning_outputs(
     predicted_variance = np.maximum((rho**2) * prior_variance + process_variance, 0.0)
     prediction_error = income_signal - predicted_mean
     innovation_variance = predicted_variance + np.maximum(signal_variance, income_floor)
+    # When innovation_variance is non-finite or non-positive, kalman_gain
+    # defaults to 0 (no update from the signal) rather than the ~1 a true
+    # Kalman gain would take as prior variance dominates uncertainty; this
+    # is a defensive default, not a physically motivated gain.
     kalman_gain = np.divide(
         predicted_variance,
         innovation_variance,
@@ -104,7 +109,9 @@ def compute_income_belief_learning_outputs(
 
     # Spec step 9: non-finite outputs fall back to the previous posterior
     # (mu) or previous/zero-floored posterior variance (p), rather than
-    # propagating NaN/inf into runtime state.
+    # propagating NaN/inf into runtime state. posterior_fallback_used flags
+    # households where this triggered, so silent corrections remain visible
+    # to callers even though execution continues.
     non_finite_mean = ~np.isfinite(posterior_mean)
     if non_finite_mean.any():
         fallback_mean = np.where(np.isfinite(prior_mean), prior_mean, 0.0)
@@ -113,6 +120,7 @@ def compute_income_belief_learning_outputs(
     if non_finite_variance.any():
         fallback_variance = np.where(np.isfinite(prior_variance), prior_variance, 0.0)
         posterior_variance = np.where(non_finite_variance, fallback_variance, posterior_variance)
+    posterior_fallback_used = non_finite_mean | non_finite_variance
 
     return IncomeBeliefLearningOutputs(
         prior_mean=prior_mean,
@@ -127,4 +135,5 @@ def compute_income_belief_learning_outputs(
         income_signal=income_signal,
         prediction_error=prediction_error,
         floor_used=floor_used,
+        posterior_fallback_used=posterior_fallback_used,
     )

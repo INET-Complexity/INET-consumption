@@ -44,6 +44,7 @@ def test__income_belief_learning_outputs_use_correct_variance_mapping_and_predic
     np.testing.assert_allclose(outputs.posterior_mean, expected_posterior_mean)
     np.testing.assert_allclose(outputs.posterior_variance, expected_posterior_variance)
     assert not outputs.floor_used.any()
+    assert not outputs.posterior_fallback_used.any()
     assert np.all(outputs.posterior_variance <= outputs.predicted_variance)
 
 
@@ -143,6 +144,8 @@ def test__income_belief_learning_falls_back_to_zero_mean_on_non_finite_prior_mea
     assert not np.isfinite(outputs.predicted_mean[0])
     assert outputs.posterior_mean[0] == 0.0
     assert np.isfinite(outputs.posterior_mean[1])
+    assert outputs.posterior_fallback_used[0]
+    assert not outputs.posterior_fallback_used[1]
 
 
 def test__income_belief_learning_falls_back_to_prior_variance_on_non_finite_posterior_variance():
@@ -163,6 +166,8 @@ def test__income_belief_learning_falls_back_to_prior_variance_on_non_finite_post
     assert not np.isfinite(outputs.predicted_variance[0])
     assert outputs.posterior_variance[0] == pytest.approx(priors["income_belief_p"][0])
     assert np.isfinite(outputs.posterior_variance[1])
+    assert outputs.posterior_fallback_used[0]
+    assert not outputs.posterior_fallback_used[1]
 
 
 def test__income_belief_learning_falls_back_to_zero_when_prior_variance_non_finite():
@@ -182,3 +187,4 @@ def test__income_belief_learning_falls_back_to_zero_when_prior_variance_non_fini
 
     assert not np.isfinite(outputs.predicted_variance[0])
     assert outputs.posterior_variance[0] == 0.0
+    assert outputs.posterior_fallback_used[0]

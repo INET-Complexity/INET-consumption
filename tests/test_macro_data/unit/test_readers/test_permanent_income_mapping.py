@@ -70,7 +70,7 @@ def test__mapping_uses_income_index_scale_directly_and_bootstraps_lags_from_desi
             real_pc_income=[92.0, 94.0, 96.0, 98.0],
             policy_rate=[0.01, 0.02, 0.03, 0.04],
             cpi_fixed_basket=[100.0, 101.0, 102.0, 103.0],
-            unemployment_rate=[5.0, 6.0, 7.0, 8.0],
+            unemployment_rate=[0.05, 0.06, 0.07, 0.08],
         ),
         design_matrix=design,
         start_period=1980,
@@ -99,7 +99,7 @@ def test__start_period_aligns_trend_without_rebasing_income_index():
         real_pc_income=[90.0, 91.0, 92.0, 93.0, 94.0],
         policy_rate=[0.01] * 5,
         cpi_fixed_basket=[100.0, 101.0, 102.0, 103.0, 104.0],
-        unemployment_rate=[5.0] * 5,
+        unemployment_rate=[0.05] * 5,
     )
 
     x_t_1980_anchor = build_permanent_income_forecast_regressors(
@@ -129,7 +129,7 @@ def test__mapping_does_not_fall_back_to_start_period_or_initial_design_income_an
             real_pc_income=[80.0, 82.0, 84.0, 86.0, 88.0],
             policy_rate=[0.01] * 5,
             cpi_fixed_basket=[100.0, 101.0, 102.0, 103.0, 104.0],
-            unemployment_rate=[5.0] * 5,
+            unemployment_rate=[0.05] * 5,
         ),
         design_matrix=design,
         start_period=1980,
@@ -146,7 +146,7 @@ def test__mapping_uses_endogenous_income_real_rate_and_percent_unemployment_afte
     real_pc_income = np.linspace(92.0, 108.0, 17)
     policy_rate = np.linspace(0.005, 0.025, 17)
     cpi = np.linspace(100.0, 120.0, 17)
-    unemployment_percent = np.linspace(0.2, 0.8, 17)
+    unemployment_share = np.linspace(0.002, 0.008, 17)
 
     x_t = build_permanent_income_forecast_regressors(
         sources=PermanentIncomeSimulationSources(
@@ -154,13 +154,14 @@ def test__mapping_uses_endogenous_income_real_rate_and_percent_unemployment_afte
             real_pc_income=real_pc_income,
             policy_rate=policy_rate,
             cpi_fixed_basket=cpi,
-            unemployment_rate=unemployment_percent,
+            unemployment_rate=unemployment_share,
         ),
         design_matrix=design,
         start_period="1980Q1",
     )
 
     real_rate = _fisher(policy_rate, cpi)
+    unemployment_percent = unemployment_share * 100.0
     assert x_t["d4_log_real_pc_income"] == pytest.approx(np.log(real_pc_income[-1] / real_pc_income[-5]))
     assert x_t["real_interest_rate_ma4_l1"] == pytest.approx(real_rate[-5:-1].mean())
     assert x_t["real_interest_rate_ma4_l5"] == pytest.approx(real_rate[-9:-5].mean())
@@ -169,7 +170,7 @@ def test__mapping_uses_endogenous_income_real_rate_and_percent_unemployment_afte
     assert x_t["unemp_rate_ma4_l5"] == pytest.approx(unemployment_percent[-9:-5].mean())
 
 
-def test__mapping_freezes_selected_exogenous_terms_at_initial_period_but_keeps_t_bill_current_exogenous():
+def test__mapping_freezes_selected_exogenous_terms_at_initial_period_including_t_bill():
     periods = pd.period_range("2014Q1", periods=10, freq="Q")
     design = _design_matrix(periods)
 
@@ -179,7 +180,7 @@ def test__mapping_freezes_selected_exogenous_terms_at_initial_period_but_keeps_t
             real_pc_income=np.linspace(10.0, 14.0, 10),
             policy_rate=[0.01] * 10,
             cpi_fixed_basket=np.linspace(100.0, 109.0, 10),
-            unemployment_rate=np.linspace(5.0, 10.0, 10),
+            unemployment_rate=np.linspace(0.05, 0.10, 10),
         ),
         design_matrix=design,
         start_period=1980,
@@ -192,5 +193,45 @@ def test__mapping_freezes_selected_exogenous_terms_at_initial_period_but_keeps_t
     assert x_t["log_real_oil_price_ma4_l5"] == pytest.approx(initial["log_real_oil_price_ma4_l5"])
     assert x_t["log_real_fx_rate_ma4_l1"] == pytest.approx(initial["log_real_fx_rate_ma4_l1"])
     assert x_t["log_working_age_population_share"] == pytest.approx(initial["log_working_age_population_share"])
-    assert x_t["d4_t_bill_rate"] == pytest.approx(current["d4_t_bill_rate"])
-    assert x_t["d4_t_bill_rate_l1"] == pytest.approx(current["d4_t_bill_rate_l1"])
+    assert x_t["d4_t_bill_rate"] == pytest.approx(initial["d4_t_bill_rate"])
+    assert x_t["d4_t_bill_rate_l1"] == pytest.approx(initial["d4_t_bill_rate_l1"])
+    assert x_t["d4_t_bill_rate"] != pytest.approx(current["d4_t_bill_rate"])
+    assert x_t["d4_t_bill_rate_l1"] != pytest.approx(current["d4_t_bill_rate_l1"])
+
+
+def test__unemployment_rate_is_converted_from_share_to_percent():
+    periods = pd.period_range("2014Q1", periods=8, freq="Q")
+    design = _design_matrix(periods)
+
+    x_t = build_permanent_income_forecast_regressors(
+        sources=PermanentIncomeSimulationSources(
+            current_period="2015Q4",
+            real_pc_income=np.linspace(90.0, 98.0, 8),
+            policy_rate=[0.01] * 8,
+            cpi_fixed_basket=np.linspace(100.0, 103.0, 8),
+            unemployment_rate=np.linspace(0.05, 0.08, 8),
+        ),
+        design_matrix=design,
+        start_period=1980,
+    )
+
+    assert x_t["unemp_rate_ma4_l1"] == pytest.approx(np.linspace(0.05, 0.08, 8)[-5:-1].mean() * 100.0)
+    assert x_t["unemp_rate_ma4_l1"] > 1.0
+
+
+def test__unemployment_rate_outside_unit_interval_raises():
+    periods = pd.period_range("2014Q1", periods=5, freq="Q")
+    design = _design_matrix(periods)
+
+    with pytest.raises(ValueError, match="unemployment_rate"):
+        build_permanent_income_forecast_regressors(
+            sources=PermanentIncomeSimulationSources(
+                current_period="2015Q1",
+                real_pc_income=[90.0] * 5,
+                policy_rate=[0.01] * 5,
+                cpi_fixed_basket=[100.0] * 5,
+                unemployment_rate=[5.0] * 5,
+            ),
+            design_matrix=design,
+            start_period=1980,
+        )

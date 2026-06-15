@@ -34,8 +34,8 @@ FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
     "real_interest_rate_ma4_l1": "policy_rate_and_cpi_fixed_basket",
     "real_interest_rate_ma4_l5": "policy_rate_and_cpi_fixed_basket",
     "real_interest_rate_ma4_l9": "policy_rate_and_cpi_fixed_basket",
-    "d4_t_bill_rate": "exogenous_design_matrix_current_period",
-    "d4_t_bill_rate_l1": "exogenous_design_matrix_current_period",
+    "d4_t_bill_rate": "frozen_design_matrix_initial_period",
+    "d4_t_bill_rate_l1": "frozen_design_matrix_initial_period",
     "log_stock_market_index_ma4_l1": "frozen_design_matrix_initial_period",
     "unemp_rate_ma4_l1": "unemployment_rate",
     "unemp_rate_ma4_l5": "unemployment_rate",
@@ -53,6 +53,8 @@ FROZEN_EXOGENOUS_FORECAST_READER_NAMES = (
     "log_real_oil_price_ma4_l5",
     "log_real_fx_rate_ma4_l1",
     "log_real_fx_rate_ma4_l5",
+    "d4_t_bill_rate",
+    "d4_t_bill_rate_l1",
 )
 
 
@@ -63,7 +65,9 @@ class PermanentIncomeSimulationSources:
     The history arrays must be quarterly and ordered from the simulation's first
     quarter through ``current_period``. ``real_pc_income`` must already be the
     notebook/export real per-capita income index scale. Policy rates are model
-    decimal rates; unemployment rates are percentages on ``[0, 100]``.
+    decimal rates; unemployment rates are shares on ``[0, 1]``, matching
+    ``Economy.ts.unemployment_rate``, and are converted to percentage points
+    internally for the ``unemp_rate_ma4_*`` regressors.
     """
 
     current_period: str | pd.Period | pd.Timestamp
@@ -164,10 +168,10 @@ def _ma4_lag_from_history(values: np.ndarray, lag: int) -> float | None:
     return float(values[start:end_exclusive].mean())
 
 
-def _unemployment_percent_history(unemployment_rate: np.ndarray) -> np.ndarray:
-    if np.any((unemployment_rate < 0.0) | (unemployment_rate > 100.0)):
-        raise ValueError("unemployment_rate history must be percentages on [0, 100].")
-    return unemployment_rate
+def _unemployment_percent_history_from_share(unemployment_rate: np.ndarray) -> np.ndarray:
+    if np.any((unemployment_rate < 0.0) | (unemployment_rate > 1.0)):
+        raise ValueError("unemployment_rate history must be shares on [0, 1].")
+    return unemployment_rate * 100.0
 
 
 def _splittrend_pdv(
@@ -252,7 +256,7 @@ def build_permanent_income_forecast_regressors(
         if endogenous_value is not None:
             values[name] = endogenous_value
 
-    unemployment_percent = _unemployment_percent_history(unemployment_rate)
+    unemployment_percent = _unemployment_percent_history_from_share(unemployment_rate)
     for lag, name in [(1, "unemp_rate_ma4_l1"), (5, "unemp_rate_ma4_l5")]:
         endogenous_value = _ma4_lag_from_history(unemployment_percent, lag)
         if endogenous_value is not None:

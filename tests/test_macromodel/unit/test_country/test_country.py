@@ -7,14 +7,10 @@ import pandas as pd
 
 import macromodel.country.country as country_module
 from macro_data.readers.permanent_income_forecast import (
-    PermanentIncomeForecastInputs,
-    load_permanent_income_forecast_hac_covariance,
-    load_permanent_income_forecast_inputs,
-    load_permanent_income_forecast_residual_variance,
-    load_permanent_income_forecast_table,
+    forecast_common_permanent_income as pure_forecast_common_permanent_income,
 )
 from macro_data.readers.permanent_income_forecast import (
-    forecast_common_permanent_income as pure_forecast_common_permanent_income,
+    load_permanent_income_forecast_inputs,
 )
 from macro_data.readers.permanent_income_mapping import (
     design_matrix_to_forecast_reader_names,
@@ -31,24 +27,11 @@ PERMANENT_INCOME_DATA_PATH = (
 
 
 def _load_permanent_income_forecast_inputs_for_test():
-    """Load FR permanent-income forecast inputs, symmetrizing the HAC covariance.
-
-    The checked-in ``FR_cov_hac.json`` round-trips with ~1e-10 asymmetry from JSON
-    float serialization, just above the loader's strict 1e-10 tolerance. Symmetrize
-    here so the wrapper tests can exercise the real fixture data without touching
-    the unrelated data-quality issue.
-    """
-    table = load_permanent_income_forecast_table(PERMANENT_INCOME_DATA_PATH / "FR_table.json")
-    covariance = load_permanent_income_forecast_hac_covariance(PERMANENT_INCOME_DATA_PATH / "FR_cov_hac.json")
-    covariance = (covariance + covariance.T) / 2.0
-    residual_variance = load_permanent_income_forecast_residual_variance(
-        PERMANENT_INCOME_DATA_PATH / "FR_sigma2_u.json"
-    )
-    return PermanentIncomeForecastInputs(
-        coefficient_table=table,
-        hac_covariance=covariance,
-        residual_variance=residual_variance,
-        diagnostics={},
+    """Load FR permanent-income forecast inputs via the production loader."""
+    return load_permanent_income_forecast_inputs(
+        PERMANENT_INCOME_DATA_PATH / "FR_table.json",
+        PERMANENT_INCOME_DATA_PATH / "FR_cov_hac.json",
+        PERMANENT_INCOME_DATA_PATH / "FR_sigma2_u.json",
     )
 
 

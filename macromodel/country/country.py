@@ -2285,11 +2285,19 @@ class Country:
                 design_matrix=self._permanent_income_design_matrix,
                 start_period=self.start_period,
             )
-            return forecast_common_permanent_income(x_t, self._permanent_income_forecast_inputs)
         except ValueError as exc:
+            # ValueError here is data-dependent (e.g. non-positive income/CPI,
+            # unemployment outside [0, 1], non-finite history values) and is
+            # expected to occur transiently during a simulation run, so it is
+            # safe to skip this period's forecast. Errors from
+            # forecast_common_permanent_income() below indicate a static
+            # configuration/wiring mismatch (e.g. x_t vs. coefficient_table
+            # index mismatch) and are deliberately NOT caught here.
             logging.warning(
                 "Skipping common permanent-income forecast for %s due to invalid inputs: %s",
                 self.country_name,
                 exc,
             )
             return None
+
+        return forecast_common_permanent_income(x_t, self._permanent_income_forecast_inputs)

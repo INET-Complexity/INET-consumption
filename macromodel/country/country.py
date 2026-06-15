@@ -44,6 +44,19 @@ from macro_data.readers.default_readers import DataPaths
 from macro_data.readers.income_belief_classification import compute_household_income_beliefs
 from macro_data.readers.income_belief_priors import load_income_belief_priors_table
 from macro_data.readers.insee_smic import load_insee_smic_annual_table
+from macro_data.readers.permanent_income_forecast import (
+    PermanentIncomeForecast,
+    PermanentIncomeForecastInputs,
+    forecast_common_permanent_income,
+    load_permanent_income_forecast_inputs,
+)
+from macro_data.readers.permanent_income_mapping import (
+    PermanentIncomeSimulationSources,
+    build_permanent_income_forecast_regressors,
+    design_matrix_to_forecast_reader_names,
+    load_permanent_income_design_matrix,
+    rebase_real_pc_income_index,
+)
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -149,6 +162,9 @@ class Country:
         emitting_indices: Optional[np.ndarray] = None,
         emission_factors_lcu_ch4: Optional[np.ndarray] = None,
         emitting_indices_ch4: Optional[np.ndarray] = None,
+        initial_year: Optional[int] = None,
+        permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None,
+        permanent_income_design_matrix: Optional[pd.DataFrame] = None,
     ):
         """Initialize a new country economy.
 
@@ -220,6 +236,17 @@ class Country:
         self.emitting_indices_ch4 = emitting_indices_ch4
         self.use_emission_multiplier = self.configuration.use_emission_multiplier
         self._clear_household_income_shock()
+
+        # Stage 3 common permanent-income forecast: cached at construction time so
+        # the (potentially expensive, PSD-validated) inputs are loaded once.
+        # start_period follows the same convention as the design-matrix trend column
+        # (quarter 1 of initial_year, e.g. 2014Q1), consistent with `_quarter_period(int)`
+        # in permanent_income_mapping.py.
+        self.start_period: Optional[pd.Period] = (
+            pd.Period(f"{initial_year}Q1", freq="Q") if initial_year is not None else None
+        )
+        self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
+        self._permanent_income_design_matrix = permanent_income_design_matrix
 
     @classmethod
     def from_pickled_country(
@@ -429,6 +456,31 @@ class Country:
                 priors_table=income_belief_priors_table,
             )
 
+        permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None
+        permanent_income_design_matrix: Optional[pd.DataFrame] = None
+        if country_name == "FRA" and data_paths is not None:
+            if (
+                data_paths.permanent_income_forecast_table_path is not None
+                and data_paths.permanent_income_forecast_covariance_path is not None
+                and data_paths.permanent_income_forecast_residual_variance_path is not None
+            ):
+                try:
+                    permanent_income_forecast_inputs = load_permanent_income_forecast_inputs(
+                        data_paths.permanent_income_forecast_table_path,
+                        data_paths.permanent_income_forecast_covariance_path,
+                        data_paths.permanent_income_forecast_residual_variance_path,
+                    )
+                except (OSError, ValueError):
+                    permanent_income_forecast_inputs = None
+
+            if data_paths.permanent_income_design_matrix_path is not None:
+                try:
+                    permanent_income_design_matrix = design_matrix_to_forecast_reader_names(
+                        load_permanent_income_design_matrix(data_paths.permanent_income_design_matrix_path)
+                    )
+                except (OSError, ValueError):
+                    permanent_income_design_matrix = None
+
         labour_market = LabourMarket.from_agents(
             individuals=individuals,
             labour_market_configuration=country_configuration.labour_market,
@@ -474,6 +526,9 @@ class Country:
             emitting_indices=emitting_indices,
             emission_factors_lcu_ch4=emission_factors_lcu_ch4,
             emitting_indices_ch4=emitting_indices_ch4,
+            initial_year=initial_year,
+            permanent_income_forecast_inputs=permanent_income_forecast_inputs,
+            permanent_income_design_matrix=permanent_income_design_matrix,
         )
 
     @staticmethod
@@ -2168,3 +2223,81 @@ class Country:
     def n_individuals(self) -> int:
         """int: Total number of individual agents in the economy."""
         return self.individuals.n_individuals
+
+    def _permanent_income_simulation_sources(self) -> PermanentIncomeSimulationSources:
+        """Build the Stage 3 common forecast simulation-source history.
+
+        Side-effect free: only reads existing time series, does not mutate
+        ``economy.ts``, ``households.ts``, or ``individuals.ts``.
+        """
+        current_period = self.start_period + (len(self.economy.ts.dicts["cpi_fixed_basket"]) - 1)
+
+        cpi_fixed_basket = np.asarray(
+            [np.asarray(value).reshape(-1)[0] for value in self.economy.ts.dicts["cpi_fixed_basket"]],
+            dtype=float,
+        )
+        unemployment_rate = np.asarray(
+            [np.asarray(value).reshape(-1)[0] for value in self.economy.ts.dicts["unemployment_rate"]],
+            dtype=float,
+        )
+        policy_rate = np.asarray(
+            [np.asarray(value).reshape(-1)[0] for value in self.central_bank.ts.dicts["policy_rate"]],
+            dtype=float,
+        )
+
+        # Real household disposable income per capita (Stage 0 `model_spendable_income`
+        # convention, i.e. households.ts["income"]), deflated by cpi_fixed_basket and
+        # divided by the population history, then rebased to the notebook's
+        # `real_pc_idx` convention (index = 100 at start_period).
+        n_individuals_history = np.asarray(
+            [np.asarray(value).reshape(-1)[0] for value in self.individuals.ts.dicts["n_individuals"]],
+            dtype=float,
+        )
+        total_income_history = np.asarray(
+            [float(np.sum(value)) for value in self.households.ts.dicts["income"]],
+            dtype=float,
+        )
+        real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals_history
+        real_pc_income = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
+
+        return PermanentIncomeSimulationSources(
+            current_period=current_period,
+            real_pc_income=real_pc_income,
+            policy_rate=policy_rate,
+            cpi_fixed_basket=cpi_fixed_basket,
+            unemployment_rate=unemployment_rate,
+        )
+
+    def forecast_common_permanent_income(self) -> Optional[PermanentIncomeForecast]:
+        """Compute the Stage 3 common permanent-income forecast for the current period.
+
+        Returns ``None`` if the forecast inputs or design matrix are unavailable
+        for this country/configuration (e.g. non-FRA or missing ``data_paths``).
+        Side-effect free: no mutation of model state.
+        """
+        if self._permanent_income_forecast_inputs is None or self._permanent_income_design_matrix is None:
+            return None
+
+        try:
+            sources = self._permanent_income_simulation_sources()
+            x_t = build_permanent_income_forecast_regressors(
+                sources=sources,
+                design_matrix=self._permanent_income_design_matrix,
+                start_period=self.start_period,
+            )
+        except ValueError as exc:
+            # ValueError here is data-dependent (e.g. non-positive income/CPI,
+            # unemployment outside [0, 1], non-finite history values) and is
+            # expected to occur transiently during a simulation run, so it is
+            # safe to skip this period's forecast. Errors from
+            # forecast_common_permanent_income() below indicate a static
+            # configuration/wiring mismatch (e.g. x_t vs. coefficient_table
+            # index mismatch) and are deliberately NOT caught here.
+            logging.warning(
+                "Skipping common permanent-income forecast for %s due to invalid inputs: %s",
+                self.country_name,
+                exc,
+            )
+            return None
+
+        return forecast_common_permanent_income(x_t, self._permanent_income_forecast_inputs)

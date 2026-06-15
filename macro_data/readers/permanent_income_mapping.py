@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 import numpy as np
@@ -121,6 +122,22 @@ def _design_row(design: pd.DataFrame, period: pd.Period) -> pd.Series:
     return design.loc[period]
 
 
+def _design_row_or_nearest(design: pd.DataFrame, period: pd.Period) -> pd.Series:
+    """Look up a design-matrix row, clamping to the nearest available period.
+
+    The design matrix is a fixed historical export with finite coverage, while
+    ``period`` (derived from the simulation clock) grows without bound. Periods
+    past either end of ``design.index`` are clamped to the first/last available
+    row so design-matrix-only regressors freeze at their boundary values instead
+    of raising once the simulation runs longer than the export's coverage.
+    """
+    if period in design.index:
+        return design.loc[period]
+    if period > design.index.max():
+        return design.loc[design.index.max()]
+    return design.loc[design.index.min()]
+
+
 def _as_1d_float_history(values: Sequence[float], name: str) -> np.ndarray:
     arr = np.asarray(values, dtype=float).reshape(-1)
     if arr.size == 0:
@@ -220,8 +237,8 @@ def build_permanent_income_forecast_regressors(
     periods = _periods_for_history(current_period, history_length)
     initial_period = periods[0]
     design = design_matrix_to_forecast_reader_names(design_matrix)
-    current_design = _design_row(design, current_period)
-    initial_design = _design_row(design, initial_period)
+    current_design = _design_row_or_nearest(design, current_period)
+    initial_design = _design_row_or_nearest(design, initial_period)
     log_income_history = _log_income_index_history(real_pc_income)
 
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
@@ -263,3 +280,38 @@ def build_permanent_income_forecast_regressors(
         values[name] = float(initial_design[name])
 
     return pd.Series(values, index=FORECAST_READER_VARIABLE_ORDER, dtype=float, name=current_period)
+
+
+def load_permanent_income_design_matrix(path: str | Path) -> pd.DataFrame:
+    """Load the raw permanent-income design matrix export.
+
+    Exported from ``consumption-notebooks/data/pi_est/FR/design_matrix.csv``
+    (``permanent_income_estimation.ipynb``). Returns the design matrix with
+    notebook/export column names and a ``date`` column intact, ready to be
+    passed into :func:`design_matrix_to_forecast_reader_names`.
+    """
+    df = pd.read_csv(path)
+    unnamed_columns = [col for col in df.columns if str(col).startswith("Unnamed")]
+    if unnamed_columns:
+        df = df.drop(columns=unnamed_columns)
+    if "const" not in df.columns:
+        df["const"] = 1.0
+    return df
+
+
+def rebase_real_pc_income_index(
+    real_pc_income_levels: np.ndarray,
+    base_period_index: int,
+    index_base_value: float = 100.0,
+) -> np.ndarray:
+    """Rebase a real per-capita income level history to the notebook's index convention.
+
+    Implements ``index_base_value * real_pc / real_pc[base_period_index]``.
+    """
+    levels = np.asarray(real_pc_income_levels, dtype=float)
+    if levels.ndim != 1 or levels.size == 0:
+        raise ValueError("real_pc_income_levels must be a non-empty 1D array.")
+    base_value = levels[base_period_index]
+    if not np.isfinite(base_value) or base_value <= 0.0:
+        raise ValueError("real_pc_income_levels base period value must be finite and positive.")
+    return index_base_value * levels / base_value

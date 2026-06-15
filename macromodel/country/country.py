@@ -975,6 +975,22 @@ class Country:
         initial_additional_taxes = np.zeros(len(self.firms.ts.current("price")))
 
         saving_rates_histogram_len = len(self.households.ts.saving_rates_histogram)
+
+        # Stage 3 Increment 5: wire learned individual beliefs and the common
+        # macro permanent-income forecast into the consumption rule. When the
+        # rule does not opt in (default / non-FRA), both stay None and
+        # compute_target_consumption reproduces the prior zero behaviour exactly.
+        permanent_income_log_ratio = None
+        uncertainty_delta = None
+        if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
+            common_log_ratio, common_forecast_variance = self._common_permanent_income_terms()
+            learning_inputs = self.households.current_income_belief_learning_inputs(
+                common_permanent_income_log_ratio=common_log_ratio,
+                common_forecast_variance=common_forecast_variance,
+            )
+            permanent_income_log_ratio = learning_inputs["permanent_income_log_ratio"]
+            uncertainty_delta = learning_inputs["uncertainty_delta"]
+
         target_consumption = self.households.compute_target_consumption(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             current_cpi=self.economy.current_consumer_price_level(),
@@ -998,6 +1014,8 @@ class Country:
             real_borrowing_rate=0.0,
             consumer_debt_rate_delta=0.0,
             mortgage_payment=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
+            permanent_income_log_ratio=permanent_income_log_ratio,
+            uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
         )
 
@@ -2267,6 +2285,27 @@ class Country:
             cpi_fixed_basket=cpi_fixed_basket,
             unemployment_rate=unemployment_rate,
         )
+
+    def _common_permanent_income_terms(self) -> tuple[float, float]:
+        """Return ``(common_log_ratio, common_forecast_variance)`` for this period.
+
+        ``common_log_ratio`` is ``ln(y^p_t / y_t)`` -- the common forecast's
+        point forecast (on the rebased ``log_real_pc_idx`` scale) minus the
+        current-period rebased log income. ``common_forecast_variance`` is the
+        forecast's prediction-error variance. Both are scalar, broadcast to all
+        households by the household-side helpers.
+
+        Returns ``(0.0, 0.0)`` when the forecast is unavailable (non-FRA /
+        missing inputs), preserving the pre-Increment-5 zero behaviour. This is
+        the only fallback path; the household-side helpers add no second fallback.
+        """
+        forecast = self.forecast_common_permanent_income()
+        if forecast is None:
+            return 0.0, 0.0
+        sources = self._permanent_income_simulation_sources()
+        log_real_pc_income_t = float(np.log(sources.real_pc_income[-1]))
+        common_log_ratio = float(forecast.point_forecast) - log_real_pc_income_t
+        return common_log_ratio, float(forecast.forecast_variance)
 
     def forecast_common_permanent_income(self) -> Optional[PermanentIncomeForecast]:
         """Compute the Stage 3 common permanent-income forecast for the current period.

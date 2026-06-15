@@ -32,7 +32,11 @@ from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
 from macromodel.agents.households.income_belief_learning import (
     IncomeBeliefLearningOutputs,
+    _scalar_rho,
     compute_income_belief_learning_outputs,
+    compute_income_uncertainty,
+    compute_permanent_income_log_ratio,
+    compute_zeta,
 )
 from macromodel.agents.households.utils.create_bundle_matrix import create_bundle_matrix
 from macromodel.configurations import HouseholdsConfiguration
@@ -824,8 +828,20 @@ class Households(Agent):
         self,
         *,
         common_permanent_income_log_ratio: np.ndarray | float | None = None,
+        common_forecast_variance: np.ndarray | float | None = None,
     ) -> dict[str, np.ndarray]:
-        """Return Increment 2 placeholders for deferred consumption wiring."""
+        """Map posterior beliefs into Stage 3 consumption-rule inputs.
+
+        Combines the cached scalar weight ``zeta`` with the current posterior
+        beliefs (``income_belief_mu``/``income_belief_p``) and the broadcast
+        common-forecast terms to produce ``permanent_income_log_ratio`` and
+        ``uncertainty_delta`` per the Stage 3 architecture note (item 5).
+
+        ``common_permanent_income_log_ratio``/``common_forecast_variance`` are
+        scalar (float) terms broadcast across households; ``None`` (forecast
+        unavailable) is treated as ``0.0``, reducing each output to its pure
+        individual component.
+        """
         priors = self.states.get("income_belief_priors")
         if priors is None:
             raise ValueError(
@@ -833,10 +849,45 @@ class Households(Agent):
                 "but households.states['income_belief_priors'] is not available."
             )
         runtime_state = self._income_belief_runtime_state(priors)
+        zeta = self._income_belief_zeta(priors)
+        # Common terms are scalar (broadcast) per step 4; treat None as 0.0
+        # explicitly to avoid the `array or 0.0` truthiness trap (an ndarray
+        # would raise on `or`), even though step 4 only ever passes floats.
+        common_log_ratio = (
+            0.0 if common_permanent_income_log_ratio is None else float(common_permanent_income_log_ratio)
+        )
+        common_variance = 0.0 if common_forecast_variance is None else float(common_forecast_variance)
         return {
-            "permanent_income_log_ratio": np.zeros_like(runtime_state["posterior_mean"]),
-            "uncertainty_delta": np.zeros_like(runtime_state["posterior_variance"]),
+            "permanent_income_log_ratio": compute_permanent_income_log_ratio(
+                runtime_state["posterior_mean"], zeta, common_log_ratio
+            ),
+            "uncertainty_delta": compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance),
         }
+
+    def _income_belief_zeta(self, priors: dict[str, np.ndarray]) -> float:
+        """Return the cached scalar weight zeta, computing it once on first use.
+
+        zeta depends only on the scalars ``(rho, delta, S)`` so it is cached on
+        ``self.states['income_belief_zeta']`` rather than recomputed per period.
+        ``delta``/``S`` come from the consumption rule's configured
+        ``income_belief_learning_horizon``; a missing value raises rather than
+        silently defaulting, since zeta has real economic meaning.
+        """
+        if "income_belief_zeta" not in self.states:
+            consumption = self.functions["consumption"]
+            delta = getattr(consumption, "income_belief_learning_delta", None)
+            horizon_S = getattr(consumption, "income_belief_learning_S", None)
+            if delta is None or horizon_S is None:
+                raise ValueError(
+                    "Income-belief learning is enabled but the consumption rule has no "
+                    "income_belief_learning_horizon (delta/S). Configure "
+                    "stage_3.income_belief_learning.permanent_income_log_ratio "
+                    "via the paper_parameter reference; there is no safe default for zeta."
+                )
+            n_households = int(self.ts.current("n_households"))
+            rho = _scalar_rho(priors, n_households)
+            self.states["income_belief_zeta"] = compute_zeta(rho, delta, horizon_S)
+        return self.states["income_belief_zeta"]
 
     def _income_belief_runtime_state(self, priors: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         """Return mutable posterior state, seeded from static priors once."""

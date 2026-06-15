@@ -4,6 +4,7 @@ from unittest.mock import patch
 import h5py
 import numpy as np
 import pandas as pd
+import pytest
 
 import macromodel.country.country as country_module
 from macro_data.readers.permanent_income_forecast import (
@@ -939,3 +940,130 @@ class TestCountry:
 
         assert result is None
         assert any("permanent-income forecast" in record.message for record in caplog.records)
+
+    def test__common_permanent_income_terms_zero_when_forecast_unavailable(self, test_country):
+        # Increment 5: no cached forecast inputs -> (0.0, 0.0), preserving the
+        # pre-Increment-5 zero behaviour.
+        assert test_country._permanent_income_forecast_inputs is None
+        assert test_country._common_permanent_income_terms() == (0.0, 0.0)
+
+    def test__common_permanent_income_terms_matches_forecast_minus_log_income(self, test_country):
+        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
+        design_matrix = design_matrix_to_forecast_reader_names(
+            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
+        )
+        test_country.start_period = pd.Period("2014Q1", freq="Q")
+        test_country._permanent_income_forecast_inputs = forecast_inputs
+        test_country._permanent_income_design_matrix = design_matrix
+
+        forecast = test_country.forecast_common_permanent_income()
+        assert forecast is not None
+        sources = test_country._permanent_income_simulation_sources()
+        expected_log_ratio = float(forecast.point_forecast) - float(np.log(sources.real_pc_income[-1]))
+
+        common_log_ratio, common_forecast_variance = test_country._common_permanent_income_terms()
+        assert common_log_ratio == pytest.approx(expected_log_ratio)
+        assert common_forecast_variance == pytest.approx(float(forecast.forecast_variance))
+
+    def test__set_household_target_demand_wires_income_belief_learning_terms(self, test_country, monkeypatch):
+        # Increment 5: with the rule opted in, the country call site computes the
+        # learning inputs and passes finite, non-None terms to the consumption
+        # rule. The common forecast is unavailable here (no cached inputs), so the
+        # terms reduce to the pure individual zeta-based component.
+        n_households = test_country.households.ts.current("n_households")
+        test_country.households.states["income_belief_priors"] = {
+            "income_belief_mu": np.linspace(0.05, 0.15, n_households),
+            "income_belief_p": np.linspace(0.2, 0.4, n_households),
+            "income_belief_rho": np.full(n_households, 0.9519),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+        test_country.households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            permanent_income_propensity=0.1,
+            uncertainty_propensity=0.1,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon={"delta": 0.95, "S": 40},
+        )
+
+        captured = {}
+        original = test_country.households.functions["consumption"].compute_target_consumption
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(test_country.households.functions["consumption"], "compute_target_consumption", capture)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        # No cached forecast inputs -> common terms are (0.0, 0.0).
+        assert test_country._permanent_income_forecast_inputs is None
+
+        economy_keys_before = set(test_country.economy.ts.get_keys())
+        households_income_before = test_country.households.ts.dicts["income"][-1].copy()
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert captured["permanent_income_log_ratio"] is not None
+        assert captured["uncertainty_delta"] is not None
+        assert np.all(np.isfinite(captured["permanent_income_log_ratio"]))
+        assert np.all(np.isfinite(captured["uncertainty_delta"]))
+        zeta = test_country.households.states["income_belief_zeta"]
+        runtime_state = test_country.households.states["income_belief_runtime_state"]
+        np.testing.assert_allclose(captured["permanent_income_log_ratio"], zeta * runtime_state["posterior_mean"])
+        np.testing.assert_allclose(captured["uncertainty_delta"], (zeta**2) * runtime_state["posterior_variance"])
+        # The added call site reads only existing series (side-effect free w.r.t.
+        # economy/household income state).
+        assert set(test_country.economy.ts.get_keys()) == economy_keys_before
+        assert np.array_equal(test_country.households.ts.dicts["income"][-1], households_income_before)
+
+    def test__set_household_target_demand_disabled_is_bit_identical(self, test_country, monkeypatch):
+        # Regression: with income-belief learning disabled (default), the new
+        # wiring passes None through, and target consumption + all diagnostics
+        # are bit-identical to running with the wiring stripped out (None terms).
+        test_country.households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+        )
+        captured = {}
+        original = test_country.households.functions["consumption"].compute_target_consumption
+
+        def capture(**kwargs):
+            captured.update(kwargs)
+            return original(**kwargs)
+
+        monkeypatch.setattr(test_country.households.functions["consumption"], "compute_target_consumption", capture)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(test_country.households.ts.current("n_households")),
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        # Disabled rule: both terms stay None (identical to pre-Increment-5).
+        assert captured["permanent_income_log_ratio"] is None
+        assert captured["uncertainty_delta"] is None
+        target_with_wiring = test_country.households.ts.current("target_consumption").copy()
+        components_with_wiring = {
+            key: value.copy()
+            for key, value in test_country.households.functions[
+                "consumption"
+            ].last_target_consumption_components.items()
+        }
+
+        # Recompute target consumption directly with explicit None terms (the
+        # behaviour the wiring is supposed to reproduce when disabled).
+        target_baseline = original(**{**captured, "permanent_income_log_ratio": None, "uncertainty_delta": None})
+        components_baseline = test_country.households.functions["consumption"].last_target_consumption_components
+
+        np.testing.assert_array_equal(target_with_wiring, target_baseline)
+        for key, value in components_with_wiring.items():
+            np.testing.assert_array_equal(value, components_baseline[key])

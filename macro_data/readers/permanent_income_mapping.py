@@ -1,0 +1,284 @@
+"""Map simulation state into common permanent-income forecast regressors."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Sequence
+
+import numpy as np
+import pandas as pd
+
+from macro_data.readers.permanent_income_forecast import (
+    RAW_VARIABLE_ORDER,
+    SIMULATION_VARIABLE_NAME_MAP,
+)
+
+NOTEBOOK_EXPORT_TO_FORECAST_READER_NAME = SIMULATION_VARIABLE_NAME_MAP
+FORECAST_READER_TO_NOTEBOOK_EXPORT_NAME = {
+    forecast_reader_name: notebook_name
+    for notebook_name, forecast_reader_name in NOTEBOOK_EXPORT_TO_FORECAST_READER_NAME.items()
+}
+FORECAST_READER_VARIABLE_ORDER = [
+    NOTEBOOK_EXPORT_TO_FORECAST_READER_NAME[notebook_name] for notebook_name in RAW_VARIABLE_ORDER
+]
+
+FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
+    "constant": "intercept",
+    "time_trend": "simulation_period_index",
+    "split_trend_from_2009q4_discounted_present_value": "simulation_period_index",
+    "covid19": "excluded_stage_3_dummy",
+    "log_real_pc_income": "real_pc_income",
+    "d4_log_real_pc_income": "real_pc_income",
+    "log_working_age_population_share": "frozen_design_matrix_initial_period",
+    "survey_expectations_ma4_l1": "frozen_design_matrix_initial_period",
+    "real_interest_rate_ma4_l1": "policy_rate_and_cpi_fixed_basket",
+    "real_interest_rate_ma4_l5": "policy_rate_and_cpi_fixed_basket",
+    "real_interest_rate_ma4_l9": "policy_rate_and_cpi_fixed_basket",
+    "d4_t_bill_rate": "exogenous_design_matrix_current_period",
+    "d4_t_bill_rate_l1": "exogenous_design_matrix_current_period",
+    "log_stock_market_index_ma4_l1": "frozen_design_matrix_initial_period",
+    "unemp_rate_ma4_l1": "unemployment_rate",
+    "unemp_rate_ma4_l5": "unemployment_rate",
+    "log_real_oil_price_ma4_l1": "frozen_design_matrix_initial_period",
+    "log_real_oil_price_ma4_l5": "frozen_design_matrix_initial_period",
+    "log_real_fx_rate_ma4_l1": "frozen_design_matrix_initial_period",
+    "log_real_fx_rate_ma4_l5": "frozen_design_matrix_initial_period",
+}
+
+FROZEN_EXOGENOUS_FORECAST_READER_NAMES = (
+    "log_working_age_population_share",
+    "survey_expectations_ma4_l1",
+    "log_stock_market_index_ma4_l1",
+    "log_real_oil_price_ma4_l1",
+    "log_real_oil_price_ma4_l5",
+    "log_real_fx_rate_ma4_l1",
+    "log_real_fx_rate_ma4_l5",
+)
+
+
+@dataclass(frozen=True)
+class PermanentIncomeSimulationSources:
+    """Simulation-source inputs used by the Stage 3 X-mapping helper.
+
+    The history arrays must be quarterly and ordered from the simulation's first
+    quarter through ``current_period``. Rates are model decimal rates; the mapper
+    converts them to the notebook percentage convention where needed.
+    """
+
+    current_period: str | pd.Period | pd.Timestamp
+    real_pc_income: Sequence[float]
+    policy_rate: Sequence[float]
+    cpi_fixed_basket: Sequence[float]
+    unemployment_rate: Sequence[float]
+
+
+def _quarter_period(value: str | int | pd.Period | pd.Timestamp) -> pd.Period:
+    if isinstance(value, pd.Period):
+        return value.asfreq("Q")
+    if isinstance(value, int):
+        return pd.Period(f"{value}Q1", freq="Q")
+    return pd.Period(value, freq="Q")
+
+
+def _quarter_index(period: pd.Period, start_period: str | int | pd.Period | pd.Timestamp) -> int:
+    start = _quarter_period(start_period)
+    return (period.year - start.year) * 4 + (period.quarter - start.quarter)
+
+
+def _periods_for_history(current_period: pd.Period, history_length: int) -> pd.PeriodIndex:
+    if history_length <= 0:
+        raise ValueError("Simulation source histories must contain at least one quarter.")
+    return pd.period_range(end=current_period, periods=history_length, freq="Q")
+
+
+def design_matrix_to_forecast_reader_names(design_matrix: pd.DataFrame) -> pd.DataFrame:
+    """Return a design matrix whose columns use canonical forecast-reader names."""
+    out = design_matrix.copy()
+    rename_map = {
+        notebook_name: forecast_reader_name
+        for notebook_name, forecast_reader_name in NOTEBOOK_EXPORT_TO_FORECAST_READER_NAME.items()
+        if notebook_name in out.columns
+    }
+    out = out.rename(columns=rename_map)
+
+    if "date" in out.columns:
+        periods = pd.to_datetime(out["date"]).dt.to_period("Q")
+        out = out.drop(columns=["date"])
+        out.index = periods
+    elif not isinstance(out.index, pd.PeriodIndex):
+        out.index = pd.to_datetime(out.index).to_period("Q")
+    else:
+        out.index = out.index.asfreq("Q")
+
+    return out.sort_index()
+
+
+def _design_row(design_matrix: pd.DataFrame, period: pd.Period) -> pd.Series:
+    design = design_matrix_to_forecast_reader_names(design_matrix)
+    if period not in design.index:
+        raise ValueError(f"Design matrix does not contain required quarter {period}.")
+    return design.loc[period]
+
+
+def _as_1d_float_history(values: Sequence[float], name: str) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    if arr.size == 0:
+        raise ValueError(f"{name} history must contain at least one quarter.")
+    if not np.isfinite(arr).all():
+        raise ValueError(f"{name} history contains non-finite values.")
+    return arr
+
+
+def _rebased_log_income_history(
+    real_pc_income: np.ndarray,
+    *,
+    design_anchor_log_income: float,
+    anchor_position: int,
+) -> np.ndarray:
+    if np.any(real_pc_income <= 0.0):
+        raise ValueError("real_pc_income history must be strictly positive for log/index rebasing.")
+    anchor_index_level = float(np.exp(design_anchor_log_income))
+    real_pc_income_index = anchor_index_level * real_pc_income / real_pc_income[anchor_position]
+    return np.log(real_pc_income_index)
+
+
+def _fisher_real_short_rate_percent(
+    policy_rate: np.ndarray,
+    cpi_fixed_basket: np.ndarray,
+    *,
+    policy_rate_periods_per_year: int,
+) -> np.ndarray:
+    if policy_rate_periods_per_year <= 0:
+        raise ValueError("policy_rate_periods_per_year must be positive.")
+    if policy_rate.size != cpi_fixed_basket.size:
+        raise ValueError("policy_rate and cpi_fixed_basket histories must have matching lengths.")
+    if np.any(cpi_fixed_basket <= 0.0):
+        raise ValueError("cpi_fixed_basket history must be strictly positive.")
+    if cpi_fixed_basket.size < 5:
+        return np.array([], dtype=float)
+
+    annual_nominal_rate = policy_rate[4:] * float(policy_rate_periods_per_year)
+    yoy_inflation = cpi_fixed_basket[4:] / cpi_fixed_basket[:-4] - 1.0
+    return 100.0 * ((1.0 + annual_nominal_rate) / (1.0 + yoy_inflation) - 1.0)
+
+
+def _ma4_lag_from_history(values: np.ndarray, lag: int) -> float | None:
+    end_exclusive = values.size - lag
+    start = end_exclusive - 4
+    if start < 0 or end_exclusive > values.size:
+        return None
+    return float(values[start:end_exclusive].mean())
+
+
+def _unemployment_percent_history(unemployment_rate: np.ndarray) -> np.ndarray:
+    if np.any(unemployment_rate < 0.0):
+        raise ValueError("unemployment_rate history must be non-negative.")
+    finite_max = float(unemployment_rate.max())
+    out = unemployment_rate * 100.0 if finite_max <= 1.0 else unemployment_rate
+    if np.any(out > 100.0):
+        raise ValueError("unemployment_rate history must be either decimal [0, 1] or percent [0, 100].")
+    return out
+
+
+def _splittrend_pdv(
+    current_period: pd.Period,
+    *,
+    break_period: str | pd.Period,
+    horizon_q: int,
+    delta_q: float,
+) -> float:
+    if horizon_q <= 0:
+        raise ValueError("horizon_q must be positive.")
+    break_q = _quarter_period(break_period)
+    weights = float(delta_q) ** np.arange(int(horizon_q), dtype=float)
+    indicators = np.array([float(current_period + j >= break_q) for j in range(int(horizon_q))])
+    return float(np.dot(weights, indicators))
+
+
+def build_permanent_income_forecast_regressors(
+    *,
+    sources: PermanentIncomeSimulationSources,
+    design_matrix: pd.DataFrame,
+    start_period: str | int | pd.Period | pd.Timestamp,
+    trend_break_period: str | pd.Period = "2009Q4",
+    horizon_q: int = 40,
+    delta_q: float = 0.95,
+    policy_rate_periods_per_year: int = 4,
+    income_index_base_period: str | int | pd.Period | pd.Timestamp | None = None,
+) -> pd.Series:
+    """Build canonical forecast-reader regressors from simulation-source values.
+
+    Endogenous lagged terms use the design matrix during warm-up and switch to
+    simulation history only once the required lag window is fully available.
+    """
+    current_period = _quarter_period(sources.current_period)
+    real_pc_income = _as_1d_float_history(sources.real_pc_income, "real_pc_income")
+    policy_rate = _as_1d_float_history(sources.policy_rate, "policy_rate")
+    cpi_fixed_basket = _as_1d_float_history(sources.cpi_fixed_basket, "cpi_fixed_basket")
+    unemployment_rate = _as_1d_float_history(sources.unemployment_rate, "unemployment_rate")
+
+    history_length = real_pc_income.size
+    for name, arr in {
+        "policy_rate": policy_rate,
+        "cpi_fixed_basket": cpi_fixed_basket,
+        "unemployment_rate": unemployment_rate,
+    }.items():
+        if arr.size != history_length:
+            raise ValueError(f"{name} history length {arr.size} does not match real_pc_income length {history_length}.")
+
+    periods = _periods_for_history(current_period, history_length)
+    initial_period = periods[0]
+    current_design = _design_row(design_matrix, current_period)
+    initial_design = _design_row(design_matrix, initial_period)
+    income_anchor_period = _quarter_period(income_index_base_period if income_index_base_period is not None else start_period)
+    if income_anchor_period in periods:
+        anchor_position = int(periods.get_loc(income_anchor_period))
+        anchor_design = _design_row(design_matrix, income_anchor_period)
+    else:
+        anchor_position = 0
+        anchor_design = initial_design
+    log_income_history = _rebased_log_income_history(
+        real_pc_income,
+        design_anchor_log_income=float(anchor_design["log_real_pc_income"]),
+        anchor_position=anchor_position,
+    )
+
+    values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
+    values["constant"] = 1.0
+    values["time_trend"] = float(_quarter_index(current_period, start_period))
+    values["split_trend_from_2009q4_discounted_present_value"] = _splittrend_pdv(
+        current_period,
+        break_period=trend_break_period,
+        horizon_q=horizon_q,
+        delta_q=delta_q,
+    )
+    values["covid19"] = 0.0
+
+    values["log_real_pc_income"] = float(log_income_history[-1])
+    if history_length >= 5:
+        values["d4_log_real_pc_income"] = float(log_income_history[-1] - log_income_history[-5])
+
+    real_short_rate = _fisher_real_short_rate_percent(
+        policy_rate,
+        cpi_fixed_basket,
+        policy_rate_periods_per_year=policy_rate_periods_per_year,
+    )
+    for lag, name in [
+        (1, "real_interest_rate_ma4_l1"),
+        (5, "real_interest_rate_ma4_l5"),
+        (9, "real_interest_rate_ma4_l9"),
+    ]:
+        endogenous_value = _ma4_lag_from_history(real_short_rate, lag)
+        if endogenous_value is not None:
+            values[name] = endogenous_value
+
+    unemployment_percent = _unemployment_percent_history(unemployment_rate)
+    for lag, name in [(1, "unemp_rate_ma4_l1"), (5, "unemp_rate_ma4_l5")]:
+        endogenous_value = _ma4_lag_from_history(unemployment_percent, lag)
+        if endogenous_value is not None:
+            values[name] = endogenous_value
+
+    for name in FROZEN_EXOGENOUS_FORECAST_READER_NAMES:
+        values[name] = float(initial_design[name])
+
+    return pd.Series(values, index=FORECAST_READER_VARIABLE_ORDER, dtype=float, name=current_period)

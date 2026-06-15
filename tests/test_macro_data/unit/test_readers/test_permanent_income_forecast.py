@@ -256,6 +256,22 @@ def test__load_permanent_income_forecast_inputs_rejects_non_symmetric_covariance
         _load_inputs_from_normalized(monkeypatch, inputs)
 
 
+def test__load_permanent_income_forecast_inputs_rejects_covariance_beyond_symmetrization_tolerance(monkeypatch):
+    # Asymmetry of 2e-5 exceeds the symmetrization tolerance (atol=1e-8, rtol=1e-5;
+    # for entries ~1.0 the allclose threshold is ~1.001e-5), so the loader does not
+    # symmetrize, and the strict validation symmetry check (tolerance=1e-10) then raises.
+    inputs = _normalized_inputs(
+        coefficients=[1.0, 2.0],
+        covariance=[
+            [1.0, 1.0],
+            [1.0 + 2e-5, 1.0],
+        ],
+    )
+
+    with pytest.raises(ValueError, match="symmetric"):
+        _load_inputs_from_normalized(monkeypatch, inputs)
+
+
 def test__load_permanent_income_forecast_inputs_rejects_non_psd_covariance(monkeypatch):
     inputs = _normalized_inputs(
         coefficients=[1.0, 2.0],

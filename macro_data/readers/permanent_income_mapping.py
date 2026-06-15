@@ -122,6 +122,22 @@ def _design_row(design: pd.DataFrame, period: pd.Period) -> pd.Series:
     return design.loc[period]
 
 
+def _design_row_or_nearest(design: pd.DataFrame, period: pd.Period) -> pd.Series:
+    """Look up a design-matrix row, clamping to the nearest available period.
+
+    The design matrix is a fixed historical export with finite coverage, while
+    ``period`` (derived from the simulation clock) grows without bound. Periods
+    past either end of ``design.index`` are clamped to the first/last available
+    row so design-matrix-only regressors freeze at their boundary values instead
+    of raising once the simulation runs longer than the export's coverage.
+    """
+    if period in design.index:
+        return design.loc[period]
+    if period > design.index.max():
+        return design.loc[design.index.max()]
+    return design.loc[design.index.min()]
+
+
 def _as_1d_float_history(values: Sequence[float], name: str) -> np.ndarray:
     arr = np.asarray(values, dtype=float).reshape(-1)
     if arr.size == 0:
@@ -221,8 +237,8 @@ def build_permanent_income_forecast_regressors(
     periods = _periods_for_history(current_period, history_length)
     initial_period = periods[0]
     design = design_matrix_to_forecast_reader_names(design_matrix)
-    current_design = _design_row(design, current_period)
-    initial_design = _design_row(design, initial_period)
+    current_design = _design_row_or_nearest(design, current_period)
+    initial_design = _design_row_or_nearest(design, initial_period)
     log_income_history = _log_income_index_history(real_pc_income)
 
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
@@ -296,6 +312,6 @@ def rebase_real_pc_income_index(
     if levels.ndim != 1 or levels.size == 0:
         raise ValueError("real_pc_income_levels must be a non-empty 1D array.")
     base_value = levels[base_period_index]
-    if not np.isfinite(base_value) or base_value == 0.0:
-        raise ValueError("real_pc_income_levels base period value must be finite and non-zero.")
+    if not np.isfinite(base_value) or base_value <= 0.0:
+        raise ValueError("real_pc_income_levels base period value must be finite and positive.")
     return index_base_value * levels / base_value

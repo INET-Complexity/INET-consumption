@@ -918,3 +918,24 @@ class TestCountry:
 
         mock_load_inputs.assert_not_called()
         mock_load_design_matrix.assert_not_called()
+
+    def test__forecast_common_permanent_income_returns_none_on_non_positive_base_income(self, test_country, caplog):
+        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
+        design_matrix = design_matrix_to_forecast_reader_names(
+            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
+        )
+
+        test_country.start_period = pd.Period("2014Q1", freq="Q")
+        test_country._permanent_income_forecast_inputs = forecast_inputs
+        test_country._permanent_income_design_matrix = design_matrix
+
+        # Force the base-period (first) real_pc_income history value to zero so
+        # rebase_real_pc_income_index raises ValueError ("must be finite and positive").
+        first_income = test_country.households.ts.dicts["income"][0]
+        test_country.households.ts.dicts["income"][0] = np.zeros_like(first_income)
+
+        with caplog.at_level("WARNING"):
+            result = test_country.forecast_common_permanent_income()
+
+        assert result is None
+        assert any("permanent-income forecast" in record.message for record in caplog.records)

@@ -199,12 +199,13 @@ def load_permanent_income_forecast_inputs(
     covariance = load_permanent_income_forecast_hac_covariance(cov_path)
     # JSON round-tripping of the exported HAC covariance introduces ~1e-10 asymmetry,
     # which is symmetric by construction. Symmetrize only when already nearly symmetric
-    # (within a loose tolerance) so genuinely asymmetric/non-square inputs still fail
+    # (within a tolerance well above the observed round-trip noise but well below any
+    # plausible real asymmetry) so genuinely asymmetric/non-square inputs still fail
     # validation with their normal error messages.
     if covariance.shape[0] == covariance.shape[1]:
         covariance_values = covariance.to_numpy(dtype=float)
         if np.all(np.isfinite(covariance_values)) and np.allclose(
-            covariance_values, covariance_values.T, atol=1e-6, rtol=0.0
+            covariance_values, covariance_values.T, atol=1e-8, rtol=1e-5
         ):
             covariance = (covariance + covariance.T) / 2.0
     residual_variance = load_permanent_income_forecast_residual_variance(residual_variance_path)

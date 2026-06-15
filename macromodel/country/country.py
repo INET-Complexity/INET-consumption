@@ -2278,10 +2278,18 @@ class Country:
         if self._permanent_income_forecast_inputs is None or self._permanent_income_design_matrix is None:
             return None
 
-        sources = self._permanent_income_simulation_sources()
-        x_t = build_permanent_income_forecast_regressors(
-            sources=sources,
-            design_matrix=self._permanent_income_design_matrix,
-            start_period=self.start_period,
-        )
-        return forecast_common_permanent_income(x_t, self._permanent_income_forecast_inputs)
+        try:
+            sources = self._permanent_income_simulation_sources()
+            x_t = build_permanent_income_forecast_regressors(
+                sources=sources,
+                design_matrix=self._permanent_income_design_matrix,
+                start_period=self.start_period,
+            )
+            return forecast_common_permanent_income(x_t, self._permanent_income_forecast_inputs)
+        except ValueError as exc:
+            logging.warning(
+                "Skipping common permanent-income forecast for %s due to invalid inputs: %s",
+                self.country_name,
+                exc,
+            )
+            return None

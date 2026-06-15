@@ -294,6 +294,35 @@ def test__build_permanent_income_forecast_regressors_matches_fr_design_matrix_re
         assert x_t["split_trend_from_2009q4_discounted_present_value"] != pytest.approx(0.0)
 
 
+def test__build_permanent_income_forecast_regressors_clamps_periods_beyond_design_matrix_range():
+    design_matrix = load_permanent_income_design_matrix(FR_DESIGN_MATRIX_PATH)
+    converted = design_matrix_to_forecast_reader_names(design_matrix)
+    last_row_period = converted.index.max()
+    last_row = converted.loc[last_row_period]
+
+    # current_period (and, with history_length=1, initial_period too) is far beyond
+    # the design matrix's last available row, so both _design_row_or_nearest lookups
+    # should clamp to the last row instead of raising.
+    current_period = last_row_period + 20
+
+    x_t = build_permanent_income_forecast_regressors(
+        sources=PermanentIncomeSimulationSources(
+            current_period=current_period,
+            real_pc_income=[100.0],
+            policy_rate=[0.01],
+            cpi_fixed_basket=[100.0],
+            unemployment_rate=[0.05],
+        ),
+        design_matrix=design_matrix,
+        start_period="2014Q1",
+    )
+
+    assert np.isfinite(x_t.to_numpy(dtype=float)).all()
+
+    for name in FROZEN_EXOGENOUS_FORECAST_READER_NAMES:
+        assert x_t[name] == pytest.approx(float(last_row[name])), name
+
+
 def test__unemployment_rate_outside_unit_interval_raises():
     periods = pd.period_range("2014Q1", periods=5, freq="Q")
     design = _design_matrix(periods)

@@ -2289,9 +2289,10 @@ class Country:
     def _common_permanent_income_terms(self) -> tuple[float, float]:
         """Return ``(common_log_ratio, common_forecast_variance)`` for this period.
 
-        ``common_log_ratio`` is ``ln(y^p_t / y_t)`` -- the common forecast's
-        point forecast (on the rebased ``log_real_pc_idx`` scale) minus the
-        current-period rebased log income. ``common_forecast_variance`` is the
+        ``common_log_ratio`` is ``ln(y^p_t / y_t)`` directly -- the common
+        forecast's point forecast, which is regressed against ``ln_y_p_over_y``
+        and is therefore already the log permanent-to-current income ratio (no
+        further transformation is needed). ``common_forecast_variance`` is the
         forecast's prediction-error variance. Both are scalar, broadcast to all
         households by the household-side helpers.
 
@@ -2302,10 +2303,7 @@ class Country:
         forecast = self.forecast_common_permanent_income()
         if forecast is None:
             return 0.0, 0.0
-        sources = self._permanent_income_simulation_sources()
-        log_real_pc_income_t = float(np.log(sources.real_pc_income[-1]))
-        common_log_ratio = float(forecast.point_forecast) - log_real_pc_income_t
-        return common_log_ratio, float(forecast.forecast_variance)
+        return float(forecast.point_forecast), float(forecast.forecast_variance)
 
     def forecast_common_permanent_income(self) -> Optional[PermanentIncomeForecast]:
         """Compute the Stage 3 common permanent-income forecast for the current period.

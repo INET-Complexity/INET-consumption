@@ -8,10 +8,11 @@ import pytest
 
 import macromodel.country.country as country_module
 from macro_data.readers.permanent_income_forecast import (
-    forecast_common_permanent_income as pure_forecast_common_permanent_income,
+    PermanentIncomeForecast,
+    load_permanent_income_forecast_inputs,
 )
 from macro_data.readers.permanent_income_forecast import (
-    load_permanent_income_forecast_inputs,
+    forecast_common_permanent_income as pure_forecast_common_permanent_income,
 )
 from macro_data.readers.permanent_income_mapping import (
     design_matrix_to_forecast_reader_names,
@@ -947,23 +948,16 @@ class TestCountry:
         assert test_country._permanent_income_forecast_inputs is None
         assert test_country._common_permanent_income_terms() == (0.0, 0.0)
 
-    def test__common_permanent_income_terms_matches_forecast_minus_log_income(self, test_country):
-        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
-        design_matrix = design_matrix_to_forecast_reader_names(
-            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
-        )
-        test_country.start_period = pd.Period("2014Q1", freq="Q")
-        test_country._permanent_income_forecast_inputs = forecast_inputs
-        test_country._permanent_income_design_matrix = design_matrix
-
-        forecast = test_country.forecast_common_permanent_income()
-        assert forecast is not None
-        sources = test_country._permanent_income_simulation_sources()
-        expected_log_ratio = float(forecast.point_forecast) - float(np.log(sources.real_pc_income[-1]))
+    def test__common_permanent_income_terms_returns_point_forecast_directly(self, test_country, monkeypatch):
+        # forecast.point_forecast is regressed against `ln_y_p_over_y`, i.e. it is
+        # already the log permanent-to-current income ratio. It must be returned
+        # as-is, with no further level transformation.
+        stub_forecast = PermanentIncomeForecast(point_forecast=0.0315, forecast_variance=0.002)
+        monkeypatch.setattr(test_country, "forecast_common_permanent_income", lambda: stub_forecast)
 
         common_log_ratio, common_forecast_variance = test_country._common_permanent_income_terms()
-        assert common_log_ratio == pytest.approx(expected_log_ratio)
-        assert common_forecast_variance == pytest.approx(float(forecast.forecast_variance))
+        assert common_log_ratio == pytest.approx(stub_forecast.point_forecast)
+        assert common_forecast_variance == pytest.approx(stub_forecast.forecast_variance)
 
     def test__set_household_target_demand_wires_income_belief_learning_terms(self, test_country, monkeypatch):
         # Increment 5: with the rule opted in, the country call site computes the

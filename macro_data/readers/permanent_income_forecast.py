@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 RAW_VARIABLE_ORDER = [
@@ -63,8 +64,89 @@ class PermanentIncomeForecastInputs:
     diagnostics: dict[str, float | int | str]
 
 
+@dataclass(frozen=True)
+class PermanentIncomeForecast:
+    """Point forecast and forecast-error variance for common permanent income."""
+
+    point_forecast: float
+    forecast_variance: float
+
+
 def _load_json(path: str | Path) -> dict:
     return json.loads(Path(path).read_text())
+
+
+def _validate_permanent_income_forecast_inputs(
+    table: pd.DataFrame,
+    covariance: pd.DataFrame,
+    residual_variance: float,
+    *,
+    tolerance: float = 1e-10,
+) -> None:
+    """Validate normalized common-forecast inputs before runtime use."""
+    if "coefficient" not in table.columns:
+        raise ValueError("Permanent-income coefficient table must include a 'coefficient' column.")
+
+    if covariance.shape[0] != covariance.shape[1]:
+        raise ValueError("Permanent-income HAC covariance matrix must be square.")
+
+    if not table.index.equals(covariance.index) or not table.index.equals(covariance.columns):
+        raise ValueError("Permanent-income coefficient-table labels/order must exactly match HAC covariance axes.")
+
+    coefficients = table["coefficient"].to_numpy(dtype=float)
+    covariance_values = covariance.to_numpy(dtype=float)
+    residual_variance = float(residual_variance)
+
+    if not np.all(np.isfinite(coefficients)):
+        raise ValueError("Permanent-income coefficients must be finite.")
+
+    if not np.all(np.isfinite(covariance_values)):
+        raise ValueError("Permanent-income HAC covariance values must be finite.")
+
+    if not np.isfinite(residual_variance):
+        raise ValueError("Permanent-income residual variance must be finite.")
+
+    if residual_variance <= 0:
+        raise ValueError("Permanent-income residual variance must be positive.")
+
+    if not np.allclose(covariance_values, covariance_values.T, atol=tolerance, rtol=0.0):
+        raise ValueError("Permanent-income HAC covariance matrix must be symmetric.")
+
+    min_eigenvalue = float(np.linalg.eigvalsh(covariance_values).min())
+    if min_eigenvalue < -tolerance:
+        raise ValueError("Permanent-income HAC covariance matrix must be positive semidefinite.")
+
+
+def forecast_common_permanent_income(
+    x_t: pd.Series,
+    forecast_inputs: PermanentIncomeForecastInputs,
+) -> PermanentIncomeForecast:
+    """Compute the common permanent-income point forecast and forecast variance."""
+    if not isinstance(x_t, pd.Series):
+        raise TypeError("x_t must be a labeled pandas Series.")
+
+    expected_index = forecast_inputs.coefficient_table.index
+    if not x_t.index.equals(expected_index):
+        raise ValueError("x_t index must exactly match the permanent-income coefficient-table order.")
+
+    hac_index = forecast_inputs.hac_covariance.index
+    hac_columns = forecast_inputs.hac_covariance.columns
+    if not hac_index.equals(expected_index) or not hac_columns.equals(expected_index):
+        raise ValueError("Permanent-income HAC covariance axes must exactly match the coefficient-table order.")
+
+    x_values = x_t.to_numpy(dtype=float)
+    if not np.all(np.isfinite(x_values)):
+        raise ValueError("x_t values must be finite.")
+
+    coefficients = forecast_inputs.coefficient_table["coefficient"].to_numpy(dtype=float)
+    covariance = forecast_inputs.hac_covariance.to_numpy(dtype=float)
+
+    point_forecast = float(x_values @ coefficients)
+    forecast_variance = float(forecast_inputs.residual_variance + x_values @ covariance @ x_values)
+    return PermanentIncomeForecast(
+        point_forecast=point_forecast,
+        forecast_variance=forecast_variance,
+    )
 
 
 def load_permanent_income_forecast_table(path: str | Path) -> pd.DataFrame:
@@ -126,6 +208,7 @@ def load_permanent_income_forecast_inputs(
         "dw": 0.8067,
         "hac_lags": 8,
     }
+    _validate_permanent_income_forecast_inputs(table, covariance, residual_variance)
     return PermanentIncomeForecastInputs(
         coefficient_table=table,
         hac_covariance=covariance,

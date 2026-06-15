@@ -45,16 +45,13 @@ FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
     "log_real_fx_rate_ma4_l5": "frozen_design_matrix_initial_period",
 }
 
-FROZEN_EXOGENOUS_FORECAST_READER_NAMES = (
-    "log_working_age_population_share",
-    "survey_expectations_ma4_l1",
-    "log_stock_market_index_ma4_l1",
-    "log_real_oil_price_ma4_l1",
-    "log_real_oil_price_ma4_l5",
-    "log_real_fx_rate_ma4_l1",
-    "log_real_fx_rate_ma4_l5",
-    "d4_t_bill_rate",
-    "d4_t_bill_rate_l1",
+# d4_t_bill_rate/d4_t_bill_rate_l1 are frozen here too, unlike the other entries
+# which lack a model concept entirely. If an endogenous t-bill proxy is added
+# later, it will need a dedicated lookup rather than this static initial-period read.
+FROZEN_EXOGENOUS_FORECAST_READER_NAMES = tuple(
+    name
+    for name, source in FORECAST_READER_TO_SIMULATION_SOURCE_NAME.items()
+    if source == "frozen_design_matrix_initial_period"
 )
 
 
@@ -118,8 +115,7 @@ def design_matrix_to_forecast_reader_names(design_matrix: pd.DataFrame) -> pd.Da
     return out.sort_index()
 
 
-def _design_row(design_matrix: pd.DataFrame, period: pd.Period) -> pd.Series:
-    design = design_matrix_to_forecast_reader_names(design_matrix)
+def _design_row(design: pd.DataFrame, period: pd.Period) -> pd.Series:
     if period not in design.index:
         raise ValueError(f"Design matrix does not contain required quarter {period}.")
     return design.loc[period]
@@ -223,8 +219,9 @@ def build_permanent_income_forecast_regressors(
 
     periods = _periods_for_history(current_period, history_length)
     initial_period = periods[0]
-    current_design = _design_row(design_matrix, current_period)
-    initial_design = _design_row(design_matrix, initial_period)
+    design = design_matrix_to_forecast_reader_names(design_matrix)
+    current_design = _design_row(design, current_period)
+    initial_design = _design_row(design, initial_period)
     log_income_history = _log_income_index_history(real_pc_income)
 
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}

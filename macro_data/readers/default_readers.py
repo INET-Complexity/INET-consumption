@@ -165,15 +165,9 @@ class DataPaths:
             firm_prices_path=raw_data_path / "cims_prices" / "firm_prices.csv",
             insee_smic_path=raw_data_path / "INSEE" / "SMIC_monthly_values.csv",
             income_belief_priors_path=raw_data_path / "CES" / "FR_priors_table5.csv",
-            permanent_income_forecast_table_path=raw_data_path
-            / "permanent_income"
-            / "FR_table.json",
-            permanent_income_forecast_covariance_path=raw_data_path
-            / "permanent_income"
-            / "FR_cov_hac.json",
-            permanent_income_forecast_residual_variance_path=raw_data_path
-            / "permanent_income"
-            / "FR_sigma2_u.json",
+            permanent_income_forecast_table_path=raw_data_path / "permanent_income" / "FR_table.json",
+            permanent_income_forecast_covariance_path=raw_data_path / "permanent_income" / "FR_cov_hac.json",
+            permanent_income_forecast_residual_variance_path=raw_data_path / "permanent_income" / "FR_sigma2_u.json",
         )
 
     # @classmethod

@@ -37,9 +37,7 @@ def _write_forecast_fixtures(tmp_path):
     for col_idx, col_name in enumerate(RAW_VARIABLE_ORDER):
         covariance_payload[col_name] = {}
         for row_idx, row_name in enumerate(RAW_VARIABLE_ORDER):
-            covariance_payload[col_name][row_name] = (
-                1.0 + col_idx if row_idx == col_idx else (row_idx + col_idx) / 100
-            )
+            covariance_payload[col_name][row_name] = 1.0 + col_idx if row_idx == col_idx else (row_idx + col_idx) / 100
 
     table_path.write_text(json.dumps(table_payload))
     cov_path.write_text(json.dumps(covariance_payload))

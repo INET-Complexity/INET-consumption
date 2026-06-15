@@ -115,9 +115,7 @@ def load_permanent_income_forecast_inputs(
     """Load and normalize the common permanent-income forecast inputs."""
     table = load_permanent_income_forecast_table(table_path)
     covariance = load_permanent_income_forecast_hac_covariance(cov_path)
-    residual_variance = load_permanent_income_forecast_residual_variance(
-        residual_variance_path
-    )
+    residual_variance = load_permanent_income_forecast_residual_variance(residual_variance_path)
     diagnostics = {
         "table_label": "tab:permanent_income_estimation",
         "nobs": 94,

@@ -137,6 +137,14 @@ def test__forecast_common_permanent_income_rejects_reordered_x_t():
         forecast_common_permanent_income(x_t, inputs)
 
 
+def test__forecast_common_permanent_income_rejects_missing_x_t_label():
+    inputs = _normalized_inputs()
+    x_t = pd.Series([1.0, 3.0], index=inputs.coefficient_table.index[:2])
+
+    with pytest.raises(ValueError, match="exactly match"):
+        forecast_common_permanent_income(x_t, inputs)
+
+
 def test__forecast_common_permanent_income_rejects_mismatched_hac_axes():
     inputs = _normalized_inputs()
     inputs = PermanentIncomeForecastInputs(

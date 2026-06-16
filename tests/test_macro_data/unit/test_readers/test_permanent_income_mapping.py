@@ -31,7 +31,7 @@ def _design_matrix(periods: pd.PeriodIndex) -> pd.DataFrame:
         row = {"date": period.to_timestamp(how="end")}
         for col_idx, raw_name in enumerate(RAW_VARIABLE_ORDER):
             row[raw_name] = 1_000.0 + 100.0 * row_idx + col_idx
-        row["const"] = 9.0
+        row["const"] = 1.0
         row["trend"] = -99.0
         row["splittrend_pdv"] = -88.0
         row["covid19"] = 1.0
@@ -88,9 +88,6 @@ def test__mapping_uses_income_index_scale_directly_and_bootstraps_lags_from_desi
         ),
         design_matrix=design,
         start_period=1980,
-        trend_break_period="2015Q3",
-        horizon_q=4,
-        delta_q=0.5,
     )
 
     assert x_t["log_real_pc_income"] == pytest.approx(np.log(98.0))
@@ -100,7 +97,7 @@ def test__mapping_uses_income_index_scale_directly_and_bootstraps_lags_from_desi
     assert x_t["unemp_rate_ma4_l1"] == pytest.approx(17.0)
     assert x_t["constant"] == pytest.approx(1.0)
     assert x_t["time_trend"] == pytest.approx(143.0)
-    assert x_t["split_trend_from_2009q4_discounted_present_value"] == pytest.approx(1.875)
+    assert x_t["split_trend_from_2009q4_discounted_present_value"] == pytest.approx(-88.0)
     assert x_t["covid19"] == pytest.approx(0.0)
 
 
@@ -291,7 +288,6 @@ def test__build_permanent_income_forecast_regressors_matches_fr_design_matrix_re
         expected_trend = (current_period.year - 2014) * 4 + (current_period.quarter - 1)
         assert x_t["time_trend"] == pytest.approx(expected_trend)
         assert x_t["covid19"] == pytest.approx(0.0)
-        assert x_t["split_trend_from_2009q4_discounted_present_value"] != pytest.approx(0.0)
 
 
 def test__build_permanent_income_forecast_regressors_clamps_periods_beyond_design_matrix_range():

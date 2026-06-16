@@ -2278,6 +2278,12 @@ class Country:
         real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals_history
         real_pc_income = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
 
+        # policy_rate is appended during estimation_phase (start of period) while
+        # income/cpi/unemployment are appended at end-of-period, so policy_rate is
+        # always one entry ahead when this method is called mid-period. Trim to align.
+        n_hist = len(real_pc_income)
+        policy_rate = policy_rate[:n_hist]
+
         return PermanentIncomeSimulationSources(
             current_period=current_period,
             real_pc_income=real_pc_income,

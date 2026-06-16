@@ -1806,40 +1806,11 @@ class Country:
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()
-
-            # Use non-financial income (employee + social_transfers + rental) for the belief-learning
-            # signal. Total income includes stochastic illiquid asset returns (r_kappa * IFA) which
-            # can be large and negative after bad market draws, creating pathological log-signals
-            # unrelated to the permanent-income concept the Kalman model was calibrated for.
-            # CES respondents reporting expected income growth had non-property income in mind;
-            # financial returns enter the model separately via Stage 1 and the IFA wealth term in
-            # Stage 2.
-            def _nonfa_income(ts_dicts_snapshot=None):
-                if ts_dicts_snapshot is None:
-                    return (
-                        self.households.ts.current("income_employee")
-                        + self.households.ts.current("income_social_transfers")
-                        + self.households.ts.current("income_rental")
-                    )
-                return (
-                    ts_dicts_snapshot["income_employee"]
-                    + ts_dicts_snapshot["income_social_transfers"]
-                    + ts_dicts_snapshot["income_rental"]
-                )
-
             lagged_real_income = None
-            if (
-                len(self.households.ts.historic("income_employee")) >= 5
-                and len(self.economy.ts.historic(cpi_series)) >= 5
-            ):
-                lagged_nonfa = (
-                    self.households.ts.dicts["income_employee"][-5]
-                    + self.households.ts.dicts["income_social_transfers"][-5]
-                    + self.households.ts.dicts["income_rental"][-5]
-                )
-                lagged_real_income = lagged_nonfa / self.economy.ts.dicts[cpi_series][-5][0]
+            if len(self.households.ts.historic("income")) >= 5 and len(self.economy.ts.historic(cpi_series)) >= 5:
+                lagged_real_income = self.households.ts.dicts["income"][-5] / self.economy.ts.dicts[cpi_series][-5][0]
             self.households.update_income_belief_learning_state(
-                current_income=_nonfa_income() / self.economy.ts.current(cpi_series)[0],
+                current_income=self.households.ts.current("income") / self.economy.ts.current(cpi_series)[0],
                 lagged_income=lagged_real_income,
             )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))

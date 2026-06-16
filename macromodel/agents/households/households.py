@@ -628,6 +628,23 @@ class Households(Agent):
             + self.ts.current("income_financial_assets")
         )
 
+    def compute_non_property_income(self) -> np.ndarray:
+        """Calculate non-property current income (employment + social transfers + rental).
+
+        Excludes stochastic illiquid financial asset returns, which can be large and
+        negative after bad market draws and are unrelated to the permanent-income concept
+        used in Bayesian income-belief learning. This series is the appropriate signal
+        for the Kalman updater, consistent with the CES calibration of the learning priors.
+
+        Returns:
+            np.ndarray: Non-property income by household
+        """
+        return (
+            self.ts.current("income_employee")
+            + self.ts.current("income_social_transfers")
+            + self.ts.current("income_rental")
+        )
+
     def get_saving_rates_by_household(self) -> np.ndarray:
         """Calculate household-specific saving rates.
 

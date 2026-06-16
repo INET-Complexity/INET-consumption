@@ -14,6 +14,7 @@ if str(RUN_MODEL_PATH) not in sys.path:
 
 from src.household_account_diagnostics import (  # noqa: E402
     build_household_account_panel,
+    compute_household_accounts_from_rules,
     make_paper_account_panel,
     run_household_account_diagnostics,
     write_household_account_outputs,
@@ -129,6 +130,23 @@ def test_make_paper_account_panel_preserves_helper_index_as_household_id():
     panel = make_paper_account_panel(_datawrapper(household_data), "FRA")
 
     assert panel["household_id"].tolist() == [10, 11, 12]
+
+
+def test_stage_0_yaml_rules_drive_account_construction():
+    stage_0_parameters = {
+        "account_rules": {
+            "lfa": {"components": [["Wealth in Deposits"]]},
+            "ifa": {"components": [["Mutual Funds"]]},
+            "ha": {"components": [["Value of the Main Residence"]]},
+            "mr": {"preferred": ["Outstanding Balance of Mortgage Debt"]},
+            "db": {"preferred": ["Outstanding Balance of Non-Mortgage Debt"]},
+        }
+    }
+
+    accounts = compute_household_accounts_from_rules(_household_data(), stage_0_parameters)
+
+    assert accounts.loc[0, "ha"] == 100.0
+    assert accounts.loc[0, "nw"] == 66.0
 
 
 def test_diagnostics_build_moments_quantiles_reconciliation_and_outputs(tmp_path):

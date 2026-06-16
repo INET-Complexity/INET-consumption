@@ -27,6 +27,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--country-code", required=True, help="Country ISO3 code, e.g. FRA.")
     parser.add_argument("--period", type=int, default=None, help="HDF5 row to diagnose. Defaults to the final row.")
     parser.add_argument("--output-dir", required=True, type=Path, help="Directory for diagnostic outputs.")
+    parser.add_argument(
+        "--parameter-file",
+        type=Path,
+        default=RUN_MODEL_DIR / "config" / "consumption_paper_parameters.yaml",
+        help="Active consumption parameter registry.",
+    )
     return parser.parse_args()
 
 
@@ -37,6 +43,7 @@ def main(
     country_code: str,
     period: int | None = None,
     output_dir: str | Path,
+    parameter_file: str | Path = RUN_MODEL_DIR / "config" / "consumption_paper_parameters.yaml",
 ) -> dict[str, Path]:
     data = DataWrapper.init_from_pickle(data_pkl)
     diagnostics = run_household_account_diagnostics(
@@ -44,6 +51,7 @@ def main(
         model_h5=model_h5,
         country_code=country_code,
         period=period,
+        parameter_file=parameter_file,
     )
     return write_household_account_outputs(diagnostics, output_dir, country_code=country_code)
 
@@ -56,6 +64,7 @@ if __name__ == "__main__":
         country_code=args.country_code,
         period=args.period,
         output_dir=args.output_dir,
+        parameter_file=args.parameter_file,
     )
     for name, path in outputs.items():
         print(f"{name}: {path}")

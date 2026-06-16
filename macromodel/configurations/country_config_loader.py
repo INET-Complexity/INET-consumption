@@ -59,9 +59,7 @@ def _resolve_parameter_references(
     visiting = _visiting or frozenset()
     visit_token = (parameter_path, ref_key)
     if visit_token in visiting:
-        raise ValueError(
-            f"Circular paper parameter reference detected: {parameter_path}::{ref_key}"
-        )
+        raise ValueError(f"Circular paper parameter reference detected: {parameter_path}::{ref_key}")
     if not parameter_path.exists():
         raise FileNotFoundError(f"Paper parameter file not found: {parameter_path}")
     with parameter_path.open() as handle:

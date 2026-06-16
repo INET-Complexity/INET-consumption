@@ -47,13 +47,15 @@ class HouseholdConsumption(ABC):
         consumption_smoothing_window: int,
         minimum_consumption_fraction: float,
         elasticity_of_substitution: float = 1.0,  # Ignored by default consumption
-        uses_income_belief_learning: bool = False,  # Optional feature for credit-augmented consumption
-        **kwargs,  # Accept additional parameters from subclasses
+        **kwargs,  # Tolerate rule-specific parameters left in the shared config
+        # (e.g. income-belief-learning settings) when a non-supporting rule is selected.
     ):
         self.consumption_smoothing_fraction = consumption_smoothing_fraction
         self.consumption_smoothing_window = consumption_smoothing_window
         self.minimum_consumption_fraction = minimum_consumption_fraction
-        self.uses_income_belief_learning = uses_income_belief_learning
+        # `uses_income_belief_learning` is a CreditAugmentedConsumption-only feature; it
+        # stays False (class attribute) for rules that do not implement it, even when the
+        # config still carries the flag from a different rule (e.g. after a name override).
         # Note: elasticity_of_substitution is ignored in default consumption
 
     @abstractmethod
@@ -324,14 +326,12 @@ class CESHouseholdConsumption(HouseholdConsumption):
         consumption_smoothing_window: int,
         minimum_consumption_fraction: float,
         elasticity_of_substitution: float = 1.0,
-        uses_income_belief_learning: bool = False,
+        **kwargs,  # Tolerate rule-specific parameters left in the shared config.
     ):
         super().__init__(
             consumption_smoothing_fraction,
             consumption_smoothing_window,
             minimum_consumption_fraction,
-            elasticity_of_substitution,
-            uses_income_belief_learning,
         )
         self.elasticity_of_substitution = elasticity_of_substitution
 
@@ -610,8 +610,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             consumption_smoothing_window,
             minimum_consumption_fraction,
             elasticity_of_substitution,
-            uses_income_belief_learning,
         )
+        # Income-belief learning is implemented by this rule only.
+        self.uses_income_belief_learning = uses_income_belief_learning
         self.long_run_intercept = long_run_intercept
         self.real_borrowing_rate_propensity = real_borrowing_rate_propensity
         self.permanent_income_propensity = permanent_income_propensity

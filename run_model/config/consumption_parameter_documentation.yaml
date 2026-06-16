@@ -1,0 +1,94 @@
+stage_0:
+  source_audit:
+    behaviour_preserving: true
+    registry_role: single_consumption_implementation_registry
+  account_mapping:
+    lfa:
+      paper_concept: liquid_financial_assets
+      notebook_source: DA2101
+      macro_reader_source: Wealth in Deposits
+      runtime_source: wealth_deposits
+      note: Do not use notebook nla as LFA.
+    ifa:
+      paper_concept: illiquid_financial_assets
+      notebook_source: DA2102 + DA2103 + DA2105 + DA2106 + DA2107 + DA2108 + DA2109
+      macro_reader_source: "Mutual funds, bonds, shares, managed accounts, receivables, other assets, voluntary pension"
+      runtime_source: wealth_other_financial_assets
+      note: Excludes DA2104 private business wealth.
+    ha:
+      paper_concept: housing_wealth
+      notebook_source: DA1110 + DA1122
+      macro_reader_source: "Main residence + other non-business real estate"
+      runtime_source: "wealth_main_residence + wealth_other_properties + wealth_other_real_assets"
+      note: Uses main residence plus non-business other real estate, not all real assets.
+    mr:
+      paper_concept: mortgage_debt
+      notebook_source: DL1100
+      macro_reader_source: "Outstanding Balance of Mortgage Debt"
+      runtime_source: mortgage_debt
+      note: Richer splits include HMR mortgage DL1110 and other-property mortgage DL1120.
+    db:
+      paper_concept: consumer_debt
+      notebook_source: DL1200
+      macro_reader_source: "Outstanding Balance of Non-Mortgage Debt"
+      runtime_source: consumption_loan_debt
+      note: Total non-mortgage debt, including credit line/card components where present.
+    nw:
+      paper_concept: net_worth
+      formula: LFA + IFA + HA - MR - DB
+      note: Compute explicitly in diagnostics.
+  source_compatibility:
+    ifa_excludes_private_business_wealth: true
+    ha_definition: main_residence_plus_non_business_other_real_estate
+    db_definition: total_non_mortgage_debt
+  runtime_income:
+    model_field: households.ts["income"]
+    label: model_spendable_income
+    note: Use the model's spendable-income proxy, not the notebook/HFCS disposable-income construction.
+  real_value_deflators:
+    default: cpi_fixed_basket
+    sensitivity: cpi_transaction
+    note: Use fixed-basket CPI for default real ratios; report transaction-CPI sensitivity where useful.
+  runtime_diagnostics:
+    household_account_fields:
+      - income
+      - consumption
+      - wealth_deposits
+      - wealth_other_financial_assets
+      - wealth_main_residence
+      - wealth_other_properties
+      - wealth_other_real_assets
+      - mortgage_debt
+      - consumption_loan_debt
+      - debt
+      - net_wealth
+    paper_account_outputs:
+      - lfa
+      - ifa
+      - ha
+      - mr
+      - db
+      - nw
+  behaviour:
+    read_only: true
+
+stage_1:
+  asset_returns:
+    paper_stochastic_v1:
+      other_real_assets_depreciation_rate: 0.05
+      mu_eq: 0.0029
+      mu_bond: 0.0081
+      sigma_eq: 0.0935
+      sigma_bond: 0.0316
+      rho: -0.2585
+      equity_weight: 0.5
+      draw_scope: country_period
+
+stage_3:
+  income_belief_learning:
+    permanent_income_log_ratio:
+      # Quarterly discount factor and horizon (in quarters) used to compute
+      # the scalar individual weight zeta (eq:zeta_weight). zeta depends only
+      # on (rho, delta, S); rho is the existing income_belief_rho scalar.
+      delta: 0.95
+      S: 40

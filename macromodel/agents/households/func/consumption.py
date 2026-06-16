@@ -47,10 +47,13 @@ class HouseholdConsumption(ABC):
         consumption_smoothing_window: int,
         minimum_consumption_fraction: float,
         elasticity_of_substitution: float = 1.0,  # Ignored by default consumption
+        uses_income_belief_learning: bool = False,  # Optional feature for credit-augmented consumption
+        **kwargs,  # Accept additional parameters from subclasses
     ):
         self.consumption_smoothing_fraction = consumption_smoothing_fraction
         self.consumption_smoothing_window = consumption_smoothing_window
         self.minimum_consumption_fraction = minimum_consumption_fraction
+        self.uses_income_belief_learning = uses_income_belief_learning
         # Note: elasticity_of_substitution is ignored in default consumption
 
     @abstractmethod
@@ -321,11 +324,14 @@ class CESHouseholdConsumption(HouseholdConsumption):
         consumption_smoothing_window: int,
         minimum_consumption_fraction: float,
         elasticity_of_substitution: float = 1.0,
+        uses_income_belief_learning: bool = False,
     ):
         super().__init__(
             consumption_smoothing_fraction,
             consumption_smoothing_window,
             minimum_consumption_fraction,
+            elasticity_of_substitution,
+            uses_income_belief_learning,
         )
         self.elasticity_of_substitution = elasticity_of_substitution
 
@@ -604,6 +610,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             consumption_smoothing_window,
             minimum_consumption_fraction,
             elasticity_of_substitution,
+            uses_income_belief_learning,
         )
         self.long_run_intercept = long_run_intercept
         self.real_borrowing_rate_propensity = real_borrowing_rate_propensity
@@ -624,7 +631,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.income_floor = income_floor
         self.consumption_floor = consumption_floor
         self.house_price_floor = house_price_floor
-        self.uses_income_belief_learning = uses_income_belief_learning
         # Quarterly discount factor delta and horizon S used to compute the
         # scalar individual weight zeta. Sourced from
         # stage_3.income_belief_learning.permanent_income_log_ratio via the

@@ -893,7 +893,7 @@ class Households(Agent):
                 raise ValueError(
                     "Income-belief learning is enabled but the consumption rule has no "
                     "income_belief_learning_horizon (delta/S). Configure "
-                    "stage_3.income_belief_learning.permanent_income_log_ratio "
+                    "income_belief_learning.permanent_income_log_ratio "
                     "via the paper_parameter reference; there is no safe default for zeta."
                 )
             n_households = int(self.ts.current("n_households"))

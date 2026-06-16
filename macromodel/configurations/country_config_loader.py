@@ -26,14 +26,18 @@ def _resolve_dot_path(payload: Mapping[str, Any], dot_path: str) -> Any:
     return current
 
 
-def _resolve_parameter_references(payload: Any, base_dir: Path) -> Any:
+def _resolve_parameter_references(
+    payload: Any,
+    base_dir: Path,
+    _visiting: frozenset[tuple[Path, str]] | None = None,
+) -> Any:
     if isinstance(payload, list):
-        return [_resolve_parameter_references(item, base_dir) for item in payload]
+        return [_resolve_parameter_references(item, base_dir, _visiting) for item in payload]
     if not isinstance(payload, Mapping):
         return payload
 
     resolved_children = {
-        key: _resolve_parameter_references(value, base_dir)
+        key: _resolve_parameter_references(value, base_dir, _visiting)
         for key, value in payload.items()
         if key not in {_PARAMETER_FILE_KEY, _PARAMETER_REF_KEY}
     }
@@ -50,11 +54,17 @@ def _resolve_parameter_references(payload: Any, base_dir: Path) -> Any:
     parameter_path = Path(str(payload[_PARAMETER_FILE_KEY]))
     if not parameter_path.is_absolute():
         parameter_path = base_dir / parameter_path
+    parameter_path = parameter_path.resolve()
+    ref_key = str(payload[_PARAMETER_REF_KEY])
+    visiting = _visiting or frozenset()
+    visit_token = (parameter_path, ref_key)
+    if visit_token in visiting:
+        raise ValueError(f"Circular paper parameter reference detected: {parameter_path}::{ref_key}")
     if not parameter_path.exists():
         raise FileNotFoundError(f"Paper parameter file not found: {parameter_path}")
     with parameter_path.open() as handle:
         parameter_payload = yaml.safe_load(handle) or {}
-    parameter_section = _resolve_dot_path(parameter_payload, str(payload[_PARAMETER_REF_KEY]))
+    parameter_section = _resolve_dot_path(parameter_payload, ref_key)
     if not isinstance(parameter_section, Mapping):
         raise ValueError(f"Paper parameter section must be a mapping: {payload[_PARAMETER_REF_KEY]}")
     return _resolve_parameter_references(parameter_section, parameter_path.parent)

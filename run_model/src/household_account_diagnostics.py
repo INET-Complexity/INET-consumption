@@ -8,8 +8,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
-
-from macro_data.processing.synthetic_population.hfcs_synthetic_population import compute_notebook_household_accounts
+import yaml
 
 PAPER_ACCOUNT_COLUMNS = ("lfa", "ifa", "ha", "mr", "db", "nw")
 RUNTIME_HOUSEHOLD_FIELDS = (
@@ -26,6 +25,7 @@ RUNTIME_HOUSEHOLD_FIELDS = (
 )
 OPTIONAL_RUNTIME_HOUSEHOLD_FIELDS = ("wealth_other_real_assets",)
 DEFAULT_QUANTILES = (0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
+DEFAULT_PARAMETER_FILE = Path(__file__).resolve().parents[1] / "config" / "consumption_paper_parameters.yaml"
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,16 @@ class HouseholdAccountDiagnostics:
     moments: pd.DataFrame
     quantiles: pd.DataFrame
     reconciliation: pd.DataFrame
+
+
+def load_stage_0_parameters(parameter_file: str | Path = DEFAULT_PARAMETER_FILE) -> dict:
+    """Load account diagnostics parameters from the consumption parameter registry."""
+    with Path(parameter_file).open() as handle:
+        payload = yaml.safe_load(handle) or {}
+    stage_0 = payload.get("account_diagnostics")
+    if not isinstance(stage_0, dict):
+        raise ValueError(f"Missing account_diagnostics block in {parameter_file}.")
+    return stage_0
 
 
 def _country_entry(mapping: dict, country_code: str):
@@ -57,11 +67,73 @@ def _population_frame(datawrapper, country_code: str) -> pd.DataFrame:
     return household_data
 
 
-def make_paper_account_panel(datawrapper, country_code: str) -> pd.DataFrame:
-    """Compute notebook-style accounts and expose the helper index as household_id."""
+def _numeric_series(data: pd.DataFrame, aliases: list[str], *, required: bool = True) -> pd.Series:
+    for column in aliases:
+        if column in data.columns:
+            return pd.to_numeric(data[column], errors="coerce").fillna(0.0)
+    if required:
+        raise KeyError(f"Missing required household account column. Tried: {aliases}")
+    return pd.Series(0.0, index=data.index, dtype="float64")
+
+
+def _has_any_column(data: pd.DataFrame, aliases: list[str]) -> bool:
+    return any(column in data.columns for column in aliases)
+
+
+def _sum_rule_components(data: pd.DataFrame, aliases_by_component: list[list[str]]) -> pd.Series:
+    total = pd.Series(0.0, index=data.index, dtype="float64")
+    for aliases in aliases_by_component:
+        total = total + _numeric_series(data, aliases)
+    return total
+
+
+def _account_from_rule(data: pd.DataFrame, rule: dict) -> pd.Series:
+    if "components" in rule:
+        return _sum_rule_components(data, rule["components"])
+    preferred = rule.get("preferred")
+    if preferred is not None and _has_any_column(data, preferred):
+        return _numeric_series(data, preferred)
+    fallback_components = rule.get("fallback_components")
+    if fallback_components is not None:
+        return _sum_rule_components(data, fallback_components)
+    raise ValueError("Account rule must define components or preferred/fallback_components.")
+
+
+def compute_household_accounts_from_rules(data: pd.DataFrame, stage_0_parameters: dict) -> pd.DataFrame:
+    """Compute Stage 0 household accounts from active YAML rules."""
+    rules = stage_0_parameters.get("account_rules", {})
+    missing = [column for column in ("lfa", "ifa", "ha", "mr", "db") if column not in rules]
+    if missing:
+        raise ValueError(f"Missing Stage 0 account rules: {', '.join(missing)}")
+    lfa = _account_from_rule(data, rules["lfa"])
+    ifa = _account_from_rule(data, rules["ifa"])
+    ha = _account_from_rule(data, rules["ha"])
+    mr = _account_from_rule(data, rules["mr"])
+    db = _account_from_rule(data, rules["db"])
+    return pd.DataFrame(
+        {
+            "lfa": lfa,
+            "ifa": ifa,
+            "ha": ha,
+            "mr": mr,
+            "db": db,
+            "nw": lfa + ifa + ha - mr - db,
+        },
+        index=data.index,
+    )
+
+
+def make_paper_account_panel(
+    datawrapper,
+    country_code: str,
+    *,
+    stage_0_parameters: dict | None = None,
+) -> pd.DataFrame:
+    """Compute YAML-configured accounts and expose the helper index as household_id."""
     household_data = _population_frame(datawrapper, country_code)
+    stage_0_parameters = load_stage_0_parameters() if stage_0_parameters is None else stage_0_parameters
     try:
-        accounts = compute_notebook_household_accounts(household_data)
+        accounts = compute_household_accounts_from_rules(household_data, stage_0_parameters)
     except KeyError as exc:
         raise ValueError(
             "Cannot compute paper household accounts from the data pickle. "
@@ -106,10 +178,17 @@ def read_runtime_household_panel(
     country_code: str,
     *,
     period: int | None = None,
-    fixed_cpi_source: str = "cpi_fixed_basket",
-    transaction_cpi_source: str = "cpi_transaction",
+    stage_0_parameters: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Read one HDF5 household row and attach fixed/transaction CPI deflators."""
+    stage_0_parameters = load_stage_0_parameters() if stage_0_parameters is None else stage_0_parameters
+    deflators = stage_0_parameters.get("real_value_deflators", {})
+    fixed_cpi_source = deflators.get("default", "cpi_fixed_basket")
+    transaction_cpi_source = deflators.get("sensitivity", "cpi_transaction")
+    runtime_config = stage_0_parameters.get("runtime_diagnostics", {})
+    required_fields = tuple(runtime_config.get("household_account_fields", RUNTIME_HOUSEHOLD_FIELDS))
+    required_fields = tuple(field for field in required_fields if field not in OPTIONAL_RUNTIME_HOUSEHOLD_FIELDS)
+    income_label = stage_0_parameters.get("runtime_income", {}).get("label", "model_spendable_income")
     with h5py.File(h5_path, "r") as handle:
         if country_code not in handle:
             available = ", ".join(sorted(handle.keys()))
@@ -118,7 +197,7 @@ def read_runtime_household_panel(
         households = country_group["households"]
         economy = country_group["economy"]
 
-        arrays = {field: _read_household_field(households, field) for field in RUNTIME_HOUSEHOLD_FIELDS}
+        arrays = {field: _read_household_field(households, field) for field in required_fields}
         optional_arrays = {
             field: _read_household_field(households, field)
             for field in OPTIONAL_RUNTIME_HOUSEHOLD_FIELDS
@@ -145,7 +224,7 @@ def read_runtime_household_panel(
 
     panel = pd.DataFrame({"household_id": np.arange(n_households, dtype=int)})
     for field, values in arrays.items():
-        column = "model_spendable_income" if field == "income" else f"runtime_{field}"
+        column = income_label if field == "income" else f"runtime_{field}"
         panel[column] = values[row]
     for field, values in optional_arrays.items():
         panel[f"runtime_{field}"] = values[row]
@@ -188,9 +267,15 @@ def build_household_account_panel(
     country_code: str,
     *,
     period: int | None = None,
+    parameter_file: str | Path = DEFAULT_PARAMETER_FILE,
+    stage_0_parameters: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
-    paper = make_paper_account_panel(datawrapper, country_code)
-    runtime, metadata = read_runtime_household_panel(h5_path, country_code, period=period)
+    stage_0_parameters = load_stage_0_parameters(parameter_file) if stage_0_parameters is None else stage_0_parameters
+    income_label = stage_0_parameters.get("runtime_income", {}).get("label", "model_spendable_income")
+    paper = make_paper_account_panel(datawrapper, country_code, stage_0_parameters=stage_0_parameters)
+    runtime, metadata = read_runtime_household_panel(
+        h5_path, country_code, period=period, stage_0_parameters=stage_0_parameters
+    )
     metadata["household_count_mismatch"] = len(paper) != metadata["n_households"]
     if metadata["household_count_mismatch"]:
         raise ValueError(
@@ -215,7 +300,7 @@ def build_household_account_panel(
     panel["runtime_net_wealth_identity"] = panel["runtime_total_assets"] - panel["runtime_total_debt_components"]
 
     nominal_columns = list(PAPER_ACCOUNT_COLUMNS) + [
-        "model_spendable_income",
+        income_label,
         "runtime_consumption",
         "runtime_wealth_deposits",
         "runtime_wealth_other_financial_assets",
@@ -234,7 +319,7 @@ def build_household_account_panel(
         panel[f"real_{column}_fixed_cpi"] = panel[column] / panel["cpi_fixed_basket"]
         panel[f"real_{column}_transaction_cpi"] = panel[column] / panel["cpi_transaction"]
 
-    income = panel["model_spendable_income"]
+    income = panel[income_label]
     assets = panel["lfa"] + panel["ifa"] + panel["ha"]
     for column in PAPER_ACCOUNT_COLUMNS:
         panel[f"{column}_to_income"] = _safe_ratio(panel[column], income)
@@ -318,8 +403,15 @@ def run_household_account_diagnostics(
     model_h5: str | Path,
     country_code: str,
     period: int | None = None,
+    parameter_file: str | Path = DEFAULT_PARAMETER_FILE,
 ) -> HouseholdAccountDiagnostics:
-    panel, metadata = build_household_account_panel(datawrapper, model_h5, country_code, period=period)
+    panel, metadata = build_household_account_panel(
+        datawrapper,
+        model_h5,
+        country_code,
+        period=period,
+        parameter_file=parameter_file,
+    )
     moments = summarize_moments(panel)
     quantiles = summarize_quantiles(panel)
     reconciliation = build_reconciliation(panel, metadata)

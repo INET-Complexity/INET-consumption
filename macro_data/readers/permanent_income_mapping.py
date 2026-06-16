@@ -207,6 +207,7 @@ def build_permanent_income_forecast_regressors(
     sources: PermanentIncomeSimulationSources,
     design_matrix: pd.DataFrame,
     start_period: str | int | pd.Period | pd.Timestamp,
+    estimation_epoch: str | pd.Period | pd.Timestamp | None = None,
     trend_break_period: str | pd.Period = "2009Q4",
     horizon_q: int = 40,
     delta_q: float = 0.95,
@@ -218,6 +219,13 @@ def build_permanent_income_forecast_regressors(
     simulation history only once the required lag window is fully available.
     ``start_period`` anchors the X timeline and trend only; income histories are
     expected to already use the notebook/export index convention.
+
+    ``estimation_epoch`` sets the origin for the ``time_trend`` counter.  When
+    provided it overrides ``start_period`` for that purpose only, allowing the
+    trend to be anchored to the estimation sample's epoch (e.g. 1980Q1) rather
+    than the simulation's start.  Defaults to ``None``, in which case
+    ``start_period`` is used as the anchor (preserving the prior behaviour for
+    all existing call sites and tests).
     """
     current_period = _quarter_period(sources.current_period)
     real_pc_income = _as_1d_float_history(sources.real_pc_income, "real_pc_income")
@@ -241,9 +249,11 @@ def build_permanent_income_forecast_regressors(
     initial_design = _design_row_or_nearest(design, initial_period)
     log_income_history = _log_income_index_history(real_pc_income)
 
+    epoch = _quarter_period(estimation_epoch) if estimation_epoch is not None else _quarter_period(start_period)
+
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
     values["constant"] = 1.0
-    values["time_trend"] = float(_quarter_index(current_period, start_period))
+    values["time_trend"] = float(_quarter_index(current_period, epoch))
     values["split_trend_from_2009q4_discounted_present_value"] = _splittrend_pdv(
         current_period,
         break_period=trend_break_period,

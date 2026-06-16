@@ -1,7 +1,103 @@
 import numpy as np
 import pytest
 
-from macromodel.agents.households.income_belief_learning import compute_income_belief_learning_outputs
+from macromodel.agents.households.income_belief_learning import (
+    compute_income_belief_learning_outputs,
+    compute_income_uncertainty,
+    compute_permanent_income_log_ratio,
+    compute_zeta,
+)
+
+
+def test__compute_zeta_hand_computed_s1():
+    # S=1: numerator sum is only s=1, inner sum over j=0..0 is rho^0 = 1.
+    #   numerator   = delta^1 * (1/4) * 1
+    #   denominator = delta^0 + delta^1 = 1 + delta
+    rho = 0.9519
+    delta = 0.95
+    expected = (delta * (1.0 / 4.0) * 1.0) / (1.0 + delta)
+    assert compute_zeta(rho, delta, S=1) == pytest.approx(expected)
+
+
+def test__compute_zeta_hand_computed_s2():
+    # S=2: numerator = s=1 term + s=2 term.
+    #   s=1: delta^1 * (1/4) * (rho^0)              = delta * 1/4
+    #   s=2: delta^2 * (1/4) * (rho^0 + rho^0)      = delta^2 * 1/4 * 2
+    #        (j=0 and j=1 both give 4*floor(j/4)=0 -> rho^0=1)
+    #   denominator = 1 + delta + delta^2
+    rho = 0.9519
+    delta = 0.95
+    numerator = delta * (1.0 / 4.0) * 1.0 + (delta**2) * (1.0 / 4.0) * 2.0
+    denominator = 1.0 + delta + delta**2
+    assert compute_zeta(rho, delta, S=2) == pytest.approx(numerator / denominator)
+
+
+def test__compute_zeta_s0_is_zero():
+    # S=0: numerator sum (s=1..0) is empty -> 0; denominator is delta^0 = 1.
+    assert compute_zeta(0.9519, 0.95, S=0) == pytest.approx(0.0)
+
+
+def test__compute_zeta_finite_and_positive_for_resolved_params():
+    # zeta is a discounted sum of horizon-growing inner sums divided by a
+    # geometric discount-factor sum, so it is NOT bounded by 1 for the resolved
+    # (rho=0.9519, delta=0.95, S=40) calibration (it is ~2.31). The meaningful
+    # invariants are that it is finite and strictly positive.
+    zeta = compute_zeta(0.9519, 0.95, S=40)
+    assert np.isfinite(zeta)
+    assert zeta > 0.0
+
+
+def test__compute_zeta_monotonic_in_horizon():
+    # Adding discounted future quarters can only add non-negative numerator mass
+    # relative to the denominator growth, so zeta is non-decreasing in S for the
+    # resolved (rho<1, delta<1) calibration.
+    zetas = [compute_zeta(0.9519, 0.95, S=s) for s in range(0, 41)]
+    assert all(b >= a - 1e-12 for a, b in zip(zetas, zetas[1:]))
+
+
+def test__compute_zeta_rejects_negative_horizon():
+    with pytest.raises(ValueError, match="non-negative horizon"):
+        compute_zeta(0.9519, 0.95, S=-1)
+
+
+def test__compute_permanent_income_log_ratio_hand_computed():
+    mu = np.array([0.2, -0.1, 0.0])
+    zeta = 0.3
+    common_log_ratio = 0.05
+    expected = zeta * mu + common_log_ratio
+    np.testing.assert_allclose(
+        compute_permanent_income_log_ratio(mu, zeta, common_log_ratio),
+        expected,
+    )
+
+
+def test__compute_permanent_income_log_ratio_zero_common_reduces_to_individual():
+    mu = np.array([0.2, -0.1, 0.4])
+    zeta = 0.3
+    np.testing.assert_allclose(
+        compute_permanent_income_log_ratio(mu, zeta, 0.0),
+        zeta * mu,
+    )
+
+
+def test__compute_income_uncertainty_hand_computed():
+    p = np.array([0.5, 0.2, 0.0])
+    zeta = 0.3
+    common_forecast_variance = 0.04
+    expected = (zeta**2) * p + common_forecast_variance
+    np.testing.assert_allclose(
+        compute_income_uncertainty(p, zeta, common_forecast_variance),
+        expected,
+    )
+
+
+def test__compute_income_uncertainty_zero_common_reduces_to_individual():
+    p = np.array([0.5, 0.2, 0.7])
+    zeta = 0.3
+    np.testing.assert_allclose(
+        compute_income_uncertainty(p, zeta, 0.0),
+        (zeta**2) * p,
+    )
 
 
 def test__income_belief_learning_outputs_use_correct_variance_mapping_and_prediction_error():

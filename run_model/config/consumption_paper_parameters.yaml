@@ -9,3 +9,12 @@ stage_1:
       rho: -0.2585
       equity_weight: 0.5
       draw_scope: country_period
+
+stage_3:
+  income_belief_learning:
+    permanent_income_log_ratio:
+      # Quarterly discount factor and horizon (in quarters) used to compute
+      # the scalar individual weight zeta (eq:zeta_weight). zeta depends only
+      # on (rho, delta, S); rho is the existing income_belief_rho scalar.
+      delta: 0.95
+      S: 40

@@ -597,6 +597,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         consumption_floor: float = 1e-12,
         house_price_floor: float = 1e-12,
         uses_income_belief_learning: bool = False,
+        income_belief_learning_horizon: dict | None = None,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -624,6 +625,15 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.consumption_floor = consumption_floor
         self.house_price_floor = house_price_floor
         self.uses_income_belief_learning = uses_income_belief_learning
+        # Quarterly discount factor delta and horizon S used to compute the
+        # scalar individual weight zeta. Sourced from
+        # stage_3.income_belief_learning.permanent_income_log_ratio via the
+        # paper_parameter reference mechanism. Left as None when not configured;
+        # current_income_belief_learning_inputs() raises rather than silently
+        # defaulting, since zeta has real economic meaning and has no safe default.
+        horizon = income_belief_learning_horizon or {}
+        self.income_belief_learning_delta = horizon.get("delta")
+        self.income_belief_learning_S = horizon.get("S")
         self.last_target_consumption_components: dict[str, np.ndarray] | None = None
         self.last_formula_implied_mpc: np.ndarray | None = None
 

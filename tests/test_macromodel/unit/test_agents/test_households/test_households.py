@@ -1,8 +1,10 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.income_belief_learning import compute_zeta
 
 
 def _setup_emission_ts(households, n_hh, n_industries):
@@ -326,6 +328,136 @@ class TestHouseholds:
         np.testing.assert_allclose(components["target_consumption_permanent_income"], 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty_delta"], 0.0)
         assert "income_belief_runtime_state" in test_households.states
+
+    def test__current_income_belief_learning_inputs_returns_nonzero_finite_terms(self, test_households):
+        # Increment 5: with a configured horizon (delta/S), a non-trivial
+        # posterior state, and non-zero common terms, the inputs are finite,
+        # non-zero, and match the resolved zeta-based formula. Feeding them
+        # through compute_target_consumption populates the Stage 3 diagnostics.
+        n_households = test_households.ts.current("n_households")
+        lagged_income = np.linspace(100.0, 120.0, n_households)
+        current_income = lagged_income * np.linspace(1.05, 1.15, n_households)
+        test_households.ts.expected_income.append(lagged_income)
+        test_households.ts.expected_income.append(current_income)
+        priors = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.5),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+        test_households.states["income_belief_priors"] = priors
+        test_households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            permanent_income_propensity=0.1,
+            uncertainty_propensity=0.1,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon={"delta": 0.95, "S": 40},
+        )
+        # Advance posterior beliefs so income_belief_mu/p are non-trivial.
+        test_households.update_income_belief_learning_state(
+            current_income=current_income,
+            lagged_income=lagged_income,
+        )
+        runtime_state = test_households.states["income_belief_runtime_state"]
+        # Ensure the posterior variance is non-zero so the uncertainty term is non-zero.
+        assert np.any(runtime_state["posterior_variance"] != 0.0)
+
+        common_log_ratio = 0.02
+        common_forecast_variance = 0.03
+        inputs = test_households.current_income_belief_learning_inputs(
+            common_permanent_income_log_ratio=common_log_ratio,
+            common_forecast_variance=common_forecast_variance,
+        )
+
+        zeta = test_households.states["income_belief_zeta"]
+        assert zeta == compute_zeta(0.5, 0.95, 40)
+        expected_log_ratio = zeta * runtime_state["posterior_mean"] + common_log_ratio
+        expected_uncertainty = (zeta**2) * runtime_state["posterior_variance"] + common_forecast_variance
+        np.testing.assert_allclose(inputs["permanent_income_log_ratio"], expected_log_ratio)
+        np.testing.assert_allclose(inputs["uncertainty_delta"], expected_uncertainty)
+        assert np.all(np.isfinite(inputs["permanent_income_log_ratio"]))
+        assert np.all(np.isfinite(inputs["uncertainty_delta"]))
+        assert np.any(inputs["permanent_income_log_ratio"] != 0.0)
+        assert np.any(inputs["uncertainty_delta"] != 0.0)
+
+        test_households.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            exogenous_total_consumption=np.array([0.0]),
+            per_capita_unemployment_benefits=0.0,
+            tau_vat=0.0,
+            assume_zero_growth=False,
+            permanent_income_log_ratio=inputs["permanent_income_log_ratio"],
+            uncertainty_delta=inputs["uncertainty_delta"],
+        )
+        components = test_households.functions["consumption"].last_target_consumption_components
+        np.testing.assert_allclose(
+            components["target_consumption_permanent_income_log_ratio"],
+            expected_log_ratio,
+        )
+        np.testing.assert_allclose(
+            components["target_consumption_uncertainty_delta"],
+            expected_uncertainty,
+        )
+        assert np.any(components["target_consumption_permanent_income"] != 0.0)
+        assert np.any(components["target_consumption_uncertainty"] != 0.0)
+
+    def test__current_income_belief_learning_inputs_zero_common_reduces_to_individual(self, test_households):
+        # None common terms (forecast unavailable) reduce each output to its pure
+        # individual component, matching the pre-Increment-5 fallback contract.
+        n_households = test_households.ts.current("n_households")
+        lagged_income = np.linspace(100.0, 120.0, n_households)
+        current_income = lagged_income * np.linspace(1.05, 1.15, n_households)
+        priors = {
+            "income_belief_mu": np.linspace(0.05, 0.15, n_households),
+            "income_belief_p": np.linspace(0.2, 0.4, n_households),
+            "income_belief_rho": np.full(n_households, 0.5),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+        test_households.states["income_belief_priors"] = priors
+        test_households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon={"delta": 0.95, "S": 40},
+        )
+        test_households.update_income_belief_learning_state(
+            current_income=current_income,
+            lagged_income=lagged_income,
+        )
+        runtime_state = test_households.states["income_belief_runtime_state"]
+
+        inputs = test_households.current_income_belief_learning_inputs()
+        zeta = test_households.states["income_belief_zeta"]
+        np.testing.assert_allclose(inputs["permanent_income_log_ratio"], zeta * runtime_state["posterior_mean"])
+        np.testing.assert_allclose(inputs["uncertainty_delta"], (zeta**2) * runtime_state["posterior_variance"])
+
+    def test__current_income_belief_learning_inputs_raises_when_horizon_unset(self, test_households):
+        # No silent default: zeta has economic meaning, so a missing delta/S
+        # while income-belief learning is enabled must raise clearly.
+        n_households = test_households.ts.current("n_households")
+        test_households.states["income_belief_priors"] = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.5),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+        test_households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            uses_income_belief_learning=True,
+            # income_belief_learning_horizon deliberately omitted.
+        )
+        with pytest.raises(ValueError, match="income_belief_learning_horizon"):
+            test_households.current_income_belief_learning_inputs()
 
     def test__prepare_goods_market_clearing_reports_subsistence_shortfall_without_altering_demand(
         self, test_households

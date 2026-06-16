@@ -323,6 +323,73 @@ def test__build_permanent_income_forecast_regressors_clamps_periods_beyond_desig
         assert x_t[name] == pytest.approx(float(last_row[name])), name
 
 
+def test__estimation_epoch_anchors_time_trend_independently_of_start_period():
+    """time_trend must equal 146 at 2016Q3 when epoch is 1980Q1 (FR estimation sample)."""
+    periods = pd.period_range("2014Q1", periods=11, freq="Q")
+    design = _design_matrix(periods)
+
+    x_t_with_epoch = build_permanent_income_forecast_regressors(
+        sources=PermanentIncomeSimulationSources(
+            current_period="2016Q3",
+            real_pc_income=np.linspace(90.0, 101.0, 11),
+            policy_rate=[0.01] * 11,
+            cpi_fixed_basket=np.linspace(100.0, 110.0, 11),
+            unemployment_rate=[0.05] * 11,
+        ),
+        design_matrix=design,
+        start_period="2014Q1",
+        estimation_epoch="1980Q1",
+    )
+
+    x_t_without_epoch = build_permanent_income_forecast_regressors(
+        sources=PermanentIncomeSimulationSources(
+            current_period="2016Q3",
+            real_pc_income=np.linspace(90.0, 101.0, 11),
+            policy_rate=[0.01] * 11,
+            cpi_fixed_basket=np.linspace(100.0, 110.0, 11),
+            unemployment_rate=[0.05] * 11,
+        ),
+        design_matrix=design,
+        start_period="2014Q1",
+    )
+
+    # 2016Q3 is (2016-1980)*4 + (3-1) = 144 + 2 = 146 quarters after 1980Q1
+    assert x_t_with_epoch["time_trend"] == pytest.approx(146.0)
+    # Without estimation_epoch, start_period=2014Q1 is used: 2016Q3 = 10 quarters after 2014Q1
+    assert x_t_without_epoch["time_trend"] == pytest.approx(10.0)
+    # All other regressors are unaffected
+    assert x_t_with_epoch["log_real_pc_income"] == pytest.approx(x_t_without_epoch["log_real_pc_income"])
+    assert x_t_with_epoch["constant"] == pytest.approx(1.0)
+
+
+def test__estimation_epoch_none_falls_back_to_start_period():
+    """Explicit estimation_epoch=None must give the same result as omitting it."""
+    periods = pd.period_range("2014Q1", periods=11, freq="Q")
+    design = _design_matrix(periods)
+
+    sources = PermanentIncomeSimulationSources(
+        current_period="2016Q3",
+        real_pc_income=np.linspace(90.0, 101.0, 11),
+        policy_rate=[0.01] * 11,
+        cpi_fixed_basket=np.linspace(100.0, 110.0, 11),
+        unemployment_rate=[0.05] * 11,
+    )
+
+    x_t_none = build_permanent_income_forecast_regressors(
+        sources=sources,
+        design_matrix=design,
+        start_period="2014Q1",
+        estimation_epoch=None,
+    )
+    x_t_default = build_permanent_income_forecast_regressors(
+        sources=sources,
+        design_matrix=design,
+        start_period="2014Q1",
+    )
+
+    assert x_t_none["time_trend"] == pytest.approx(x_t_default["time_trend"])
+
+
 def test__unemployment_rate_outside_unit_interval_raises():
     periods = pd.period_range("2014Q1", periods=5, freq="Q")
     design = _design_matrix(periods)

@@ -41,6 +41,67 @@ def _scalar_rho(priors: dict[str, np.ndarray], n_households: int) -> float:
     return rho
 
 
+def compute_zeta(rho: float, delta: float, S: int) -> float:
+    """Scalar individual weight on ``income_belief_mu`` in the permanent-income log ratio.
+
+    Implements eq:zeta_weight from the Stage 3 architecture note::
+
+        zeta = sum_{s=1}^{S} delta^s * (1/4) * sum_{j=0}^{s-1} rho^(4*floor(j/4))
+               ----------------------------------------------------------------
+                              sum_{s=0}^{S} delta^s
+
+    ``zeta`` depends only on the scalars ``(rho, delta, S)`` and is therefore
+    computed once and cached, not per period and not per household. ``S`` is a
+    small horizon (40 quarters in the FR calibration), so the nested sums are
+    evaluated directly without vectorisation.
+    """
+    rho = float(rho)
+    delta = float(delta)
+    S = int(S)
+    if S < 0:
+        raise ValueError(f"compute_zeta expects a non-negative horizon S, got {S}.")
+
+    denominator = float(np.sum([delta**s for s in range(0, S + 1)]))
+    numerator = 0.0
+    for s in range(1, S + 1):
+        inner = float(np.sum([rho ** (4 * (j // 4)) for j in range(0, s)]))
+        numerator += (delta**s) * (1.0 / 4.0) * inner
+    return numerator / denominator
+
+
+def compute_permanent_income_log_ratio(
+    income_belief_mu: np.ndarray,
+    zeta: float,
+    common_log_ratio: float,
+) -> np.ndarray:
+    """Total log permanent-to-current income ratio per household.
+
+    ``zeta * income_belief_mu + common_log_ratio`` where ``common_log_ratio`` is
+    the (scalar) common-forecast term broadcast across households. With
+    ``common_log_ratio == 0.0`` (forecast unavailable) this reduces to the pure
+    individual term ``zeta * income_belief_mu``.
+    """
+    income_belief_mu = np.asarray(income_belief_mu, dtype=float)
+    return float(zeta) * income_belief_mu + float(common_log_ratio)
+
+
+def compute_income_uncertainty(
+    income_belief_p: np.ndarray,
+    zeta: float,
+    common_forecast_variance: float,
+) -> np.ndarray:
+    """Total income-uncertainty index ``theta_it`` per household.
+
+    ``zeta**2 * income_belief_p + common_forecast_variance`` where
+    ``common_forecast_variance`` is the (scalar) common-forecast prediction-error
+    variance broadcast across households. With ``common_forecast_variance == 0.0``
+    (forecast unavailable) this reduces to the pure individual term
+    ``zeta**2 * income_belief_p``.
+    """
+    income_belief_p = np.asarray(income_belief_p, dtype=float)
+    return (float(zeta) ** 2) * income_belief_p + float(common_forecast_variance)
+
+
 def compute_income_belief_learning_outputs(
     *,
     current_income: np.ndarray,

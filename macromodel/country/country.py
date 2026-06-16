@@ -1806,6 +1806,7 @@ class Country:
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()
+
             # Use non-financial income (employee + social_transfers + rental) for the belief-learning
             # signal. Total income includes stochastic illiquid asset returns (r_kappa * IFA) which
             # can be large and negative after bad market draws, creating pathological log-signals
@@ -1825,8 +1826,12 @@ class Country:
                     + ts_dicts_snapshot["income_social_transfers"]
                     + ts_dicts_snapshot["income_rental"]
                 )
+
             lagged_real_income = None
-            if len(self.households.ts.historic("income_employee")) >= 5 and len(self.economy.ts.historic(cpi_series)) >= 5:
+            if (
+                len(self.households.ts.historic("income_employee")) >= 5
+                and len(self.economy.ts.historic(cpi_series)) >= 5
+            ):
                 lagged_nonfa = (
                     self.households.ts.dicts["income_employee"][-5]
                     + self.households.ts.dicts["income_social_transfers"][-5]

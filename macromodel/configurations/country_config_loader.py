@@ -59,7 +59,7 @@ def _resolve_parameter_references(payload: Any, base_dir: Path) -> Any:
         raise ValueError(f"Paper parameter section must be a mapping: {payload[_PARAMETER_REF_KEY]}")
     if _PARAMETER_FILE_KEY in parameter_section or _PARAMETER_REF_KEY in parameter_section:
         raise ValueError("Nested paper parameter references are not supported.")
-    return dict(parameter_section)
+    return _resolve_parameter_references(parameter_section, parameter_path.parent)
 
 
 def load_country_configuration(config_path: str | Path, country_iso3: str | None = None) -> CountryConfiguration:

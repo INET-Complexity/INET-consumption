@@ -271,6 +271,7 @@ def build_household_account_panel(
     stage_0_parameters: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     stage_0_parameters = load_stage_0_parameters(parameter_file) if stage_0_parameters is None else stage_0_parameters
+    income_label = stage_0_parameters.get("runtime_income", {}).get("label", "model_spendable_income")
     paper = make_paper_account_panel(datawrapper, country_code, stage_0_parameters=stage_0_parameters)
     runtime, metadata = read_runtime_household_panel(
         h5_path, country_code, period=period, stage_0_parameters=stage_0_parameters
@@ -299,7 +300,7 @@ def build_household_account_panel(
     panel["runtime_net_wealth_identity"] = panel["runtime_total_assets"] - panel["runtime_total_debt_components"]
 
     nominal_columns = list(PAPER_ACCOUNT_COLUMNS) + [
-        "model_spendable_income",
+        income_label,
         "runtime_consumption",
         "runtime_wealth_deposits",
         "runtime_wealth_other_financial_assets",
@@ -318,7 +319,7 @@ def build_household_account_panel(
         panel[f"real_{column}_fixed_cpi"] = panel[column] / panel["cpi_fixed_basket"]
         panel[f"real_{column}_transaction_cpi"] = panel[column] / panel["cpi_transaction"]
 
-    income = panel["model_spendable_income"]
+    income = panel[income_label]
     assets = panel["lfa"] + panel["ifa"] + panel["ha"]
     for column in PAPER_ACCOUNT_COLUMNS:
         panel[f"{column}_to_income"] = _safe_ratio(panel[column], income)

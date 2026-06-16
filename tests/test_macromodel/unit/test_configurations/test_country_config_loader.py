@@ -132,17 +132,15 @@ def test__load_country_configuration_rejects_embedded_parameter_overrides(tmp_pa
 
 def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_parameter_section(tmp_path):
     paper_params = {
-        "stage_2": {
-            "desired_consumption": {
-                "credit_augmented_v1": {
-                    "income_belief_learning_horizon": {
-                        "paper_parameter_file": "paper.yaml",
-                        "paper_parameter_ref": "stage_3.income_belief_learning.permanent_income_log_ratio",
-                    },
-                }
+        "desired_consumption": {
+            "credit_augmented_v1": {
+                "income_belief_learning_horizon": {
+                    "paper_parameter_file": "paper.yaml",
+                    "paper_parameter_ref": "income_belief_learning.permanent_income_log_ratio",
+                },
             }
         },
-        "stage_3": {"income_belief_learning": {"permanent_income_log_ratio": {"delta": 0.95, "S": 40}}},
+        "income_belief_learning": {"permanent_income_log_ratio": {"delta": 0.95, "S": 40}},
     }
     (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
     country_path = tmp_path / "country.yaml"
@@ -157,7 +155,7 @@ def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_para
                                 "path_name": "consumption",
                                 "parameters": {
                                     "paper_parameter_file": "paper.yaml",
-                                    "paper_parameter_ref": "stage_2.desired_consumption.credit_augmented_v1",
+                                    "paper_parameter_ref": "desired_consumption.credit_augmented_v1",
                                 },
                             }
                         }

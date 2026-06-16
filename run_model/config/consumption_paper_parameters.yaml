@@ -118,6 +118,10 @@ income_belief_learning:
     kalman_gain_bounds: [0.0, 1.0]
     require_posterior_variance_lte_predicted_variance: true
   permanent_income_log_ratio:
+    # Parameters that control the zeta weight applied to individual income beliefs
+    # in the permanent-income log ratio: zeta = delta^k for k in 0..S-1, then renormalised.
+    # delta (discount rate): higher values give more weight to beliefs from earlier periods.
+    # S (horizon quarters): number of lagged Kalman-posterior means included in the weighted sum.
     # Consumed via paper_parameter_ref from desired_consumption.credit_augmented_v1.income_belief_learning_horizon.
     delta: 0.95
     S: 40

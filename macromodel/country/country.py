@@ -2321,6 +2321,7 @@ class Country:
                 sources=sources,
                 design_matrix=self._permanent_income_design_matrix,
                 start_period=self.start_period,
+                estimation_epoch=self._permanent_income_design_matrix.index.min(),
             )
         except ValueError as exc:
             # ValueError here is data-dependent (e.g. non-positive income/CPI,

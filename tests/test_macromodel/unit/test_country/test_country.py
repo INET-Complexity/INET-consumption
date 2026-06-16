@@ -884,6 +884,7 @@ class TestCountry:
             sources=sources,
             design_matrix=design_matrix,
             start_period=test_country.start_period,
+            estimation_epoch=design_matrix.index.min(),
         )
         expected = pure_forecast_common_permanent_income(x_t, forecast_inputs)
 
@@ -941,6 +942,38 @@ class TestCountry:
 
         assert result is None
         assert any("permanent-income forecast" in record.message for record in caplog.records)
+
+    def test__forecast_common_permanent_income_passes_estimation_epoch_from_design_matrix(self, test_country):
+        """build_permanent_income_forecast_regressors must receive estimation_epoch=design_matrix.index.min().
+
+        This pins the fix for the time_trend anchor bug: the trend must be
+        counted from the estimation sample's epoch (e.g. 1980Q1 for FR), not
+        from start_period (2014Q1).  The test checks that the country wrapper
+        passes the correct epoch by capturing the kwarg via a spy.
+        """
+        forecast_inputs = _load_permanent_income_forecast_inputs_for_test()
+        design_matrix = design_matrix_to_forecast_reader_names(
+            load_permanent_income_design_matrix(PERMANENT_INCOME_DATA_PATH / "FR_design_matrix.csv")
+        )
+
+        test_country.start_period = pd.Period("2014Q1", freq="Q")
+        test_country._permanent_income_forecast_inputs = forecast_inputs
+        test_country._permanent_income_design_matrix = design_matrix
+
+        captured_kwargs: list[dict] = []
+        original_fn = country_module.build_permanent_income_forecast_regressors
+
+        def spy(*args, **kwargs):
+            captured_kwargs.append(kwargs)
+            return original_fn(*args, **kwargs)
+
+        with patch.object(country_module, "build_permanent_income_forecast_regressors", side_effect=spy):
+            result = test_country.forecast_common_permanent_income()
+
+        assert result is not None
+        assert len(captured_kwargs) == 1
+        expected_epoch = design_matrix.index.min()
+        assert captured_kwargs[0]["estimation_epoch"] == expected_epoch
 
     def test__common_permanent_income_terms_zero_when_forecast_unavailable(self, test_country):
         # Increment 5: no cached forecast inputs -> (0.0, 0.0), preserving the

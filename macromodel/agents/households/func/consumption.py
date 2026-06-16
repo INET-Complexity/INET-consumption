@@ -317,9 +317,9 @@ class CESHouseholdConsumption(HouseholdConsumption):
 
     def __init__(
         self,
-        consumption_smoothing_fraction: float,
-        consumption_smoothing_window: int,
-        minimum_consumption_fraction: float,
+        consumption_smoothing_fraction: float = 0.0,
+        consumption_smoothing_window: int = 12,
+        minimum_consumption_fraction: float = 1.0,
         elasticity_of_substitution: float = 1.0,
     ):
         super().__init__(

@@ -57,8 +57,6 @@ def _resolve_parameter_references(payload: Any, base_dir: Path) -> Any:
     parameter_section = _resolve_dot_path(parameter_payload, str(payload[_PARAMETER_REF_KEY]))
     if not isinstance(parameter_section, Mapping):
         raise ValueError(f"Paper parameter section must be a mapping: {payload[_PARAMETER_REF_KEY]}")
-    if _PARAMETER_FILE_KEY in parameter_section or _PARAMETER_REF_KEY in parameter_section:
-        raise ValueError("Nested paper parameter references are not supported.")
     return _resolve_parameter_references(parameter_section, parameter_path.parent)
 
 

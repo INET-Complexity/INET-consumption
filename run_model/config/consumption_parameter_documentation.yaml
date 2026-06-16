@@ -1,3 +1,13 @@
+# Documentation-only companion to consumption_paper_parameters.yaml.
+# Not consumed at runtime. Contains:
+#   stage_0  — source-audit annotations, account-mapping notes, and architectural decisions
+#   stage_2  — paper-symbol cross-reference and input wiring notes
+#   stage_3  — architectural records: classification schemas, signal choices, validation flags
+#   stage_4  — forward contract for portfolio-choice settings (not yet implemented)
+#
+# Rule: update consumption_paper_parameters.yaml first when recalibrating.
+# Numeric values repeated here are copies for human reference; this file is not authoritative.
+
 stage_0:
   source_audit:
     behaviour_preserving: true
@@ -49,46 +59,201 @@ stage_0:
     default: cpi_fixed_basket
     sensitivity: cpi_transaction
     note: Use fixed-basket CPI for default real ratios; report transaction-CPI sensitivity where useful.
-  runtime_diagnostics:
-    household_account_fields:
-      - income
-      - consumption
-      - wealth_deposits
-      - wealth_other_financial_assets
-      - wealth_main_residence
-      - wealth_other_properties
-      - wealth_other_real_assets
-      - mortgage_debt
-      - consumption_loan_debt
-      - debt
-      - net_wealth
-    paper_account_outputs:
-      - lfa
-      - ifa
-      - ha
-      - mr
-      - db
-      - nw
   behaviour:
-    read_only: true
+    read_only: true  # stage_0 is behaviour-preserving; no model behaviour changes
 
-stage_1:
-  asset_returns:
-    paper_stochastic_v1:
-      other_real_assets_depreciation_rate: 0.05
-      mu_eq: 0.0029
-      mu_bond: 0.0081
-      sigma_eq: 0.0935
-      sigma_bond: 0.0316
-      rho: -0.2585
-      equity_weight: 0.5
-      draw_scope: country_period
+stage_2:
+  implementation_contract:
+    paper_symbol_map:  # paper symbol → current calibrated value
+      alpha_0: 0.0    # long_run_intercept
+      alpha_1: 0.0    # real_borrowing_rate_propensity
+      alpha_2: 0.05   # permanent_income_propensity
+      gamma_1: 0.04   # liquid_wealth_propensity
+      gamma_2: 0.02   # illiquid_wealth_propensity
+      gamma_3: 0.02   # house_price_propensity
+      gamma_4: 0.02   # housing_wealth_propensity
+      beta_1: 0.0     # income_growth_propensity
+      beta_2: 0.0     # interest_rate_cashflow_propensity
+      beta_3: 0.05    # uncertainty_propensity
+      lambda: 0.5     # partial_adjustment_speed
+    input_mapping:
+      current_income:
+        source: households.ts.current.expected_income
+        label: model_spendable_income_planning_base
+        deflator: current_consumer_price_level
+      lagged_income:
+        source: households.ts.prev.expected_income
+        fallback: current_income
+        deflator: lagged_consumer_price_level
+      lagged_consumption:
+        source: households.ts.prev.consumption
+        fallback: historic_consumption_sum_last
+        deflator: lagged_consumer_price_level
+      real_net_liquid_assets:
+        formula: lagged_wealth_deposits - lagged_mortgage_debt - lagged_consumption_loan_debt
+        deflator: lagged_consumer_price_level
+      illiquid_financial_assets:
+        source: households.ts.prev.wealth_other_financial_assets
+        deflator: lagged_consumer_price_level
+      housing_wealth:
+        formula: households.ts.current.wealth_main_residence + households.ts.current.wealth_other_properties
+        deflator: current_consumer_price_level
+      house_price:
+        source: economy.ts.prev.hpi
+        fallback: economy.ts.current.hpi
+        interpretation: index_proxy_not_currency_price_level
+      consumer_debt:
+        source: households.ts.prev.consumption_loan_debt
+        excludes_mortgage_debt: true
+      real_borrowing_rate:
+        source: placeholder
+        default: 0.0
+      permanent_income_log_ratio:
+        source: stage_3.income_belief_learning
+        default_when_unavailable: 0.0
+      consumer_debt_rate_delta:
+        source: placeholder
+        default: 0.0
+      uncertainty_delta:
+        source: stage_3.income_belief_learning
+        default_when_unavailable: 0.0
+      current_cpi:
+        source: economy.current_consumer_price_level
+      initial_cpi:
+        source: economy.initial_consumer_price_level
+      lagged_cpi:
+        source: economy.ts.prev.consumer_price_level_series_name
+      expected_inflation:
+        source: economy.current_expected_consumer_period_inflation
+    target_rule_switches:
+      rent_enters_behavioural_target: false
+      mortgage_debt_enters_behavioural_target: false
+      mortgage_service_enters_behavioural_target: false
+      rent_kept_as_feasibility_diagnostic: true
+      mortgage_service_kept_as_feasibility_diagnostic: true
+      formula_implied_mpc_method: perturb_real_spendable_income
+      nominalization: current_deflator_times_expected_inflation
 
 stage_3:
   income_belief_learning:
-    permanent_income_log_ratio:
-      # Quarterly discount factor and horizon (in quarters) used to compute
-      # the scalar individual weight zeta (eq:zeta_weight). zeta depends only
-      # on (rho, delta, S); rho is the existing income_belief_rho scalar.
-      delta: 0.95
-      S: 40
+    enabled: true  # controlled by uses_income_belief_learning in stage_2 config
+    priors:
+      required_fields:
+        - rho_q
+        - mu_1_0
+        - P_1_0
+        - sigma2_xi
+        - sigma2_v
+      classification:
+        employment_statuses:
+          - employed
+          - unemployed
+          - retired
+        age_groups:
+          - 18-34
+          - 35-49
+          - 50-70
+          - 71-85
+      fallback_missing_cell:
+        from: unemployed_50_70
+        to: unemployed_71_85
+      household_aggregation: income_weighted_adult_members
+      zero_income_weight_fallback: equal_adult_member_weights
+      rho_scope: scalar
+      runtime_posterior_state_only: true
+    income_signal:
+      source: households.ts.income
+      label: model_spendable_income
+    common_forecast:
+      enabled: true  # forecast runs whenever uses_income_belief_learning is true and data paths are available
+      real_pc_income:
+        source: households.ts.income
+        label: model_spendable_income
+        deflator: cpi_fixed_basket
+        population_denominator: individuals.ts.n_individuals
+      policy_rate_source: central_bank.ts.policy_rate
+    validation:
+      validate_mu_hat_p_against_ces_moments: false
+      validate_kalman_gain_bounds: true
+      validate_posterior_variance_lte_predicted_variance: true
+
+# Forward contract — not yet implemented; settings below define the intended
+# portfolio-choice interface once Stage 4 is built.
+stage_4:
+  portfolio_choice:
+    uses_portfolio_choice: false
+    settles_portfolio_choice: false
+    target_share_source: precomputed
+    participation_source: initial_ifa_positive
+    default_target_illiquid_share: 0.0
+    liquid_return_source: policy_rate_markup
+    liquid_asset_policy_rate_markup: 1.0
+    phi_1: 5.0
+    phi_2: 45.0
+    phi_2_derivation:
+      derived_from: [phi_1, adjustment_speed]
+      formula: phi_1 * (1 / adjustment_speed - 1)
+      independent_calibration: false
+    fixed_cost_share: 0.001
+    adjustment_speed: 0.1
+    dynamic_shifters_enabled: false
+    dynamic_adjustment_speed_enabled: false
+    no_borrowing_for_financial_asset_acquisition: true
+    shadow_mode_preserves_balance_sheet: true
+    target_share_bounds:
+      min: 0.0
+      max: 1.0
+      clipping_diagnostic: true
+    participation_rule:
+      initial_ifa_positive_threshold: 0.0
+      nonparticipants_can_buy_ifa: false
+    portfolio_base:
+      lfa_source: stage_0.account_rules.lfa
+      ifa_source: stage_0.account_rules.ifa
+      opening_tfa_formula: LFA + IFA
+      post_return_ifa_formula: (1 + r_kappa) * IFA_lagged
+      post_return_lfa_formula: (1 + r_ell) * LFA_lagged
+      target_tfa_base_formula: post_return_lfa + post_return_ifa + max(investable_surplus, 0)
+      positive_surplus_only: true
+    adjustment_rule:
+      lambda_formula: phi_1 / (phi_1 + phi_2)
+      fixed_cost_base: total_financial_assets
+      adjustment_cost_paid_from: liquid_assets
+      constrained_projection_rule: true
+      no_financial_assets_policy: no_positive_illiquid_acquisition
+    return_sources:
+      illiquid_return_source: stage_1.asset_returns.paper_stochastic_v1
+      liquid_return_source: policy_rate_markup
+      do_not_redraw_stage_1_return: true
+    shadow_mode_invariants:
+      does_not_change_consumption: true
+      does_not_change_lfa: true
+      does_not_change_ifa: true
+      does_not_change_debt: true
+      does_not_change_net_worth: true
+    diagnostics:
+      - portfolio_actual_illiquid_share
+      - portfolio_opening_tfa_scale
+      - portfolio_target_tfa_base
+      - portfolio_post_return_lfa
+      - portfolio_post_return_ifa
+      - portfolio_liquid_return_rate
+      - portfolio_illiquid_return_rate
+      - portfolio_investable_surplus_proxy
+      - portfolio_participation_probability
+      - portfolio_participates
+      - portfolio_target_illiquid_share
+      - portfolio_target_illiquid_assets
+      - portfolio_delta_tilde
+      - portfolio_kappa_star_tilde
+      - portfolio_kappa_tilde
+      - portfolio_desired_illiquid_adjustment
+      - portfolio_adjustment_cost
+      - portfolio_counterfactual_lfa_flow
+      - portfolio_counterfactual_ifa_flow
+      - portfolio_inaction_flag
+      - portfolio_upper_bound_flag
+      - portfolio_lower_bound_flag
+      - portfolio_no_financial_assets_flag
+      - portfolio_target_share_clipped_flag
+      - portfolio_settlement_enabled

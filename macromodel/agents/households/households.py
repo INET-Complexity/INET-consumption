@@ -827,8 +827,8 @@ class Households(Agent):
     def current_income_belief_learning_inputs(
         self,
         *,
-        common_permanent_income_log_ratio: np.ndarray | float | None = None,
-        common_forecast_variance: np.ndarray | float | None = None,
+        common_permanent_income_log_ratio: float | None = None,
+        common_forecast_variance: float | None = None,
     ) -> dict[str, np.ndarray]:
         """Map posterior beliefs into Stage 3 consumption-rule inputs.
 
@@ -838,7 +838,7 @@ class Households(Agent):
         ``uncertainty_delta`` per the Stage 3 architecture note (item 5).
 
         ``common_permanent_income_log_ratio``/``common_forecast_variance`` are
-        scalar (float) terms broadcast across households; ``None`` (forecast
+        scalar floats broadcast across households; ``None`` (forecast
         unavailable) is treated as ``0.0``, reducing each output to its pure
         individual component.
         """
@@ -850,13 +850,8 @@ class Households(Agent):
             )
         runtime_state = self._income_belief_runtime_state(priors)
         zeta = self._income_belief_zeta(priors)
-        # Common terms are scalar (broadcast) per step 4; treat None as 0.0
-        # explicitly to avoid the `array or 0.0` truthiness trap (an ndarray
-        # would raise on `or`), even though step 4 only ever passes floats.
-        common_log_ratio = (
-            0.0 if common_permanent_income_log_ratio is None else float(common_permanent_income_log_ratio)
-        )
-        common_variance = 0.0 if common_forecast_variance is None else float(common_forecast_variance)
+        common_log_ratio = 0.0 if common_permanent_income_log_ratio is None else common_permanent_income_log_ratio
+        common_variance = 0.0 if common_forecast_variance is None else common_forecast_variance
         return {
             "permanent_income_log_ratio": compute_permanent_income_log_ratio(
                 runtime_state["posterior_mean"], zeta, common_log_ratio

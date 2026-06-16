@@ -1050,6 +1050,55 @@ class TestCountry:
         assert set(test_country.economy.ts.get_keys()) == economy_keys_before
         assert np.array_equal(test_country.households.ts.dicts["income"][-1], households_income_before)
 
+    def test__income_belief_zeta_raises_when_horizon_not_configured(self, test_country):
+        # With uses_income_belief_learning=True but no income_belief_learning_horizon,
+        # _income_belief_zeta must raise rather than silently defaulting, since zeta
+        # has real economic meaning and has no safe default.
+        n_households = test_country.households.ts.current("n_households")
+        test_country.households.states["income_belief_priors"] = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.9519),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.ones(n_households),
+        }
+        test_country.households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon=None,
+        )
+        with pytest.raises(ValueError, match="income_belief_learning_horizon"):
+            test_country.households.current_income_belief_learning_inputs()
+
+    def test__current_income_belief_learning_inputs_none_common_terms_treated_as_zero(self, test_country):
+        # When the common forecast is unavailable, both common terms default to
+        # None -> 0.0. With income_belief_mu=0 and income_belief_p=0 the outputs
+        # must be exactly zero arrays, confirming the None->0.0 path produces
+        # the correct additive-identity result.
+        n_households = test_country.households.ts.current("n_households")
+        test_country.households.states["income_belief_priors"] = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.9519),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.ones(n_households),
+        }
+        test_country.households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon={"delta": 0.95, "S": 40},
+        )
+        result = test_country.households.current_income_belief_learning_inputs(
+            common_permanent_income_log_ratio=None,
+            common_forecast_variance=None,
+        )
+        np.testing.assert_array_equal(result["permanent_income_log_ratio"], np.zeros(n_households))
+        np.testing.assert_array_equal(result["uncertainty_delta"], np.zeros(n_households))
+
     def test__set_household_target_demand_disabled_is_bit_identical(self, test_country, monkeypatch):
         # Regression: with income-belief learning disabled (default), the new
         # wiring passes None through, and target consumption + all diagnostics

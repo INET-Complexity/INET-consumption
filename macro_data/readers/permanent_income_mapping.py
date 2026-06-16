@@ -24,9 +24,9 @@ FORECAST_READER_VARIABLE_ORDER = [
 ]
 
 FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
-    "constant": "intercept",
+    "constant": "frozen_design_matrix_initial_period",
     "time_trend": "simulation_period_index",
-    "split_trend_from_2009q4_discounted_present_value": "simulation_period_index",
+    "split_trend_from_2009q4_discounted_present_value": "frozen_design_matrix_initial_period",
     "covid19": "excluded_stage_3_dummy",
     "log_real_pc_income": "real_pc_income",
     "d4_log_real_pc_income": "real_pc_income",
@@ -187,30 +187,12 @@ def _unemployment_percent_history_from_share(unemployment_rate: np.ndarray) -> n
     return unemployment_rate * 100.0
 
 
-def _splittrend_pdv(
-    current_period: pd.Period,
-    *,
-    break_period: str | pd.Period,
-    horizon_q: int,
-    delta_q: float,
-) -> float:
-    if horizon_q <= 0:
-        raise ValueError("horizon_q must be positive.")
-    break_q = _quarter_period(break_period)
-    weights = float(delta_q) ** np.arange(int(horizon_q), dtype=float)
-    indicators = np.array([float(current_period + j >= break_q) for j in range(int(horizon_q))])
-    return float(np.dot(weights, indicators))
-
-
 def build_permanent_income_forecast_regressors(
     *,
     sources: PermanentIncomeSimulationSources,
     design_matrix: pd.DataFrame,
     start_period: str | int | pd.Period | pd.Timestamp,
     estimation_epoch: str | pd.Period | pd.Timestamp | None = None,
-    trend_break_period: str | pd.Period = "2009Q4",
-    horizon_q: int = 40,
-    delta_q: float = 0.95,
     policy_rate_periods_per_year: int = 4,
 ) -> pd.Series:
     """Build canonical forecast-reader regressors from simulation-source values.
@@ -252,14 +234,7 @@ def build_permanent_income_forecast_regressors(
     epoch = _quarter_period(estimation_epoch) if estimation_epoch is not None else _quarter_period(start_period)
 
     values: dict[str, float] = {name: float(current_design[name]) for name in FORECAST_READER_VARIABLE_ORDER}
-    values["constant"] = 1.0
     values["time_trend"] = float(_quarter_index(current_period, epoch))
-    values["split_trend_from_2009q4_discounted_present_value"] = _splittrend_pdv(
-        current_period,
-        break_period=trend_break_period,
-        horizon_q=horizon_q,
-        delta_q=delta_q,
-    )
     values["covid19"] = 0.0
 
     values["log_real_pc_income"] = float(log_income_history[-1])

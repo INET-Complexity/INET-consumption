@@ -130,6 +130,49 @@ def test__load_country_configuration_rejects_embedded_parameter_overrides(tmp_pa
         load_country_configuration(country_path, country_iso3="FRA")
 
 
+def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_parameter_section(tmp_path):
+    paper_params = {
+        "stage_2": {
+            "desired_consumption": {
+                "credit_augmented_v1": {
+                    "income_belief_learning_horizon": {
+                        "paper_parameter_file": "paper.yaml",
+                        "paper_parameter_ref": "stage_3.income_belief_learning.permanent_income_log_ratio",
+                    },
+                }
+            }
+        },
+        "stage_3": {"income_belief_learning": {"permanent_income_log_ratio": {"delta": 0.95, "S": 40}}},
+    }
+    (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            {
+                "FRA": {
+                    "households": {
+                        "functions": {
+                            "consumption": {
+                                "name": "CreditAugmentedConsumption",
+                                "path_name": "consumption",
+                                "parameters": {
+                                    "paper_parameter_file": "paper.yaml",
+                                    "paper_parameter_ref": "stage_2.desired_consumption.credit_augmented_v1",
+                                },
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    )
+
+    config = load_country_configuration(country_path, country_iso3="FRA")
+
+    params = config.households.functions.consumption.parameters
+    assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
+
+
 def test__load_country_configuration_rejects_missing_paper_parameter_ref(tmp_path):
     (tmp_path / "paper.yaml").write_text(yaml.safe_dump({"stage_1": {}}))
     country_path = tmp_path / "country.yaml"

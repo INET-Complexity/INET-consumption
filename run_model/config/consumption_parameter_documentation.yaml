@@ -64,18 +64,18 @@ stage_0:
 
 stage_2:
   implementation_contract:
-    paper_symbol_map:  # paper symbol → current calibrated value
-      alpha_0: 0.0    # long_run_intercept
-      alpha_1: 0.0    # real_borrowing_rate_propensity
-      alpha_2: 0.05   # permanent_income_propensity
-      gamma_1: 0.04   # liquid_wealth_propensity
-      gamma_2: 0.02   # illiquid_wealth_propensity
-      gamma_3: 0.02   # house_price_propensity
-      gamma_4: 0.02   # housing_wealth_propensity
-      beta_1: 0.0     # income_growth_propensity
-      beta_2: 0.0     # interest_rate_cashflow_propensity
-      beta_3: 0.05    # uncertainty_propensity
-      lambda: 0.5     # partial_adjustment_speed
+    paper_symbol_map:  # paper symbol → current calibrated value; source: Chauvin & Muellbauer (2018) Table 1
+      alpha_0: 0.08    # long_run_intercept
+      alpha_1: -0.72   # real_borrowing_rate_propensity
+      alpha_2: 0.55    # permanent_income_propensity
+      gamma_1: 0.14    # liquid_wealth_propensity (NLA/income)
+      gamma_2: 0.022   # illiquid_wealth_propensity (IFA/income)
+      gamma_3: 0.013   # housing_wealth_propensity (HA/income)
+      gamma_4: -0.062  # house_price_propensity (log house prices/income)
+      beta_1: 0.45     # income_growth_propensity
+      beta_2: -0.003   # interest_rate_cashflow_propensity (to be calibrated)
+      beta_3: -0.005   # uncertainty_propensity (to be calibrated)
+      lambda: 0.56     # partial_adjustment_speed
     input_mapping:
       current_income:
         source: households.ts.current.expected_income
@@ -162,8 +162,16 @@ stage_3:
       rho_scope: scalar
       runtime_posterior_state_only: true
     income_signal:
-      source: households.ts.income
-      label: model_spendable_income
+      source: households.ts.income_employee + income_social_transfers + income_rental
+      label: non_financial_household_income
+      excludes: income_financial_assets
+      rationale: >
+        CES respondents reporting expected income growth had employment/transfer income
+        in mind, not volatile stochastic asset returns. Financial returns enter the model
+        separately via Stage 1 (balance sheet) and the IFA wealth term gamma_2 in Stage 2.
+        Using total income (including r_kappa * IFA) produces pathological log-signals
+        after bad market draws for high-IFA households; non-financial income is strictly
+        positive and well-behaved.
     common_forecast:
       enabled: true  # forecast runs whenever uses_income_belief_learning is true and data paths are available
       real_pc_income:

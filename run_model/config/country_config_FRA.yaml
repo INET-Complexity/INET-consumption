@@ -50,23 +50,8 @@ FRA:
         name: CreditAugmentedConsumption
         path_name: consumption
         parameters:
-          consumption_smoothing_fraction: 0.0
-          consumption_smoothing_window: 12
-          elasticity_of_substitution: 1.0
-          minimum_consumption_fraction: 1.0
-          # Stage 3 Increment 5: enable the learned income-belief / common
-          # permanent-income forecast terms together (they share zeta and the
-          # forecast call). The propensities below are CONSERVATIVE DIAGNOSTIC
-          # placeholders pending calibration -- small fractional values so the
-          # Stage 3 terms cannot dominate target consumption while the wiring is
-          # validated end to end.
-          uses_income_belief_learning: true
-          permanent_income_propensity: 0.05
-          uncertainty_propensity: 0.05
-          # delta (quarterly discount) and S (horizon, quarters) feeding zeta.
-          income_belief_learning_horizon:
-            paper_parameter_file: consumption_paper_parameters.yaml
-            paper_parameter_ref: stage_3.income_belief_learning.permanent_income_log_ratio
+          paper_parameter_file: consumption_paper_parameters.yaml
+          paper_parameter_ref: desired_consumption.credit_augmented_v1
       financial_assets:
         name: DefaultFinancialAssets
         path_name: financial_assets
@@ -141,7 +126,7 @@ FRA:
         path_name: wealth
         parameters:
           paper_parameter_file: consumption_paper_parameters.yaml
-          paper_parameter_ref: stage_1.asset_returns.paper_stochastic_v1
+          paper_parameter_ref: asset_returns.paper_stochastic_v1
     parameters:
       take_consumption_weights_by_income_quantile: false
     substitution_bundles:

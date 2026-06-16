@@ -43,9 +43,9 @@ class HouseholdConsumption(ABC):
 
     def __init__(
         self,
-        consumption_smoothing_fraction: float,
-        consumption_smoothing_window: int,
-        minimum_consumption_fraction: float,
+        consumption_smoothing_fraction: float = 0.0,
+        consumption_smoothing_window: int = 12,
+        minimum_consumption_fraction: float = 1.0,
         elasticity_of_substitution: float = 1.0,  # Ignored by default consumption
     ):
         self.consumption_smoothing_fraction = consumption_smoothing_fraction
@@ -574,9 +574,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
     def __init__(
         self,
-        consumption_smoothing_fraction: float,
-        consumption_smoothing_window: int,
-        minimum_consumption_fraction: float,
+        consumption_smoothing_fraction: float = 0.0,
+        consumption_smoothing_window: int = 12,
+        minimum_consumption_fraction: float = 1.0,
         elasticity_of_substitution: float = 1.0,
         long_run_intercept: float = 0.0,
         real_borrowing_rate_propensity: float = 0.0,

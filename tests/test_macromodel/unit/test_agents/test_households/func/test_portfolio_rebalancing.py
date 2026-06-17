@@ -156,6 +156,27 @@ class TestActualIlliquidShareDenominator:
         assert not result.portfolio_valid_flag[0]
         np.testing.assert_allclose(result.actual_illiquid_share, [0.0])
 
+    def test__negative_target_tfa_base_does_not_blow_up_the_share(self):
+        # target_tfa_base < 0 is reachable when post_return_lfa +
+        # post_return_ifa is itself negative (e.g. overdraft-style negative
+        # deposits). The household-period is otherwise valid (opening_tfa_scale
+        # > 0, all inputs finite) -- only this one diagnostic has no
+        # meaningful value. A naive max(target_tfa_base, eps) floor would
+        # divide by a near-zero epsilon and produce an enormous, meaningless
+        # ratio instead of signalling "no measurable share."
+        result = _run(
+            opening_tfa_scale=[1.0],
+            post_return_lfa=[20.0],
+            post_return_ifa=[10.0],
+            target_illiquid_assets=[10.5],
+            portfolio_participates=[True],
+            target_tfa_base=[-50.0],
+        )
+
+        assert result.portfolio_valid_flag[0]
+        np.testing.assert_allclose(result.actual_illiquid_share, [0.0])
+        assert result.actual_illiquid_share[0] < 1.0
+
 
 # ---------------------------------------------------------------------------
 # Target below / above actual share (sign of delta_tilde)

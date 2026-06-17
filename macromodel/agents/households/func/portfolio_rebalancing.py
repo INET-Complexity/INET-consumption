@@ -102,7 +102,11 @@ def compute_portfolio_rebalancing(
             Used only as the denominator for the ``actual_illiquid_share``
             diagnostic (per the wiki's Data Inputs table), distinct from
             ``opening_tfa_scale``, which normalizes the adjustment decision
-            itself. Floored at a small epsilon to avoid division by zero.
+            itself. Non-positive values (reachable when combined liquid and
+            illiquid stocks are themselves negative, e.g. overdraft-style
+            negative deposits) yield ``actual_illiquid_share = 0`` rather
+            than dividing by a near-zero epsilon, which would otherwise
+            produce an enormous, meaningless ratio.
         portfolio_participates (np.ndarray): Boolean array; nonparticipants
             run the identical projection/gain-test path (their
             ``target_illiquid_assets`` is already ``0`` upstream) rather than
@@ -157,12 +161,18 @@ def compute_portfolio_rebalancing(
     # post-return-and-surplus TFA), not opening_tfa_scale, per the wiki's
     # Data Inputs table: it answers "what fraction of assets are illiquid
     # right now," including this period's saving, not last period's stock.
+    # A non-positive target_tfa_base (reachable when post_return_lfa +
+    # post_return_ifa is itself negative, e.g. overdraft-style negative
+    # deposits) is treated as "no measurable share," not floored to a tiny
+    # epsilon, which would otherwise blow up the ratio to an enormous,
+    # meaningless value rather than signalling the no-assets state.
+    has_measurable_share = portfolio_valid_flag & (target_tfa_base > 0.0)
     safe_actual_share_denominator = np.maximum(target_tfa_base, _ACTUAL_SHARE_DENOMINATOR_EPS)
     actual_illiquid_share = np.divide(
         post_return_ifa,
         safe_actual_share_denominator,
         out=np.zeros_like(safe_actual_share_denominator),
-        where=portfolio_valid_flag,
+        where=has_measurable_share,
     )
 
     delta_tilde = (target_illiquid_assets - post_return_ifa) / safe_scale

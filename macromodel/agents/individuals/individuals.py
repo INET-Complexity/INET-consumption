@@ -149,6 +149,7 @@ class Individuals(Agent):
             "Gender",
             "Age",
             "Education",
+            "college",
             "Activity Status",
             "Employment Industry",
             "Income",

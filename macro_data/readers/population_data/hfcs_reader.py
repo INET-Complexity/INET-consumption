@@ -43,6 +43,7 @@ Note:
     exchange rates.
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -329,7 +330,9 @@ class HFCSReader:
 
         # Join the derived data with the household data
         households_df = households_df.join(derived_df)
-        households_df = cls._compute_windfall_income(households_df, windfall_threshold=windfall_threshold)
+        households_df = cls._compute_windfall_income(
+            households_df, windfall_threshold=windfall_threshold, default_year=year
+        )
 
         return cls(
             country_name_short=country_name_short,
@@ -340,12 +343,9 @@ class HFCSReader:
     @staticmethod
     def _compute_windfall_income(
         households_df: pd.DataFrame,
-        windfall_threshold: float,
+        windfall_threshold: float = 20000.0,
         default_year: int | None = None,
     ) -> pd.DataFrame:
-        if windfall_threshold is None:
-            return households_df
-
         if "Survey Year" in households_df.columns:
             survey_year = pd.to_numeric(households_df["Survey Year"], errors="coerce")
         elif default_year is not None:
@@ -356,6 +356,13 @@ class HFCSReader:
         if "Gift or Inheritance Reported" in households_df.columns:
             gift_reported = households_df["Gift or Inheritance Reported"] == 1
         else:
+            # Column missing for the whole wave/country (not just NaN for some households):
+            # surface this rather than silently zeroing windfall_income for the entire population.
+            warnings.warn(
+                "'Gift or Inheritance Reported' column not found; windfall_income will be False "
+                "for all households in this population.",
+                stacklevel=2,
+            )
             gift_reported = pd.Series(False, index=households_df.index)
 
         windfall_masks = []
@@ -372,8 +379,13 @@ class HFCSReader:
                 households_df.get(f"Gift Amount {index}", pd.NA),
                 errors="coerce",
             )
+            # "Within 2 years of the survey": the survey year itself and the year before it.
             mask = (
-                gift_reported & (gift_year >= survey_year - 2) & (gift_type == 1) & (gift_amount >= windfall_threshold)
+                gift_reported
+                & (gift_year > survey_year - 2)
+                & (gift_year <= survey_year)
+                & (gift_type == 1)
+                & (gift_amount >= windfall_threshold)
             )
             windfall_masks.append(mask.fillna(False))
 
@@ -382,10 +394,12 @@ class HFCSReader:
         else:
             windfall_flag = np.zeros(len(households_df), dtype=bool)
 
+        # No NaNs remain after fillna(False) above, so a plain bool is sufficient
+        # and avoids pandas <NA> semantics leaking into downstream consumers.
         households_df["windfall_income"] = pd.Series(
             windfall_flag,
             index=households_df.index,
-        ).astype("Int64")
+        ).astype(bool)
         return households_df
 
     @staticmethod

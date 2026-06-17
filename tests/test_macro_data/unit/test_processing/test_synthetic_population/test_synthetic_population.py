@@ -148,6 +148,7 @@ def test__hfcs_reader_preserves_notebook_account_source_columns():
     assert var_mapping["DA1122"] == "Value of Other Non-Business Real Estate"
     assert var_mapping["DL1100"] == "Outstanding Balance of Mortgage Debt"
     assert var_mapping["DL1200"] == "Outstanding Balance of Non-Mortgage Debt"
+    assert var_mapping["DHAQ01"] == "Country quintile, gross wealth, among households"
     assert "Value of Other Non-Business Real Estate" in var_numerical
     assert "Outstanding Balance of Mortgage Debt" in var_numerical
     assert "Outstanding Balance of Non-Mortgage Debt" in var_numerical

@@ -47,7 +47,7 @@ FRA:
   households:
     functions:
       consumption:
-        name: DefaultHouseholdConsumption
+        name: CreditAugmentedConsumption
         path_name: consumption
         parameters:
           consumption_smoothing_fraction: 0.0

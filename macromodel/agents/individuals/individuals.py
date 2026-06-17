@@ -145,6 +145,7 @@ class Individuals(Agent):
         # Additional states
         states: dict[str, float | np.ndarray | list[np.ndarray]] = {}
         for state_name in [
+            "Relation to Reference Person",
             "Gender",
             "Age",
             "Education",

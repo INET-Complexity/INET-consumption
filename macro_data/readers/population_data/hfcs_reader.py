@@ -59,6 +59,7 @@ var_mapping = {
     "iid": "Corresponding Individuals ID",  # Individual within household
     "HW0010": "Weight",  # Survey weight
     "DHHTYPE": "Type",  # Household type
+    "RA0100": "Relation to Reference Person",  # Relation to Reference Person
     "RA0200": "Gender",  # Gender of individual
     "RA0300": "Age",  # Age of individual
     "PA0200": "Education",  # Education level

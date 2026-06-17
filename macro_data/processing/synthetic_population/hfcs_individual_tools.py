@@ -86,6 +86,7 @@ def process_individual_data(
             "Income from Unemployment Benefits",
             "Income",
             "Corresponding Household ID",
+            "Relation to Reference Person",
         ]
     ].copy()
 

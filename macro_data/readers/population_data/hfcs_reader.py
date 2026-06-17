@@ -114,7 +114,7 @@ var_mapping = {
     "HI0310": "Private Transfers Given",  # Monthly private transfers
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
     "HD1800": "Investment Attitudes",  # Household investment attitudes
-    "DHAQ01": "Country quintile, gross wealth, among households", # Wealth quintile
+    "DHAQ01": "Country quintile, gross wealth, among households",  # Wealth quintile
     "HH0100": "Gift or Inheritance Reported",  # Gift or inheritance indicator
     "HH0201": "Gift Year 1",  # Year of gift/inheritance 1
     "HH0202": "Gift Year 2",  # Year of gift/inheritance 2
@@ -373,10 +373,7 @@ class HFCSReader:
                 errors="coerce",
             )
             mask = (
-                gift_reported
-                & (gift_year >= survey_year - 2)
-                & (gift_type == 1)
-                & (gift_amount >= windfall_threshold)
+                gift_reported & (gift_year >= survey_year - 2) & (gift_type == 1) & (gift_amount >= windfall_threshold)
             )
             windfall_masks.append(mask.fillna(False))
 

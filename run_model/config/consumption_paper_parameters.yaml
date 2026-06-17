@@ -160,14 +160,33 @@ mortgage:
 portfolio_composition:
   # Section 3.5, Table 4 — GTP-FRM (Generalised Two-Part Fractional Response Model)
   # Participation and magnitude coefficient vectors are stored in the JSON file below.
-  # Dynamic shifters (ϑ_μ income expectations, ϑ_θ uncertainty, ϑ_r return differential)
-  # are noted as planned in Table 16; all set to zero pending implementation.
+  # FRM estimated on pooled HFCS waves 2014/2017/2021 (N=16,869); see data_paths.frm_coefficients
+  # for the full coefficient table, including investment_attitudes and windfall_income.
+  uses_portfolio_choice: false      # gates the Stage 4 diagnostics-only call site; true only for FRA shadow runs
+  settles_portfolio_choice: false   # true only once Stage 5 provides a post-feasibility household transaction account
+  target_share_source: scalar       # scalar | precomputed | grouped — first implementation uses the fixed scalar below
+  participation_source: initial_ifa_positive   # extensive margin fixed at init from initial_IFA > 0; nonparticipants never buy IFA
+  default_target_illiquid_share: 0.65   # first-pass intensive-margin target for all participating households
+  liquid_return_source: policy_rate_markup   # r_ell = liquid_asset_policy_rate_markup * policy_rate
+  liquid_asset_policy_rate_markup: null   # not yet calibrated in paper; must be set before settled mode
+  phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
+  lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
+  fixed_cost_share: null   # paper example uses 0.001; not yet confirmed as calibrated for this implementation
+  dynamic_shifters_enabled: false   # gates whether dynamic_shifters below move target shares; false until Stage 3 validation lands
   dynamic_shifters:
     income_expectations: 0.0   # ϑ_μ
     uncertainty: 0.0           # ϑ_θ
     return_differential: 0.0   # ϑ_r
   data_paths:
     frm_coefficients: portfolio/FR_portfolio_frm_coefficients.json
+  # Open HFCS-sourcing decisions (Increment 1, not yet resolved):
+  #   investment_attitudes (HD1800): requires the HFCS reader to thread HD1800 into household init
+  #     state for the designated household head, frozen thereafter (no dynamic recompute).
+  #   windfall_income: Option A (fix at 0 for all households) biases the participation index
+  #     downward by coefficient * P(windfall) and would need an explicit constant recalibration;
+  #     Option B (freeze each household's own HFCS initial value at init) preserves the
+  #     exclusion-restriction identification and is the preferred option.
+  #   See knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md for full discussion.
 
 housing_market:
   # Section 3.6, A.7.1 — placeholder; not yet implemented

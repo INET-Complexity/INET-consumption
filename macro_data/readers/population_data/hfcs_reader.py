@@ -115,7 +115,7 @@ var_mapping = {
     "HI0310": "Private Transfers Given",  # Monthly private transfers
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
     "HD1800": "Investment Attitudes",  # Household investment attitudes
-    "DHAQ01": "Country quintile, gross wealth, among households",  # Wealth quintile
+    "DHAQ01": "Country quintile, gross wealth, among households",  # HFCS-provided wealth quintile (1-5), frozen at init
     "DH0001": "Number of household members",  # Household size
     "DH0004": "Number of household members in employment",  # Household employment count
     "HH0100": "Gift or Inheritance Reported",  # Gift or inheritance indicator

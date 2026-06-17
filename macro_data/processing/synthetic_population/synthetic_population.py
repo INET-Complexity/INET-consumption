@@ -97,6 +97,8 @@ RESTRICT_COLS = [
     "Tenure Status of the Main Residence",
     "Number of Properties other than Household Main Residence",
     "Investment Attitudes",
+    "Country quintile, gross wealth, among households",
+    "windfall_income",
 ]
 
 

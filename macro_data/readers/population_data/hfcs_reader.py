@@ -116,6 +116,8 @@ var_mapping = {
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
     "HD1800": "Investment Attitudes",  # Household investment attitudes
     "DHAQ01": "Country quintile, gross wealth, among households",  # Wealth quintile
+    "DH0001": "Number of household members",  # Household size
+    "DH0004": "Number of household members in employment",  # Household employment count
     "HH0100": "Gift or Inheritance Reported",  # Gift or inheritance indicator
     "HH0201": "Gift Year 1",  # Year of gift/inheritance 1
     "HH0202": "Gift Year 2",  # Year of gift/inheritance 2

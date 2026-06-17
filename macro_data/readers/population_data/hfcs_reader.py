@@ -43,6 +43,7 @@ Note:
     exchange rates.
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -114,6 +115,20 @@ var_mapping = {
     "HI0310": "Private Transfers Given",  # Monthly private transfers
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
     "HD1800": "Investment Attitudes",  # Household investment attitudes
+    "DHAQ01": "Country quintile, gross wealth, among households",  # Wealth quintile
+    "DH0001": "Number of household members",  # Household size
+    "DH0004": "Number of household members in employment",  # Household employment count
+    "HH0100": "Gift or Inheritance Reported",  # Gift or inheritance indicator
+    "HH0201": "Gift Year 1",  # Year of gift/inheritance 1
+    "HH0202": "Gift Year 2",  # Year of gift/inheritance 2
+    "HH0203": "Gift Year 3",  # Year of gift/inheritance 3
+    "HH0301a": "Gift Type Money 1",  # Gift/inheritance type 1: money
+    "HH0302a": "Gift Type Money 2",  # Gift/inheritance type 2: money
+    "HH0303a": "Gift Type Money 3",  # Gift/inheritance type 3: money
+    "HH0401": "Gift Amount 1",  # Gift/inheritance amount 1
+    "HH0402": "Gift Amount 2",  # Gift/inheritance amount 2
+    "HH0403": "Gift Amount 3",  # Gift/inheritance amount 3
+    "SA0200": "Survey Year",  # Survey year
 }
 
 # List of variables containing monetary values that need currency conversion
@@ -163,6 +178,9 @@ var_numerical = [
     "Amount spent on Consumption of Goods and Services",  # Total spending
     "Private Transfers Given",  # Private transfer
     "Health Insurance Payments",  # Health insurance
+    "Gift Amount 1",  # Gift/inheritance amount 1
+    "Gift Amount 2",  # Gift/inheritance amount 2
+    "Gift Amount 3",  # Gift/inheritance amount 3
     "Consumption of Consumer Goods/Services as a Share of Income",  # Spending ratio
 ]
 
@@ -216,6 +234,7 @@ class HFCSReader:
         hfcs_data_path: Path,
         exchange_rates: ExchangeRatesReader,
         num_surveys: int = 5,
+        windfall_threshold: float = 20000.0,
     ) -> "HFCSReader":
         """
         Create a HFCSReader instance from CSV files.
@@ -313,12 +332,101 @@ class HFCSReader:
 
         # Join the derived data with the household data
         households_df = households_df.join(derived_df)
+        households_df = cls._compute_windfall_income(
+            households_df, windfall_threshold=windfall_threshold, default_year=year
+        )
 
         return cls(
             country_name_short=country_name_short,
             individuals_df=individuals_df,
             households_df=households_df,
         )
+
+    @staticmethod
+    def _compute_windfall_income(
+        households_df: pd.DataFrame,
+        windfall_threshold: float = 20000.0,
+        default_year: int | None = None,
+    ) -> pd.DataFrame:
+        if "Survey Year" in households_df.columns:
+            survey_year = pd.to_numeric(households_df["Survey Year"], errors="coerce")
+        elif default_year is not None:
+            survey_year = pd.Series(default_year, index=households_df.index)
+        else:
+            # No "Survey Year" column and no fallback year supplied: every year-window
+            # comparison below becomes NaN -> False, silently zeroing windfall_income
+            # for the entire population. Surface this rather than failing silently.
+            warnings.warn(
+                "'Survey Year' column not found and no default_year supplied; windfall_income "
+                "will be False for all households in this population.",
+                stacklevel=2,
+            )
+            survey_year = pd.Series(np.nan, index=households_df.index)
+
+        if "Gift or Inheritance Reported" in households_df.columns:
+            gift_reported = households_df["Gift or Inheritance Reported"] == 1
+        else:
+            # Column missing for the whole wave/country (not just NaN for some households):
+            # surface this rather than silently zeroing windfall_income for the entire population.
+            warnings.warn(
+                "'Gift or Inheritance Reported' column not found; windfall_income will be False "
+                "for all households in this population.",
+                stacklevel=2,
+            )
+            gift_reported = pd.Series(False, index=households_df.index)
+
+        gift_detail_columns_present = any(
+            f"Gift Year {index}" in households_df.columns
+            or f"Gift Type Money {index}" in households_df.columns
+            or f"Gift Amount {index}" in households_df.columns
+            for index in range(1, 4)
+        )
+        if not gift_detail_columns_present:
+            # None of the per-event gift detail columns exist for this wave/country: every
+            # mask below will be NaN -> False regardless of gift_reported, silently zeroing
+            # windfall_income for the entire population. Surface this rather than failing silently.
+            warnings.warn(
+                "No 'Gift Year/Type Money/Amount N' columns found; windfall_income will be "
+                "False for all households in this population.",
+                stacklevel=2,
+            )
+
+        windfall_masks = []
+        for index in range(1, 4):
+            gift_year = pd.to_numeric(
+                households_df.get(f"Gift Year {index}", pd.NA),
+                errors="coerce",
+            )
+            gift_type = pd.to_numeric(
+                households_df.get(f"Gift Type Money {index}", pd.NA),
+                errors="coerce",
+            )
+            gift_amount = pd.to_numeric(
+                households_df.get(f"Gift Amount {index}", pd.NA),
+                errors="coerce",
+            )
+            # "Within 2 years of the survey": the survey year itself and the year before it.
+            mask = (
+                gift_reported
+                & (gift_year > survey_year - 2)
+                & (gift_year <= survey_year)
+                & (gift_type == 1)
+                & (gift_amount >= windfall_threshold)
+            )
+            windfall_masks.append(mask.fillna(False))
+
+        if windfall_masks:
+            windfall_flag = np.logical_or.reduce(windfall_masks)
+        else:
+            windfall_flag = np.zeros(len(households_df), dtype=bool)
+
+        # No NaNs remain after fillna(False) above, so a plain bool is sufficient
+        # and avoids pandas <NA> semantics leaking into downstream consumers.
+        households_df["windfall_income"] = pd.Series(
+            windfall_flag,
+            index=households_df.index,
+        ).astype(bool)
+        return households_df
 
     @staticmethod
     def read_csv(

@@ -47,6 +47,7 @@ def process_individual_data(
     individual_data = fill_missing_gender(individual_data)
     individual_data = fill_individual_age(individual_data)
     individual_data = fill_individual_education(individual_data)
+    individual_data["college"] = (individual_data["Education"] > 3).astype(int)
     individual_data = fill_individual_labour_status(individual_data)
     individual_data = set_individual_activity_status(
         individual_data=individual_data,
@@ -80,6 +81,7 @@ def process_individual_data(
             "Gender",
             "Age",
             "Education",
+            "college",
             "Activity Status",
             "Employment Industry",
             "Employee Income",

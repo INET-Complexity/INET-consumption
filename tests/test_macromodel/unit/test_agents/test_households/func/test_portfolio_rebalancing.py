@@ -19,15 +19,25 @@ def _run(
     post_return_ifa,
     target_illiquid_assets,
     portfolio_participates,
+    target_tfa_base=None,
     phi_1=PHI_1,
     lambda_kappa=LAMBDA_KAPPA,
     fixed_cost_share=FIXED_COST_SHARE,
 ) -> PortfolioRebalancingResult:
+    post_return_lfa = np.asarray(post_return_lfa, dtype=float)
+    post_return_ifa = np.asarray(post_return_ifa, dtype=float)
+    if target_tfa_base is None:
+        # Default: no separate investable surplus modeled in this scenario,
+        # so target_tfa_base = post_surplus_lfa + post_return_ifa collapses
+        # to post_return_lfa + post_return_ifa (post_surplus_lfa with a
+        # zero/negative surplus branch).
+        target_tfa_base = post_return_lfa + post_return_ifa
     return compute_portfolio_rebalancing(
         opening_tfa_scale=np.asarray(opening_tfa_scale, dtype=float),
-        post_return_lfa=np.asarray(post_return_lfa, dtype=float),
-        post_return_ifa=np.asarray(post_return_ifa, dtype=float),
+        post_return_lfa=post_return_lfa,
+        post_return_ifa=post_return_ifa,
         target_illiquid_assets=np.asarray(target_illiquid_assets, dtype=float),
+        target_tfa_base=np.asarray(target_tfa_base, dtype=float),
         portfolio_participates=np.asarray(portfolio_participates, dtype=bool),
         phi_1=phi_1,
         lambda_kappa=lambda_kappa,
@@ -94,6 +104,57 @@ class TestNoFinancialAssets:
 
         assert not result.no_financial_assets_flag[0]
         assert result.portfolio_valid_flag[0]
+
+
+# ---------------------------------------------------------------------------
+# actual_illiquid_share denominator (target_tfa_base, not opening_tfa_scale)
+# ---------------------------------------------------------------------------
+
+
+class TestActualIlliquidShareDenominator:
+    def test__uses_target_tfa_base_not_opening_tfa_scale(self):
+        # opening_tfa_scale=100 (stale, previous-period total), but this
+        # period's post-return-and-surplus total (target_tfa_base) is 115
+        # (post_return_ifa=60, post_return_lfa=45, plus surplus 10).
+        # actual_illiquid_share must reflect "right now" (60/115), not the
+        # stale previous-period scale (60/100).
+        result = _run(
+            opening_tfa_scale=[100.0],
+            post_return_lfa=[45.0],
+            post_return_ifa=[60.0],
+            target_illiquid_assets=[70.0],
+            portfolio_participates=[True],
+            target_tfa_base=[115.0],
+        )
+
+        np.testing.assert_allclose(result.actual_illiquid_share, [60.0 / 115.0])
+        assert not np.isclose(result.actual_illiquid_share[0], 60.0 / 100.0)
+
+    def test__zero_target_tfa_base_does_not_divide_by_zero(self):
+        result = _run(
+            opening_tfa_scale=[1.0],
+            post_return_lfa=[0.0],
+            post_return_ifa=[0.0],
+            target_illiquid_assets=[0.0],
+            portfolio_participates=[False],
+            target_tfa_base=[0.0],
+        )
+
+        assert np.isfinite(result.actual_illiquid_share[0])
+        np.testing.assert_allclose(result.actual_illiquid_share, [0.0])
+
+    def test__non_finite_target_tfa_base_flags_invalid(self):
+        result = _run(
+            opening_tfa_scale=[1.0],
+            post_return_lfa=[20.0],
+            post_return_ifa=[10.0],
+            target_illiquid_assets=[10.5],
+            portfolio_participates=[True],
+            target_tfa_base=[np.nan],
+        )
+
+        assert not result.portfolio_valid_flag[0]
+        np.testing.assert_allclose(result.actual_illiquid_share, [0.0])
 
 
 # ---------------------------------------------------------------------------
@@ -293,7 +354,13 @@ class TestClippingDiagnosticFlags:
 class TestNonFiniteInputFallback:
     @pytest.mark.parametrize(
         "field",
-        ["opening_tfa_scale", "post_return_lfa", "post_return_ifa", "target_illiquid_assets"],
+        [
+            "opening_tfa_scale",
+            "post_return_lfa",
+            "post_return_ifa",
+            "target_illiquid_assets",
+            "target_tfa_base",
+        ],
     )
     def test__nan_in_any_input_zeroes_outputs_and_flags_invalid(self, field):
         values = {
@@ -301,6 +368,7 @@ class TestNonFiniteInputFallback:
             "post_return_lfa": [20.0],
             "post_return_ifa": [10.0],
             "target_illiquid_assets": [10.5],
+            "target_tfa_base": [30.0],
         }
         values[field] = [np.nan]
 
@@ -309,6 +377,7 @@ class TestNonFiniteInputFallback:
             post_return_lfa=np.asarray(values["post_return_lfa"], dtype=float),
             post_return_ifa=np.asarray(values["post_return_ifa"], dtype=float),
             target_illiquid_assets=np.asarray(values["target_illiquid_assets"], dtype=float),
+            target_tfa_base=np.asarray(values["target_tfa_base"], dtype=float),
             portfolio_participates=np.array([True]),
             phi_1=PHI_1,
             lambda_kappa=LAMBDA_KAPPA,
@@ -566,6 +635,7 @@ class TestShapeAndDtype:
             "inaction_flag",
             "upper_bound_flag",
             "lower_bound_flag",
+            "infeasible_interval_flag",
             "no_financial_assets_flag",
             "portfolio_valid_flag",
         ):
@@ -574,4 +644,5 @@ class TestShapeAndDtype:
 
         assert result.kappa_tilde.dtype.kind == "f"
         assert result.inaction_flag.dtype == bool
+        assert result.infeasible_interval_flag.dtype == bool
         assert result.portfolio_valid_flag.dtype == bool

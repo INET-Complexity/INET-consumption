@@ -42,11 +42,15 @@ class PortfolioRebalancingResult:
     portfolio_valid_flag: np.ndarray
 
 
+_ACTUAL_SHARE_DENOMINATOR_EPS = 1e-12
+
+
 def compute_portfolio_rebalancing(
     opening_tfa_scale: np.ndarray,
     post_return_lfa: np.ndarray,
     post_return_ifa: np.ndarray,
     target_illiquid_assets: np.ndarray,
+    target_tfa_base: np.ndarray,
     portfolio_participates: np.ndarray,
     phi_1: float,
     lambda_kappa: float,
@@ -92,6 +96,13 @@ def compute_portfolio_rebalancing(
         target_illiquid_assets (np.ndarray): Precomputed target illiquid
             asset level (``target_illiquid_share * target_tfa_base``),
             supplied by the caller; echoed back unchanged in the result.
+        target_tfa_base (np.ndarray): Current-period post-return-and-surplus
+            total financial assets (``post_surplus_lfa + post_return_ifa``,
+            per the wiki's Paper Rule To Implement), supplied by the caller.
+            Used only as the denominator for the ``actual_illiquid_share``
+            diagnostic (per the wiki's Data Inputs table), distinct from
+            ``opening_tfa_scale``, which normalizes the adjustment decision
+            itself. Floored at a small epsilon to avoid division by zero.
         portfolio_participates (np.ndarray): Boolean array; nonparticipants
             run the identical projection/gain-test path (their
             ``target_illiquid_assets`` is already ``0`` upstream) rather than
@@ -123,6 +134,7 @@ def compute_portfolio_rebalancing(
     post_return_lfa = np.asarray(post_return_lfa, dtype=float)
     post_return_ifa = np.asarray(post_return_ifa, dtype=float)
     target_illiquid_assets = np.asarray(target_illiquid_assets, dtype=float)
+    target_tfa_base = np.asarray(target_tfa_base, dtype=float)
     portfolio_participates = np.asarray(portfolio_participates, dtype=bool)
 
     no_financial_assets_flag = opening_tfa_scale <= 0.0
@@ -131,6 +143,7 @@ def compute_portfolio_rebalancing(
         & np.isfinite(post_return_lfa)
         & np.isfinite(post_return_ifa)
         & np.isfinite(target_illiquid_assets)
+        & np.isfinite(target_tfa_base)
     )
     portfolio_valid_flag = finite_inputs & ~no_financial_assets_flag
 
@@ -140,10 +153,15 @@ def compute_portfolio_rebalancing(
     # discarded, not propagated.
     safe_scale = np.where(portfolio_valid_flag, opening_tfa_scale, 1.0)
 
+    # actual_illiquid_share uses target_tfa_base (current-period
+    # post-return-and-surplus TFA), not opening_tfa_scale, per the wiki's
+    # Data Inputs table: it answers "what fraction of assets are illiquid
+    # right now," including this period's saving, not last period's stock.
+    safe_actual_share_denominator = np.maximum(target_tfa_base, _ACTUAL_SHARE_DENOMINATOR_EPS)
     actual_illiquid_share = np.divide(
         post_return_ifa,
-        safe_scale,
-        out=np.zeros_like(safe_scale),
+        safe_actual_share_denominator,
+        out=np.zeros_like(safe_actual_share_denominator),
         where=portfolio_valid_flag,
     )
 

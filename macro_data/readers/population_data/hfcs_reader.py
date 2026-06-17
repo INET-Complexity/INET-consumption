@@ -353,6 +353,14 @@ class HFCSReader:
         elif default_year is not None:
             survey_year = pd.Series(default_year, index=households_df.index)
         else:
+            # No "Survey Year" column and no fallback year supplied: every year-window
+            # comparison below becomes NaN -> False, silently zeroing windfall_income
+            # for the entire population. Surface this rather than failing silently.
+            warnings.warn(
+                "'Survey Year' column not found and no default_year supplied; windfall_income "
+                "will be False for all households in this population.",
+                stacklevel=2,
+            )
             survey_year = pd.Series(np.nan, index=households_df.index)
 
         if "Gift or Inheritance Reported" in households_df.columns:
@@ -366,6 +374,22 @@ class HFCSReader:
                 stacklevel=2,
             )
             gift_reported = pd.Series(False, index=households_df.index)
+
+        gift_detail_columns_present = any(
+            f"Gift Year {index}" in households_df.columns
+            or f"Gift Type Money {index}" in households_df.columns
+            or f"Gift Amount {index}" in households_df.columns
+            for index in range(1, 4)
+        )
+        if not gift_detail_columns_present:
+            # None of the per-event gift detail columns exist for this wave/country: every
+            # mask below will be NaN -> False regardless of gift_reported, silently zeroing
+            # windfall_income for the entire population. Surface this rather than failing silently.
+            warnings.warn(
+                "No 'Gift Year/Type Money/Amount N' columns found; windfall_income will be "
+                "False for all households in this population.",
+                stacklevel=2,
+            )
 
         windfall_masks = []
         for index in range(1, 4):

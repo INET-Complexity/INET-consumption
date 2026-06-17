@@ -219,6 +219,53 @@ class TestFixedCostInaction:
 
 
 # ---------------------------------------------------------------------------
+# Infeasible interval (kappa_lower > kappa_upper)
+# ---------------------------------------------------------------------------
+
+
+class TestInfeasibleInterval:
+    def test__inverted_interval_forces_inaction_not_clip_to_upper(self):
+        # post_return_lfa = post_return_ifa = 0.0003, fixed_cost_share = 0.001:
+        # kappa_upper = 0.0003 - 0.001 = -0.0007
+        # kappa_lower = -(0.0003 - 0.001) = +0.0007
+        # kappa_lower (0.0007) > kappa_upper (-0.0007): empty feasible interval.
+        # np.clip(x, 0.0007, -0.0007) would silently return -0.0007 regardless
+        # of x; the household can in fact afford neither direction.
+        result = _run(
+            opening_tfa_scale=[1.0],
+            post_return_lfa=[0.0003],
+            post_return_ifa=[0.0003],
+            target_illiquid_assets=[-1.0],
+            portfolio_participates=[True],
+        )
+
+        kappa_upper = 0.0003 - FIXED_COST_SHARE
+        kappa_lower = -(0.0003 - FIXED_COST_SHARE)
+        assert kappa_lower > kappa_upper, "scenario must exercise an inverted interval"
+
+        assert result.infeasible_interval_flag[0]
+        assert result.inaction_flag[0]
+        np.testing.assert_allclose(result.kappa_tilde, [0.0])
+        np.testing.assert_allclose(result.adjustment_cost, [0.0])
+        np.testing.assert_allclose(result.desired_illiquid_adjustment, [0.0])
+        np.testing.assert_allclose(result.counterfactual_lfa_flow, [0.0])
+        np.testing.assert_allclose(result.counterfactual_ifa_flow, [0.0])
+
+    def test__infeasible_interval_flag_false_when_invalid_household(self):
+        # opening_tfa_scale <= 0 takes precedence; infeasible_interval_flag
+        # should not be set for an already-invalid household-period.
+        result = _run([0.0], [0.0003], [0.0003], [-1.0], [True])
+
+        assert not result.portfolio_valid_flag[0]
+        assert not result.infeasible_interval_flag[0]
+
+    def test__feasible_interval_does_not_set_the_flag(self):
+        result = _run([1.0], [20.0], [10.0], [10.5], [True])
+
+        assert not result.infeasible_interval_flag[0]
+
+
+# ---------------------------------------------------------------------------
 # Clipping / diagnostic flags consistency
 # ---------------------------------------------------------------------------
 
@@ -413,6 +460,80 @@ class TestClosedFormThresholdOracle:
         assert not expect_adjust
         assert result.inaction_flag[0]
         np.testing.assert_allclose(result.kappa_tilde, [0.0])
+
+
+# ---------------------------------------------------------------------------
+# Independent bounds oracle (derives kappa_lower/kappa_upper from raw stocks,
+# not by repeating the implementation's expression)
+# ---------------------------------------------------------------------------
+
+
+def _independent_kappa_upper(post_return_lfa, opening_tfa_scale, fixed_cost_share):
+    """Max feasible purchase share: liquid buffer net of the fixed cost.
+
+    Written independently of the implementation's `kappa_upper` line so this
+    test exercises the bounds formula itself, not just internal consistency
+    of the gain-test logic downstream of it.
+    """
+    liquid_share = post_return_lfa / opening_tfa_scale
+    return liquid_share - fixed_cost_share
+
+
+def _independent_kappa_lower(post_return_ifa, opening_tfa_scale, fixed_cost_share):
+    """Max feasible sale share (negative): illiquid buffer net of the fixed cost."""
+    illiquid_share = post_return_ifa / opening_tfa_scale
+    return -(illiquid_share - fixed_cost_share)
+
+
+class TestIndependentBoundsOracle:
+    @pytest.mark.parametrize(
+        "opening_tfa_scale,post_return_lfa,post_return_ifa",
+        [
+            (1.0, 20.0, 10.0),
+            (2.0, 0.5, 8.0),
+            (5.0, 100.0, 0.02),
+            (1.0, 0.0003, 0.0003),
+        ],
+    )
+    def test__bounds_match_independent_formula(self, opening_tfa_scale, post_return_lfa, post_return_ifa):
+        expected_upper = _independent_kappa_upper(post_return_lfa, opening_tfa_scale, FIXED_COST_SHARE)
+        expected_lower = _independent_kappa_lower(post_return_ifa, opening_tfa_scale, FIXED_COST_SHARE)
+
+        # Probe kappa_upper/kappa_lower indirectly: drive delta_tilde far
+        # enough in each direction that kappa_star_tilde = lambda_kappa *
+        # delta_tilde is well outside the true bound, so a binding result
+        # reveals the bound's location regardless of the gain test (use
+        # fixed_cost_share=0 here to remove the inaction region and isolate
+        # the projection step). The offset must be scaled by 1/lambda_kappa
+        # since the unconstrained solution shrinks delta_tilde by that factor.
+        huge_offset = (1000.0 * opening_tfa_scale) / LAMBDA_KAPPA
+        big_target = post_return_ifa + huge_offset
+        result_high = _run(
+            [opening_tfa_scale],
+            [post_return_lfa],
+            [post_return_ifa],
+            [big_target],
+            [True],
+            fixed_cost_share=0.0,
+        )
+        small_target = post_return_ifa - huge_offset
+        result_low = _run(
+            [opening_tfa_scale],
+            [post_return_lfa],
+            [post_return_ifa],
+            [small_target],
+            [True],
+            fixed_cost_share=0.0,
+        )
+
+        if expected_lower <= expected_upper:
+            # Feasible interval: the projection should land exactly on the
+            # independently computed bound (fixed_cost_share=0 here, so the
+            # bound formula above must be evaluated with cost 0 too).
+            expected_upper_zero_cost = _independent_kappa_upper(post_return_lfa, opening_tfa_scale, 0.0)
+            expected_lower_zero_cost = _independent_kappa_lower(post_return_ifa, opening_tfa_scale, 0.0)
+            np.testing.assert_allclose(result_high.kappa_tilde, [expected_upper_zero_cost], atol=1e-10)
+            np.testing.assert_allclose(result_low.kappa_tilde, [expected_lower_zero_cost], atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

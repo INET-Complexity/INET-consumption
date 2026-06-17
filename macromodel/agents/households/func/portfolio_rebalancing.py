@@ -37,6 +37,7 @@ class PortfolioRebalancingResult:
     inaction_flag: np.ndarray
     upper_bound_flag: np.ndarray
     lower_bound_flag: np.ndarray
+    infeasible_interval_flag: np.ndarray
     no_financial_assets_flag: np.ndarray
     portfolio_valid_flag: np.ndarray
 
@@ -71,6 +72,15 @@ def compute_portfolio_rebalancing(
     flag set to ``False``, and ``portfolio_valid_flag = False`` (per the
     wiki's "non-finite-input fallback contract"), fully vectorized via
     ``np.where``/boolean masking.
+
+    Households whose feasible interval is empty (``kappa_lower >
+    kappa_upper``, i.e. neither buying nor selling illiquid assets can cover
+    the fixed cost) are forced into inaction with zero adjustment cost,
+    independent of the discrete gain test, and flagged via
+    ``infeasible_interval_flag``. Without this, ``np.clip`` would silently
+    return the upper bound for any inverted interval regardless of the
+    unconstrained solution, fabricating a transaction these households
+    cannot actually afford.
 
     Args:
         opening_tfa_scale (np.ndarray): Previous-period total financial
@@ -147,6 +157,15 @@ def compute_portfolio_rebalancing(
     upper_bound_flag = kappa_star_tilde > kappa_upper
     lower_bound_flag = kappa_star_tilde < kappa_lower
 
+    # An empty/inverted feasible interval (kappa_lower > kappa_upper) is
+    # reachable whenever a household's combined liquid+illiquid buffer cannot
+    # cover the fixed cost in either direction. np.clip resolves lower > upper
+    # by always returning upper regardless of the input, which would silently
+    # fabricate a nonzero adjustment and a real fixed-cost charge for a
+    # household that can afford neither direction. Force inaction for these
+    # household-periods independently of the clip/gain test below.
+    infeasible_interval_flag = kappa_lower > kappa_upper
+
     kappa_breve = np.clip(kappa_star_tilde, kappa_lower, kappa_upper)
 
     def loss(kappa_tilde: np.ndarray) -> np.ndarray:
@@ -163,7 +182,7 @@ def compute_portfolio_rebalancing(
         loss_breve = loss(kappa_breve)
         gain = loss_zero - loss_breve
 
-    adjust = gain > 0.0
+    adjust = (gain > 0.0) & ~infeasible_interval_flag
     kappa_tilde_final = np.where(adjust, kappa_breve, 0.0)
     inaction_flag = ~adjust
 
@@ -186,6 +205,7 @@ def compute_portfolio_rebalancing(
     inaction_flag = inaction_flag & portfolio_valid_flag
     upper_bound_flag = upper_bound_flag & portfolio_valid_flag
     lower_bound_flag = lower_bound_flag & portfolio_valid_flag
+    infeasible_interval_flag = infeasible_interval_flag & portfolio_valid_flag
     target_illiquid_assets_echo = np.where(portfolio_valid_flag, target_illiquid_assets, 0.0)
 
     return PortfolioRebalancingResult(
@@ -202,6 +222,7 @@ def compute_portfolio_rebalancing(
         inaction_flag=inaction_flag,
         upper_bound_flag=upper_bound_flag,
         lower_bound_flag=lower_bound_flag,
+        infeasible_interval_flag=infeasible_interval_flag,
         no_financial_assets_flag=no_financial_assets_flag,
         portfolio_valid_flag=portfolio_valid_flag,
     )

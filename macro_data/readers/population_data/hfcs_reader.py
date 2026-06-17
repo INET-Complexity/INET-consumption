@@ -113,6 +113,7 @@ var_mapping = {
     "HI0220": "Amount spent on Consumption of Goods and Services",  # Total consumption
     "HI0310": "Private Transfers Given",  # Monthly private transfers
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
+    "HD1800": "Investment Attitudes",  # Household investment attitudes
 }
 
 # List of variables containing monetary values that need currency conversion

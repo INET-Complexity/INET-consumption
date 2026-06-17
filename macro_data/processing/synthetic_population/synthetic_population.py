@@ -96,6 +96,7 @@ RESTRICT_COLS = [
     "Debt Installments",
     "Tenure Status of the Main Residence",
     "Number of Properties other than Household Main Residence",
+    "Investment Attitudes",
 ]
 
 

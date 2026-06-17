@@ -238,6 +238,7 @@ class Households(Agent):
             "Corresponding Inhabited House ID",
             "Corresponding Property Owner",
             "Tenure Status of the Main Residence",
+            "Investment Attitudes",
         ]:
             if state_name not in hh_data.columns:
                 raise ValueError(f"Missing {state_name} from the data for initialising households.")

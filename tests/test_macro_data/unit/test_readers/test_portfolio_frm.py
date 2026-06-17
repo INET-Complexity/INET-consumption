@@ -145,3 +145,12 @@ def test__load_frm_coefficients_phi_2_consistency_check_raises_on_mismatch(tmp_p
     path = _write(tmp_path, payload)
     with pytest.raises(ValueError, match="does not match"):
         load_frm_coefficients(path)
+
+
+def test__load_frm_coefficients_malformed_phi_2_derived_string_raises(tmp_path):
+    payload = _base_payload()
+    # Present but unparseable: must raise, not silently skip the consistency check.
+    payload["adjustment_parameters"]["phi_2_derived"] = "see notebook cell 12"
+    path = _write(tmp_path, payload)
+    with pytest.raises(ValueError, match="Could not parse"):
+        load_frm_coefficients(path)

@@ -92,14 +92,10 @@ def _validate_adjustment_parameters(payload: dict) -> tuple[float, float]:
 
     phi_2_derived_text = adjustment_parameters.get("phi_2_derived")
     if isinstance(phi_2_derived_text, str):
-        try:
-            parsed_phi_2 = _parse_phi_2_derived(phi_2_derived_text)
-        except ValueError:
-            parsed_phi_2 = None
-    else:
-        parsed_phi_2 = None
-
-    if parsed_phi_2 is not None:
+        # A present-but-unparseable phi_2_derived string is a data error, not an
+        # absent field: raise here rather than silently falling back to the weaker
+        # finite/positive-only check below, which would mask a real inconsistency.
+        parsed_phi_2 = _parse_phi_2_derived(phi_2_derived_text)
         if abs(computed_phi_2 - parsed_phi_2) >= 1e-6:
             raise ValueError(
                 "Computed phi_2 (phi_1 * (1 - lambda_kappa) / lambda_kappa) = "

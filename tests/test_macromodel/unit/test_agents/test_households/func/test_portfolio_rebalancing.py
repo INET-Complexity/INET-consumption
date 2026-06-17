@@ -631,6 +631,207 @@ class TestIndependentBoundsOracle:
 # ---------------------------------------------------------------------------
 
 
+class TestMultiHouseholdBehavioralMatrix:
+    """A single batched call where each household independently exercises a
+    different branch, to catch cross-household contamination from a
+    vectorized mask applied with the wrong shape/broadcasting (e.g. a scalar
+    leaking from one household's branch into another's).
+
+    Expected values are hand-derived per household, independently of the
+    single-household tests above (not copy-pasted from them), using the same
+    closed-form/oracle arithmetic as those tests.
+    """
+
+    def test__eight_households_each_in_a_different_branch(self):
+        # (a) interior unconstrained adjustment
+        # (b) upper-bound-binding adjustment
+        # (c) lower-bound-binding adjustment
+        # (d) fixed-cost inaction
+        # (e) opening_tfa_scale <= 0 (invalid)
+        # (f) non-finite input (invalid)
+        # (g) infeasible/inverted interval
+        # (h) non-participant with a legacy IFA balance to liquidate
+        opening_tfa_scale = [1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0]
+        post_return_lfa = [20.0, 0.002, 20.0, 20.0, 20.0, np.nan, 0.0003, 20.0]
+        post_return_ifa = [10.0, 5.0, 0.021, 10.0, 10.0, 10.0, 0.0003, 10.0]
+        target_illiquid_assets = [10.5, 6.0, -0.979, 10.01, 10.5, 10.5, -1.0, 0.0]
+        target_tfa_base = [30.0, 5.002, 20.021, 30.0, 30.0, 30.0, 0.0006, 30.0]
+        portfolio_participates = [True, True, True, True, True, True, True, False]
+
+        result = _run(
+            opening_tfa_scale,
+            post_return_lfa,
+            post_return_ifa,
+            target_illiquid_assets,
+            portfolio_participates,
+            target_tfa_base=target_tfa_base,
+        )
+
+        # --- per-household hand-derived expectations ---
+        # (a) interior: delta=0.5, kappa_star=0.05, within bounds, gain>0.
+        # (b) upper bound: kappa_upper=0.002-0.001=0.001, kappa_star=0.1 -> clipped.
+        # (c) lower bound: kappa_lower=-(0.021-0.001)=-0.02, kappa_star=-0.1 -> clipped.
+        # (d) inaction: |delta|=0.01 below sqrt(2*0.001/(5*0.1))~=0.0632.
+        # (e) invalid: opening_tfa_scale<=0.
+        # (f) invalid: non-finite post_return_lfa.
+        # (g) infeasible: kappa_upper=0.0003-0.001=-0.0007, kappa_lower=+0.0007 -> inverted.
+        # (h) nonparticipant liquidation: target=0, delta=-10, kappa_star=-1.0, within
+        #     bounds [-9.999, 19.999], gain large positive -> full liquidation -1.0.
+        expected_valid = [True, True, True, True, False, False, True, True]
+        expected_no_assets = [False, False, False, False, True, False, False, False]
+        expected_infeasible = [False, False, False, False, False, False, True, False]
+        expected_inaction = [False, False, False, True, False, False, True, False]
+        expected_upper_bound = [False, True, False, False, False, False, False, False]
+        expected_lower_bound = [False, False, True, False, False, False, True, False]
+        expected_kappa_tilde = [0.05, 0.001, -0.02, 0.0, 0.0, 0.0, 0.0, -1.0]
+        expected_desired_adjustment = [0.05, 0.001, -0.02, 0.0, 0.0, 0.0, 0.0, -1.0]
+        expected_adjustment_cost = [0.001, 0.001, 0.001, 0.0, 0.0, 0.0, 0.0, 0.001]
+        expected_lfa_flow = [-0.051, -0.002, 0.019, 0.0, 0.0, 0.0, 0.0, 0.999]
+        expected_ifa_flow = [0.05, 0.001, -0.02, 0.0, 0.0, 0.0, 0.0, -1.0]
+        expected_delta_tilde = [0.5, 1.0, -1.0, 0.01, 0.0, 0.0, -1.0003, -10.0]
+        expected_actual_share = [
+            10.0 / 30.0,
+            5.0 / 5.002,
+            0.021 / 20.021,
+            10.0 / 30.0,
+            0.0,
+            0.0,
+            0.0003 / 0.0006,
+            10.0 / 30.0,
+        ]
+
+        np.testing.assert_array_equal(result.portfolio_valid_flag, expected_valid)
+        np.testing.assert_array_equal(result.no_financial_assets_flag, expected_no_assets)
+        np.testing.assert_array_equal(result.infeasible_interval_flag, expected_infeasible)
+        np.testing.assert_array_equal(result.inaction_flag, expected_inaction)
+        np.testing.assert_array_equal(result.upper_bound_flag, expected_upper_bound)
+        np.testing.assert_array_equal(result.lower_bound_flag, expected_lower_bound)
+        np.testing.assert_allclose(result.kappa_tilde, expected_kappa_tilde, atol=1e-9)
+        np.testing.assert_allclose(result.desired_illiquid_adjustment, expected_desired_adjustment, atol=1e-9)
+        np.testing.assert_allclose(result.adjustment_cost, expected_adjustment_cost, atol=1e-9)
+        np.testing.assert_allclose(result.counterfactual_lfa_flow, expected_lfa_flow, atol=1e-9)
+        np.testing.assert_allclose(result.counterfactual_ifa_flow, expected_ifa_flow, atol=1e-9)
+        np.testing.assert_allclose(result.delta_tilde, expected_delta_tilde, atol=1e-9)
+        np.testing.assert_allclose(result.actual_illiquid_share, expected_actual_share, atol=1e-9)
+        np.testing.assert_array_equal(
+            result.portfolio_participates,
+            [True, True, True, True, True, True, True, False],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Extreme magnitudes: very large and very small-but-nonzero values
+# ---------------------------------------------------------------------------
+
+
+class TestExtremeMagnitudes:
+    def test__very_large_values_stay_finite_and_consistent(self):
+        # opening_tfa_scale ~1e9, target_illiquid_assets ~1e12: a household
+        # in a "large economy" with a sizeable target deviation. kappa_upper
+        # binds because the household cannot acquire 1e12 worth of IFA in
+        # one period without borrowing.
+        result = _run(
+            opening_tfa_scale=[1e9],
+            post_return_lfa=[1.5e9],
+            post_return_ifa=[3e8],
+            target_illiquid_assets=[1e12],
+            portfolio_participates=[True],
+            target_tfa_base=[1.8e9],
+        )
+
+        for field in (
+            "actual_illiquid_share",
+            "delta_tilde",
+            "kappa_star_tilde",
+            "kappa_tilde",
+            "desired_illiquid_adjustment",
+            "adjustment_cost",
+            "counterfactual_lfa_flow",
+            "counterfactual_ifa_flow",
+        ):
+            array = getattr(result, field)
+            assert np.all(np.isfinite(array)), f"{field} is not finite: {array}"
+
+        assert result.portfolio_valid_flag[0]
+        assert result.upper_bound_flag[0]
+        assert not result.inaction_flag[0]
+        # kappa_upper = post_return_lfa/scale - fixed_cost_share = 1.5 - 0.001
+        expected_kappa_upper = 1.5e9 / 1e9 - FIXED_COST_SHARE
+        np.testing.assert_allclose(result.kappa_tilde, [expected_kappa_upper], atol=1e-9)
+        expected_adjustment = expected_kappa_upper * 1e9
+        np.testing.assert_allclose(result.desired_illiquid_adjustment, [expected_adjustment], rtol=1e-9)
+        np.testing.assert_allclose(result.adjustment_cost, [FIXED_COST_SHARE * 1e9], rtol=1e-9)
+
+    def test__very_small_nonzero_values_stay_finite_and_consistent(self):
+        # opening_tfa_scale ~1e-8, stocks ~1e-10/1e-8: a household with a
+        # tiny but nonzero balance sheet. Normalized quantities (divided by
+        # opening_tfa_scale) should remain O(1) and the de-normalized
+        # currency outputs should remain finite and non-negative-cost.
+        result = _run(
+            opening_tfa_scale=[1e-8],
+            post_return_lfa=[1.5e-8],
+            post_return_ifa=[1e-10],
+            target_illiquid_assets=[5e-9],
+            portfolio_participates=[True],
+            target_tfa_base=[1.6e-8],
+        )
+
+        for field in (
+            "actual_illiquid_share",
+            "delta_tilde",
+            "kappa_star_tilde",
+            "kappa_tilde",
+            "desired_illiquid_adjustment",
+            "adjustment_cost",
+            "counterfactual_lfa_flow",
+            "counterfactual_ifa_flow",
+        ):
+            array = getattr(result, field)
+            assert np.all(np.isfinite(array)), f"{field} is not finite: {array}"
+
+        assert result.portfolio_valid_flag[0]
+        assert not result.no_financial_assets_flag[0]
+
+        expected_delta_tilde = (5e-9 - 1e-10) / 1e-8
+        expected_kappa_star = LAMBDA_KAPPA * expected_delta_tilde
+        np.testing.assert_allclose(result.delta_tilde, [expected_delta_tilde], rtol=1e-9)
+        np.testing.assert_allclose(result.kappa_star_tilde, [expected_kappa_star], rtol=1e-9)
+        # Not bound-binding at this magnitude (kappa_upper/kappa_lower are
+        # both large in normalized terms relative to kappa_star here).
+        assert not result.upper_bound_flag[0]
+        assert not result.lower_bound_flag[0]
+        np.testing.assert_allclose(result.kappa_tilde, [expected_kappa_star], rtol=1e-9)
+
+    def test__squared_loss_terms_do_not_silently_misfire_bound_flags_at_extreme_scale(self):
+        # A pathologically large delta_tilde (driven by an enormous target
+        # relative to a small opening_tfa_scale) pushes the quadratic loss
+        # terms (delta_tilde - kappa_tilde)**2 and kappa_tilde**2 toward
+        # float overflow. The implementation must not let an overflowed/NaN
+        # `gain` silently produce a wrong-but-still-"valid" result; at minimum
+        # outputs must stay finite, and validity/finite-input flags must not
+        # be corrupted by the internal overflow.
+        with np.errstate(over="ignore", invalid="ignore"):
+            result = _run(
+                opening_tfa_scale=[1.0],
+                post_return_lfa=[1e9],
+                post_return_ifa=[1e-10],
+                target_illiquid_assets=[1e308],
+                portfolio_participates=[True],
+                target_tfa_base=[1e9],
+            )
+
+        assert result.portfolio_valid_flag[0]
+        for field in (
+            "kappa_tilde",
+            "desired_illiquid_adjustment",
+            "adjustment_cost",
+            "counterfactual_lfa_flow",
+            "counterfactual_ifa_flow",
+        ):
+            array = getattr(result, field)
+            assert np.all(np.isfinite(array)), f"{field} is not finite: {array}"
+
+
 class TestShapeAndDtype:
     def test__all_fields_match_input_shape(self):
         n = 4

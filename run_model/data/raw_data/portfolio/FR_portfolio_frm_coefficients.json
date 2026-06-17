@@ -1,0 +1,58 @@
+{
+  "source": "Table: Sample Selection Model Estimates (Generalised Two-Part Fractional Response Model)",
+  "country": "FR",
+  "data_source": "HFCS waves 2014, 2017, 2021 (pooled)",
+  "observations": 16869,
+  "positive_outcomes": 10722,
+  "zero_outcomes": 6147,
+  "clusters": 7691,
+  "log_likelihood": -15622.33,
+  "correlation_rho": {
+    "value": 0.0418,
+    "se": 0.0569,
+    "note": "Not statistically significant; independent two-part model is sufficient."
+  },
+  "participation": {
+    "description": "Participation equation (extensive margin): Pr(holds_ifa=1 | Z) = Phi(Z'theta). Dependent variable: holds_ifa = (ifa_ratio > 1e-3).",
+    "coefficients": {
+      "constant":                 { "value":  0.0851, "se": 0.1518, "sig": "",    "notebook_var": "const",                    "units": "intercept" },
+      "college":                  { "value":  0.0905, "se": 0.0418, "sig": "**",  "notebook_var": "college",                  "units": "binary (0/1)" },
+      "household_size":           { "value": -0.0725, "se": 0.0175, "sig": "***", "notebook_var": "hh_size",                  "units": "count of household members" },
+      "investment_attitudes":     { "value": -0.3332, "se": 0.0351, "sig": "***", "notebook_var": "investment_attitudes",     "units": "discrete HFCS scale (continuous in estimation)" },
+      "mortgagor":                { "value": -0.3684, "se": 0.0641, "sig": "***", "notebook_var": "mortgagor",                "units": "binary (0/1): housing_tenure == 2" },
+      "owner":                    { "value": -0.3377, "se": 0.0637, "sig": "***", "notebook_var": "owner",                    "units": "binary (0/1): housing_tenure == 1 (owner, not mortgagor)" },
+      "gross_household_income":   { "value":  0.0731, "se": 0.0099, "sig": "***", "notebook_var": "gross_household_income",   "units": "EUR / 10000 (level scaled by 1e-4, not log)" },
+      "wealth_quintile":          { "value":  0.4179, "se": 0.0239, "sig": "***", "notebook_var": "wealth_quintile",          "units": "ordinal 1-5 (used as continuous)" },
+      "windfall_income":          { "value":  0.2079, "se": 0.0905, "sig": "**",  "notebook_var": "windfall_income",          "units": "binary (0/1): identifying variable (exclusion restriction)" }
+    }
+  },
+  "magnitude": {
+    "description": "Magnitude equation (intensive margin): E(ifa_ratio | holds_ifa=1, X, Z). Dependent variable: ifa_ratio = IFA / TFA in [0,1].",
+    "coefficients": {
+      "constant":                          { "value":  0.0418, "se": 0.1098, "sig": "",    "notebook_var": "const",                               "units": "intercept" },
+      "age":                               { "value":  0.0101, "se": 0.0015, "sig": "***", "notebook_var": "age",                                 "units": "years" },
+      "household_members_in_employment":   { "value": -0.1126, "se": 0.0202, "sig": "***", "notebook_var": "household_members_in_employment",     "units": "count of employed adults in household" },
+      "investment_attitudes":              { "value": -0.1410, "se": 0.0213, "sig": "***", "notebook_var": "investment_attitudes",                "units": "discrete HFCS scale (continuous in estimation)" },
+      "mortgagor":                         { "value": -0.1403, "se": 0.0393, "sig": "***", "notebook_var": "mortgagor",                           "units": "binary (0/1): housing_tenure == 2" },
+      "owner":                             { "value": -0.1749, "se": 0.0391, "sig": "***", "notebook_var": "owner",                               "units": "binary (0/1): housing_tenure == 1 (owner, not mortgagor)" },
+      "net_wealth":                        { "value":  0.0345, "se": 0.0037, "sig": "***", "notebook_var": "net_wealth",                          "units": "EUR / 100000 (level scaled by 1e-5, not log; net_wealth = tfa + ha - total_debt)" }
+    }
+  },
+  "adjustment_parameters": {
+    "note": "Confirmed from frm_estimation.ipynb portfolio adjustment plot cell.",
+    "lambda_kappa": 0.1,
+    "phi_1": 5.0,
+    "phi_2_derived": "phi_1 * (1 - lambda_kappa) / lambda_kappa = 45.0"
+  },
+  "notes": {
+    "significance": "* p<0.10, ** p<0.05, *** p<0.01",
+    "se_clustering": "Standard errors clustered at household id level.",
+    "scale_convention": {
+      "description": "Coefficients were estimated on HFCS per-household data (e.g. gross income ~EUR 30k). The INET macro model rescales each agent's financial variables by a population scale factor S (e.g. S=10 means each model agent represents 10 real households, so model income is S x HFCS income). Before applying the estimation-scale divisors below, model financial variables must first be divided by S to recover per-household real values.",
+      "gross_household_income": "x = model_gross_income / (S * 10_000), where S is the model population scale factor",
+      "net_wealth": "x = model_net_wealth / (S * 100_000), where S is the model population scale factor",
+      "unaffected_variables": "age, household_size, investment_attitudes, mortgagor, owner, college, household_members_in_employment, windfall_income, wealth_quintile — these are counts, binary flags, or ordinal scales that do not scale with the model population factor"
+    },
+    "model_variable_mapping_status": "Units and notebook variable names confirmed against frm_estimation.ipynb. Exact HFCS field sources (e.g. investment_attitudes scale, windfall_income definition) should be confirmed against src/portfolio_allocation_helpers.py and data/hfcs/ before wiring into the model reader."
+  }
+}

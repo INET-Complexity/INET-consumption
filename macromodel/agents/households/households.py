@@ -231,23 +231,30 @@ class Households(Agent):
             "investment_rate": synthetic_population.household_data["Investment Rate"].values,
         }
 
-        # Additional states
-        for state_name in [
+        # Additional states. "Wealth Quintile" aliases the long HFCS column label
+        # ("Country quintile, gross wealth, among households") to a usable runtime key.
+        state_name_aliases = {"Country quintile, gross wealth, among households": "Wealth Quintile"}
+        for column_name in [
             "Type",
             "Corresponding Bank ID",
             "Corresponding Inhabited House ID",
             "Corresponding Property Owner",
             "Tenure Status of the Main Residence",
             "Investment Attitudes",
+            "Country quintile, gross wealth, among households",
+            "windfall_income",
         ]:
-            if state_name not in hh_data.columns:
-                raise ValueError(f"Missing {state_name} from the data for initialising households.")
-            if state_name == "Type":
-                states[state_name] = hh_data[state_name].values.flatten()
+            if column_name not in hh_data.columns:
+                raise ValueError(f"Missing {column_name} from the data for initialising households.")
+            state_name = state_name_aliases.get(column_name, column_name)
+            if column_name == "Type":
+                states[state_name] = hh_data[column_name].values.flatten()
             else:
                 with warnings.catch_warnings():
                     warnings.simplefilter(action="ignore", category=RuntimeWarning)
-                    states[state_name] = hh_data[state_name].fillna(-1).values.astype(int).flatten()
+                    # windfall_income is a boolean field with no NaNs by construction (reader fills with False),
+                    # so the fillna(-1) is inert and this converts True/False to 1/0 integers.
+                    states[state_name] = hh_data[column_name].fillna(-1).values.astype(int).flatten()
                     states[state_name][states[state_name] < 0] = -1
 
         # TODO: this is set to 0.2 in Sam's code, and transformed somehow into 0.0945. by the time the data is exported

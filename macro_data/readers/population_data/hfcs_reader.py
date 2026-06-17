@@ -114,6 +114,18 @@ var_mapping = {
     "HI0310": "Private Transfers Given",  # Monthly private transfers
     "PNF3610": "Health Insurance Payments",  # Monthly health insurance payments
     "HD1800": "Investment Attitudes",  # Household investment attitudes
+    "DHAQ01": "Country quintile, gross wealth, among households", # Wealth quintile
+    "HH0100": "Gift or Inheritance Reported",  # Gift or inheritance indicator
+    "HH0201": "Gift Year 1",  # Year of gift/inheritance 1
+    "HH0202": "Gift Year 2",  # Year of gift/inheritance 2
+    "HH0203": "Gift Year 3",  # Year of gift/inheritance 3
+    "HH0301a": "Gift Type Money 1",  # Gift/inheritance type 1: money
+    "HH0302a": "Gift Type Money 2",  # Gift/inheritance type 2: money
+    "HH0303a": "Gift Type Money 3",  # Gift/inheritance type 3: money
+    "HH0401": "Gift Amount 1",  # Gift/inheritance amount 1
+    "HH0402": "Gift Amount 2",  # Gift/inheritance amount 2
+    "HH0403": "Gift Amount 3",  # Gift/inheritance amount 3
+    "SA0200": "Survey Year",  # Survey year
 }
 
 # List of variables containing monetary values that need currency conversion
@@ -163,6 +175,9 @@ var_numerical = [
     "Amount spent on Consumption of Goods and Services",  # Total spending
     "Private Transfers Given",  # Private transfer
     "Health Insurance Payments",  # Health insurance
+    "Gift Amount 1",  # Gift/inheritance amount 1
+    "Gift Amount 2",  # Gift/inheritance amount 2
+    "Gift Amount 3",  # Gift/inheritance amount 3
     "Consumption of Consumer Goods/Services as a Share of Income",  # Spending ratio
 ]
 
@@ -216,6 +231,7 @@ class HFCSReader:
         hfcs_data_path: Path,
         exchange_rates: ExchangeRatesReader,
         num_surveys: int = 5,
+        windfall_threshold: float = 20000.0,
     ) -> "HFCSReader":
         """
         Create a HFCSReader instance from CSV files.
@@ -313,12 +329,67 @@ class HFCSReader:
 
         # Join the derived data with the household data
         households_df = households_df.join(derived_df)
+        households_df = cls._compute_windfall_income(households_df, windfall_threshold=windfall_threshold)
 
         return cls(
             country_name_short=country_name_short,
             individuals_df=individuals_df,
             households_df=households_df,
         )
+
+    @staticmethod
+    def _compute_windfall_income(
+        households_df: pd.DataFrame,
+        windfall_threshold: float,
+        default_year: int | None = None,
+    ) -> pd.DataFrame:
+        if windfall_threshold is None:
+            return households_df
+
+        if "Survey Year" in households_df.columns:
+            survey_year = pd.to_numeric(households_df["Survey Year"], errors="coerce")
+        elif default_year is not None:
+            survey_year = pd.Series(default_year, index=households_df.index)
+        else:
+            survey_year = pd.Series(np.nan, index=households_df.index)
+
+        if "Gift or Inheritance Reported" in households_df.columns:
+            gift_reported = households_df["Gift or Inheritance Reported"] == 1
+        else:
+            gift_reported = pd.Series(False, index=households_df.index)
+
+        windfall_masks = []
+        for index in range(1, 4):
+            gift_year = pd.to_numeric(
+                households_df.get(f"Gift Year {index}", pd.NA),
+                errors="coerce",
+            )
+            gift_type = pd.to_numeric(
+                households_df.get(f"Gift Type Money {index}", pd.NA),
+                errors="coerce",
+            )
+            gift_amount = pd.to_numeric(
+                households_df.get(f"Gift Amount {index}", pd.NA),
+                errors="coerce",
+            )
+            mask = (
+                gift_reported
+                & (gift_year >= survey_year - 2)
+                & (gift_type == 1)
+                & (gift_amount >= windfall_threshold)
+            )
+            windfall_masks.append(mask.fillna(False))
+
+        if windfall_masks:
+            windfall_flag = np.logical_or.reduce(windfall_masks)
+        else:
+            windfall_flag = np.zeros(len(households_df), dtype=bool)
+
+        households_df["windfall_income"] = pd.Series(
+            windfall_flag,
+            index=households_df.index,
+        ).astype("Int64")
+        return households_df
 
     @staticmethod
     def read_csv(

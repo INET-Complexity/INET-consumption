@@ -182,6 +182,42 @@ def test__hfcs_reader_converts_notebook_account_source_columns(tmp_path):
     assert data.loc[1, "Outstanding Balance of Non-Mortgage Debt"] == 20.0
 
 
+def test__hfcs_reader_computes_windfall_income(tmp_path):
+    class ExchangeRates:
+        def from_eur_to_lcu(self, country, year):
+            return 1.0
+
+    csv_path = tmp_path / "H1.csv"
+    pd.DataFrame(
+        {
+            "SA0100": ["FR"],
+            "ID": [1],
+            "HH0100": [1],
+            "HH0201": [2012],
+            "HH0202": [2010],
+            "HH0203": [2013],
+            "HH0301a": [1],
+            "HH0302a": [1],
+            "HH0303a": [1],
+            "HH0401": [20000.0],
+            "HH0402": [1000.0],
+            "HH0403": [25000.0],
+            "SA0200": [2014],
+        }
+    ).to_csv(csv_path, index=False)
+
+    data = HFCSReader.read_csv(
+        path=csv_path,
+        country_name="France",
+        country_name_short="FR",
+        year=2014,
+        exchange_rates=ExchangeRates(),
+    )
+    data = HFCSReader._compute_windfall_income(data, windfall_threshold=20000.0, default_year=2014)
+
+    assert data.loc[1, "windfall_income"] == 1
+
+
 def test__proxy_conversion_includes_notebook_account_source_columns():
     assert "Managed Accounts" in CONVERT_HH_COLS
     assert "Value of Other Non-Business Real Estate" in CONVERT_HH_COLS

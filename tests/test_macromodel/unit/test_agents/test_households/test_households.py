@@ -783,3 +783,31 @@ class TestComputeStage4PortfolioDiagnostics:
             )
             n_hh = len(test_households.states["Type"])
             assert test_households.ts.dicts[key][-1].shape[0] == n_hh
+
+    def test__opening_tfa_scale_uses_current_period_fallback_at_t0(self, test_households):
+        # TimeSeries.prev() falls back to the current value when only one entry
+        # exists yet (t=0), so at the very first call opening_tfa_scale equals
+        # this period's post_return_ifa + post_surplus_lfa rather than a genuine
+        # prior-period stock. This is a known, documented approximation (not a
+        # crash) — this test pins the behavior so a future TimeSeries change
+        # doesn't silently alter the first-period diagnostic without notice.
+        self._enable_portfolio_choice(test_households)
+
+        test_households.compute_stage4_portfolio_diagnostics()
+
+        expected = test_households.ts.current("wealth_other_financial_assets") + test_households.ts.current(
+            "wealth_deposits"
+        )
+        np.testing.assert_allclose(test_households.ts.dicts["portfolio_opening_tfa_scale"][-1], expected)
+
+    def test__liquid_return_rate_and_participation_probability_stay_nan(self, test_households):
+        # Both fields are explicitly not sourced in this increment (see the
+        # comments at the two append() call sites in households.py); pin them
+        # as NaN so a careless future refactor can't silently start emitting
+        # 0.0 (which would look like a real measured rate/probability) instead.
+        self._enable_portfolio_choice(test_households)
+
+        test_households.compute_stage4_portfolio_diagnostics()
+
+        assert np.all(np.isnan(test_households.ts.dicts["portfolio_liquid_return_rate"][-1]))
+        assert np.all(np.isnan(test_households.ts.dicts["portfolio_participation_probability"][-1]))

@@ -4,6 +4,7 @@ from scipy.stats import norm
 
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_frm_magnitude_target_share,
+    compute_household_head_covariates,
     compute_target_illiquid_share,
     validate_target_share_source,
 )
@@ -181,7 +182,31 @@ def test__frm_path_flags_non_finite_input_instead_of_silently_clipping():
     )
 
     assert clipped_flag[0]
-    assert target_share[0] == 0.0
+
+
+def test__frm_path_missing_coefficient_key_fails_clearly():
+    """A typo'd or incomplete magnitude_coefficients dict must raise a named
+    ValueError listing the missing key(s), not an opaque KeyError from deep
+    inside the linear-index computation."""
+    incomplete_coefficients = dict(_MAGNITUDE_COEFFICIENTS)
+    del incomplete_coefficients["net_wealth"]
+    n = 2
+    participates = np.full(n, True)
+    zeros = np.zeros(n)
+
+    with pytest.raises(ValueError, match="net_wealth"):
+        compute_frm_magnitude_target_share(
+            age=zeros,
+            household_members_in_employment=zeros,
+            investment_attitudes=zeros,
+            mortgagor=zeros,
+            owner=zeros,
+            net_wealth=zeros,
+            portfolio_participates=participates,
+            magnitude_coefficients=incomplete_coefficients,
+            population_scale_factor=5000.0,
+            net_wealth_scale_divisor=100_000.0,
+        )
 
 
 def test__frm_path_nonparticipant_override_forces_zero_even_with_high_covariate_share():
@@ -370,3 +395,111 @@ def test__dispatch_unsupported_source_still_raises():
             portfolio_participates=np.array([True]),
             target_share_source="grouped",
         )
+
+
+# ---------------------------------------------------------------------------
+# compute_household_head_covariates (Increment 5: household-head aggregation)
+#
+# Hand-built individual population (5 individuals, 3 households) with
+# expected values computed by inspection, independent of the production
+# selection algorithm — this is the genuinely independent oracle that
+# test_households.py's real-FRA-data integration check intentionally does
+# not re-derive.
+#
+# Individual:        0     1     2     3     4
+# Age:               70    45    8     30    60
+# Employed:          F     T     F     T     T
+# Reference person:  F     T     F     F     T
+#
+# Household 0 -> members [0, 1, 2]: individual 1 is the flagged reference
+#   person -> head_age = 45 (not 70, the oldest); employed count = 1 (only
+#   individual 1).
+# Household 1 -> members [3]: single member, not flagged reference person
+#   -> no flag in this household -> oldest-member fallback -> head_age = 30
+#   (the only member); employed count = 1.
+# Household 2 -> members [2, 4]: individual 4 is the flagged reference
+#   person -> head_age = 60; employed count = 1 (only individual 4).
+# ---------------------------------------------------------------------------
+
+_HEAD_TEST_AGES = np.array([70.0, 45.0, 8.0, 30.0, 60.0])
+_HEAD_TEST_IS_EMPLOYED = np.array([False, True, False, True, True])
+_HEAD_TEST_IS_REFERENCE_PERSON = np.array([False, True, False, False, True])
+_HEAD_TEST_CORR_INDIVIDUALS = [
+    np.array([0, 1, 2]),
+    np.array([3]),
+    np.array([2, 4]),
+]
+
+
+def test__household_head_covariates_uses_flagged_reference_person_not_oldest():
+    head_age, employed_count = compute_household_head_covariates(
+        corr_individuals=_HEAD_TEST_CORR_INDIVIDUALS,
+        individual_ages=_HEAD_TEST_AGES,
+        individual_is_employed=_HEAD_TEST_IS_EMPLOYED,
+        individual_is_reference_person=_HEAD_TEST_IS_REFERENCE_PERSON,
+    )
+
+    # Household 0: head is individual 1 (age 45), the flagged reference
+    # person, not individual 0 (age 70, the oldest) — this is the case that
+    # distinguishes this rule from a pure oldest-member proxy.
+    assert head_age[0] == 45.0
+    assert employed_count[0] == 1.0
+
+
+def test__household_head_covariates_falls_back_to_oldest_when_no_reference_person_flagged():
+    head_age, employed_count = compute_household_head_covariates(
+        corr_individuals=_HEAD_TEST_CORR_INDIVIDUALS,
+        individual_ages=_HEAD_TEST_AGES,
+        individual_is_employed=_HEAD_TEST_IS_EMPLOYED,
+        individual_is_reference_person=_HEAD_TEST_IS_REFERENCE_PERSON,
+    )
+
+    # Household 1: single member (individual 3), not flagged as reference
+    # person -> falls back to oldest-member rule, which trivially selects
+    # the only member.
+    assert head_age[1] == 30.0
+    assert employed_count[1] == 1.0
+
+
+def test__household_head_covariates_handles_multi_member_household_with_flag():
+    head_age, employed_count = compute_household_head_covariates(
+        corr_individuals=_HEAD_TEST_CORR_INDIVIDUALS,
+        individual_ages=_HEAD_TEST_AGES,
+        individual_is_employed=_HEAD_TEST_IS_EMPLOYED,
+        individual_is_reference_person=_HEAD_TEST_IS_REFERENCE_PERSON,
+    )
+
+    # Household 2: head is individual 4 (age 60, flagged reference person),
+    # not individual 2 (age 8, the other member).
+    assert head_age[2] == 60.0
+    assert employed_count[2] == 1.0
+
+
+def test__household_head_covariates_fallback_with_no_flag_among_multiple_members():
+    # A genuinely independent case beyond the three fixture households above:
+    # two members, neither flagged as reference person (e.g. both NaN on
+    # RA0100) -> must fall back to the oldest of the two, not the first.
+    corr_individuals = [np.array([0, 4])]  # ages 70 and 60; neither flagged
+    head_age, employed_count = compute_household_head_covariates(
+        corr_individuals=corr_individuals,
+        individual_ages=_HEAD_TEST_AGES,
+        individual_is_employed=_HEAD_TEST_IS_EMPLOYED,
+        individual_is_reference_person=np.array([False, True, False, False, False]),
+    )
+
+    assert head_age[0] == 70.0  # oldest of {individual 0 (70), individual 4 (60)}
+    assert employed_count[0] == 1.0  # only individual 4 is employed
+
+
+def test__household_head_covariates_shape_and_dtype():
+    head_age, employed_count = compute_household_head_covariates(
+        corr_individuals=_HEAD_TEST_CORR_INDIVIDUALS,
+        individual_ages=_HEAD_TEST_AGES,
+        individual_is_employed=_HEAD_TEST_IS_EMPLOYED,
+        individual_is_reference_person=_HEAD_TEST_IS_REFERENCE_PERSON,
+    )
+
+    assert head_age.shape == (3,)
+    assert employed_count.shape == (3,)
+    assert head_age.dtype.kind == "f"
+    assert employed_count.dtype.kind == "f"

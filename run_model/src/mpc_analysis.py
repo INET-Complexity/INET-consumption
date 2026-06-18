@@ -301,7 +301,17 @@ def _current_or_zero(households, field: str, *, n_households: int) -> np.ndarray
 
 
 def _household_head_age_proxy(country, *, n_households: int) -> np.ndarray:
-    """Return the oldest linked individual age per household when available."""
+    """Return the oldest linked individual age per household when available.
+
+    NOTE — coexisting "household head" definition: this proxy uses oldest-by-age
+    only and does not consult "Relation to Reference Person" (RA0100). Stage 4's
+    FRM covariate path (Households.from_pickled_agent's household_head_age state,
+    macromodel/agents/households/households.py) instead uses RA0100 == 1 (HFCS
+    reference person), falling back to oldest-by-age only when no individual is
+    flagged. The two definitions can disagree whenever the reference person is
+    not the oldest household member. Do not assume this MPC proxy and Stage 4's
+    household_head_age agree without checking, if ever combining their outputs.
+    """
     ages = getattr(getattr(country, "individuals", None), "states", {}).get("Age")
     corr_individuals = getattr(country.households, "states", {}).get("corr_individuals")
     if ages is None or corr_individuals is None:

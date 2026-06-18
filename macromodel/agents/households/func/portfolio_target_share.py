@@ -170,6 +170,64 @@ def compute_target_illiquid_share(
     )
 
 
+def compute_household_head_covariates(
+    corr_individuals: list[np.ndarray],
+    individual_ages: np.ndarray,
+    individual_is_employed: np.ndarray,
+    individual_is_reference_person: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate per-individual state to household-head covariates.
+
+    Pure, extracted from ``Households.from_pickled_agent`` (Stage 4 Increment
+    5) so the head-selection rule is independently unit-testable without a
+    real synthetic population fixture. For each household, the "head" is the
+    individual flagged ``individual_is_reference_person`` (HFCS ``RA0100 ==
+    1``, the reference person), with a fallback to the oldest member by age
+    when no individual in that household is flagged (e.g. genuine HFCS
+    survey non-response on ``RA0100``, which is NaN and therefore never
+    equal to the flag value).
+
+    See ``knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md``
+    (Increment 5) for why this rule, not a coexisting oldest-member-only
+    proxy used elsewhere in this codebase (``run_model/src/mpc_analysis.py``'s
+    ``_household_head_age_proxy``), is the correct definition for the FRM
+    covariates: the GTP-FRM estimation is defined on the reference person.
+
+    Args:
+        corr_individuals (list[np.ndarray]): One entry per household; each
+            entry is the array/list of individual-row positions (into
+            ``individual_ages`` etc.) belonging to that household. Every
+            household must have at least one member.
+        individual_ages (np.ndarray): Age per individual, indexed by the
+            individual-row positions referenced in ``corr_individuals``.
+        individual_is_employed (np.ndarray): Boolean array, one entry per
+            individual, ``True`` where employed.
+        individual_is_reference_person (np.ndarray): Boolean array, one
+            entry per individual, ``True`` where flagged as the household's
+            HFCS reference person (``RA0100 == 1``).
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: ``(household_head_age,
+        household_members_in_employment)``, both shape
+        ``(n_households,)``, where ``n_households = len(corr_individuals)``.
+    """
+    n_households = len(corr_individuals)
+    household_head_age = np.empty(n_households, dtype=float)
+    household_members_in_employment = np.empty(n_households, dtype=float)
+
+    for row_position, members in enumerate(corr_individuals):
+        member_ids = np.asarray(members, dtype=int)
+        household_is_reference_person = individual_is_reference_person[member_ids]
+        if household_is_reference_person.any():
+            head_position = member_ids[household_is_reference_person][0]
+        else:
+            head_position = member_ids[np.argmax(individual_ages[member_ids])]
+        household_head_age[row_position] = individual_ages[head_position]
+        household_members_in_employment[row_position] = individual_is_employed[member_ids].sum()
+
+    return household_head_age, household_members_in_employment
+
+
 def compute_frm_magnitude_target_share(
     age: np.ndarray,
     household_members_in_employment: np.ndarray,
@@ -242,7 +300,27 @@ def compute_frm_magnitude_target_share(
         included for interface symmetry with ``compute_target_illiquid_share``
         and to catch non-finite inputs (e.g. NaN covariates), which
         ``np.clip`` would otherwise pass through silently.
+
+    Raises:
+        ValueError: If ``magnitude_coefficients`` is missing any required
+            key, with the missing key name(s) reported explicitly (rather
+            than a bare ``KeyError`` from a missing-key lookup further
+            down), matching the "fail clearly" convention used by
+            ``compute_target_illiquid_share``'s ``frm_covariates`` check.
     """
+    required_coefficient_keys = (
+        "constant",
+        "age",
+        "household_members_in_employment",
+        "investment_attitudes",
+        "mortgagor",
+        "owner",
+        "net_wealth",
+    )
+    missing_coefficients = [key for key in required_coefficient_keys if key not in magnitude_coefficients]
+    if missing_coefficients:
+        raise ValueError(f"magnitude_coefficients is missing required keys: {missing_coefficients!r}.")
+
     age = np.asarray(age, dtype=float)
     household_members_in_employment = np.asarray(household_members_in_employment, dtype=float)
     investment_attitudes = np.asarray(investment_attitudes, dtype=float)

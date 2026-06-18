@@ -31,6 +31,9 @@ from macromodel.agents.banks.banks import Banks
 from macromodel.agents.households.func.portfolio_diagnostics import (
     compute_stage4_household_diagnostics,
 )
+from macromodel.agents.households.func.portfolio_target_share import (
+    compute_household_head_covariates,
+)
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
 from macromodel.agents.households.income_belief_learning import (
@@ -291,6 +294,17 @@ class Households(Agent):
         # gap in the Stage 4 architecture doc's FRM Variable Mapping Audit),
         # RA0100 == 1 identifies the reference person ("household head") within
         # each household's individual_data rows.
+        #
+        # NOTE — coexisting "household head" definition: run_model/src/mpc_analysis.py's
+        # _household_head_age_proxy() defines "head" as the oldest linked individual
+        # (np.nanmax over ages), with no reference to RA0100 at all. That proxy and this
+        # FRM-covariate definition can disagree whenever HFCS's reference person is not
+        # the oldest household member (e.g. a younger reference person with an older
+        # dependent parent) — RA0100 == 1 here is the correct/intended definition for the
+        # FRM model since the GTP-FRM estimation itself is defined on the reference
+        # person, not the oldest member. If a future increment needs to compare or merge
+        # MPC-by-age-cohort output with FRM-driven portfolio diagnostics, reconcile these
+        # two head-selection rules explicitly rather than assuming they already agree.
         individual_activity_status = synthetic_population.individual_data["Activity Status"].to_numpy(dtype=float)
         individual_relation_to_reference_person = synthetic_population.individual_data[
             "Relation to Reference Person"
@@ -298,22 +312,12 @@ class Households(Agent):
         is_employed = individual_activity_status == 1.0  # ActivityStatus.EMPLOYED, raw HFCS-coded value
         is_reference_person = individual_relation_to_reference_person == 1.0
 
-        head_age = np.empty(len(hh_data), dtype=float)
-        employed_member_count = np.empty(len(hh_data), dtype=float)
-        for row_position, members in enumerate(corr_individuals.values):
-            member_ids = np.asarray(members, dtype=int)
-            household_is_reference_person = is_reference_person[member_ids]
-            if household_is_reference_person.any():
-                head_position = member_ids[household_is_reference_person][0]
-            else:
-                # No individual flagged as reference person for this household
-                # (e.g. a data gap). Fall back to the oldest member as the most
-                # economically plausible proxy for "household head", rather than
-                # raising and blocking initialisation for an otherwise-valid
-                # household.
-                head_position = member_ids[np.argmax(individual_ages[member_ids])]
-            head_age[row_position] = individual_ages[head_position]
-            employed_member_count[row_position] = is_employed[member_ids].sum()
+        head_age, employed_member_count = compute_household_head_covariates(
+            corr_individuals=corr_individuals.values,
+            individual_ages=individual_ages,
+            individual_is_employed=is_employed,
+            individual_is_reference_person=is_reference_person,
+        )
 
         states["household_head_age"] = head_age
         states["household_members_in_employment"] = employed_member_count

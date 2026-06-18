@@ -40,7 +40,9 @@ def test_functions_from_model_instantiates_credit_augmented_consumption():
 
 
 def test_functions_from_model_instantiates_default_consumption_with_fra_cacf_parameters():
-    country_configuration = load_country_configuration(Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA")
+    country_configuration = load_country_configuration(
+        Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA"
+    )
     households_configuration = country_configuration.households
     households_configuration.functions.consumption.name = "DefaultHouseholdConsumption"
 

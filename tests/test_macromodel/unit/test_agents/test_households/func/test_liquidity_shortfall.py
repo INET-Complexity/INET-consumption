@@ -49,3 +49,35 @@ def test__vectorized_across_households():
 def test__returns_liquidity_shortfall_result_dataclass():
     result = _run(income=[1.0], target_consumption=[1.0], scheduled_debt_service=[0.0])
     assert isinstance(result, LiquidityShortfallResult)
+
+
+def test__nan_income_falls_back_to_zero_for_that_household_only():
+    result = _run(
+        income=[1000.0, np.nan],
+        target_consumption=[800.0, 800.0],
+        scheduled_debt_service=[300.0, 300.0],
+    )
+    np.testing.assert_allclose(result.liquidity_shortfall, [100.0, 0.0])
+    np.testing.assert_allclose(result.household_saving, [200.0, 0.0])
+
+
+def test__infinite_target_consumption_falls_back_to_zero():
+    result = _run(income=[1000.0], target_consumption=[np.inf], scheduled_debt_service=[0.0])
+    np.testing.assert_allclose(result.liquidity_shortfall, [0.0])
+    np.testing.assert_allclose(result.household_saving, [0.0])
+
+
+def test__negative_scheduled_debt_service_falls_back_to_zero():
+    # Negative scheduled debt service is a contract violation, not an
+    # expected economic state (see module docstring); treated as invalid
+    # input rather than silently flipping the shortfall's sign.
+    result = _run(income=[1000.0], target_consumption=[800.0], scheduled_debt_service=[-50.0])
+    np.testing.assert_allclose(result.liquidity_shortfall, [0.0])
+    np.testing.assert_allclose(result.household_saving, [0.0])
+
+
+def test__zero_scheduled_debt_service_is_valid_not_a_fallback():
+    # Zero is a legitimate value (no scheduled debt), distinct from negative.
+    result = _run(income=[1000.0], target_consumption=[800.0], scheduled_debt_service=[0.0])
+    np.testing.assert_allclose(result.liquidity_shortfall, [-200.0])
+    np.testing.assert_allclose(result.household_saving, [200.0])

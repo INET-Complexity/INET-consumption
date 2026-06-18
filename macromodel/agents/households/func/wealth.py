@@ -18,6 +18,7 @@ from typing import Any, Optional, Tuple
 
 import numpy as np
 
+from macromodel.agents.households.func.portfolio_target_share import validate_target_share_source
 from macromodel.timeseries import TimeSeries
 
 
@@ -458,6 +459,8 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"lambda_kappa must be in (0, 1] when uses_portfolio_choice=True, got {lambda_kappa}.")
         if uses_portfolio_choice and fixed_cost_share < 0.0:
             raise ValueError(f"fixed_cost_share must be non-negative, got {fixed_cost_share}.")
+        if uses_portfolio_choice:
+            validate_target_share_source(target_share_source)
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq

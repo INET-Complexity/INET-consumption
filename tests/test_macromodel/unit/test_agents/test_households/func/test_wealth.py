@@ -144,3 +144,26 @@ def test__paper_asset_return_wealth_setter_requires_period_draw_before_wealth_up
             used_up_wealth_in_other_financial_assets=np.array([0.0]),
             period_index=1,
         )
+
+
+def test__paper_asset_return_wealth_setter_accepts_scalar_target_share_source_by_default():
+    setter = _paper_setter(uses_portfolio_choice=True, fixed_cost_share=0.0)
+    assert setter.target_share_source == "scalar"
+
+
+def test__paper_asset_return_wealth_setter_accepts_frm_magnitude_target_share_source():
+    setter = _paper_setter(uses_portfolio_choice=True, target_share_source="frm_magnitude", fixed_cost_share=0.0)
+    assert setter.target_share_source == "frm_magnitude"
+
+
+def test__paper_asset_return_wealth_setter_rejects_unknown_target_share_source_when_portfolio_choice_active():
+    with pytest.raises(ValueError, match="target_share_source"):
+        _paper_setter(uses_portfolio_choice=True, target_share_source="precomputed", fixed_cost_share=0.0)
+
+
+def test__paper_asset_return_wealth_setter_does_not_validate_target_share_source_when_portfolio_choice_off():
+    # uses_portfolio_choice=False (the default) leaves target_share_source inert,
+    # so an invalid value must not block construction of an otherwise-ordinary
+    # asset-return setter that never reads it.
+    setter = _paper_setter(target_share_source="not-a-real-source")
+    assert setter.uses_portfolio_choice is False

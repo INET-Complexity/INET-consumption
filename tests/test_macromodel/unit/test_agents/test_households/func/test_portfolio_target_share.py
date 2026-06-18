@@ -5,6 +5,7 @@ from scipy.stats import norm
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_frm_magnitude_target_share,
     compute_target_illiquid_share,
+    validate_target_share_source,
 )
 
 # ---------------------------------------------------------------------------
@@ -247,3 +248,125 @@ def test__frm_path_shape_and_dtype_match_input():
     assert clipped_flag.shape == (n,)
     assert target_share.dtype.kind == "f"
     assert clipped_flag.dtype == bool
+
+
+# ---------------------------------------------------------------------------
+# validate_target_share_source (config-load-time validation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("valid_source", ["scalar", "frm_magnitude"])
+def test__validate_target_share_source_accepts_known_sources(valid_source):
+    validate_target_share_source(valid_source)  # must not raise
+
+
+def test__validate_target_share_source_rejects_unknown_source():
+    with pytest.raises(ValueError, match="target_share_source"):
+        validate_target_share_source("precomputed")
+
+
+# ---------------------------------------------------------------------------
+# compute_target_illiquid_share dispatch (Increment 5: frm_magnitude opt-in)
+# ---------------------------------------------------------------------------
+
+
+def _frm_kwargs(n: int, participates: np.ndarray) -> dict:
+    return dict(
+        portfolio_participates=participates,
+        target_share_source="frm_magnitude",
+        frm_covariates={
+            "age": np.full(n, 40.0),
+            "household_members_in_employment": np.full(n, 1.0),
+            "investment_attitudes": np.full(n, 2.0),
+            "mortgagor": np.zeros(n),
+            "owner": np.ones(n),
+            "net_wealth": np.full(n, 100_000.0),
+        },
+        frm_magnitude_coefficients=_MAGNITUDE_COEFFICIENTS,
+        population_scale_factor=5000.0,
+        net_wealth_scale_divisor=100_000.0,
+    )
+
+
+def test__dispatch_scalar_path_default_is_unchanged_by_frm_addition():
+    """The scalar default (this increment's user-mandated invariant) must not
+    move: calling with target_share_source defaulted/explicitly "scalar"
+    produces exactly the same result as before frm_magnitude existed."""
+    participates = np.array([True, True, False, True])
+
+    target_share, clipped_flag = compute_target_illiquid_share(
+        portfolio_participates=participates,
+        target_share_source="scalar",
+        default_target_illiquid_share=0.65,
+    )
+
+    np.testing.assert_allclose(target_share[participates], 0.65)
+    np.testing.assert_allclose(target_share[~participates], 0.0)
+    assert not clipped_flag.any()
+
+
+def test__dispatch_frm_magnitude_matches_direct_helper_call():
+    n = 3
+    participates = np.full(n, True)
+    kwargs = _frm_kwargs(n, participates)
+
+    dispatched_share, dispatched_flag = compute_target_illiquid_share(**kwargs)
+    direct_share, direct_flag = compute_frm_magnitude_target_share(
+        age=kwargs["frm_covariates"]["age"],
+        household_members_in_employment=kwargs["frm_covariates"]["household_members_in_employment"],
+        investment_attitudes=kwargs["frm_covariates"]["investment_attitudes"],
+        mortgagor=kwargs["frm_covariates"]["mortgagor"],
+        owner=kwargs["frm_covariates"]["owner"],
+        net_wealth=kwargs["frm_covariates"]["net_wealth"],
+        portfolio_participates=participates,
+        magnitude_coefficients=_MAGNITUDE_COEFFICIENTS,
+        population_scale_factor=5000.0,
+        net_wealth_scale_divisor=100_000.0,
+    )
+
+    np.testing.assert_allclose(dispatched_share, direct_share)
+    np.testing.assert_array_equal(dispatched_flag, direct_flag)
+
+
+def test__dispatch_frm_magnitude_nonparticipants_forced_to_zero():
+    n = 2
+    participates = np.array([True, False])
+    kwargs = _frm_kwargs(n, participates)
+
+    target_share, _ = compute_target_illiquid_share(**kwargs)
+
+    assert target_share[1] == 0.0
+    assert target_share[0] > 0.0
+
+
+@pytest.mark.parametrize(
+    "missing_key",
+    ["frm_covariates", "frm_magnitude_coefficients", "population_scale_factor", "net_wealth_scale_divisor"],
+)
+def test__dispatch_frm_magnitude_missing_required_argument_fails_clearly(missing_key):
+    n = 2
+    participates = np.full(n, True)
+    kwargs = _frm_kwargs(n, participates)
+    kwargs[missing_key] = None
+
+    with pytest.raises(ValueError, match="frm_magnitude"):
+        compute_target_illiquid_share(**kwargs)
+
+
+def test__dispatch_frm_magnitude_missing_covariate_key_fails_clearly():
+    n = 2
+    participates = np.full(n, True)
+    kwargs = _frm_kwargs(n, participates)
+    del kwargs["frm_covariates"]["net_wealth"]
+
+    with pytest.raises(ValueError, match="net_wealth"):
+        compute_target_illiquid_share(**kwargs)
+
+
+def test__dispatch_unsupported_source_still_raises():
+    """frm_magnitude must extend, not loosen, the closed set of valid sources."""
+    with pytest.raises(ValueError, match="target_share_source"):
+        compute_target_illiquid_share(
+            portfolio_participates=np.array([True]),
+            target_share_source="grouped",
+        )

@@ -47,8 +47,51 @@ class TestHouseholds:
             "corr_individuals",
             "corr_renters",
             "Consumption Units",
+            "household_head_age",
+            "household_members_in_employment",
+            "population_scale_factor",
         ]:
             assert state in test_households.states.keys()
+
+    def test__household_head_age_matches_reference_person_age(self, test_households, datawrapper):
+        # Stage 4 Increment 5: household_head_age must be the age of the
+        # individual flagged "Relation to Reference Person" == 1 within each
+        # household's own corr_individuals list, not e.g. the oldest member
+        # or a fixed positional choice — cross-check directly against the
+        # underlying synthetic population rather than re-deriving the same
+        # production logic in the test.
+        individual_data = datawrapper.synthetic_countries["FRA"].population.individual_data
+        ages = individual_data["Age"].to_numpy(dtype=float)
+        is_reference_person = individual_data["Relation to Reference Person"].to_numpy(dtype=float) == 1.0
+
+        for hh_id, corr_individuals in enumerate(test_households.states["corr_individuals"]):
+            member_ids = np.asarray(corr_individuals, dtype=int)
+            household_is_reference_person = is_reference_person[member_ids]
+            if household_is_reference_person.any():
+                expected_age = ages[member_ids[household_is_reference_person][0]]
+            else:
+                expected_age = ages[member_ids[np.argmax(ages[member_ids])]]
+            assert test_households.states["household_head_age"][hh_id] == expected_age
+
+    def test__household_members_in_employment_matches_activity_status_count(self, test_households, datawrapper):
+        individual_data = datawrapper.synthetic_countries["FRA"].population.individual_data
+        is_employed = individual_data["Activity Status"].to_numpy(dtype=float) == 1.0
+
+        for hh_id, corr_individuals in enumerate(test_households.states["corr_individuals"]):
+            member_ids = np.asarray(corr_individuals, dtype=int)
+            expected_count = is_employed[member_ids].sum()
+            assert test_households.states["household_members_in_employment"][hh_id] == expected_count
+
+    def test__household_head_age_and_employment_count_are_finite_for_every_household(self, test_households):
+        # Every household has at least one member by construction, so neither
+        # the reference-person branch nor the oldest-member fallback in the
+        # production code should ever leave a NaN/inf behind.
+        assert np.all(np.isfinite(test_households.states["household_head_age"]))
+        assert np.all(np.isfinite(test_households.states["household_members_in_employment"]))
+        assert np.all(test_households.states["household_members_in_employment"] >= 0)
+
+    def test__population_scale_factor_is_a_positive_scalar(self, test_households):
+        assert test_households.states["population_scale_factor"] > 0.0
 
     def test__consumption_units_refresh_only_when_age_band_composition_changes(self, test_households):
         max_individual_id = max(

@@ -14,6 +14,19 @@ _PARAMETER_REF_KEY = "paper_parameter_ref"
 _PARAMETER_REFS_KEY = "paper_parameter_refs"
 
 
+def _merge_parameter_ref_section(
+    target: dict[str, Any],
+    source: Mapping[str, Any],
+    *,
+    context: str,
+) -> None:
+    duplicate_keys = set(target).intersection(source)
+    if duplicate_keys:
+        duplicate_list = ", ".join(sorted(str(key) for key in duplicate_keys))
+        raise ValueError(f"Duplicate paper parameter keys in {context}: {duplicate_list}")
+    target.update(source)
+
+
 def _is_country_config_map(payload: Mapping[str, Any]) -> bool:
     return bool(payload) and all(isinstance(key, str) and len(key) == 3 and key.isupper() for key in payload)
 
@@ -56,12 +69,26 @@ def _resolve_parameter_references(
         parameter_refs = payload[_PARAMETER_REFS_KEY]
         if not isinstance(parameter_refs, list):
             raise ValueError(f"{_PARAMETER_REFS_KEY} must be a list of paper parameter references.")
-        for parameter_ref in parameter_refs:
+        for index, parameter_ref in enumerate(parameter_refs):
             if not isinstance(parameter_ref, Mapping):
                 raise ValueError(f"{_PARAMETER_REFS_KEY} entries must be mappings.")
+            if set(parameter_ref) != {_PARAMETER_FILE_KEY, _PARAMETER_REF_KEY}:
+                raise ValueError(
+                    f"{_PARAMETER_REFS_KEY} entries must define only "
+                    f"{_PARAMETER_FILE_KEY}/{_PARAMETER_REF_KEY}: index {index}"
+                )
             resolved_parameter_ref = _resolve_parameter_references(parameter_ref, base_dir, _visiting)
-            resolved_parameters.update(resolved_parameter_ref)
-        return {**resolved_parameters, **resolved_children}
+            _merge_parameter_ref_section(
+                resolved_parameters,
+                resolved_parameter_ref,
+                context=f"{_PARAMETER_REFS_KEY}[{index}]",
+            )
+        _merge_parameter_ref_section(
+            resolved_parameters,
+            resolved_children,
+            context=f"{_PARAMETER_REFS_KEY} local siblings",
+        )
+        return resolved_parameters
 
     parameter_path = Path(str(payload[_PARAMETER_FILE_KEY]))
     if not parameter_path.is_absolute():

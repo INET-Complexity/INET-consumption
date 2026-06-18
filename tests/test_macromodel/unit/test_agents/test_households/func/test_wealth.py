@@ -167,3 +167,28 @@ def test__paper_asset_return_wealth_setter_does_not_validate_target_share_source
     # asset-return setter that never reads it.
     setter = _paper_setter(target_share_source="not-a-real-source")
     assert setter.uses_portfolio_choice is False
+
+
+def test__paper_asset_return_wealth_setter_rejects_settled_portfolio_choice():
+    with pytest.raises(ValueError, match="settles_portfolio_choice"):
+        _paper_setter(settles_portfolio_choice=True)
+
+
+def test__paper_asset_return_wealth_setter_rejects_dynamic_shifters_enabled():
+    with pytest.raises(ValueError, match="dynamic_shifters_enabled"):
+        _paper_setter(dynamic_shifters_enabled=True)
+
+
+def test__paper_asset_return_wealth_setter_rejects_liquid_asset_policy_rate_markup():
+    with pytest.raises(ValueError, match="liquid_asset_policy_rate_markup"):
+        _paper_setter(liquid_asset_policy_rate_markup=1.0)
+
+
+def test__paper_asset_return_wealth_setter_rejects_unsupported_participation_source():
+    with pytest.raises(ValueError, match="participation_source"):
+        _paper_setter(participation_source="dynamic")
+
+
+def test__paper_asset_return_wealth_setter_rejects_unsupported_liquid_return_source():
+    with pytest.raises(ValueError, match="liquid_return_source"):
+        _paper_setter(liquid_return_source="deposit_rate")

@@ -174,7 +174,7 @@ portfolio_composition:
   liquid_asset_policy_rate_markup: null   # not yet calibrated in paper; must be set before settled mode
   phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
   lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
-  fixed_cost_share: null   # paper example uses 0.001; not yet confirmed as calibrated for this implementation
+  fixed_cost_share: 0.0   # neutral while uses_portfolio_choice is false; paper example 0.001 remains unactivated
   frm_coefficients_path: portfolio/FR_portfolio_frm_coefficients.json
   dynamic_shifters_enabled: false   # gates whether dynamic_shifters below move target shares; false until Stage 3 validation lands
   dynamic_shifters:

@@ -134,7 +134,6 @@ FRA:
               paper_parameter_ref: asset_returns.paper_stochastic_v1
             - paper_parameter_file: consumption_paper_parameters.yaml
               paper_parameter_ref: portfolio_composition
-          fixed_cost_share: 0.0
     parameters:
       take_consumption_weights_by_income_quantile: false
     substitution_bundles:

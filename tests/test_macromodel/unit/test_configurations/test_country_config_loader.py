@@ -5,6 +5,8 @@ import yaml
 
 from macromodel.configurations import load_country_configuration
 
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
 
 def _minimal_country_payload(wealth_parameters):
     return {
@@ -144,14 +146,13 @@ def test__load_country_configuration_merges_multiple_paper_parameter_refs(tmp_pa
             "paper_stochastic_v1": {
                 "mu_eq": 0.0029,
                 "equity_weight": 0.5,
-                "fixed_cost_share": 0.2,
             }
         },
         "portfolio_composition": {
             "uses_portfolio_choice": False,
             "phi_1": 5.0,
             "lambda_kappa": 0.1,
-            "fixed_cost_share": None,
+            "fixed_cost_share": 0.0,
         },
     }
     (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
@@ -170,7 +171,6 @@ def test__load_country_configuration_merges_multiple_paper_parameter_refs(tmp_pa
                             "paper_parameter_ref": "portfolio_composition",
                         },
                     ],
-                    "fixed_cost_share": 0.0,
                 }
             )
         )
@@ -188,6 +188,132 @@ def test__load_country_configuration_merges_multiple_paper_parameter_refs(tmp_pa
     assert params["phi_1"] == 5.0
     assert params["lambda_kappa"] == 0.1
     assert params["fixed_cost_share"] == 0.0
+
+
+def test__load_country_configuration_rejects_duplicate_keys_across_paper_parameter_refs(tmp_path):
+    paper_params = {
+        "asset_returns": {
+            "paper_stochastic_v1": {
+                "mu_eq": 0.0029,
+                "fixed_cost_share": 0.2,
+            }
+        },
+        "portfolio_composition": {
+            "uses_portfolio_choice": False,
+            "fixed_cost_share": 0.0,
+        },
+    }
+    (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_refs": [
+                        {
+                            "paper_parameter_file": "paper.yaml",
+                            "paper_parameter_ref": "asset_returns.paper_stochastic_v1",
+                        },
+                        {
+                            "paper_parameter_file": "paper.yaml",
+                            "paper_parameter_ref": "portfolio_composition",
+                        },
+                    ],
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate paper parameter keys.*fixed_cost_share"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_duplicate_local_keys_with_paper_parameter_refs(tmp_path):
+    paper_params = {
+        "asset_returns": {
+            "paper_stochastic_v1": {
+                "mu_eq": 0.0029,
+            }
+        },
+    }
+    (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_refs": [
+                        {
+                            "paper_parameter_file": "paper.yaml",
+                            "paper_parameter_ref": "asset_returns.paper_stochastic_v1",
+                        }
+                    ],
+                    "mu_eq": 0.003,
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="Duplicate paper parameter keys.*mu_eq"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_literal_mapping_inside_paper_parameter_refs(tmp_path):
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_refs": [{"mu_eq": 0.0029}],
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="entries must define only paper_parameter_file/paper_parameter_ref"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_missing_file_key_inside_paper_parameter_refs(tmp_path):
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_refs": [
+                        {
+                            "paper_parameter_ref": "asset_returns.paper_stochastic_v1",
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="entries must define only paper_parameter_file/paper_parameter_ref"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_extra_keys_inside_paper_parameter_refs(tmp_path):
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_refs": [
+                        {
+                            "paper_parameter_file": "paper.yaml",
+                            "paper_parameter_ref": "asset_returns.paper_stochastic_v1",
+                            "mu_eq": 0.0029,
+                        }
+                    ],
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="entries must define only paper_parameter_file/paper_parameter_ref"):
+        load_country_configuration(country_path, country_iso3="FRA")
 
 
 def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_parameter_section(tmp_path):
@@ -234,7 +360,7 @@ def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_para
 
 
 def test__load_country_configuration_resolves_real_fra_cacf_parameters():
-    config = load_country_configuration(Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA")
+    config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
 
     params = config.households.functions.consumption.parameters
     assert "paper_parameter_file" not in params
@@ -252,7 +378,7 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
 
 
 def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
-    config = load_country_configuration(Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA")
+    config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
 
     params = config.households.functions.wealth.parameters
     assert "paper_parameter_refs" not in params
@@ -284,4 +410,50 @@ def test__load_country_configuration_rejects_missing_paper_parameter_ref(tmp_pat
     )
 
     with pytest.raises(ValueError, match="Missing paper parameter section"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_non_mapping_paper_parameter_ref(tmp_path):
+    (tmp_path / "paper.yaml").write_text(yaml.safe_dump({"stage_1": {"scalar": 1.0}}))
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_file": "paper.yaml",
+                    "paper_parameter_ref": "stage_1.scalar",
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="Paper parameter section must be a mapping"):
+        load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__load_country_configuration_rejects_circular_paper_parameter_ref(tmp_path):
+    paper_params = {
+        "stage_1": {
+            "asset_returns": {
+                "paper_stochastic_v1": {
+                    "paper_parameter_file": "paper.yaml",
+                    "paper_parameter_ref": "stage_1.asset_returns.paper_stochastic_v1",
+                }
+            }
+        }
+    }
+    (tmp_path / "paper.yaml").write_text(yaml.safe_dump(paper_params))
+    country_path = tmp_path / "country.yaml"
+    country_path.write_text(
+        yaml.safe_dump(
+            _minimal_country_payload(
+                {
+                    "paper_parameter_file": "paper.yaml",
+                    "paper_parameter_ref": "stage_1.asset_returns.paper_stochastic_v1",
+                }
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="Circular paper parameter reference detected"):
         load_country_configuration(country_path, country_iso3="FRA")

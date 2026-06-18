@@ -57,6 +57,7 @@ from macro_data.readers.permanent_income_mapping import (
     load_permanent_income_design_matrix,
     rebase_real_pc_income_index,
 )
+from macro_data.readers.portfolio_frm import load_frm_coefficients
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -455,6 +456,34 @@ class Country:
                 n_households=households.ts.current("n_households"),
                 priors_table=income_belief_priors_table,
             )
+
+        # Stage 4 (portfolio choice): load the GTP-FRM coefficient table once at init
+        # rather than per-period. Unlike load_income_belief_priors_table, this loader
+        # has no fallback-to-module-default path, so a missing/invalid file with the
+        # flag enabled is a real config error and must raise, not silently fall back.
+        # The wealth-function-configured path is authoritative (it is what the YAML
+        # config actually sets via wealth.parameters); data_paths.frm_coefficients_path
+        # is only a fallback for callers that don't set a per-config path, since
+        # DataPaths.default_paths() always populates it unconditionally.
+        if getattr(households.functions["wealth"], "uses_portfolio_choice", False):
+            frm_coefficients_path = households.functions["wealth"].frm_coefficients_path
+            resolved_frm_path = (
+                Path(frm_coefficients_path)
+                if frm_coefficients_path is not None
+                else (data_paths.frm_coefficients_path if data_paths is not None else None)
+            )
+            if resolved_frm_path is None:
+                raise ValueError(
+                    "uses_portfolio_choice=True requires a non-null frm_coefficients_path, "
+                    "either on the wealth function configuration or via DataPaths."
+                )
+            # NOTE: stored for a future increment's use (the precomputed/grouped
+            # target_share_source paths, e.g. compute_frm_magnitude_target_share);
+            # Increment 3's active "scalar" target_share_source does not read this
+            # state at all, so loading the wrong file would currently go unnoticed
+            # by tests. Validate this path resolution again when a later increment
+            # starts reading households.states["frm_coefficients"].
+            households.states["frm_coefficients"] = load_frm_coefficients(resolved_frm_path)
 
         permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None
         permanent_income_design_matrix: Optional[pd.DataFrame] = None

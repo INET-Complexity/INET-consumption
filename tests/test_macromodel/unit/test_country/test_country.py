@@ -192,6 +192,92 @@ class TestCountry:
         assert "income_belief_p" not in households.ts.get_keys()
         assert "income_belief_rho" not in households.ts.get_keys()
 
+    def test__frm_coefficients_path_prefers_wealth_function_config_over_data_paths(self, datawrapper, tmp_path):
+        # Regression guard: country.py must resolve frm_coefficients_path from the
+        # wealth function's own config first, falling back to DataPaths only when
+        # the wealth function doesn't set one. DataPaths.default_paths() always
+        # populates frm_coefficients_path unconditionally (unlike insee_smic_path/
+        # income_belief_priors_path, which are genuinely optional), so an
+        # inverted precedence would silently discard the YAML-configured path on
+        # every real run.
+        import json
+
+        from macro_data.readers.default_readers import DataPaths
+
+        real_frm_path = (
+            Path(__file__).resolve().parents[4]
+            / "run_model"
+            / "data"
+            / "raw_data"
+            / "portfolio"
+            / "FR_portfolio_frm_coefficients.json"
+        )
+        with open(real_frm_path) as f:
+            payload = json.load(f)
+        # Mutate one coefficient so the two files are distinguishable after loading.
+        payload["participation"]["coefficients"]["constant"]["value"] = -99.0
+        decoy_frm_path = tmp_path / "decoy_frm_coefficients.json"
+        decoy_frm_path.write_text(json.dumps(payload))
+
+        synthetic_country = datawrapper.synthetic_countries["FRA"]
+        country_configuration = CountryConfiguration()
+        country_configuration.households.functions.wealth.name = "PaperAssetReturnWealthSetter"
+        country_configuration.households.functions.wealth.parameters = {
+            "other_real_assets_depreciation_rate": 0.05,
+            "mu_eq": 0.0029,
+            "mu_bond": 0.0081,
+            "sigma_eq": 0.0,
+            "sigma_bond": 0.0,
+            "rho": 0.0,
+            "equity_weight": 0.5,
+            "draw_scope": "country_period",
+            "uses_portfolio_choice": True,
+            "target_share_source": "scalar",
+            "default_target_illiquid_share": 0.65,
+            "phi_1": 5.0,
+            "lambda_kappa": 0.1,
+            "fixed_cost_share": 0.001,
+            "frm_coefficients_path": str(real_frm_path),
+        }
+
+        exchange_rates_config = ExchangeRatesConfiguration()
+        exchange_rates = ExchangeRates.from_data(
+            exchange_rates_data=datawrapper.exchange_rates,
+            exchange_rate_config=exchange_rates_config,
+            initial_year=2014,
+            country_names=["FRA"],
+        )
+        emission_factors = np.array(
+            [
+                datawrapper.emission_factors["coal"],
+                datawrapper.emission_factors["gas"],
+                datawrapper.emission_factors["oil"],
+            ]
+        )
+        # DataPaths always resolves frm_coefficients_path (unconditionally set in
+        # default_paths()); point it at the decoy file so a wrong-precedence bug
+        # would load the decoy's mutated coefficient instead of the real one.
+        data_paths = DataPaths.default_paths(raw_data_path=tmp_path, icio_years=[2014])
+        data_paths.frm_coefficients_path = decoy_frm_path
+
+        country = Country.from_pickled_country(
+            synthetic_country=synthetic_country,
+            country_configuration=country_configuration,
+            exchange_rates=exchange_rates,
+            country_name="FRA",
+            all_country_names=["FRA", "ROW"],
+            industries=datawrapper.industries,
+            initial_year=datawrapper.configuration.year,
+            t_max=12,
+            time_unit=datawrapper.time_unit,
+            running_multiple_countries=False,
+            emission_factors_usd=emission_factors,
+            data_paths=data_paths,
+        )
+
+        frm_coefficients = country.households.states["frm_coefficients"]
+        assert frm_coefficients.participation_coefficients["constant"] != -99.0
+
     def test__set_household_target_demand_uses_credit_augmented_consumption(self, test_country, monkeypatch, tmp_path):
         test_country.households.functions["consumption"] = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,

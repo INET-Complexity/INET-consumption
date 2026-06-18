@@ -437,6 +437,13 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         rho: float,
         equity_weight: float,
         draw_scope: str = "country_period",
+        uses_portfolio_choice: bool = False,
+        target_share_source: str = "scalar",
+        default_target_illiquid_share: float = 0.65,
+        phi_1: float = 5.0,
+        lambda_kappa: float = 0.1,
+        fixed_cost_share: float = 0.0,
+        frm_coefficients_path: str | None = None,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -447,6 +454,10 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError("equity_weight must be in [0, 1].")
         if not -1.0 <= rho <= 1.0:
             raise ValueError("rho must be in [-1, 1].")
+        if uses_portfolio_choice and not (0.0 < lambda_kappa <= 1.0):
+            raise ValueError(f"lambda_kappa must be in (0, 1] when uses_portfolio_choice=True, got {lambda_kappa}.")
+        if uses_portfolio_choice and fixed_cost_share < 0.0:
+            raise ValueError(f"fixed_cost_share must be non-negative, got {fixed_cost_share}.")
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq
@@ -459,6 +470,17 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self._current_illiquid_return_period: int | None = None
         self._last_consumed_illiquid_return_period: int | None = None
         self._current_illiquid_return_consumed = True
+        # Stage 4 (portfolio choice) shadow-mode parameters. uses_portfolio_choice
+        # gates the diagnostics-only call site in Households.update_wealth(); it
+        # does not affect any of the asset-return behaviour above. See
+        # knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md.
+        self.uses_portfolio_choice = uses_portfolio_choice
+        self.target_share_source = target_share_source
+        self.default_target_illiquid_share = default_target_illiquid_share
+        self.phi_1 = phi_1
+        self.lambda_kappa = lambda_kappa
+        self.fixed_cost_share = fixed_cost_share
+        self.frm_coefficients_path = frm_coefficients_path
 
     @property
     def expected_illiquid_log_return(self) -> float:

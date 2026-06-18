@@ -28,6 +28,9 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.func.portfolio_diagnostics import (
+    compute_stage4_household_diagnostics,
+)
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
 from macromodel.agents.households.income_belief_learning import (
@@ -48,6 +51,43 @@ from macromodel.util.get_histogram import get_histogram
 from macromodel.util.property_mapping import map_to_enum
 
 VACANT_HOUSEHOLD_ID = -1
+
+# Stage 4 (portfolio choice) diagnostic time series, registered at Households
+# init (regardless of whether uses_portfolio_choice is active) so that
+# Households.update_wealth() can always call .append(...) on them — see
+# knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md
+# (Diagnostics section) for the full field list and meaning. Boolean flags
+# default to False; numeric diagnostics default to 0.0, matching the
+# Increment 2 helper's non-finite-input fallback contract for a household-
+# period the call site never evaluates (uses_portfolio_choice=False).
+_STAGE4_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
+    "portfolio_actual_illiquid_share": 0.0,
+    "portfolio_opening_tfa_scale": 0.0,
+    "portfolio_target_tfa_base": 0.0,
+    "portfolio_post_return_lfa": 0.0,
+    "portfolio_post_return_ifa": 0.0,
+    "portfolio_liquid_return_rate": 0.0,
+    "portfolio_illiquid_return_rate": 0.0,
+    "portfolio_investable_surplus": 0.0,
+    "portfolio_participation_probability": 0.0,
+    "portfolio_participates": False,
+    "portfolio_target_illiquid_share": 0.0,
+    "portfolio_target_illiquid_assets": 0.0,
+    "portfolio_delta_tilde": 0.0,
+    "portfolio_kappa_star_tilde": 0.0,
+    "portfolio_kappa_tilde": 0.0,
+    "portfolio_desired_illiquid_adjustment": 0.0,
+    "portfolio_adjustment_cost": 0.0,
+    "portfolio_counterfactual_lfa_flow": 0.0,
+    "portfolio_counterfactual_ifa_flow": 0.0,
+    "portfolio_inaction_flag": False,
+    "portfolio_upper_bound_flag": False,
+    "portfolio_lower_bound_flag": False,
+    "portfolio_infeasible_interval_flag": False,
+    "portfolio_no_financial_assets_flag": False,
+    "portfolio_target_share_clipped_flag": False,
+    "portfolio_settlement_enabled": False,
+}
 
 
 class Households(Agent):
@@ -231,6 +271,15 @@ class Households(Agent):
             "investment_rate": synthetic_population.household_data["Investment Rate"].values,
         }
 
+        # Stage 4 (portfolio choice) extensive-margin participation, frozen at init.
+        # participation_source: initial_ifa_positive (consumption_paper_parameters.yaml,
+        # portfolio_composition block) — households with no initial illiquid financial
+        # assets never participate in IFA acquisition for the rest of the simulation.
+        # This is derived here (not read from an HFCS column like the state_name_aliases
+        # loop below) because it is a boolean transform of an already-loaded balance-sheet
+        # field, not a separate synthetic-population column.
+        states["portfolio_participates"] = hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float) > 0.0
+
         # Additional states. "Wealth Quintile" aliases the long HFCS column label
         # ("Country quintile, gross wealth, among households") to a usable runtime key.
         state_name_aliases = {"Country quintile, gross wealth, among households": "Wealth Quintile"}
@@ -336,6 +385,18 @@ class Households(Agent):
             oil_investment_emissions=oil_investment_emissions,
             refined_products_investment_emissions=refined_products_investment_emissions,
         )
+
+        # Stage 4 (portfolio choice): register the diagnostic time series at init,
+        # regardless of whether uses_portfolio_choice is active, so that
+        # Households.update_wealth() can always call .append(...) on them via
+        # TimeSeries.__getattr__ (which raises KeyError on a field never assigned
+        # at least once). Initial values are zero/False, matching the Increment 2
+        # helper's documented non-finite-input fallback contract; this is the
+        # same value the call site would produce anyway when uses_portfolio_choice
+        # is False, so the t=0 row is consistent with every later disabled period.
+        n_households_at_init = ts.current("n_households")
+        for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
+            ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
@@ -1754,6 +1815,18 @@ class Households(Agent):
         )
         self.ts.total_wealth_deposits.append([self.ts.current("wealth_deposits").sum()])
 
+        # Stage 4 (portfolio choice): diagnostics-only shadow call site. Must run
+        # here — after wealth_other_financial_assets and wealth_deposits are both
+        # appended above (so post_return_ifa/post_surplus_lfa are this period's
+        # final values) and before wealth_financial_assets/wealth below (so this
+        # never reads a stale total). Appends new diagnostic series only; does not
+        # touch wealth_deposits, wealth_other_financial_assets, wealth_financial_assets,
+        # wealth, debt, or any bank-side state. See
+        # knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md
+        # (Increment 3) for the full design and data-sourcing rationale.
+        if getattr(self.functions["wealth"], "uses_portfolio_choice", False):
+            self.compute_stage4_portfolio_diagnostics()
+
         # Compute total financial assets
         self.ts.wealth_financial_assets.append(
             self.ts.current("wealth_other_financial_assets") + self.ts.current("wealth_deposits")
@@ -1762,6 +1835,96 @@ class Households(Agent):
         # Compute total wealth
         self.ts.wealth.append(self.ts.current("wealth_real_assets") + self.ts.current("wealth_financial_assets"))
         return self.current_illiquid_financial_asset_return_rate()
+
+    def compute_stage4_portfolio_diagnostics(self) -> None:
+        """Compute and persist Stage 4 (portfolio choice) shadow diagnostics for this period.
+
+        Diagnostics-only: appends new ``portfolio_*`` time series and does not
+        mutate ``wealth_deposits``, ``wealth_other_financial_assets``,
+        ``wealth_financial_assets``, ``wealth``, debt, or any bank-side state.
+        Must be called from ``update_wealth()`` after ``wealth_other_financial_assets``
+        and ``wealth_deposits`` are both appended for the current period (see the
+        call site for the exact ordering rationale).
+
+        See ``knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md``
+        (Increment 3) for the full design, including the investable-surplus
+        ($\\tilde{s}_{it} = Y_{it} - C_{it} - (a^b_{it}+a^m_{it})$, $T_{it}=0$
+        since ``income`` is already net of tax) data-sourcing decisions.
+        """
+        wealth_function = self.functions["wealth"]
+
+        opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
+        post_return_ifa = self.ts.current("wealth_other_financial_assets")
+        # post_surplus_lfa ("LFA at the entry point plus s-tilde") is the
+        # household's actual, already-updated current liquid balance sheet —
+        # self.ts.current("wealth_deposits") — not a parallel shadow quantity
+        # built from new_wealth/rent/etc. That balance already reflects this
+        # period's full deposit update (new savings, withdrawals, interest,
+        # debt installments, new loans, tau_cf), so any positive-surplus
+        # acquisition is already embedded in it.
+        post_surplus_lfa = self.ts.current("wealth_deposits")
+        # investable_surplus is computed independently per the Data Inputs
+        # table's canonical definition (T_it=0 since income is already net of
+        # tax) and passed through purely as a diagnostic — it does not feed
+        # the post_surplus_lfa/target_tfa_base arithmetic below.
+        investable_surplus = (
+            self.ts.current("income") - self.ts.current("consumption") - self.ts.current("debt_installments")
+        )
+
+        diagnostics = compute_stage4_household_diagnostics(
+            opening_tfa_scale=opening_tfa_scale,
+            post_surplus_lfa=post_surplus_lfa,
+            post_return_ifa=post_return_ifa,
+            investable_surplus=investable_surplus,
+            portfolio_participates=self.states["portfolio_participates"],
+            target_share_source=wealth_function.target_share_source,
+            default_target_illiquid_share=wealth_function.default_target_illiquid_share,
+            phi_1=wealth_function.phi_1,
+            lambda_kappa=wealth_function.lambda_kappa,
+            fixed_cost_share=wealth_function.fixed_cost_share,
+        )
+        rebalancing = diagnostics.rebalancing
+        n_households = post_return_ifa.shape[0]
+
+        self.ts.portfolio_actual_illiquid_share.append(rebalancing.actual_illiquid_share)
+        self.ts.portfolio_opening_tfa_scale.append(diagnostics.portfolio_opening_tfa_scale)
+        self.ts.portfolio_target_tfa_base.append(diagnostics.portfolio_target_tfa_base)
+        self.ts.portfolio_post_return_lfa.append(diagnostics.portfolio_post_return_lfa)
+        self.ts.portfolio_post_return_ifa.append(diagnostics.portfolio_post_return_ifa)
+        # Not sourced in this increment: liquid_asset_policy_rate_markup is null
+        # (uncalibrated) and the policy rate itself lives on a sibling agent
+        # (central_bank) not reachable from Households.update_wealth(); record
+        # NaN rather than thread a new cross-agent dependency for an
+        # admittedly-uncalibrated value.
+        self.ts.portfolio_liquid_return_rate.append(np.full(n_households, np.nan))
+        self.ts.portfolio_illiquid_return_rate.append(
+            np.full(n_households, self.current_illiquid_financial_asset_return_rate())
+        )
+        self.ts.portfolio_investable_surplus.append(diagnostics.portfolio_investable_surplus)
+        # Not sourced in this increment: the scalar target_share_source path (the
+        # only one active) has no participation-probability concept; that belongs
+        # to the inert FRM covariate path (compute_frm_magnitude_target_share),
+        # reserved for a later target_share_source switch.
+        self.ts.portfolio_participation_probability.append(np.full(n_households, np.nan))
+        self.ts.portfolio_participates.append(self.states["portfolio_participates"])
+        self.ts.portfolio_target_illiquid_share.append(diagnostics.portfolio_target_illiquid_share)
+        self.ts.portfolio_target_illiquid_assets.append(rebalancing.target_illiquid_assets)
+        self.ts.portfolio_delta_tilde.append(rebalancing.delta_tilde)
+        self.ts.portfolio_kappa_star_tilde.append(rebalancing.kappa_star_tilde)
+        self.ts.portfolio_kappa_tilde.append(rebalancing.kappa_tilde)
+        self.ts.portfolio_desired_illiquid_adjustment.append(rebalancing.desired_illiquid_adjustment)
+        self.ts.portfolio_adjustment_cost.append(rebalancing.adjustment_cost)
+        self.ts.portfolio_counterfactual_lfa_flow.append(rebalancing.counterfactual_lfa_flow)
+        self.ts.portfolio_counterfactual_ifa_flow.append(rebalancing.counterfactual_ifa_flow)
+        self.ts.portfolio_inaction_flag.append(rebalancing.inaction_flag)
+        self.ts.portfolio_upper_bound_flag.append(rebalancing.upper_bound_flag)
+        self.ts.portfolio_lower_bound_flag.append(rebalancing.lower_bound_flag)
+        self.ts.portfolio_infeasible_interval_flag.append(rebalancing.infeasible_interval_flag)
+        self.ts.portfolio_no_financial_assets_flag.append(rebalancing.no_financial_assets_flag)
+        self.ts.portfolio_target_share_clipped_flag.append(diagnostics.portfolio_target_share_clipped_flag)
+        # settles_portfolio_choice is not wired in this increment (diagnostics-only,
+        # Stage 5 does not exist yet); always False.
+        self.ts.portfolio_settlement_enabled.append(np.zeros(n_households, dtype=bool))
 
     def compute_wealth_of_the_main_residence(self, housing_data: pd.DataFrame) -> np.ndarray:
         """Calculate main residence wealth.

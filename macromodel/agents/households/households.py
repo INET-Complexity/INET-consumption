@@ -956,6 +956,7 @@ class Households(Agent):
         self,
         target_consumption: np.ndarray,
         scheduled_debt_service: np.ndarray,
+        income_override: Optional[np.ndarray] = None,
         replace_current: bool = False,
     ) -> np.ndarray:
         """Compute and persist the Stage 5 (feasibility resolver) liquidity-shortfall diagnostic.
@@ -965,16 +966,24 @@ class Households(Agent):
         demand. Must be called after ``compute_target_consumption()`` for the
         current period, since it consumes that period's ``target_consumption``.
 
-        Uses ``expected_income`` (the current-period income basis used by
-        ``compute_target_consumption()`` itself, see ``households.py``'s
-        ``income = self.ts.current("expected_income")``), not ``income``
-        (the realized series, which is only appended later in
-        ``Country.update_realised_metrics()`` — after both call sites of
-        this method run, per ``simulation.py``'s per-period ordering). Using
-        ``income`` would silently compare this period's consumption plan
-        against last period's realized income, an off-by-one-period mismatch
-        caught in round-2 review (not by the original hand-computed unit
-        tests, which use synthetic scalars and can't see this ordering bug).
+        Uses ``expected_income`` by default (the current-period income basis
+        used by ``compute_target_consumption()`` itself, see ``households.py``'s
+        ``income = self.ts.current("expected_income") if income_override is
+        None else income_override``), not ``income`` (the realized series,
+        which is only appended later in ``Country.update_realised_metrics()``
+        — after both call sites of this method run, per ``simulation.py``'s
+        per-period ordering). Using ``income`` would silently compare this
+        period's consumption plan against last period's realized income, an
+        off-by-one-period mismatch caught in round-2 review (not by the
+        original hand-computed unit tests, which use synthetic scalars and
+        can't see this ordering bug). ``income_override`` mirrors
+        ``compute_target_consumption()``'s own override parameter so that, if
+        a future caller ever passes an override there (e.g. a shock-test
+        scenario), this diagnostic stays on the same income basis rather than
+        silently reverting to ``expected_income`` underneath it — the same
+        class of bug round-2 found, pre-empted here rather than left latent.
+        ``Country._set_household_target_demand()`` does not pass an override
+        today, so this is currently always ``None`` in production.
 
         See ``knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md``
         (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
@@ -986,6 +995,10 @@ class Households(Agent):
                 already returned by ``compute_target_consumption()``).
             scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
                 consumer-loan instalments for the period, per household.
+            income_override (Optional[np.ndarray]): Explicit income basis,
+                forwarded unchanged if supplied; defaults to
+                ``self.ts.current("expected_income")`` otherwise, matching
+                ``compute_target_consumption()``'s own override semantics.
             replace_current (bool): Replace the latest appended diagnostic
                 row instead of appending a new one (mirrors the
                 ``replace_current_diagnostics`` convention used elsewhere in
@@ -994,8 +1007,9 @@ class Households(Agent):
         Returns:
             np.ndarray: Per-household liquidity shortfall, ``L^d_it``.
         """
+        income = self.ts.current("expected_income") if income_override is None else income_override
         result = compute_liquidity_shortfall(
-            income=self.ts.current("expected_income"),
+            income=income,
             target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
         )

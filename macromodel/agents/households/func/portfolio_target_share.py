@@ -33,28 +33,76 @@ Increment 1. It does not implement adjustment costs, inaction bands, or
 import numpy as np
 from scipy.stats import norm
 
+_VALID_TARGET_SHARE_SOURCES = ("scalar", "frm_magnitude")
+
+
+def validate_target_share_source(target_share_source: str) -> None:
+    """Validate ``target_share_source`` at config-load time.
+
+    Per the Stage 4 architecture doc (Increment 5), ``target_share_source``
+    is a closed set of named runtime paths. Validating once at config load
+    (here, called from ``PaperAssetReturnWealthSetter.__init__``) avoids
+    re-checking the string every period inside the pure dispatch function
+    below, mirroring the existing ``lambda_kappa``/``fixed_cost_share``
+    config-time validation pattern.
+
+    Args:
+        target_share_source (str): The configured target-share source.
+
+    Raises:
+        ValueError: If ``target_share_source`` is not one of
+            ``_VALID_TARGET_SHARE_SOURCES``.
+    """
+    if target_share_source not in _VALID_TARGET_SHARE_SOURCES:
+        raise ValueError(
+            f"target_share_source must be one of {_VALID_TARGET_SHARE_SOURCES!r}; got {target_share_source!r}."
+        )
+
 
 def compute_target_illiquid_share(
     portfolio_participates: np.ndarray,
     target_share_source: str = "scalar",
     default_target_illiquid_share: float = 0.65,
+    frm_covariates: dict[str, np.ndarray] | None = None,
+    frm_magnitude_coefficients: dict[str, float] | None = None,
+    population_scale_factor: float | None = None,
+    net_wealth_scale_divisor: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the runtime target illiquid share per household.
 
     Implements the ``target_share_source`` contract from
-    ``portfolio_composition`` in ``consumption_paper_parameters.yaml``. Only
-    ``"scalar"`` is implemented in this increment: every participating
-    household is assigned the fixed ``default_target_illiquid_share``, and
-    every nonparticipant is assigned ``0.0``.
+    ``portfolio_composition`` in ``consumption_paper_parameters.yaml``.
+    ``target_share_source: scalar`` remains the default for every country:
+    every participating household is assigned the fixed
+    ``default_target_illiquid_share``, and every nonparticipant is assigned
+    ``0.0``. ``target_share_source: frm_magnitude`` (Increment 5) is an
+    opt-in alternative, switched on deliberately per country, that instead
+    calls ``compute_frm_magnitude_target_share`` with household covariates
+    and the loaded FRM coefficients. This increment does not change the
+    default: a country config that does not set ``target_share_source``
+    explicitly continues to run the ``"scalar"`` path unchanged.
 
     Args:
         portfolio_participates (np.ndarray): Boolean array, one entry per
             household, ``True`` for households with ``initial_IFA > 0``.
-        target_share_source (str): Selects the target-share rule. Only
-            ``"scalar"`` is supported in this increment.
+        target_share_source (str): Selects the target-share rule. One of
+            ``"scalar"`` (default) or ``"frm_magnitude"``.
         default_target_illiquid_share (float): Fixed scalar target share
             assigned to all participating households under the ``"scalar"``
-            source.
+            source. Ignored under ``"frm_magnitude"``.
+        frm_covariates (dict[str, np.ndarray] | None): Required only when
+            ``target_share_source="frm_magnitude"``. Keys: ``"age"``,
+            ``"household_members_in_employment"``,
+            ``"investment_attitudes"``, ``"mortgagor"``, ``"owner"``,
+            ``"net_wealth"`` — forwarded to
+            ``compute_frm_magnitude_target_share``.
+        frm_magnitude_coefficients (dict[str, float] | None): Required only
+            when ``target_share_source="frm_magnitude"``. The loaded
+            ``FRMCoefficients.magnitude_coefficients``.
+        population_scale_factor (float | None): Required only when
+            ``target_share_source="frm_magnitude"``.
+        net_wealth_scale_divisor (float | None): Required only when
+            ``target_share_source="frm_magnitude"``.
 
     Returns:
         tuple[np.ndarray, np.ndarray]: ``(target_illiquid_share,
@@ -64,20 +112,120 @@ def compute_target_illiquid_share(
         the value.
 
     Raises:
-        ValueError: If ``target_share_source`` is not ``"scalar"``.
+        ValueError: If ``target_share_source`` is not one of
+            ``_VALID_TARGET_SHARE_SOURCES``, or if ``"frm_magnitude"`` is
+            selected but required covariates/coefficients/scale arguments
+            are missing.
     """
-    if target_share_source != "scalar":
-        raise ValueError(
-            f"Only target_share_source='scalar' is implemented in Stage 4 Increment 1; got {target_share_source!r}."
-        )
+    validate_target_share_source(target_share_source)
 
     portfolio_participates = np.asarray(portfolio_participates, dtype=bool)
-    raw_share = np.where(portfolio_participates, default_target_illiquid_share, 0.0)
 
-    target_illiquid_share = np.clip(raw_share, 0.0, 1.0)
-    target_share_clipped_flag = ~np.isclose(raw_share, target_illiquid_share)
+    if target_share_source == "scalar":
+        raw_share = np.where(portfolio_participates, default_target_illiquid_share, 0.0)
+        target_illiquid_share = np.clip(raw_share, 0.0, 1.0)
+        target_share_clipped_flag = ~np.isclose(raw_share, target_illiquid_share)
+        return target_illiquid_share, target_share_clipped_flag
 
-    return target_illiquid_share, target_share_clipped_flag
+    # target_share_source == "frm_magnitude"
+    missing = [
+        name
+        for name, value in (
+            ("frm_covariates", frm_covariates),
+            ("frm_magnitude_coefficients", frm_magnitude_coefficients),
+            ("population_scale_factor", population_scale_factor),
+            ("net_wealth_scale_divisor", net_wealth_scale_divisor),
+        )
+        if value is None
+    ]
+    if missing:
+        raise ValueError(
+            "target_share_source='frm_magnitude' requires "
+            f"{', '.join(missing)} to be provided; got None for each of those."
+        )
+
+    required_covariate_keys = (
+        "age",
+        "household_members_in_employment",
+        "investment_attitudes",
+        "mortgagor",
+        "owner",
+        "net_wealth",
+    )
+    missing_covariates = [key for key in required_covariate_keys if key not in frm_covariates]
+    if missing_covariates:
+        raise ValueError(f"frm_covariates is missing required keys: {missing_covariates!r}.")
+
+    return compute_frm_magnitude_target_share(
+        age=frm_covariates["age"],
+        household_members_in_employment=frm_covariates["household_members_in_employment"],
+        investment_attitudes=frm_covariates["investment_attitudes"],
+        mortgagor=frm_covariates["mortgagor"],
+        owner=frm_covariates["owner"],
+        net_wealth=frm_covariates["net_wealth"],
+        portfolio_participates=portfolio_participates,
+        magnitude_coefficients=frm_magnitude_coefficients,
+        population_scale_factor=population_scale_factor,
+        net_wealth_scale_divisor=net_wealth_scale_divisor,
+    )
+
+
+def compute_household_head_covariates(
+    corr_individuals: list[np.ndarray],
+    individual_ages: np.ndarray,
+    individual_is_employed: np.ndarray,
+    individual_is_reference_person: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Aggregate per-individual state to household-head covariates.
+
+    Pure, extracted from ``Households.from_pickled_agent`` (Stage 4 Increment
+    5) so the head-selection rule is independently unit-testable without a
+    real synthetic population fixture. For each household, the "head" is the
+    individual flagged ``individual_is_reference_person`` (HFCS ``RA0100 ==
+    1``, the reference person), with a fallback to the oldest member by age
+    when no individual in that household is flagged (e.g. genuine HFCS
+    survey non-response on ``RA0100``, which is NaN and therefore never
+    equal to the flag value).
+
+    See ``knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md``
+    (Increment 5) for why this rule, not a coexisting oldest-member-only
+    proxy used elsewhere in this codebase (``run_model/src/mpc_analysis.py``'s
+    ``_household_head_age_proxy``), is the correct definition for the FRM
+    covariates: the GTP-FRM estimation is defined on the reference person.
+
+    Args:
+        corr_individuals (list[np.ndarray]): One entry per household; each
+            entry is the array/list of individual-row positions (into
+            ``individual_ages`` etc.) belonging to that household. Every
+            household must have at least one member.
+        individual_ages (np.ndarray): Age per individual, indexed by the
+            individual-row positions referenced in ``corr_individuals``.
+        individual_is_employed (np.ndarray): Boolean array, one entry per
+            individual, ``True`` where employed.
+        individual_is_reference_person (np.ndarray): Boolean array, one
+            entry per individual, ``True`` where flagged as the household's
+            HFCS reference person (``RA0100 == 1``).
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: ``(household_head_age,
+        household_members_in_employment)``, both shape
+        ``(n_households,)``, where ``n_households = len(corr_individuals)``.
+    """
+    n_households = len(corr_individuals)
+    household_head_age = np.empty(n_households, dtype=float)
+    household_members_in_employment = np.empty(n_households, dtype=float)
+
+    for row_position, members in enumerate(corr_individuals):
+        member_ids = np.asarray(members, dtype=int)
+        household_is_reference_person = individual_is_reference_person[member_ids]
+        if household_is_reference_person.any():
+            head_position = member_ids[household_is_reference_person][0]
+        else:
+            head_position = member_ids[np.argmax(individual_ages[member_ids])]
+        household_head_age[row_position] = individual_ages[head_position]
+        household_members_in_employment[row_position] = individual_is_employed[member_ids].sum()
+
+    return household_head_age, household_members_in_employment
 
 
 def compute_frm_magnitude_target_share(
@@ -152,7 +300,27 @@ def compute_frm_magnitude_target_share(
         included for interface symmetry with ``compute_target_illiquid_share``
         and to catch non-finite inputs (e.g. NaN covariates), which
         ``np.clip`` would otherwise pass through silently.
+
+    Raises:
+        ValueError: If ``magnitude_coefficients`` is missing any required
+            key, with the missing key name(s) reported explicitly (rather
+            than a bare ``KeyError`` from a missing-key lookup further
+            down), matching the "fail clearly" convention used by
+            ``compute_target_illiquid_share``'s ``frm_covariates`` check.
     """
+    required_coefficient_keys = (
+        "constant",
+        "age",
+        "household_members_in_employment",
+        "investment_attitudes",
+        "mortgagor",
+        "owner",
+        "net_wealth",
+    )
+    missing_coefficients = [key for key in required_coefficient_keys if key not in magnitude_coefficients]
+    if missing_coefficients:
+        raise ValueError(f"magnitude_coefficients is missing required keys: {missing_coefficients!r}.")
+
     age = np.asarray(age, dtype=float)
     household_members_in_employment = np.asarray(household_members_in_employment, dtype=float)
     investment_attitudes = np.asarray(investment_attitudes, dtype=float)

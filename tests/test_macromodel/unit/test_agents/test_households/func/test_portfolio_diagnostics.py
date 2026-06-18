@@ -22,6 +22,10 @@ def _run(
     phi_1=PHI_1,
     lambda_kappa=LAMBDA_KAPPA,
     fixed_cost_share=FIXED_COST_SHARE,
+    frm_covariates=None,
+    frm_magnitude_coefficients=None,
+    population_scale_factor=None,
+    net_wealth_scale_divisor=None,
 ) -> Stage4HouseholdDiagnostics:
     return compute_stage4_household_diagnostics(
         opening_tfa_scale=np.asarray(opening_tfa_scale, dtype=float),
@@ -34,6 +38,10 @@ def _run(
         phi_1=phi_1,
         lambda_kappa=lambda_kappa,
         fixed_cost_share=fixed_cost_share,
+        frm_covariates=frm_covariates,
+        frm_magnitude_coefficients=frm_magnitude_coefficients,
+        population_scale_factor=population_scale_factor,
+        net_wealth_scale_divisor=net_wealth_scale_divisor,
     )
 
 
@@ -148,3 +156,45 @@ def test__non_finite_investable_surplus_does_not_invalidate_the_household():
     )
     assert result.rebalancing.portfolio_valid_flag[0]
     assert np.isnan(result.portfolio_investable_surplus[0])
+
+
+_MAGNITUDE_COEFFICIENTS = {
+    "constant": 0.0418,
+    "age": 0.0101,
+    "household_members_in_employment": -0.1126,
+    "investment_attitudes": -0.141,
+    "mortgagor": -0.1403,
+    "owner": -0.1749,
+    "net_wealth": 0.0345,
+}
+
+
+def test__frm_magnitude_source_produces_nonscalar_target_share_via_full_composition():
+    # End-to-end through compute_stage4_household_diagnostics, not just the
+    # target-share helper in isolation: confirms target_share_source=
+    # "frm_magnitude" composes correctly with target_tfa_base/rebalancing.
+    result = _run(
+        opening_tfa_scale=[1000.0],
+        post_surplus_lfa=[600.0],
+        post_return_ifa=[400.0],
+        investable_surplus=[0.0],
+        portfolio_participates=[True],
+        target_share_source="frm_magnitude",
+        frm_covariates={
+            "age": np.array([40.0]),
+            "household_members_in_employment": np.array([1.0]),
+            "investment_attitudes": np.array([2.0]),
+            "mortgagor": np.array([0.0]),
+            "owner": np.array([1.0]),
+            "net_wealth": np.array([100_000.0]),
+        },
+        frm_magnitude_coefficients=_MAGNITUDE_COEFFICIENTS,
+        population_scale_factor=5000.0,
+        net_wealth_scale_divisor=100_000.0,
+    )
+
+    assert result.portfolio_target_illiquid_share[0] != DEFAULT_TARGET_SHARE
+    np.testing.assert_allclose(
+        result.rebalancing.target_illiquid_assets,
+        [result.portfolio_target_illiquid_share[0] * result.portfolio_target_tfa_base[0]],
+    )

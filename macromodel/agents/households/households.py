@@ -31,6 +31,9 @@ from macromodel.agents.banks.banks import Banks
 from macromodel.agents.households.func.portfolio_diagnostics import (
     compute_stage4_household_diagnostics,
 )
+from macromodel.agents.households.func.portfolio_target_share import (
+    compute_household_head_covariates,
+)
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
 from macromodel.agents.households.income_belief_learning import (
@@ -279,6 +282,52 @@ class Households(Agent):
         # loop below) because it is a boolean transform of an already-loaded balance-sheet
         # field, not a separate synthetic-population column.
         states["portfolio_participates"] = hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float) > 0.0
+
+        # Stage 4 (portfolio choice) Increment 5: household-head age and employed-
+        # member count, required by the opt-in target_share_source="frm_magnitude"
+        # path (compute_frm_magnitude_target_share). Frozen at init like
+        # portfolio_participates above, consistent with how every other FRM
+        # covariate (Investment Attitudes, Tenure Status, Wealth Quintile) is
+        # sourced in this method. No production code aggregates individual-level
+        # state to household level via "Relation to Reference Person" (RA0100)
+        # before this; per the HFCS codebook convention (also used to flag the
+        # gap in the Stage 4 architecture doc's FRM Variable Mapping Audit),
+        # RA0100 == 1 identifies the reference person ("household head") within
+        # each household's individual_data rows.
+        #
+        # NOTE — coexisting "household head" definition: run_model/src/mpc_analysis.py's
+        # _household_head_age_proxy() defines "head" as the oldest linked individual
+        # (np.nanmax over ages), with no reference to RA0100 at all. That proxy and this
+        # FRM-covariate definition can disagree whenever HFCS's reference person is not
+        # the oldest household member (e.g. a younger reference person with an older
+        # dependent parent) — RA0100 == 1 here is the correct/intended definition for the
+        # FRM model since the GTP-FRM estimation itself is defined on the reference
+        # person, not the oldest member. If a future increment needs to compare or merge
+        # MPC-by-age-cohort output with FRM-driven portfolio diagnostics, reconcile these
+        # two head-selection rules explicitly rather than assuming they already agree.
+        individual_activity_status = synthetic_population.individual_data["Activity Status"].to_numpy(dtype=float)
+        individual_relation_to_reference_person = synthetic_population.individual_data[
+            "Relation to Reference Person"
+        ].to_numpy(dtype=float)
+        is_employed = individual_activity_status == 1.0  # ActivityStatus.EMPLOYED, raw HFCS-coded value
+        is_reference_person = individual_relation_to_reference_person == 1.0
+
+        head_age, employed_member_count = compute_household_head_covariates(
+            corr_individuals=corr_individuals.values,
+            individual_ages=individual_ages,
+            individual_is_employed=is_employed,
+            individual_is_reference_person=is_reference_person,
+        )
+
+        states["household_head_age"] = head_age
+        states["household_members_in_employment"] = employed_member_count
+        # Required by target_share_source="frm_magnitude" to undo the population-
+        # scale inflation applied to model financial-asset state (see
+        # compute_frm_magnitude_target_share's docstring and the Stage 4
+        # architecture doc's FRM Variable Mapping Audit). Stored once at init,
+        # same as portfolio_participates above, since scale is a fixed
+        # simulation-wide constant, not a per-period value.
+        states["population_scale_factor"] = float(scale)
 
         # Additional states. "Wealth Quintile" aliases the long HFCS column label
         # ("Country quintile, gross wealth, among households") to a usable runtime key.
@@ -1871,11 +1920,38 @@ class Households(Agent):
             self.ts.current("income") - self.ts.current("consumption") - self.ts.current("debt_installments")
         )
 
+        # Stage 4 Increment 5: only built when the opt-in target_share_source=
+        # "frm_magnitude" path is selected. The default "scalar" path (unchanged
+        # from Increment 3) does not need these and must not pay for building
+        # this dict on every period for every country that has not opted in.
+        frm_covariates = None
+        frm_magnitude_coefficients = None
+        population_scale_factor = None
+        net_wealth_scale_divisor = None
+        if wealth_function.target_share_source == "frm_magnitude":
+            tenure_status = self.states["Tenure Status of the Main Residence"]
+            frm_covariates = {
+                "age": self.states["household_head_age"],
+                "household_members_in_employment": self.states["household_members_in_employment"],
+                "investment_attitudes": self.states["Investment Attitudes"],
+                "mortgagor": (tenure_status == 2).astype(float),
+                "owner": (tenure_status == 1).astype(float),
+                "net_wealth": self.compute_net_wealth(),
+            }
+            frm_coefficients = self.states["frm_coefficients"]
+            frm_magnitude_coefficients = frm_coefficients.magnitude_coefficients
+            population_scale_factor = self.states["population_scale_factor"]
+            net_wealth_scale_divisor = frm_coefficients.net_wealth_scale_divisor
+
         diagnostics = compute_stage4_household_diagnostics(
             opening_tfa_scale=opening_tfa_scale,
             post_surplus_lfa=post_surplus_lfa,
             post_return_ifa=post_return_ifa,
             investable_surplus=investable_surplus,
+            frm_covariates=frm_covariates,
+            frm_magnitude_coefficients=frm_magnitude_coefficients,
+            population_scale_factor=population_scale_factor,
+            net_wealth_scale_divisor=net_wealth_scale_divisor,
             portfolio_participates=self.states["portfolio_participates"],
             target_share_source=wealth_function.target_share_source,
             default_target_illiquid_share=wealth_function.default_target_illiquid_share,

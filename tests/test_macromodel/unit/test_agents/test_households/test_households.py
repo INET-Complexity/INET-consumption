@@ -47,8 +47,41 @@ class TestHouseholds:
             "corr_individuals",
             "corr_renters",
             "Consumption Units",
+            "household_head_age",
+            "household_members_in_employment",
+            "population_scale_factor",
         ]:
             assert state in test_households.states.keys()
+
+    def test__household_head_age_and_employment_states_are_populated_for_every_household(
+        self, test_households, datawrapper
+    ):
+        # Integration smoke check against the real FRA population: every
+        # household gets a finite head age and a non-negative employment
+        # count, and the count never exceeds the household's own member
+        # count. The head-selection rule itself (reference-person-first,
+        # oldest-member fallback) is independently unit-tested against a
+        # hand-built fixture in test_portfolio_target_share.py's
+        # compute_household_head_covariates tests, not re-derived here.
+        individual_data = datawrapper.synthetic_countries["FRA"].population.individual_data
+        n_individuals = len(individual_data)
+
+        for hh_id, corr_individuals in enumerate(test_households.states["corr_individuals"]):
+            member_ids = np.asarray(corr_individuals, dtype=int)
+            assert member_ids.size > 0
+            assert np.all((member_ids >= 0) & (member_ids < n_individuals))
+            assert 0 <= test_households.states["household_members_in_employment"][hh_id] <= member_ids.size
+
+    def test__household_head_age_and_employment_count_are_finite_for_every_household(self, test_households):
+        # Every household has at least one member by construction, so neither
+        # the reference-person branch nor the oldest-member fallback in the
+        # production code should ever leave a NaN/inf behind.
+        assert np.all(np.isfinite(test_households.states["household_head_age"]))
+        assert np.all(np.isfinite(test_households.states["household_members_in_employment"]))
+        assert np.all(test_households.states["household_members_in_employment"] >= 0)
+
+    def test__population_scale_factor_is_a_positive_scalar(self, test_households):
+        assert test_households.states["population_scale_factor"] > 0.0
 
     def test__consumption_units_refresh_only_when_age_band_composition_changes(self, test_households):
         max_individual_id = max(

@@ -73,7 +73,7 @@ asset_returns:
     # from two referenced sections at once. Keep these 7 keys in sync with
     # portfolio_composition's same-named keys if either changes.
     uses_portfolio_choice: false
-    target_share_source: scalar
+    target_share_source: scalar  # scalar (default) | frm_magnitude (opt-in, Increment 5) — see portfolio_composition below
     default_target_illiquid_share: 0.65
     phi_1: 5.0
     lambda_kappa: 0.1
@@ -184,7 +184,7 @@ portfolio_composition:
   # copies in sync — see the comment there for why this duplication exists.
   uses_portfolio_choice: false      # gates the Stage 4 diagnostics-only call site; true only for FRA shadow runs
   settles_portfolio_choice: false   # true only once Stage 5 provides a post-feasibility household transaction account
-  target_share_source: scalar       # scalar | precomputed | grouped — first implementation uses the fixed scalar below
+  target_share_source: scalar       # scalar (default, fixed share below) | frm_magnitude (opt-in, Increment 5: household-covariate FRM target share). Switching to frm_magnitude does not change this default for countries that leave it unset.
   participation_source: initial_ifa_positive   # extensive margin fixed at init from initial_IFA > 0; nonparticipants never buy IFA
   default_target_illiquid_share: 0.65   # first-pass intensive-margin target for all participating households
   liquid_return_source: policy_rate_markup   # r_ell = liquid_asset_policy_rate_markup * policy_rate

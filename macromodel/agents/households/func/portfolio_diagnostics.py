@@ -63,6 +63,10 @@ def compute_stage4_household_diagnostics(
     phi_1: float,
     lambda_kappa: float,
     fixed_cost_share: float,
+    frm_covariates: dict[str, np.ndarray] | None = None,
+    frm_magnitude_coefficients: dict[str, float] | None = None,
+    population_scale_factor: float | None = None,
+    net_wealth_scale_divisor: float | None = None,
 ) -> Stage4HouseholdDiagnostics:
     """Compute the full Stage 4 shadow diagnostics set for one household-period.
 
@@ -95,13 +99,28 @@ def compute_stage4_household_diagnostics(
         portfolio_participates (np.ndarray): Boolean array, frozen at init
             from ``initial_IFA > 0``.
         target_share_source (str): Forwarded to
-            ``compute_target_illiquid_share``; only ``"scalar"`` is
-            implemented in the current increment.
+            ``compute_target_illiquid_share``. ``"scalar"`` remains the
+            default; ``"frm_magnitude"`` (Increment 5) is an opt-in
+            alternative that requires the four ``frm_*``/scale arguments
+            below.
         default_target_illiquid_share (float): Forwarded to
-            ``compute_target_illiquid_share``.
+            ``compute_target_illiquid_share``. Ignored under
+            ``"frm_magnitude"``.
         phi_1 (float): Forwarded to ``compute_portfolio_rebalancing``.
         lambda_kappa (float): Forwarded to ``compute_portfolio_rebalancing``.
         fixed_cost_share (float): Forwarded to ``compute_portfolio_rebalancing``.
+        frm_covariates (dict[str, np.ndarray] | None): Forwarded to
+            ``compute_target_illiquid_share``; required only when
+            ``target_share_source="frm_magnitude"``.
+        frm_magnitude_coefficients (dict[str, float] | None): Forwarded to
+            ``compute_target_illiquid_share``; required only when
+            ``target_share_source="frm_magnitude"``.
+        population_scale_factor (float | None): Forwarded to
+            ``compute_target_illiquid_share``; required only when
+            ``target_share_source="frm_magnitude"``.
+        net_wealth_scale_divisor (float | None): Forwarded to
+            ``compute_target_illiquid_share``; required only when
+            ``target_share_source="frm_magnitude"``.
 
     Returns:
         Stage4HouseholdDiagnostics: The full diagnostics set for this period.
@@ -116,6 +135,10 @@ def compute_stage4_household_diagnostics(
         portfolio_participates=portfolio_participates,
         target_share_source=target_share_source,
         default_target_illiquid_share=default_target_illiquid_share,
+        frm_covariates=frm_covariates,
+        frm_magnitude_coefficients=frm_magnitude_coefficients,
+        population_scale_factor=population_scale_factor,
+        net_wealth_scale_divisor=net_wealth_scale_divisor,
     )
     target_illiquid_assets = target_illiquid_share * target_tfa_base
 

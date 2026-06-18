@@ -1255,9 +1255,7 @@ class TestCountry:
         for key, value in components_with_wiring.items():
             np.testing.assert_array_equal(value, components_baseline[key])
 
-    def test__liquidity_shortfall_diagnostic_uses_expected_income_not_realized_income(
-        self, test_country, monkeypatch
-    ):
+    def test__liquidity_shortfall_diagnostic_uses_expected_income_not_realized_income(self, test_country, monkeypatch):
         # Regression (round-2 review finding): at both call sites of
         # _set_household_target_demand, households.ts.current("income") is
         # last period's realized income (Country.update_realised_metrics()
@@ -1292,6 +1290,4 @@ class TestCountry:
         # target_consumption is all-zero (mocked), scheduled_debt_service is
         # all-zero (mocked), so household_saving == income - 0 == income, and
         # the diagnostic must reflect expected_income (222.0), not income (111.0).
-        np.testing.assert_allclose(
-            test_country.households.ts.current("household_saving"), np.full(n_households, 222.0)
-        )
+        np.testing.assert_allclose(test_country.households.ts.current("household_saving"), np.full(n_households, 222.0))

@@ -129,15 +129,12 @@ FRA:
         name: PaperAssetReturnWealthSetter
         path_name: wealth
         parameters:
-          paper_parameter_file: consumption_paper_parameters.yaml
-          paper_parameter_ref: asset_returns.paper_stochastic_v1
-          uses_portfolio_choice: false
-          target_share_source: scalar
-          default_target_illiquid_share: 0.65
-          phi_1: 5.0
-          lambda_kappa: 0.1
+          paper_parameter_refs:
+            - paper_parameter_file: consumption_paper_parameters.yaml
+              paper_parameter_ref: asset_returns.paper_stochastic_v1
+            - paper_parameter_file: consumption_paper_parameters.yaml
+              paper_parameter_ref: portfolio_composition
           fixed_cost_share: 0.0
-          frm_coefficients_path: portfolio/FR_portfolio_frm_coefficients.json
     parameters:
       take_consumption_weights_by_income_quantile: false
     substitution_bundles:

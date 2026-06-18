@@ -162,9 +162,9 @@ portfolio_composition:
   # Participation and magnitude coefficient vectors are stored in the JSON file below.
   # FRM estimated on pooled HFCS waves 2014/2017/2021 (N=16,869); see data_paths.frm_coefficients
   # for the full coefficient table, including investment_attitudes and windfall_income.
-  # NOTE: country_config_FRA.yaml overlays the live Stage 4 shadow settings onto
-  # asset_returns.paper_stochastic_v1 via paper_parameter_ref sibling keys because
-  # PaperAssetReturnWealthSetter hosts both asset-return and Stage 4 diagnostics.
+  # NOTE: country_config_FRA.yaml composes this section with asset_returns.paper_stochastic_v1
+  # via paper_parameter_refs because PaperAssetReturnWealthSetter hosts both
+  # asset-return and Stage 4 diagnostics.
   uses_portfolio_choice: false      # gates the Stage 4 diagnostics-only call site; true only for FRA shadow runs
   settles_portfolio_choice: false   # true only once Stage 5 provides a post-feasibility household transaction account
   target_share_source: scalar       # scalar (default, fixed share below) | frm_magnitude (opt-in, Increment 5: household-covariate FRM target share). Switching to frm_magnitude does not change this default for countries that leave it unset.
@@ -175,6 +175,7 @@ portfolio_composition:
   phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
   lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
   fixed_cost_share: null   # paper example uses 0.001; not yet confirmed as calibrated for this implementation
+  frm_coefficients_path: portfolio/FR_portfolio_frm_coefficients.json
   dynamic_shifters_enabled: false   # gates whether dynamic_shifters below move target shares; false until Stage 3 validation lands
   dynamic_shifters:
     income_expectations: 0.0   # ϑ_μ

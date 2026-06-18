@@ -445,6 +445,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         lambda_kappa: float = 0.1,
         fixed_cost_share: float = 0.0,
         frm_coefficients_path: str | None = None,
+        **kwargs,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":

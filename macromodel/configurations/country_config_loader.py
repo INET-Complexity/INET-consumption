@@ -11,6 +11,7 @@ from .country_configuration import CountryConfiguration
 
 _PARAMETER_FILE_KEY = "paper_parameter_file"
 _PARAMETER_REF_KEY = "paper_parameter_ref"
+_PARAMETER_REFS_KEY = "paper_parameter_refs"
 
 
 def _is_country_config_map(payload: Mapping[str, Any]) -> bool:
@@ -39,14 +40,28 @@ def _resolve_parameter_references(
     resolved_children = {
         key: _resolve_parameter_references(value, base_dir, _visiting)
         for key, value in payload.items()
-        if key not in {_PARAMETER_FILE_KEY, _PARAMETER_REF_KEY}
+        if key not in {_PARAMETER_FILE_KEY, _PARAMETER_REF_KEY, _PARAMETER_REFS_KEY}
     }
     has_file = _PARAMETER_FILE_KEY in payload
     has_ref = _PARAMETER_REF_KEY in payload
+    has_refs = _PARAMETER_REFS_KEY in payload
+    if has_refs and (has_file or has_ref):
+        raise ValueError(f"{_PARAMETER_REFS_KEY} cannot be combined with {_PARAMETER_FILE_KEY}/{_PARAMETER_REF_KEY}.")
     if has_file != has_ref:
         raise ValueError(f"{_PARAMETER_FILE_KEY} and {_PARAMETER_REF_KEY} must be provided together.")
-    if not has_file:
+    if not has_file and not has_refs:
         return resolved_children
+    if has_refs:
+        resolved_parameters: dict[str, Any] = {}
+        parameter_refs = payload[_PARAMETER_REFS_KEY]
+        if not isinstance(parameter_refs, list):
+            raise ValueError(f"{_PARAMETER_REFS_KEY} must be a list of paper parameter references.")
+        for parameter_ref in parameter_refs:
+            if not isinstance(parameter_ref, Mapping):
+                raise ValueError(f"{_PARAMETER_REFS_KEY} entries must be mappings.")
+            resolved_parameter_ref = _resolve_parameter_references(parameter_ref, base_dir, _visiting)
+            resolved_parameters.update(resolved_parameter_ref)
+        return {**resolved_parameters, **resolved_children}
 
     parameter_path = Path(str(payload[_PARAMETER_FILE_KEY]))
     if not parameter_path.is_absolute():

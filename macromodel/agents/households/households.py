@@ -278,9 +278,7 @@ class Households(Agent):
         # This is derived here (not read from an HFCS column like the state_name_aliases
         # loop below) because it is a boolean transform of an already-loaded balance-sheet
         # field, not a separate synthetic-population column.
-        states["portfolio_participates"] = (
-            hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float) > 0.0
-        )
+        states["portfolio_participates"] = hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float) > 0.0
 
         # Additional states. "Wealth Quintile" aliases the long HFCS column label
         # ("Country quintile, gross wealth, among households") to a usable runtime key.

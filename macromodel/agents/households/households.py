@@ -28,6 +28,9 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.func.liquidity_shortfall import (
+    compute_liquidity_shortfall,
+)
 from macromodel.agents.households.func.portfolio_diagnostics import (
     compute_stage4_household_diagnostics,
 )
@@ -90,6 +93,16 @@ _STAGE4_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "portfolio_no_financial_assets_flag": False,
     "portfolio_target_share_clipped_flag": False,
     "portfolio_settlement_enabled": False,
+}
+
+# Stage 5 (feasibility resolver), Increment 0: liquidity-shortfall diagnostic
+# time series, registered at Households init unconditionally — see
+# knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+# (Increment 0 section). This is diagnostics-only: it has no effect on goods
+# or credit demand at this increment.
+_STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
+    "liquidity_shortfall": 0.0,
+    "household_saving": 0.0,
 }
 
 
@@ -445,6 +458,13 @@ class Households(Agent):
         # is False, so the t=0 row is consistent with every later disabled period.
         n_households_at_init = ts.current("n_households")
         for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
+            ts[_field_name] = np.full(n_households_at_init, _zero_value)
+
+        # Stage 5 (feasibility resolver), Increment 0: register the liquidity-
+        # shortfall diagnostic time series at init, for the same reason as the
+        # Stage 4 block above (TimeSeries.__getattr__ requires at least one
+        # prior assignment before .append(...) can be called).
+        for _field_name, _zero_value in _STAGE5_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
         # Update the household type
@@ -931,6 +951,50 @@ class Households(Agent):
                 replace_current=replace_current_diagnostics,
             )
             return target_consumption
+
+    def compute_and_record_liquidity_shortfall(
+        self,
+        target_consumption: np.ndarray,
+        scheduled_debt_service: np.ndarray,
+        replace_current: bool = False,
+    ) -> np.ndarray:
+        """Compute and persist the Stage 5 (feasibility resolver) liquidity-shortfall diagnostic.
+
+        Diagnostics-only (Increment 0): appends ``liquidity_shortfall`` and
+        ``household_saving`` time series and has no effect on goods or credit
+        demand. Must be called after ``compute_target_consumption()`` for the
+        current period, since it consumes that period's ``target_consumption``.
+
+        See ``knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md``
+        (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
+        definition and the exit criterion.
+
+        Args:
+            target_consumption (np.ndarray): This period's per-household
+                target consumption, summed across goods (i.e. the same total
+                already returned by ``compute_target_consumption()``).
+            scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
+                consumer-loan instalments for the period, per household.
+            replace_current (bool): Replace the latest appended diagnostic
+                row instead of appending a new one (mirrors the
+                ``replace_current_diagnostics`` convention used elsewhere in
+                this class).
+
+        Returns:
+            np.ndarray: Per-household liquidity shortfall, ``L^d_it``.
+        """
+        result = compute_liquidity_shortfall(
+            income=self.ts.current("income"),
+            target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service,
+        )
+        if replace_current:
+            self.ts.override_current("liquidity_shortfall", result.liquidity_shortfall)
+            self.ts.override_current("household_saving", result.household_saving)
+        else:
+            self.ts.liquidity_shortfall.append(result.liquidity_shortfall)
+            self.ts.household_saving.append(result.household_saving)
+        return result.liquidity_shortfall
 
     def update_income_belief_learning_state(
         self,

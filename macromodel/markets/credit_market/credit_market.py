@@ -1109,6 +1109,10 @@ class CreditMarket:
         """Calculate scheduled mortgage service for each household."""
         return self.states["mort_loans"][2].sum(axis=0)
 
+    def compute_scheduled_consumption_loan_payments_by_household(self) -> np.ndarray:
+        """Calculate scheduled consumer-loan service for each household."""
+        return self.states["cons_loans"][2].sum(axis=0)
+
     def compute_outstanding_loans_by_bank(self) -> np.ndarray:
         """Calculate total loans outstanding for each bank.
 

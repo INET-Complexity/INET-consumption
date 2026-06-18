@@ -298,6 +298,11 @@ class TestCountry:
             "compute_scheduled_mortgage_payments_by_household",
             lambda: mortgage_payment,
         )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(test_country.households.ts.current("n_households")),
+        )
 
         test_country._set_household_target_demand(replace_current=False)
 
@@ -774,6 +779,16 @@ class TestCountry:
             "compute_target_investment",
             lambda **_kwargs: np.full(n_households, float(len(target_calls))),
         )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
 
         target_len_before = len(test_country.households.ts.target_consumption)
         histogram_len_before = len(test_country.households.ts.saving_rates_histogram)
@@ -1114,6 +1129,11 @@ class TestCountry:
             "compute_scheduled_mortgage_payments_by_household",
             lambda: np.zeros(n_households),
         )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
 
         # No cached forecast inputs -> common terms are (0.0, 0.0).
         assert test_country._permanent_income_forecast_inputs is None
@@ -1205,6 +1225,11 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.credit_market,
             "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(test_country.households.ts.current("n_households")),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(test_country.households.ts.current("n_households")),
         )
 

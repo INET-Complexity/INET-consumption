@@ -101,6 +101,7 @@ class HouseholdConsumption(ABC):
         permanent_income_log_ratio: float | np.ndarray = None,
         consumer_debt_rate_delta: float | np.ndarray = None,
         uncertainty_delta: float | np.ndarray = None,
+        population_scale_factor: float | None = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -134,6 +135,11 @@ class HouseholdConsumption(ABC):
             house_price_index (float | np.ndarray | None): House-price index level
             house_price_growth (float | np.ndarray | None): House-price growth proxy
             lagged_consumption (np.ndarray | None): Previous-period consumption
+            population_scale_factor (float | None): Synthetic-population scale
+                factor (e.g. FRA scale=5000) used to rescale model-internal
+                income back to per-household units where a rule mixes income
+                with an unscaled index (see GH issue #90). Ignored by rules
+                that do not need it.
 
         Returns:
             np.ndarray: Target consumption by household and industry
@@ -194,6 +200,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in default consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in default consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in default consumption
+        population_scale_factor: float | None = None,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
 
@@ -377,6 +384,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in CES consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in CES consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in CES consumption
+        population_scale_factor: float | None = None,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
 
@@ -682,6 +690,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_cpi: float | None,
         initial_cpi: float,
         expected_inflation: float,
+        population_scale_factor: float | None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
         lagged_income = np.asarray(lagged_income, dtype=float)
@@ -725,10 +734,19 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_housing_wealth = housing_wealth / current_deflator
         real_consumer_debt = lagged_consumption_loan_debt / lagged_deflator
         real_lagged_house_price = np.maximum(lagged_house_price_index_arr / lagged_deflator, self.house_price_floor)
+        # house_price_propensity is estimated on hp/y with y at per-household
+        # (unscaled) income; real_lagged_income carries the model's synthetic
+        # population_scale_factor (e.g. FRA scale=5000), so it must be divided
+        # back out before forming this ratio, or the index/income units mismatch
+        # by orders of magnitude (see GH issue #90).
+        scale = float(population_scale_factor) if population_scale_factor else 1.0
+        real_lagged_income_per_household = real_lagged_income / scale
 
         net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / real_spendable_income
         illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_spendable_income
-        house_price_term = self.house_price_propensity * np.log(real_lagged_house_price / real_lagged_income)
+        house_price_term = self.house_price_propensity * np.log(
+            real_lagged_house_price / real_lagged_income_per_household
+        )
         housing_wealth_term = self.housing_wealth_propensity * real_housing_wealth / real_lagged_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
         real_borrowing_rate_term = self.real_borrowing_rate_propensity * real_borrowing_rate_arr
@@ -849,6 +867,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,
         consumer_debt_rate_delta: float | np.ndarray = None,
         uncertainty_delta: float | np.ndarray = None,
+        population_scale_factor: float | None = None,
     ) -> np.ndarray:
         if lagged_consumption is None:
             lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
@@ -904,6 +923,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            population_scale_factor=population_scale_factor,
         )
 
         current_deflator = max(
@@ -937,6 +957,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            population_scale_factor=population_scale_factor,
         )
 
         target_consumption = np.maximum(
@@ -1011,6 +1032,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in exogenous consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in exogenous consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in exogenous consumption
+        population_scale_factor: float | None = None,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.
 

@@ -925,6 +925,7 @@ class Households(Agent):
                 permanent_income_log_ratio=permanent_income_log_ratio,
                 consumer_debt_rate_delta=consumer_debt_rate_delta,
                 uncertainty_delta=uncertainty_delta,
+                population_scale_factor=self.states.get("population_scale_factor"),
             )
             self._append_target_consumption_diagnostics(
                 self.functions["consumption"],

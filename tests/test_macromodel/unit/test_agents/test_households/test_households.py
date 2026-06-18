@@ -4,6 +4,7 @@ import pytest
 
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
 
 
@@ -689,3 +690,96 @@ class TestHouseholdsUpdateConsumptionEmissions:
 
         assert len(test_households.ts.consumption_emissions_ch4_by_good) == 2
         assert len(test_households.ts.investment_emissions_ch4_by_good) == 2
+
+
+class TestComputeStage4PortfolioDiagnostics:
+    """Regression guard: Stage 4 diagnostics are diagnostics-only.
+
+    ``compute_stage4_portfolio_diagnostics`` must never mutate the core
+    balance-sheet time series it reads from (``wealth_deposits``,
+    ``wealth_other_financial_assets``, ``wealth_financial_assets``,
+    ``wealth``, ``income``, ``consumption``, ``debt_installments``). It is
+    only reachable when ``uses_portfolio_choice=True`` on the wealth
+    function, so the fixture's setter is swapped for a
+    ``PaperAssetReturnWealthSetter`` configured that way.
+    """
+
+    def _enable_portfolio_choice(self, test_households):
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+
+    def test__core_wealth_and_income_series_are_bit_identical_after_call(self, test_households):
+        self._enable_portfolio_choice(test_households)
+        watched_keys = [
+            "wealth_deposits",
+            "wealth_other_financial_assets",
+            "wealth_financial_assets",
+            "wealth",
+            "income",
+            "consumption",
+            "debt_installments",
+        ]
+        before = {key: [arr.copy() for arr in test_households.ts.dicts[key]] for key in watched_keys}
+
+        test_households.compute_stage4_portfolio_diagnostics()
+
+        for key in watched_keys:
+            after = test_households.ts.dicts[key]
+            assert len(after) == len(before[key]), f"{key} series length changed"
+            for before_arr, after_arr in zip(before[key], after):
+                np.testing.assert_array_equal(before_arr, after_arr, err_msg=f"{key} mutated")
+
+    def test__diagnostic_series_get_exactly_one_new_appended_entry(self, test_households):
+        self._enable_portfolio_choice(test_households)
+        diagnostic_keys = [
+            "portfolio_actual_illiquid_share",
+            "portfolio_opening_tfa_scale",
+            "portfolio_target_tfa_base",
+            "portfolio_post_return_lfa",
+            "portfolio_post_return_ifa",
+            "portfolio_liquid_return_rate",
+            "portfolio_illiquid_return_rate",
+            "portfolio_investable_surplus",
+            "portfolio_participation_probability",
+            "portfolio_participates",
+            "portfolio_target_illiquid_share",
+            "portfolio_target_illiquid_assets",
+            "portfolio_delta_tilde",
+            "portfolio_kappa_star_tilde",
+            "portfolio_kappa_tilde",
+            "portfolio_desired_illiquid_adjustment",
+            "portfolio_adjustment_cost",
+            "portfolio_counterfactual_lfa_flow",
+            "portfolio_counterfactual_ifa_flow",
+            "portfolio_inaction_flag",
+            "portfolio_upper_bound_flag",
+            "portfolio_lower_bound_flag",
+            "portfolio_infeasible_interval_flag",
+            "portfolio_no_financial_assets_flag",
+            "portfolio_target_share_clipped_flag",
+            "portfolio_settlement_enabled",
+        ]
+        before_lengths = {key: len(test_households.ts.dicts[key]) for key in diagnostic_keys}
+
+        test_households.compute_stage4_portfolio_diagnostics()
+
+        for key in diagnostic_keys:
+            assert len(test_households.ts.dicts[key]) == before_lengths[key] + 1, (
+                f"{key} did not get exactly one new entry"
+            )
+            n_hh = len(test_households.states["Type"])
+            assert test_households.ts.dicts[key][-1].shape[0] == n_hh

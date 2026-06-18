@@ -64,6 +64,21 @@ asset_returns:
     rho: -0.2585
     equity_weight: 0.5
     draw_scope: country_period
+    # Stage 4 (portfolio choice) parameters, duplicated from portfolio_composition
+    # below. The country-config paper_parameter_ref loader (country_config_loader.py)
+    # resolves exactly one section per parameters block and rejects sibling literal
+    # keys placed next to a ref, so PaperAssetReturnWealthSetter (the single class
+    # hosting both asset-return and Stage 4 shadow-diagnostics behaviour, per the
+    # Stage 4 architecture doc's Increment 3 config-surface decision) cannot be wired
+    # from two referenced sections at once. Keep these 7 keys in sync with
+    # portfolio_composition's same-named keys if either changes.
+    uses_portfolio_choice: false
+    target_share_source: scalar
+    default_target_illiquid_share: 0.65
+    phi_1: 5.0
+    lambda_kappa: 0.1
+    fixed_cost_share: 0.0  # portfolio_composition's fixed_cost_share is null (uncalibrated); 0.0 here only because uses_portfolio_choice=false makes this inert, and the constructor types fixed_cost_share as float (no null support). Must be set to a real calibrated value before uses_portfolio_choice flips true.
+    frm_coefficients_path: portfolio/FR_portfolio_frm_coefficients.json
 
 desired_consumption:
   credit_augmented_v1:
@@ -162,6 +177,11 @@ portfolio_composition:
   # Participation and magnitude coefficient vectors are stored in the JSON file below.
   # FRM estimated on pooled HFCS waves 2014/2017/2021 (N=16,869); see data_paths.frm_coefficients
   # for the full coefficient table, including investment_attitudes and windfall_income.
+  # NOTE: uses_portfolio_choice, target_share_source, default_target_illiquid_share, phi_1,
+  # lambda_kappa, fixed_cost_share, and the FRM coefficient path are duplicated under
+  # asset_returns.paper_stochastic_v1 above (the section actually wired to
+  # PaperAssetReturnWealthSetter via wealth.parameters in country_config_FRA.yaml). Keep both
+  # copies in sync — see the comment there for why this duplication exists.
   uses_portfolio_choice: false      # gates the Stage 4 diagnostics-only call site; true only for FRA shadow runs
   settles_portfolio_choice: false   # true only once Stage 5 provides a post-feasibility household transaction account
   target_share_source: scalar       # scalar | precomputed | grouped — first implementation uses the fixed scalar below

@@ -57,6 +57,7 @@ from macro_data.readers.permanent_income_mapping import (
     load_permanent_income_design_matrix,
     rebase_real_pc_income_index,
 )
+from macro_data.readers.portfolio_frm import load_frm_coefficients
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -455,6 +456,24 @@ class Country:
                 n_households=households.ts.current("n_households"),
                 priors_table=income_belief_priors_table,
             )
+
+        # Stage 4 (portfolio choice): load the GTP-FRM coefficient table once at init
+        # rather than per-period. Unlike load_income_belief_priors_table, this loader
+        # has no fallback-to-module-default path, so a missing/invalid file with the
+        # flag enabled is a real config error and must raise, not silently fall back.
+        if getattr(households.functions["wealth"], "uses_portfolio_choice", False):
+            frm_coefficients_path = households.functions["wealth"].frm_coefficients_path
+            if frm_coefficients_path is None:
+                raise ValueError(
+                    "uses_portfolio_choice=True requires a non-null frm_coefficients_path "
+                    "on the wealth function configuration."
+                )
+            resolved_frm_path = (
+                data_paths.frm_coefficients_path
+                if (data_paths is not None and data_paths.frm_coefficients_path is not None)
+                else Path(frm_coefficients_path)
+            )
+            households.states["frm_coefficients"] = load_frm_coefficients(resolved_frm_path)
 
         permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None
         permanent_income_design_matrix: Optional[pd.DataFrame] = None

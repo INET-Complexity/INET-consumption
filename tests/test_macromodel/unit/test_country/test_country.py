@@ -1254,3 +1254,44 @@ class TestCountry:
         np.testing.assert_array_equal(target_with_wiring, target_baseline)
         for key, value in components_with_wiring.items():
             np.testing.assert_array_equal(value, components_baseline[key])
+
+    def test__liquidity_shortfall_diagnostic_uses_expected_income_not_realized_income(
+        self, test_country, monkeypatch
+    ):
+        # Regression (round-2 review finding): at both call sites of
+        # _set_household_target_demand, households.ts.current("income") is
+        # last period's realized income (Country.update_realised_metrics()
+        # only appends a fresh value later in the simulation loop), while
+        # target_consumption is built from this period's expected_income.
+        # The diagnostic must use expected_income to stay on the same period
+        # basis as the consumption plan it is being compared against.
+        n_households = test_country.households.ts.current("n_households")
+        realized_income = np.full(n_households, 111.0)
+        expected_income = np.full(n_households, 222.0)
+        test_country.households.ts.override_current("income", realized_income)
+        test_country.households.ts.override_current("expected_income", expected_income)
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_consumption",
+            lambda **_kwargs: np.zeros((n_households, len(test_country.firms.ts.current("price")))),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        # target_consumption is all-zero (mocked), scheduled_debt_service is
+        # all-zero (mocked), so household_saving == income - 0 == income, and
+        # the diagnostic must reflect expected_income (222.0), not income (111.0).
+        np.testing.assert_allclose(
+            test_country.households.ts.current("household_saving"), np.full(n_households, 222.0)
+        )

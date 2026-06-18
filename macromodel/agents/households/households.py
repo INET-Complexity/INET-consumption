@@ -965,6 +965,17 @@ class Households(Agent):
         demand. Must be called after ``compute_target_consumption()`` for the
         current period, since it consumes that period's ``target_consumption``.
 
+        Uses ``expected_income`` (the current-period income basis used by
+        ``compute_target_consumption()`` itself, see ``households.py``'s
+        ``income = self.ts.current("expected_income")``), not ``income``
+        (the realized series, which is only appended later in
+        ``Country.update_realised_metrics()`` — after both call sites of
+        this method run, per ``simulation.py``'s per-period ordering). Using
+        ``income`` would silently compare this period's consumption plan
+        against last period's realized income, an off-by-one-period mismatch
+        caught in round-2 review (not by the original hand-computed unit
+        tests, which use synthetic scalars and can't see this ordering bug).
+
         See ``knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md``
         (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
         definition and the exit criterion.
@@ -984,7 +995,7 @@ class Households(Agent):
             np.ndarray: Per-household liquidity shortfall, ``L^d_it``.
         """
         result = compute_liquidity_shortfall(
-            income=self.ts.current("income"),
+            income=self.ts.current("expected_income"),
             target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
         )

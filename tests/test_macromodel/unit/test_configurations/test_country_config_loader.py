@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import yaml
 
@@ -95,7 +97,7 @@ def test__load_country_configuration_unwraps_single_country_file_without_iso3(tm
     assert config.households.functions.wealth.parameters["mu_eq"] == 0.0029
 
 
-def test__load_country_configuration_rejects_embedded_parameter_overrides(tmp_path):
+def test__load_country_configuration_merges_embedded_parameter_overrides(tmp_path):
     paper_params = {
         "stage_1": {
             "asset_returns": {
@@ -126,8 +128,14 @@ def test__load_country_configuration_rejects_embedded_parameter_overrides(tmp_pa
         )
     )
 
-    with pytest.raises(ValueError, match="cannot define sibling parameter keys: equity_weight"):
-        load_country_configuration(country_path, country_iso3="FRA")
+    config = load_country_configuration(country_path, country_iso3="FRA")
+
+    params = config.households.functions.wealth.parameters
+    assert "paper_parameter_file" not in params
+    assert "paper_parameter_ref" not in params
+    assert params["mu_eq"] == 0.0029
+    assert params["equity_weight"] == 0.25
+    assert params["draw_scope"] == "country_period"
 
 
 def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_parameter_section(tmp_path):
@@ -168,6 +176,26 @@ def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_para
     config = load_country_configuration(country_path, country_iso3="FRA")
 
     params = config.households.functions.consumption.parameters
+    assert "paper_parameter_file" not in params
+    assert "paper_parameter_ref" not in params
+    assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
+
+
+def test__load_country_configuration_resolves_real_fra_cacf_parameters():
+    config = load_country_configuration(Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA")
+
+    params = config.households.functions.consumption.parameters
+    assert "paper_parameter_file" not in params
+    assert "paper_parameter_ref" not in params
+    assert params["permanent_income_propensity"] == 0.55
+    assert params["income_growth_propensity"] == 0.45
+    assert params["interest_rate_cashflow_propensity"] == -0.003
+    assert params["uncertainty_propensity"] == -0.005
+    assert params["partial_adjustment_speed"] == 0.56
+    assert params["consumption_smoothing_fraction"] == 0.0
+    assert params["consumption_smoothing_window"] == 12
+    assert params["elasticity_of_substitution"] == 1.0
+    assert params["minimum_consumption_fraction"] == 1.0
     assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
 
 

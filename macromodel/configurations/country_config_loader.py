@@ -47,9 +47,6 @@ def _resolve_parameter_references(
         raise ValueError(f"{_PARAMETER_FILE_KEY} and {_PARAMETER_REF_KEY} must be provided together.")
     if not has_file:
         return resolved_children
-    if resolved_children:
-        keys = ", ".join(sorted(str(key) for key in resolved_children))
-        raise ValueError(f"Paper parameter references cannot define sibling parameter keys: {keys}")
 
     parameter_path = Path(str(payload[_PARAMETER_FILE_KEY]))
     if not parameter_path.is_absolute():
@@ -67,7 +64,12 @@ def _resolve_parameter_references(
     parameter_section = _resolve_dot_path(parameter_payload, ref_key)
     if not isinstance(parameter_section, Mapping):
         raise ValueError(f"Paper parameter section must be a mapping: {payload[_PARAMETER_REF_KEY]}")
-    return _resolve_parameter_references(parameter_section, parameter_path.parent)
+    resolved_parameter_section = _resolve_parameter_references(
+        parameter_section,
+        parameter_path.parent,
+        visiting | {visit_token},
+    )
+    return {**resolved_parameter_section, **resolved_children}
 
 
 def load_country_configuration(config_path: str | Path, country_iso3: str | None = None) -> CountryConfiguration:

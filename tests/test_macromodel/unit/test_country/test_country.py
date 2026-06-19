@@ -1291,3 +1291,50 @@ class TestCountry:
         # all-zero (mocked), so household_saving == income - 0 == income, and
         # the diagnostic must reflect expected_income (222.0), not income (111.0).
         np.testing.assert_allclose(test_country.households.ts.current("household_saving"), np.full(n_households, 222.0))
+
+    def test__liquid_asset_drawdown_diagnostic_uses_liquidity_shortfall_and_current_deposits(
+        self,
+        test_country,
+        monkeypatch,
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        expected_income = np.full(n_households, 100.0)
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+        deposits = np.resize(np.asarray([80.0, 300.0, -5.0]), n_households)
+        expected_shortfall = np.full(n_households, 250.0)
+        expected_funded = np.minimum(expected_shortfall, np.maximum(deposits, 0.0))
+        expected_residual = expected_shortfall - expected_funded
+
+        test_country.households.ts.override_current("expected_income", expected_income)
+        test_country.households.ts.override_current("wealth_deposits", deposits)
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_consumption",
+            lambda **_kwargs: target_consumption,
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        np.testing.assert_allclose(
+            test_country.households.ts.current("liquidity_shortfall_before_repair"),
+            expected_shortfall,
+        )
+        np.testing.assert_allclose(test_country.households.ts.current("funded_from_liquid_assets"), expected_funded)
+        np.testing.assert_allclose(
+            test_country.households.ts.current("residual_shortfall_after_lfa"),
+            expected_residual,
+        )
+        np.testing.assert_allclose(test_country.households.ts.current("wealth_deposits"), deposits)

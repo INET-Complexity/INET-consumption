@@ -844,3 +844,44 @@ class TestComputeStage4PortfolioDiagnostics:
 
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_liquid_return_rate"][-1]))
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_participation_probability"][-1]))
+
+
+class TestComputeAndRecordLiquidityShortfall:
+    """Stage 5 (feasibility resolver) Increment 0: liquidity-shortfall diagnostic."""
+
+    def test__defaults_to_expected_income_when_no_override_supplied(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.ts.override_current("income", np.full(n_households, 111.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+
+        shortfall = test_households.compute_and_record_liquidity_shortfall(
+            target_consumption=np.zeros((n_households, n_industries)),
+            scheduled_debt_service=np.zeros(n_households),
+        )
+
+        # target_consumption and scheduled_debt_service are both zero, so
+        # liquidity_shortfall == -income; must reflect expected_income (222),
+        # not income (111). See round-2 review finding in households.py's
+        # compute_and_record_liquidity_shortfall docstring.
+        np.testing.assert_allclose(shortfall, np.full(n_households, -222.0))
+
+    def test__income_override_takes_precedence_over_expected_income(self, test_households):
+        # Mirrors compute_target_consumption's own income_override semantics
+        # (test__target_consumption_uses_income_override above) so this
+        # diagnostic cannot silently diverge from compute_target_consumption's
+        # income basis if a future caller starts passing an override through
+        # _set_household_target_demand (round-3 review finding: pre-empts the
+        # same class of bug round 2 found, before it becomes live).
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+        income_override = np.full(n_households, 999.0)
+
+        shortfall = test_households.compute_and_record_liquidity_shortfall(
+            target_consumption=np.zeros((n_households, n_industries)),
+            scheduled_debt_service=np.zeros(n_households),
+            income_override=income_override,
+        )
+
+        np.testing.assert_allclose(shortfall, np.full(n_households, -999.0))

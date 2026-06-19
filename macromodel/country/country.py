@@ -1056,6 +1056,24 @@ class Country:
         else:
             self.households.ts.target_consumption.append(target_consumption)
 
+        # Stage 5 (feasibility resolver), Increment 0: diagnostics-only liquidity-
+        # shortfall computation. Must run after target_consumption is finalized
+        # above (it consumes that value) and uses the same scheduled mortgage
+        # service already computed for compute_target_consumption, plus the
+        # parallel consumer-loan scheduled-service accessor. Has no effect on
+        # goods or credit demand at this increment. See
+        # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+        # (Increment 0 section).
+        scheduled_debt_service = (
+            self.credit_market.compute_scheduled_mortgage_payments_by_household()
+            + self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
+        )
+        self.households.compute_and_record_liquidity_shortfall(
+            target_consumption=self.households.ts.current("target_consumption"),
+            scheduled_debt_service=scheduled_debt_service,
+            replace_current=replace_current,
+        )
+
         target_investment = self.households.compute_target_investment(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             current_cpi=self.economy.current_consumer_price_level(),

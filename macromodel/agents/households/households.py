@@ -28,6 +28,9 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.func.liquid_asset_drawdown import (
+    compute_liquid_asset_drawdown,
+)
 from macromodel.agents.households.func.liquidity_shortfall import (
     compute_liquidity_shortfall,
 )
@@ -95,14 +98,17 @@ _STAGE4_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "portfolio_settlement_enabled": False,
 }
 
-# Stage 5 (feasibility resolver), Increment 0: liquidity-shortfall diagnostic
-# time series, registered at Households init unconditionally — see
+# Stage 5 (feasibility resolver) diagnostic time series, registered at
+# Households init unconditionally — see
 # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
-# (Increment 0 section). This is diagnostics-only: it has no effect on goods
-# or credit demand at this increment.
+# (Increments 0-1). These are diagnostics-only: they have no effect on goods
+# or credit demand at these increments.
 _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "liquidity_shortfall": 0.0,
     "household_saving": 0.0,
+    "liquidity_shortfall_before_repair": 0.0,
+    "funded_from_liquid_assets": 0.0,
+    "residual_shortfall_after_lfa": 0.0,
 }
 
 
@@ -460,8 +466,8 @@ class Households(Agent):
         for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
-        # Stage 5 (feasibility resolver), Increment 0: register the liquidity-
-        # shortfall diagnostic time series at init, for the same reason as the
+        # Stage 5 (feasibility resolver): register diagnostic time series at
+        # init, for the same reason as the
         # Stage 4 block above (TimeSeries.__getattr__ requires at least one
         # prior assignment before .append(...) can be called).
         for _field_name, _zero_value in _STAGE5_DIAGNOSTIC_INITIAL_VALUES.items():
@@ -1020,6 +1026,32 @@ class Households(Agent):
             self.ts.liquidity_shortfall.append(result.liquidity_shortfall)
             self.ts.household_saving.append(result.household_saving)
         return result.liquidity_shortfall
+
+    def compute_and_record_liquid_asset_drawdown(
+        self,
+        liquidity_shortfall: np.ndarray,
+        replace_current: bool = False,
+    ) -> np.ndarray:
+        """Compute and persist the Stage 5 Increment 1 shadow drawdown diagnostic."""
+        liquidity_shortfall = np.asarray(liquidity_shortfall, dtype=float)
+        liquidity_shortfall_before_repair = np.where(
+            np.isfinite(liquidity_shortfall),
+            np.maximum(liquidity_shortfall, 0.0),
+            0.0,
+        )
+        result = compute_liquid_asset_drawdown(
+            liquidity_shortfall=liquidity_shortfall_before_repair,
+            available_lfa=self.ts.current("wealth_deposits"),
+        )
+        if replace_current:
+            self.ts.override_current("liquidity_shortfall_before_repair", liquidity_shortfall_before_repair)
+            self.ts.override_current("funded_from_liquid_assets", result.funded_from_liquid_assets)
+            self.ts.override_current("residual_shortfall_after_lfa", result.residual_shortfall_after_lfa)
+        else:
+            self.ts.liquidity_shortfall_before_repair.append(liquidity_shortfall_before_repair)
+            self.ts.funded_from_liquid_assets.append(result.funded_from_liquid_assets)
+            self.ts.residual_shortfall_after_lfa.append(result.residual_shortfall_after_lfa)
+        return result.residual_shortfall_after_lfa
 
     def update_income_belief_learning_state(
         self,

@@ -885,3 +885,76 @@ class TestComputeAndRecordLiquidityShortfall:
         )
 
         np.testing.assert_allclose(shortfall, np.full(n_households, -999.0))
+
+
+class TestComputeAndRecordLiquidAssetDrawdown:
+    """Stage 5 (feasibility resolver) Increment 1: liquid-asset drawdown diagnostic."""
+
+    def test__liquid_asset_drawdown_appends_diagnostics_using_current_wealth_deposits(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        deposits = np.resize(np.asarray([50.0, 20.0, -5.0]), n_households)
+        liquidity_shortfall = np.resize(np.asarray([100.0, 10.0, 30.0]), n_households)
+        expected_funded = np.resize(np.asarray([50.0, 10.0, 0.0]), n_households)
+        expected_residual = np.resize(np.asarray([50.0, 0.0, 30.0]), n_households)
+        test_households.ts.override_current("wealth_deposits", deposits)
+
+        residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+            liquidity_shortfall,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("funded_from_liquid_assets"),
+            expected_funded,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_lfa"),
+            expected_residual,
+        )
+        np.testing.assert_allclose(residual, test_households.ts.current("residual_shortfall_after_lfa"))
+
+    def test__liquid_asset_drawdown_replace_current_overrides_latest_diagnostics(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        first_shortfall = np.full(n_households, 10.0)
+        second_shortfall = np.full(n_households, 25.0)
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 5.0))
+
+        test_households.compute_and_record_liquid_asset_drawdown(first_shortfall)
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "liquidity_shortfall_before_repair",
+                "funded_from_liquid_assets",
+                "residual_shortfall_after_lfa",
+            ]
+        }
+
+        test_households.compute_and_record_liquid_asset_drawdown(second_shortfall, replace_current=True)
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(test_households.ts.current("liquidity_shortfall_before_repair"), second_shortfall)
+        np.testing.assert_allclose(test_households.ts.current("funded_from_liquid_assets"), np.full(n_households, 5.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_lfa"),
+            np.full(n_households, 20.0),
+        )
+
+    def test__liquid_asset_drawdown_non_finite_shortfall_snapshot_is_recorded_as_zero(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        liquidity_shortfall = np.resize(np.asarray([np.nan, np.inf, -8.0, 5.0]), n_households)
+        expected_snapshot = np.resize(np.asarray([0.0, 0.0, 0.0, 5.0]), n_households)
+
+        test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+            expected_snapshot,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("funded_from_liquid_assets")
+            + test_households.ts.current("residual_shortfall_after_lfa"),
+            expected_snapshot,
+        )

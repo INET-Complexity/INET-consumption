@@ -1068,9 +1068,13 @@ class Country:
             self.credit_market.compute_scheduled_mortgage_payments_by_household()
             + self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
         )
-        self.households.compute_and_record_liquidity_shortfall(
+        liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
             scheduled_debt_service=scheduled_debt_service,
+            replace_current=replace_current,
+        )
+        self.households.compute_and_record_liquid_asset_drawdown(
+            liquidity_shortfall=liquidity_shortfall,
             replace_current=replace_current,
         )
 

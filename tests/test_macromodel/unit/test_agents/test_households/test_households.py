@@ -944,12 +944,17 @@ class TestComputeAndRecordLiquidAssetDrawdown:
     def test__liquid_asset_drawdown_non_finite_shortfall_snapshot_is_recorded_as_zero(self, test_households):
         n_households = test_households.ts.current("n_households")
         test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
-        liquidity_shortfall = np.resize(np.asarray([np.nan, np.inf, 5.0]), n_households)
-        expected_snapshot = np.resize(np.asarray([0.0, 0.0, 5.0]), n_households)
+        liquidity_shortfall = np.resize(np.asarray([np.nan, np.inf, -8.0, 5.0]), n_households)
+        expected_snapshot = np.resize(np.asarray([0.0, 0.0, 0.0, 5.0]), n_households)
 
         test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
 
         np.testing.assert_allclose(
             test_households.ts.current("liquidity_shortfall_before_repair"),
+            expected_snapshot,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("funded_from_liquid_assets")
+            + test_households.ts.current("residual_shortfall_after_lfa"),
             expected_snapshot,
         )

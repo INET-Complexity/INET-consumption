@@ -1309,6 +1309,18 @@ class TestCountry:
 
         test_country.households.ts.override_current("expected_income", expected_income)
         test_country.households.ts.override_current("wealth_deposits", deposits)
+        pre_call_series = {
+            key: test_country.households.ts.current(key).copy()
+            for key in [
+                "target_consumption",
+                "target_consumption_loans",
+                "target_mortgage",
+                "wealth_deposits",
+                "wealth_other_financial_assets",
+                "debt_installments",
+            ]
+            if key in test_country.households.ts.dicts
+        }
 
         monkeypatch.setattr(
             test_country.households,
@@ -1338,3 +1350,15 @@ class TestCountry:
             expected_residual,
         )
         np.testing.assert_allclose(test_country.households.ts.current("wealth_deposits"), deposits)
+        # Increment 1 is diagnostic-only: it must not touch credit targets,
+        # wealth stocks, or debt-service state. target_consumption and
+        # target_investment are allowed to update in this planning method.
+        for key in [
+            "target_consumption_loans",
+            "target_mortgage",
+            "wealth_deposits",
+            "wealth_other_financial_assets",
+            "debt_installments",
+        ]:
+            if key in pre_call_series:
+                np.testing.assert_allclose(test_country.households.ts.current(key), pre_call_series[key])

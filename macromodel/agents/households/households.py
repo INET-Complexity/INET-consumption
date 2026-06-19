@@ -1034,9 +1034,13 @@ class Households(Agent):
     ) -> np.ndarray:
         """Compute and persist the Stage 5 Increment 1 shadow drawdown diagnostic."""
         liquidity_shortfall = np.asarray(liquidity_shortfall, dtype=float)
-        liquidity_shortfall_before_repair = np.where(np.isfinite(liquidity_shortfall), liquidity_shortfall, 0.0)
+        liquidity_shortfall_before_repair = np.where(
+            np.isfinite(liquidity_shortfall),
+            np.maximum(liquidity_shortfall, 0.0),
+            0.0,
+        )
         result = compute_liquid_asset_drawdown(
-            liquidity_shortfall=liquidity_shortfall,
+            liquidity_shortfall=liquidity_shortfall_before_repair,
             available_lfa=self.ts.current("wealth_deposits"),
         )
         if replace_current:

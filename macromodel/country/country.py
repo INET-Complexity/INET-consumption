@@ -1073,8 +1073,18 @@ class Country:
             scheduled_debt_service=scheduled_debt_service,
             replace_current=replace_current,
         )
-        self.households.compute_and_record_liquid_asset_drawdown(
+        residual_shortfall_after_lfa = self.households.compute_and_record_liquid_asset_drawdown(
             liquidity_shortfall=liquidity_shortfall,
+            replace_current=replace_current,
+        )
+        stage4_handoff = self.households.current_stage4_handoff_for_stage5(
+            target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service,
+        )
+        self.households.compute_and_record_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=residual_shortfall_after_lfa,
+            banks=self.banks,
+            stage4_handoff=stage4_handoff,
             replace_current=replace_current,
         )
 

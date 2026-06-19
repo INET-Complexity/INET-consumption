@@ -19,6 +19,7 @@ from macro_data.readers.permanent_income_mapping import (
     load_permanent_income_design_matrix,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
@@ -1284,6 +1285,20 @@ class TestCountry:
             "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(n_households),
         )
+        test_country.banks.ts.override_current(
+            "interest_rates_on_household_consumption_loans",
+            np.asarray([0.10, 0.14]),
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "current_stage4_handoff_for_stage5",
+            lambda **_kwargs: {
+                "delta_tilde": np.zeros(n_households),
+                "opening_tfa_scale": np.full(n_households, 100.0),
+                "post_return_ifa": np.full(n_households, 25.0),
+                "r_kappa": np.full(n_households, 0.02),
+            },
+        )
 
         test_country._set_household_target_demand(replace_current=False)
 
@@ -1349,6 +1364,14 @@ class TestCountry:
             test_country.households.ts.current("residual_shortfall_after_lfa"),
             expected_residual,
         )
+        np.testing.assert_allclose(
+            test_country.households.ts.current("preferred_margin_after_lfa"),
+            np.where(expected_residual > 0.0, 1.0, 0.0),
+        )
+        np.testing.assert_allclose(
+            test_country.households.ts.current("preferred_margin_amount"),
+            expected_residual,
+        )
         np.testing.assert_allclose(test_country.households.ts.current("wealth_deposits"), deposits)
         # Increment 1 is diagnostic-only: it must not touch credit targets,
         # wealth stocks, or debt-service state. target_consumption and
@@ -1362,3 +1385,56 @@ class TestCountry:
         ]:
             if key in pre_call_series:
                 np.testing.assert_allclose(test_country.households.ts.current(key), pre_call_series[key])
+
+    def test__set_household_target_demand_uses_real_stage4_handoff_for_borrow_vs_sell(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=1.0,
+            lambda_kappa=0.5,
+            fixed_cost_share=0.0,
+        )
+        monkeypatch.setattr(test_country.households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.02)
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        test_country.banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        np.testing.assert_allclose(
+            test_country.households.ts.current("borrow_vs_sell_comparison_valid_flag"),
+            np.ones(n_households),
+        )
+        assert np.all(np.isfinite(test_country.households.ts.current("borrow_vs_sell_l_tilde")))
+        assert np.all(np.isfinite(test_country.households.ts.current("borrow_vs_sell_threshold")))
+        assert np.all(np.isfinite(test_country.households.ts.current("borrow_vs_sell_spread")))
+        np.testing.assert_allclose(
+            test_country.households.ts.current("preferred_margin_after_lfa"),
+            np.ones(n_households),
+        )

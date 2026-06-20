@@ -573,7 +573,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
     Rent and scheduled mortgage service are intentionally diagnostics only. The
     behavioural target uses current real spendable income, lagged real income,
-    lagged real consumption, paper-style lagged NLA, lagged IFA, current housing
+    lagged real consumption, paper-style lagged NLA, lagged IFA, lagged housing
     wealth, and lagged HPI. Stage 3 permanent-income, consumer-debt-rate, and
     uncertainty terms remain explicit zero placeholders unless supplied.
     """
@@ -663,6 +663,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         liquid_wealth: np.ndarray,
         illiquid_wealth: np.ndarray,
         housing_wealth: np.ndarray,
+        lagged_housing_wealth: np.ndarray,
         rent: np.ndarray,
         mortgage_debt: np.ndarray,
         mortgage_payment: np.ndarray,
@@ -689,6 +690,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         liquid_wealth = np.asarray(liquid_wealth, dtype=float)
         illiquid_wealth = np.asarray(illiquid_wealth, dtype=float)
         housing_wealth = np.asarray(housing_wealth, dtype=float)
+        lagged_housing_wealth = np.asarray(lagged_housing_wealth, dtype=float)
         rent = np.asarray(rent, dtype=float)
         mortgage_debt = np.asarray(mortgage_debt, dtype=float)
         mortgage_payment = np.asarray(mortgage_payment, dtype=float)
@@ -723,13 +725,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         ) / lagged_deflator
         real_illiquid_financial_assets = lagged_illiquid_wealth / lagged_deflator
         real_housing_wealth = housing_wealth / current_deflator
+        real_lagged_housing_wealth = lagged_housing_wealth / lagged_deflator
         real_consumer_debt = lagged_consumption_loan_debt / lagged_deflator
         real_lagged_house_price = np.maximum(lagged_house_price_index_arr / lagged_deflator, self.house_price_floor)
 
         net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / real_spendable_income
         illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_spendable_income
         house_price_term = self.house_price_propensity * np.log(real_lagged_house_price / real_lagged_income)
-        housing_wealth_term = self.housing_wealth_propensity * real_housing_wealth / real_lagged_income
+        housing_wealth_term = self.housing_wealth_propensity * real_lagged_housing_wealth / real_spendable_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
         real_borrowing_rate_term = self.real_borrowing_rate_propensity * real_borrowing_rate_arr
 
@@ -782,6 +785,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_real_net_liquid_assets": real_net_liquid_assets,
             "target_consumption_real_illiquid_financial_assets": real_illiquid_financial_assets,
             "target_consumption_real_housing_wealth": real_housing_wealth,
+            "target_consumption_real_lagged_housing_wealth": real_lagged_housing_wealth,
             "target_consumption_real_consumer_debt": real_consumer_debt,
             "target_consumption_rent": np.zeros_like(real_spendable_income),
             "target_consumption_mortgage_debt": np.zeros_like(real_spendable_income),
@@ -830,6 +834,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         liquid_wealth: np.ndarray = None,
         illiquid_wealth: np.ndarray = None,
         housing_wealth: np.ndarray = None,
+        lagged_housing_wealth: np.ndarray = None,
         rent: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
@@ -860,6 +865,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         liquid_wealth = self._as_array(income, liquid_wealth)
         illiquid_wealth = self._as_array(income, illiquid_wealth)
         housing_wealth = self._as_array(income, housing_wealth)
+        lagged_housing_wealth = self._as_array(
+            income, lagged_housing_wealth if lagged_housing_wealth is not None else housing_wealth
+        )
         rent = self._as_array(income, rent)
         mortgage_debt = self._as_array(income, mortgage_debt)
         mortgage_payment = self._as_array(income, mortgage_payment)
@@ -885,6 +893,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
             housing_wealth=housing_wealth,
+            lagged_housing_wealth=lagged_housing_wealth,
             rent=rent,
             mortgage_debt=mortgage_debt,
             mortgage_payment=mortgage_payment,
@@ -918,6 +927,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             liquid_wealth=liquid_wealth,
             illiquid_wealth=illiquid_wealth,
             housing_wealth=housing_wealth,
+            lagged_housing_wealth=lagged_housing_wealth,
             rent=rent,
             mortgage_debt=mortgage_debt,
             mortgage_payment=mortgage_payment,

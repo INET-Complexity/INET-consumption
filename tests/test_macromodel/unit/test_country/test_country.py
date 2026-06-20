@@ -317,12 +317,14 @@ class TestCountry:
         assert "lagged_illiquid_wealth" in captured
         assert "lagged_mortgage_debt" in captured
         assert "lagged_consumption_loan_debt" in captured
+        assert "lagged_housing_wealth" in captured
         assert "lagged_house_price_index" in captured
         assert "real_borrowing_rate" in captured
         assert "consumer_debt_rate_delta" in captured
         assert "owner_occupied" in captured
         assert "mortgagor" in captured
         assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("wealth_deposits"))
+        assert np.allclose(captured["income"], test_country.households.ts.current("expected_income"))
         assert np.allclose(captured["lagged_income"], test_country.households.ts.prev("expected_income"))
         assert np.allclose(captured["lagged_liquid_wealth"], test_country.households.ts.prev("wealth_deposits"))
         assert np.allclose(
@@ -341,6 +343,11 @@ class TestCountry:
             captured["housing_wealth"],
             test_country.households.ts.current("wealth_main_residence")
             + test_country.households.ts.current("wealth_other_properties"),
+        )
+        assert np.allclose(
+            captured["lagged_housing_wealth"],
+            test_country.households.ts.prev("wealth_main_residence")
+            + test_country.households.ts.prev("wealth_other_properties"),
         )
         assert np.allclose(captured["mortgage_payment"], mortgage_payment)
         assert np.allclose(
@@ -371,6 +378,7 @@ class TestCountry:
             assert "target_consumption_lagged_real_income" in household_group
             assert "target_consumption_real_net_liquid_assets" in household_group
             assert "target_consumption_real_lagged_house_price" in household_group
+            assert "target_consumption_real_lagged_housing_wealth" in household_group
             assert "target_consumption_interest_rate_cashflow" in household_group
             assert "target_consumption_partial_adjustment_gap" in household_group
             assert "target_consumption_owner_occupied" in household_group

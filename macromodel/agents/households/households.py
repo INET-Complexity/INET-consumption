@@ -860,6 +860,7 @@ class Households(Agent):
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
         lagged_house_price_index: Optional[float] = None,
+        lagged_housing_wealth: Optional[np.ndarray] = None,
         real_borrowing_rate: Optional[float] = None,
         consumer_debt_rate_delta: Optional[float] = None,
         permanent_income_log_ratio: Optional[np.ndarray] = None,
@@ -895,6 +896,8 @@ class Households(Agent):
             house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
             house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
             lagged_house_price_index (Optional[float]): Lagged HPI index level for the paper house-price term
+            lagged_housing_wealth (Optional[np.ndarray]): Lagged gross housing wealth for the paper
+                housing-wealth term; defaults to the previous period's housing stock
             real_borrowing_rate (Optional[float]): Explicit real-rate proxy; defaults to zero placeholder
             consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
             permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
@@ -929,6 +932,8 @@ class Households(Agent):
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
+            if lagged_housing_wealth is None:
+                lagged_housing_wealth = self.ts.prev("wealth_main_residence") + self.ts.prev("wealth_other_properties")
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -952,6 +957,7 @@ class Households(Agent):
                 liquid_wealth=self.ts.current("wealth_deposits"),
                 illiquid_wealth=self.ts.current("wealth_other_financial_assets"),
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
+                lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
                 mortgage_debt=self.ts.current("mortgage_debt"),
                 mortgage_payment=mortgage_payment,
@@ -1322,6 +1328,7 @@ class Households(Agent):
             "target_consumption_real_net_liquid_assets",
             "target_consumption_real_illiquid_financial_assets",
             "target_consumption_real_housing_wealth",
+            "target_consumption_real_lagged_housing_wealth",
             "target_consumption_real_consumer_debt",
             "target_consumption_rent",
             "target_consumption_mortgage_debt",

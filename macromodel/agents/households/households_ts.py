@@ -129,6 +129,7 @@ def create_households_timeseries(
         target_consumption_real_net_liquid_assets=np.zeros(len(data)),
         target_consumption_real_illiquid_financial_assets=np.zeros(len(data)),
         target_consumption_real_housing_wealth=np.zeros(len(data)),
+        target_consumption_real_lagged_housing_wealth=np.zeros(len(data)),
         target_consumption_real_consumer_debt=np.zeros(len(data)),
         target_consumption_rent=np.zeros(len(data)),
         target_consumption_mortgage_debt=np.zeros(len(data)),

@@ -1259,7 +1259,9 @@ class TestComputeAndRecordResidualCapacityFallback:
     def test__records_shadow_plan_without_touching_balance_sheet_state(self, test_households, test_banks):
         n_households = test_households.ts.current("n_households")
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.0, 0.0]))
-        preferred_margin_after_lfa = np.resize(np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]), n_households)
+        preferred_margin_after_lfa = np.resize(
+            np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]), n_households
+        )
         preferred_margin_amount = np.resize(np.asarray([100.0, 25.0]), n_households)
         income = np.full(n_households, 100.0)
         scheduled_mortgage_payment = np.full(n_households, 0.0)
@@ -1363,4 +1365,6 @@ class TestComputeAndRecordResidualCapacityFallback:
         after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
         assert after_lengths == before_lengths
         np.testing.assert_allclose(test_households.ts.current("borrow_planned"), np.full(n_households, 12.0))
-        np.testing.assert_allclose(test_households.ts.current("residual_shortfall_after_caps"), np.full(n_households, 0.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_caps"), np.full(n_households, 0.0)
+        )

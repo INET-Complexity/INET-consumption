@@ -1066,7 +1066,9 @@ class Country:
         # goods or credit demand at this increment. See
         # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
         # (Increment 0 section).
-        scheduled_consumption_loan_payment = self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
+        scheduled_consumption_loan_payment = (
+            self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
+        )
         scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),

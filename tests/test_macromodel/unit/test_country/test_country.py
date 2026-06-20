@@ -1449,9 +1449,7 @@ class TestCountry:
             np.ones(n_households),
         )
 
-    def test__set_household_target_demand_records_increment_3_shadow_residual_caps(
-        self, test_country, monkeypatch
-    ):
+    def test__set_household_target_demand_records_increment_3_shadow_residual_caps(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(
@@ -1497,8 +1495,12 @@ class TestCountry:
         np.testing.assert_allclose(test_country.households.ts.current("dsti_headroom"), np.zeros(n_households))
         np.testing.assert_allclose(test_country.households.ts.current("dsti_maximum_loan_size"), np.zeros(n_households))
         np.testing.assert_allclose(test_country.households.ts.current("borrow_planned"), np.zeros(n_households))
-        np.testing.assert_allclose(test_country.households.ts.current("liquidation_planned"), np.full(n_households, 25.0))
-        np.testing.assert_allclose(test_country.households.ts.current("shadow_credit_requested"), np.zeros(n_households))
+        np.testing.assert_allclose(
+            test_country.households.ts.current("liquidation_planned"), np.full(n_households, 25.0)
+        )
+        np.testing.assert_allclose(
+            test_country.households.ts.current("shadow_credit_requested"), np.zeros(n_households)
+        )
         np.testing.assert_allclose(
             test_country.households.ts.current("forced_liquidation_amount"),
             np.full(n_households, 25.0),

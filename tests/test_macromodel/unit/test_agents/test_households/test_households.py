@@ -2,8 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import macromodel.agents.households.households as households_module
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
+from macromodel.agents.households.func.borrow_vs_sell import (
+    PREFERRED_MARGIN_BORROW,
+    PREFERRED_MARGIN_SELL,
+)
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
+from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
 
@@ -958,3 +965,289 @@ class TestComputeAndRecordLiquidAssetDrawdown:
             + test_households.ts.current("residual_shortfall_after_lfa"),
             expected_snapshot,
         )
+
+
+class TestComputeAndRecordBorrowVsSellChoice:
+    """Stage 5 (feasibility resolver) Increment 2: borrow-vs-sell diagnostic."""
+
+    def test__uses_stage4_handoff_and_mean_offered_rate(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        residual = np.resize(np.asarray([10.0, 10.0]), n_households)
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current(
+            "portfolio_delta_tilde",
+            np.resize(np.asarray([0.0, -0.1]), n_households),
+        )
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_target_illiquid_assets", np.full(n_households, 10.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=residual,
+            banks=test_banks,
+            stage4_handoff=stage4_handoff,
+        )
+
+        np.testing.assert_array_equal(
+            preferred_margin[:2],
+            np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]),
+        )
+        np.testing.assert_allclose(preferred_amount[:2], [10.0, 10.0])
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[0], 0.0)
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[1], 0.10)
+
+    def test__replace_current_overrides_latest_diagnostics_without_changing_lengths(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current("portfolio_delta_tilde", np.zeros(n_households))
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 10.0),
+            test_banks,
+            stage4_handoff,
+        )
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "preferred_margin_after_lfa",
+                "preferred_margin_amount",
+                "borrow_vs_sell_threshold",
+                "borrow_vs_sell_spread",
+                "borrow_vs_sell_l_tilde",
+                "borrow_vs_sell_comparison_valid_flag",
+            ]
+        }
+
+        preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 0.0),
+            test_banks,
+            stage4_handoff,
+            replace_current=True,
+        )
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(preferred_margin, np.zeros(n_households))
+        np.testing.assert_allclose(preferred_amount, np.zeros(n_households))
+
+    def test__does_not_mutate_core_balance_sheet_or_credit_targets(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current("portfolio_delta_tilde", np.full(n_households, 1.0))
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        baseline = {
+            key: test_households.ts.current(key).copy()
+            for key in [
+                "wealth_deposits",
+                "wealth_other_financial_assets",
+                "target_consumption_loans",
+                "target_mortgage",
+                "debt_installments",
+            ]
+        }
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 10.0),
+            test_banks,
+            stage4_handoff,
+        )
+
+        for key, values in baseline.items():
+            np.testing.assert_allclose(test_households.ts.current(key), values)
+
+    def test__current_stage4_handoff_adds_positive_surplus_before_calling_stage4_helper(
+        self, test_households, monkeypatch
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        captured = {}
+
+        def fake_stage4_helper(**kwargs):
+            captured.update(kwargs)
+            return Stage4HouseholdDiagnostics(
+                portfolio_opening_tfa_scale=np.full(n_households, 100.0),
+                portfolio_target_tfa_base=np.full(n_households, 175.0),
+                portfolio_post_return_lfa=kwargs["post_surplus_lfa"],
+                portfolio_post_return_ifa=np.full(n_households, 25.0),
+                portfolio_investable_surplus=kwargs["investable_surplus"],
+                portfolio_target_illiquid_share=np.full(n_households, 0.65),
+                portfolio_target_share_clipped_flag=np.zeros(n_households, dtype=bool),
+                rebalancing=PortfolioRebalancingResult(
+                    portfolio_participates=np.ones(n_households, dtype=bool),
+                    actual_illiquid_share=np.zeros(n_households),
+                    target_illiquid_assets=np.zeros(n_households),
+                    delta_tilde=np.zeros(n_households),
+                    kappa_star_tilde=np.zeros(n_households),
+                    kappa_tilde=np.zeros(n_households),
+                    desired_illiquid_adjustment=np.zeros(n_households),
+                    adjustment_cost=np.zeros(n_households),
+                    counterfactual_lfa_flow=np.zeros(n_households),
+                    counterfactual_ifa_flow=np.zeros(n_households),
+                    inaction_flag=np.zeros(n_households, dtype=bool),
+                    upper_bound_flag=np.zeros(n_households, dtype=bool),
+                    lower_bound_flag=np.zeros(n_households, dtype=bool),
+                    infeasible_interval_flag=np.zeros(n_households, dtype=bool),
+                    no_financial_assets_flag=np.zeros(n_households, dtype=bool),
+                    portfolio_valid_flag=np.ones(n_households, dtype=bool),
+                ),
+            )
+
+        monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
+
+        test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(captured["investable_surplus"], np.full(n_households, 50.0))
+        np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 100.0))
+
+    def test__current_stage4_handoff_uses_post_return_ifa_before_calling_stage4_helper(
+        self, test_households, monkeypatch
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        test_households.functions["wealth"].compute_income_from_financial_assets(
+            current_wealth_in_other_financial_assets=test_households.ts.current("wealth_other_financial_assets"),
+        )
+        expected_post_return_ifa = (
+            test_households.ts.current("wealth_other_financial_assets")
+            + test_households.current_illiquid_financial_asset_return_amount()
+        )
+        captured = {}
+
+        def fake_stage4_helper(**kwargs):
+            captured.update(kwargs)
+            return Stage4HouseholdDiagnostics(
+                portfolio_opening_tfa_scale=np.full(n_households, 100.0),
+                portfolio_target_tfa_base=np.full(n_households, 175.0),
+                portfolio_post_return_lfa=kwargs["post_surplus_lfa"],
+                portfolio_post_return_ifa=kwargs["post_return_ifa"],
+                portfolio_investable_surplus=kwargs["investable_surplus"],
+                portfolio_target_illiquid_share=np.full(n_households, 0.65),
+                portfolio_target_share_clipped_flag=np.zeros(n_households, dtype=bool),
+                rebalancing=PortfolioRebalancingResult(
+                    portfolio_participates=np.ones(n_households, dtype=bool),
+                    actual_illiquid_share=np.zeros(n_households),
+                    target_illiquid_assets=np.zeros(n_households),
+                    delta_tilde=np.zeros(n_households),
+                    kappa_star_tilde=np.zeros(n_households),
+                    kappa_tilde=np.zeros(n_households),
+                    desired_illiquid_adjustment=np.zeros(n_households),
+                    adjustment_cost=np.zeros(n_households),
+                    counterfactual_lfa_flow=np.zeros(n_households),
+                    counterfactual_ifa_flow=np.zeros(n_households),
+                    inaction_flag=np.zeros(n_households, dtype=bool),
+                    upper_bound_flag=np.zeros(n_households, dtype=bool),
+                    lower_bound_flag=np.zeros(n_households, dtype=bool),
+                    infeasible_interval_flag=np.zeros(n_households, dtype=bool),
+                    no_financial_assets_flag=np.zeros(n_households, dtype=bool),
+                    portfolio_valid_flag=np.ones(n_households, dtype=bool),
+                ),
+            )
+
+        monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
+
+        test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(captured["post_return_ifa"], expected_post_return_ifa)
+
+    def test__current_stage4_handoff_draws_current_return_when_not_pre_drawn(self, test_households, monkeypatch):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
+
+        handoff = test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
+        np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))

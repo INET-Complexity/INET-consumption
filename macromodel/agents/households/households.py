@@ -28,6 +28,9 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.func.borrow_vs_sell import (
+    compute_borrow_vs_sell_choice,
+)
 from macromodel.agents.households.func.liquid_asset_drawdown import (
     compute_liquid_asset_drawdown,
 )
@@ -109,6 +112,12 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "liquidity_shortfall_before_repair": 0.0,
     "funded_from_liquid_assets": 0.0,
     "residual_shortfall_after_lfa": 0.0,
+    "preferred_margin_after_lfa": 0.0,
+    "preferred_margin_amount": 0.0,
+    "borrow_vs_sell_threshold": 0.0,
+    "borrow_vs_sell_spread": 0.0,
+    "borrow_vs_sell_l_tilde": 0.0,
+    "borrow_vs_sell_comparison_valid_flag": False,
 }
 
 
@@ -734,6 +743,17 @@ class Households(Agent):
             return np.nan
         return current_rate()
 
+    def current_illiquid_financial_asset_return_amount(self) -> np.ndarray:
+        """Return the current-period illiquid return amount vector, if available."""
+        current_amount = getattr(self.functions["wealth"], "current_illiquid_return_amount", None)
+        current_wealth = self.ts.current("wealth_other_financial_assets")
+        if current_amount is None:
+            return np.full(current_wealth.shape, np.nan)
+        try:
+            return current_amount(current_wealth_in_other_financial_assets=current_wealth)
+        except ValueError:
+            return np.full(current_wealth.shape, np.nan)
+
     def compute_expected_income(self) -> np.ndarray:
         """Calculate total expected income.
 
@@ -1052,6 +1072,122 @@ class Households(Agent):
             self.ts.funded_from_liquid_assets.append(result.funded_from_liquid_assets)
             self.ts.residual_shortfall_after_lfa.append(result.residual_shortfall_after_lfa)
         return result.residual_shortfall_after_lfa
+
+    def compute_and_record_borrow_vs_sell_choice(
+        self,
+        residual_shortfall_after_lfa: np.ndarray,
+        banks: Banks,
+        stage4_handoff: dict[str, np.ndarray],
+        replace_current: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute and persist the Stage 5 Increment 2 shadow branch choice."""
+        mean_offered_household_loan_rate = np.full(
+            self.ts.current("n_households"),
+            banks.ts.current("interest_rates_on_household_consumption_loans").mean(),
+            dtype=float,
+        )
+        result = compute_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float),
+            delta_tilde=stage4_handoff["delta_tilde"],
+            opening_tfa_scale=stage4_handoff["opening_tfa_scale"],
+            post_return_ifa=stage4_handoff["post_return_ifa"],
+            r_b=mean_offered_household_loan_rate,
+            r_kappa=stage4_handoff["r_kappa"],
+            phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
+            lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
+        )
+        if replace_current:
+            self.ts.override_current("preferred_margin_after_lfa", result.preferred_margin)
+            self.ts.override_current("preferred_margin_amount", result.preferred_amount)
+            self.ts.override_current("borrow_vs_sell_threshold", result.borrow_vs_sell_threshold)
+            self.ts.override_current("borrow_vs_sell_spread", result.borrow_vs_sell_spread)
+            self.ts.override_current("borrow_vs_sell_l_tilde", result.borrow_vs_sell_l_tilde)
+            self.ts.override_current("borrow_vs_sell_comparison_valid_flag", result.comparison_valid_flag)
+        else:
+            self.ts.preferred_margin_after_lfa.append(result.preferred_margin)
+            self.ts.preferred_margin_amount.append(result.preferred_amount)
+            self.ts.borrow_vs_sell_threshold.append(result.borrow_vs_sell_threshold)
+            self.ts.borrow_vs_sell_spread.append(result.borrow_vs_sell_spread)
+            self.ts.borrow_vs_sell_l_tilde.append(result.borrow_vs_sell_l_tilde)
+            self.ts.borrow_vs_sell_comparison_valid_flag.append(result.comparison_valid_flag)
+        return result.preferred_margin, result.preferred_amount
+
+    def current_stage4_handoff_for_stage5(
+        self,
+        *,
+        target_consumption_total: np.ndarray,
+        scheduled_debt_service: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Build the current-period Stage 4 handoff needed by Stage 5.
+
+        This uses the same pure Stage 4 diagnostics helper as
+        ``compute_stage4_portfolio_diagnostics()`` but does not persist any
+        ``portfolio_*`` time series. When portfolio choice is disabled, the
+        returned arrays intentionally force the Increment 2 fallback path.
+        """
+        n_households = self.ts.current("n_households")
+        wealth_function = self.functions["wealth"]
+        if not getattr(wealth_function, "uses_portfolio_choice", False):
+            return {
+                "delta_tilde": np.full(n_households, np.nan),
+                "opening_tfa_scale": np.full(n_households, np.nan),
+                "post_return_ifa": np.full(n_households, np.nan),
+                "r_kappa": np.full(n_households, np.nan),
+            }
+
+        opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
+        current_return_amount = self.current_illiquid_financial_asset_return_amount()
+        if not np.all(np.isfinite(current_return_amount)):
+            current_return_amount = self.compute_income_from_financial_assets()
+        post_return_ifa = self.ts.current("wealth_other_financial_assets") + current_return_amount
+        investable_surplus = (
+            self.ts.current("expected_income")
+            - np.asarray(target_consumption_total, dtype=float)
+            - np.asarray(scheduled_debt_service, dtype=float)
+        )
+        post_surplus_lfa = self.ts.current("wealth_deposits") + np.maximum(investable_surplus, 0.0)
+
+        frm_covariates = None
+        frm_magnitude_coefficients = None
+        population_scale_factor = None
+        net_wealth_scale_divisor = None
+        if wealth_function.target_share_source == "frm_magnitude":
+            tenure_status = self.states["Tenure Status of the Main Residence"]
+            frm_covariates = {
+                "age": self.states["household_head_age"],
+                "household_members_in_employment": self.states["household_members_in_employment"],
+                "investment_attitudes": self.states["Investment Attitudes"],
+                "mortgagor": (tenure_status == 2).astype(float),
+                "owner": (tenure_status == 1).astype(float),
+                "net_wealth": self.compute_net_wealth(),
+            }
+            frm_coefficients = self.states["frm_coefficients"]
+            frm_magnitude_coefficients = frm_coefficients.magnitude_coefficients
+            population_scale_factor = self.states["population_scale_factor"]
+            net_wealth_scale_divisor = frm_coefficients.net_wealth_scale_divisor
+
+        diagnostics = compute_stage4_household_diagnostics(
+            opening_tfa_scale=opening_tfa_scale,
+            post_surplus_lfa=post_surplus_lfa,
+            post_return_ifa=post_return_ifa,
+            investable_surplus=investable_surplus,
+            frm_covariates=frm_covariates,
+            frm_magnitude_coefficients=frm_magnitude_coefficients,
+            population_scale_factor=population_scale_factor,
+            net_wealth_scale_divisor=net_wealth_scale_divisor,
+            portfolio_participates=self.states["portfolio_participates"],
+            target_share_source=wealth_function.target_share_source,
+            default_target_illiquid_share=wealth_function.default_target_illiquid_share,
+            phi_1=wealth_function.phi_1,
+            lambda_kappa=wealth_function.lambda_kappa,
+            fixed_cost_share=wealth_function.fixed_cost_share,
+        )
+        return {
+            "delta_tilde": diagnostics.rebalancing.delta_tilde,
+            "opening_tfa_scale": diagnostics.portfolio_opening_tfa_scale,
+            "post_return_ifa": diagnostics.portfolio_post_return_ifa,
+            "r_kappa": np.full(n_households, self.current_illiquid_financial_asset_return_rate()),
+        }
 
     def update_income_belief_learning_state(
         self,

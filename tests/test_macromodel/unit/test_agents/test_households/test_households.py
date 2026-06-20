@@ -1002,8 +1002,8 @@ class TestComputeAndRecordBorrowVsSellChoice:
             np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]),
         )
         np.testing.assert_allclose(preferred_amount[:2], [10.0, 10.0])
-        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[0], 0.0)
-        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[1], 0.10)
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[0], -0.02)
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[1], 0.08)
 
     def test__replace_current_overrides_latest_diagnostics_without_changing_lengths(self, test_households, test_banks):
         n_households = test_households.ts.current("n_households")
@@ -1148,7 +1148,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         )
 
         np.testing.assert_allclose(captured["investable_surplus"], np.full(n_households, 50.0))
-        np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 100.0))
+        np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 50.0))
 
     def test__current_stage4_handoff_uses_post_return_ifa_before_calling_stage4_helper(
         self, test_households, monkeypatch

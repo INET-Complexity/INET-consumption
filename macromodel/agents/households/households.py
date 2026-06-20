@@ -1081,17 +1081,28 @@ class Households(Agent):
         replace_current: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute and persist the Stage 5 Increment 2 shadow branch choice."""
-        mean_offered_household_loan_rate = np.full(
-            self.ts.current("n_households"),
-            banks.ts.current("interest_rates_on_household_consumption_loans").mean(),
-            dtype=float,
-        )
+        bank_rates = np.asarray(banks.ts.current("interest_rates_on_household_consumption_loans"), dtype=float)
+        corresponding_bank_ids = np.asarray(self.states["Corresponding Bank ID"], dtype=int)
+        if bank_rates.ndim == 0:
+            bank_rates = np.full(self.ts.current("n_households"), float(bank_rates), dtype=float)
+        elif bank_rates.ndim == 1:
+            if bank_rates.shape[0] == self.ts.current("n_households"):
+                pass
+            elif bank_rates.shape[0] == banks.ts.current("n_banks"):
+                bank_rates = bank_rates[corresponding_bank_ids]
+            else:
+                bank_rates = np.resize(bank_rates, banks.ts.current("n_banks"))[corresponding_bank_ids]
+        else:
+            raise ValueError(
+                "interest_rates_on_household_consumption_loans must be a scalar, one rate per household, "
+                "or one rate per bank."
+            )
         result = compute_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float),
             delta_tilde=stage4_handoff["delta_tilde"],
             opening_tfa_scale=stage4_handoff["opening_tfa_scale"],
             post_return_ifa=stage4_handoff["post_return_ifa"],
-            r_b=mean_offered_household_loan_rate,
+            r_b=bank_rates,
             r_kappa=stage4_handoff["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
@@ -1145,7 +1156,7 @@ class Households(Agent):
             - np.asarray(target_consumption_total, dtype=float)
             - np.asarray(scheduled_debt_service, dtype=float)
         )
-        post_surplus_lfa = self.ts.current("wealth_deposits") + np.maximum(investable_surplus, 0.0)
+        post_surplus_lfa = self.ts.current("wealth_deposits")
 
         frm_covariates = None
         frm_magnitude_coefficients = None

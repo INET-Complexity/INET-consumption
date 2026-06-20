@@ -1,6 +1,6 @@
-from typing import Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .bank_configuration import BanksConfiguration
 from .central_bank_configuration import CentralBankConfiguration
@@ -35,6 +35,7 @@ class CountryConfiguration(BaseModel):
     housing_market: HousingMarketConfiguration = HousingMarketConfiguration()
     credit_market: CreditMarketConfiguration = CreditMarketConfiguration()
     goods_market: GoodsMarketConfiguration = GoodsMarketConfiguration()
+    consumer_credit: dict[str, Any] = Field(default_factory=dict)
 
     forecasting_window: int = 60
     assume_zero_growth: bool = False

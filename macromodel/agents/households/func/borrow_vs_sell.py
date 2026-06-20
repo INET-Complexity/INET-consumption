@@ -95,7 +95,9 @@ def compute_borrow_vs_sell_choice(
 
     preferred_margin = np.where(spread_prefers_sell, PREFERRED_MARGIN_SELL, preferred_margin)
     preferred_margin = np.where(spread_prefers_borrow, PREFERRED_MARGIN_BORROW, preferred_margin)
-    preferred_amount = np.where(spread_prefers_sell | spread_prefers_borrow, residual_shortfall_after_lfa, preferred_amount)
+    preferred_amount = np.where(
+        spread_prefers_sell | spread_prefers_borrow, residual_shortfall_after_lfa, preferred_amount
+    )
 
     return BorrowVsSellResult(
         preferred_margin=preferred_margin,

@@ -1423,7 +1423,9 @@ class TestCountry:
             "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(n_households),
         )
-        test_country.banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        test_country.banks.ts.override_current(
+            "interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14])
+        )
 
         test_country._set_household_target_demand(replace_current=False)
 

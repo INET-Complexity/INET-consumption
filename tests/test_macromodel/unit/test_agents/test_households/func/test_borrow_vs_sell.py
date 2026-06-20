@@ -48,7 +48,14 @@ def test__exact_tie_defaults_to_borrow():
 
 
 def test__zero_or_negative_shortfall_returns_none():
-    result = _compute(residual_shortfall_after_lfa=[0.0, -1.0], delta_tilde=[0.0, 0.0], opening_tfa_scale=[100.0, 100.0], post_return_ifa=[25.0, 25.0], r_b=[0.08, 0.08], r_kappa=[0.02, 0.02])
+    result = _compute(
+        residual_shortfall_after_lfa=[0.0, -1.0],
+        delta_tilde=[0.0, 0.0],
+        opening_tfa_scale=[100.0, 100.0],
+        post_return_ifa=[25.0, 25.0],
+        r_b=[0.08, 0.08],
+        r_kappa=[0.02, 0.02],
+    )
 
     np.testing.assert_array_equal(result.preferred_margin, [PREFERRED_MARGIN_NONE, PREFERRED_MARGIN_NONE])
     np.testing.assert_allclose(result.preferred_amount, [0.0, 0.0])

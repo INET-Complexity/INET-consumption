@@ -190,6 +190,42 @@ def test__non_finite_inputs_collapse_to_conservative_zero_capacity_behavior():
     np.testing.assert_allclose(result.residual_shortfall_after_caps, [10.0])
 
 
+def test__non_finite_rate_uses_zero_rate_annuity_limit():
+    result = _compute(
+        preferred_margin_amount=np.asarray([80.0], dtype=float),
+        income=np.asarray([100.0], dtype=float),
+        scheduled_mortgage_payment=np.asarray([0.0], dtype=float),
+        r_b=np.asarray([np.nan], dtype=float),
+        consumer_loan_maturity=4,
+        dsti_limit=0.2,
+        current_ifa=np.asarray([0.0], dtype=float),
+    )
+
+    np.testing.assert_allclose(result.dsti_headroom, [20.0])
+    np.testing.assert_allclose(result.dsti_maximum_loan_size, [80.0])
+    np.testing.assert_allclose(result.borrow_planned, [80.0])
+    np.testing.assert_array_equal(result.dsti_cap_binding, [False])
+
+
+def test__negative_proxy_inputs_collapse_to_zero_capacity():
+    result = _compute(
+        preferred_margin_amount=np.asarray([12.0], dtype=float),
+        income=np.asarray([-1.0], dtype=float),
+        scheduled_mortgage_payment=np.asarray([-2.0], dtype=float),
+        current_ifa=np.asarray([-3.0], dtype=float),
+        r_b=np.asarray([0.04], dtype=float),
+        consumer_loan_maturity=4,
+        dsti_limit=0.2,
+    )
+
+    np.testing.assert_allclose(result.dsti_headroom, [0.0])
+    np.testing.assert_allclose(result.dsti_maximum_loan_size, [0.0])
+    np.testing.assert_allclose(result.borrow_planned, [0.0])
+    np.testing.assert_allclose(result.liquidation_planned, [0.0])
+    np.testing.assert_allclose(result.shadow_credit_requested, [0.0])
+    np.testing.assert_allclose(result.residual_shortfall_after_caps, [12.0])
+
+
 def test__returns_typed_result_without_side_effects():
     preferred_amount = np.asarray([10.0], dtype=float)
     result = _compute(preferred_margin_amount=preferred_amount)

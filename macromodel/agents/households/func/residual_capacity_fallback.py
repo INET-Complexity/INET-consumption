@@ -110,11 +110,13 @@ def compute_residual_capacity_fallback(
     proxy_valid = (
         valid_margin
         & np.isfinite(income)
+        & (income >= 0.0)
         & np.isfinite(scheduled_mortgage_payment)
-        & np.isfinite(r_b)
+        & (scheduled_mortgage_payment >= 0.0)
         & np.isfinite(consumer_loan_maturity)
         & np.isfinite(dsti_limit)
         & np.isfinite(current_ifa)
+        & (current_ifa >= 0.0)
         & (consumer_loan_maturity > 0.0)
         & (dsti_limit > 0.0)
     )

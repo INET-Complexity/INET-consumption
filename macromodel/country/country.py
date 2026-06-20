@@ -79,6 +79,22 @@ from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.util.get_histogram import get_histogram
 
 
+def _positive_int_or_default(value: object, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _positive_float_or_default(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if np.isfinite(parsed) and parsed > 0.0 else default
+
+
 class Country:
     """A complete national economy with interacting agents and markets.
 
@@ -1090,12 +1106,16 @@ class Country:
             replace_current=replace_current,
         )
         consumer_credit_parameters = getattr(self.configuration, "consumer_credit", {}) or {}
-        consumer_credit_maturity = int(
+        consumer_credit_maturity = _positive_int_or_default(
             consumer_credit_parameters.get(
                 "maturity_quarters", self.banks.parameters.household_consumption_loan_maturity
-            )
+            ),
+            self.banks.parameters.household_consumption_loan_maturity,
         )
-        consumer_credit_dsti_limit = float(consumer_credit_parameters.get("dsti_limit", 0.35))
+        consumer_credit_dsti_limit = _positive_float_or_default(
+            consumer_credit_parameters.get("dsti_limit", 0.35),
+            0.35,
+        )
         self.households.compute_and_record_residual_capacity_fallback(
             preferred_margin_after_lfa=self.households.ts.current("preferred_margin_after_lfa"),
             preferred_margin_amount=self.households.ts.current("preferred_margin_amount"),

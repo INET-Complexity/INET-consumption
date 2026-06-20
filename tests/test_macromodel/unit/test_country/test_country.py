@@ -1513,3 +1513,64 @@ class TestCountry:
             test_country.households.ts.current("dsti_cap_binding"),
             np.ones(n_households, dtype=bool),
         )
+
+    def test__set_household_target_demand_falls_back_on_invalid_consumer_credit_config(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.consumer_credit = {
+            "maturity_quarters": None,
+            "dsti_limit": "bad-value",
+        }
+        test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=1.0,
+            lambda_kappa=0.5,
+            fixed_cost_share=0.0,
+        )
+        monkeypatch.setattr(test_country.households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.02)
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        test_country.banks.ts.override_current(
+            "interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14])
+        )
+        captured = {}
+
+        def capture_residual_capacity_fallback(**kwargs):
+            captured.update(kwargs)
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            capture_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert captured["consumer_loan_maturity"] == test_country.banks.parameters.household_consumption_loan_maturity
+        assert captured["dsti_limit"] == 0.35

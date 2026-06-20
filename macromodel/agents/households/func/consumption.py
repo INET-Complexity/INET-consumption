@@ -82,6 +82,7 @@ class HouseholdConsumption(ABC):
         liquid_wealth: np.ndarray = None,
         illiquid_wealth: np.ndarray = None,
         housing_wealth: np.ndarray = None,
+        lagged_housing_wealth: np.ndarray = None,
         rent: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
@@ -175,6 +176,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         liquid_wealth: np.ndarray = None,  # Ignored in default consumption
         illiquid_wealth: np.ndarray = None,  # Ignored in default consumption
         housing_wealth: np.ndarray = None,  # Ignored in default consumption
+        lagged_housing_wealth: np.ndarray = None,  # Ignored in default consumption
         rent: np.ndarray = None,  # Ignored in default consumption
         mortgage_debt: np.ndarray = None,  # Ignored in default consumption
         mortgage_payment: np.ndarray = None,  # Ignored in default consumption
@@ -358,6 +360,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         liquid_wealth: np.ndarray = None,  # Ignored in CES consumption
         illiquid_wealth: np.ndarray = None,  # Ignored in CES consumption
         housing_wealth: np.ndarray = None,  # Ignored in CES consumption
+        lagged_housing_wealth: np.ndarray = None,  # Ignored in CES consumption
         rent: np.ndarray = None,  # Ignored in CES consumption
         mortgage_debt: np.ndarray = None,  # Ignored in CES consumption
         mortgage_payment: np.ndarray = None,  # Ignored in CES consumption
@@ -1002,6 +1005,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         liquid_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         illiquid_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         housing_wealth: np.ndarray = None,  # Ignored in exogenous consumption
+        lagged_housing_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         rent: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_debt: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_payment: np.ndarray = None,  # Ignored in exogenous consumption

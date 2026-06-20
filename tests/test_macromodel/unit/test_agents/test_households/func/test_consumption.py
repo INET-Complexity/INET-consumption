@@ -44,6 +44,7 @@ class TestDefaultHouseholdConsumption:
             current_time=0,
             take_consumption_weights_by_income_quantile=False,
             tau_vat=tau_vat,
+            lagged_housing_wealth=np.full(n_households, 120.0),
         )
 
         # Check output shape
@@ -135,6 +136,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.1,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
         }
 
         # CES without substitution data (should fall back to default)
@@ -184,6 +186,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.0,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
             "prices": current_prices,
             "initial_prices": initial_prices,
             "taxes": current_taxes,
@@ -352,6 +355,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.0,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
             "prices": prices,
             "initial_prices": prices,
             "taxes": taxes,

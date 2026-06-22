@@ -747,7 +747,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         annual_lagged_income = real_lagged_income * annualization_factor
 
         net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / annual_spendable_income
-        illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / annual_spendable_income
+        illiquid_assets_term = (
+            self.illiquid_wealth_propensity * real_illiquid_financial_assets / annual_spendable_income
+        )
         house_price_term = self.house_price_propensity * np.log(real_lagged_house_price / annual_lagged_income)
         housing_wealth_term = self.housing_wealth_propensity * real_lagged_housing_wealth / annual_spendable_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr

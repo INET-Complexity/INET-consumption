@@ -1251,3 +1251,120 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
         np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
+
+
+class TestComputeAndRecordResidualCapacityFallback:
+    """Stage 5 (feasibility resolver) Increment 3: shadow residual-capacity fallback."""
+
+    def test__records_shadow_plan_without_touching_balance_sheet_state(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.0, 0.0]))
+        preferred_margin_after_lfa = np.resize(
+            np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]), n_households
+        )
+        preferred_margin_amount = np.resize(np.asarray([100.0, 25.0]), n_households)
+        income = np.full(n_households, 100.0)
+        scheduled_mortgage_payment = np.full(n_households, 0.0)
+        current_ifa = np.resize(np.asarray([0.0, 10.0]), n_households)
+        baseline = {
+            key: test_households.ts.current(key).copy()
+            for key in [
+                "wealth_deposits",
+                "wealth_other_financial_assets",
+                "target_consumption_loans",
+                "target_mortgage",
+                "debt_installments",
+            ]
+        }
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+        )
+
+        np.testing.assert_allclose(test_households.ts.current("dsti_headroom"), np.full(n_households, 10.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("borrow_planned"),
+            np.resize(np.asarray([100.0, 15.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidation_planned"),
+            np.resize(np.asarray([0.0, 10.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("shadow_credit_requested"),
+            np.resize(np.asarray([100.0, 15.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("forced_liquidation_amount"),
+            np.resize(np.asarray([0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_caps"),
+            np.resize(np.asarray([0.0, 0.0]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("dsti_cap_binding"),
+            np.resize(np.asarray([False, False]), n_households),
+        )
+
+        for key, values in baseline.items():
+            np.testing.assert_allclose(test_households.ts.current(key), values)
+
+    def test__replace_current_overrides_latest_diagnostics_without_changing_lengths(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.0, 0.0]))
+        preferred_margin_after_lfa = np.full(n_households, PREFERRED_MARGIN_BORROW)
+        preferred_margin_amount = np.full(n_households, 12.0)
+        income = np.full(n_households, 100.0)
+        scheduled_mortgage_payment = np.full(n_households, 0.0)
+        current_ifa = np.full(n_households, 0.0)
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+        )
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "dsti_headroom",
+                "dsti_maximum_loan_size",
+                "dsti_cap_binding",
+                "borrow_planned",
+                "liquidation_planned",
+                "shadow_credit_requested",
+                "forced_liquidation_amount",
+                "residual_shortfall_after_caps",
+            ]
+        }
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+            replace_current=True,
+        )
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(test_households.ts.current("borrow_planned"), np.full(n_households, 12.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_caps"), np.full(n_households, 0.0)
+        )

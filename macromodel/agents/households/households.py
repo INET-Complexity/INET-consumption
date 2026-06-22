@@ -43,6 +43,10 @@ from macromodel.agents.households.func.portfolio_diagnostics import (
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_household_head_covariates,
 )
+from macromodel.agents.households.func.residual_capacity_fallback import (
+    ResidualCapacityFallbackResult,
+    compute_residual_capacity_fallback,
+)
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
 from macromodel.agents.households.income_belief_learning import (
@@ -118,6 +122,14 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "borrow_vs_sell_spread": 0.0,
     "borrow_vs_sell_l_tilde": 0.0,
     "borrow_vs_sell_comparison_valid_flag": False,
+    "dsti_headroom": 0.0,
+    "dsti_maximum_loan_size": 0.0,
+    "dsti_cap_binding": False,
+    "borrow_planned": 0.0,
+    "liquidation_planned": 0.0,
+    "shadow_credit_requested": 0.0,
+    "forced_liquidation_amount": 0.0,
+    "residual_shortfall_after_caps": 0.0,
 }
 
 
@@ -1128,6 +1140,71 @@ class Households(Agent):
             self.ts.borrow_vs_sell_l_tilde.append(result.borrow_vs_sell_l_tilde)
             self.ts.borrow_vs_sell_comparison_valid_flag.append(result.comparison_valid_flag)
         return result.preferred_margin, result.preferred_amount
+
+    def compute_and_record_residual_capacity_fallback(
+        self,
+        preferred_margin_after_lfa: np.ndarray,
+        preferred_margin_amount: np.ndarray,
+        banks: Banks,
+        income: np.ndarray,
+        scheduled_mortgage_payment: np.ndarray,
+        consumer_loan_maturity: int,
+        dsti_limit: float,
+        current_ifa: np.ndarray,
+        replace_current: bool = False,
+    ) -> ResidualCapacityFallbackResult:
+        """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
+
+        This uses the provisional DSTI proxy only. It records the shadow plan
+        but does not touch live balances, debt service, or market-clearing
+        state.
+        """
+        bank_rates = np.asarray(banks.ts.current("interest_rates_on_household_consumption_loans"), dtype=float)
+        corresponding_bank_ids = np.asarray(self.states["Corresponding Bank ID"], dtype=int)
+        if bank_rates.ndim == 0:
+            bank_rates = np.full(self.ts.current("n_households"), float(bank_rates), dtype=float)
+        elif bank_rates.ndim == 1:
+            if bank_rates.shape[0] == self.ts.current("n_households"):
+                pass
+            elif bank_rates.shape[0] == banks.ts.current("n_banks"):
+                bank_rates = bank_rates[corresponding_bank_ids]
+            else:
+                bank_rates = np.resize(bank_rates, banks.ts.current("n_banks"))[corresponding_bank_ids]
+        else:
+            raise ValueError(
+                "interest_rates_on_household_consumption_loans must be a scalar, one rate per household, "
+                "or one rate per bank."
+            )
+
+        result = compute_residual_capacity_fallback(
+            preferred_margin_after_lfa=np.asarray(preferred_margin_after_lfa, dtype=float),
+            preferred_margin_amount=np.asarray(preferred_margin_amount, dtype=float),
+            income=np.asarray(income, dtype=float),
+            scheduled_mortgage_payment=np.asarray(scheduled_mortgage_payment, dtype=float),
+            r_b=bank_rates,
+            consumer_loan_maturity=consumer_loan_maturity,
+            dsti_limit=dsti_limit,
+            current_ifa=np.asarray(current_ifa, dtype=float),
+        )
+        if replace_current:
+            self.ts.override_current("dsti_headroom", result.dsti_headroom)
+            self.ts.override_current("dsti_maximum_loan_size", result.dsti_maximum_loan_size)
+            self.ts.override_current("dsti_cap_binding", result.dsti_cap_binding)
+            self.ts.override_current("borrow_planned", result.borrow_planned)
+            self.ts.override_current("liquidation_planned", result.liquidation_planned)
+            self.ts.override_current("shadow_credit_requested", result.shadow_credit_requested)
+            self.ts.override_current("forced_liquidation_amount", result.forced_liquidation_amount)
+            self.ts.override_current("residual_shortfall_after_caps", result.residual_shortfall_after_caps)
+        else:
+            self.ts.dsti_headroom.append(result.dsti_headroom)
+            self.ts.dsti_maximum_loan_size.append(result.dsti_maximum_loan_size)
+            self.ts.dsti_cap_binding.append(result.dsti_cap_binding)
+            self.ts.borrow_planned.append(result.borrow_planned)
+            self.ts.liquidation_planned.append(result.liquidation_planned)
+            self.ts.shadow_credit_requested.append(result.shadow_credit_requested)
+            self.ts.forced_liquidation_amount.append(result.forced_liquidation_amount)
+            self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
+        return result
 
     def current_stage4_handoff_for_stage5(
         self,

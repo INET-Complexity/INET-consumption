@@ -1064,6 +1064,7 @@ class Country:
             permanent_income_log_ratio=permanent_income_log_ratio,
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
+            time_unit=self.economy.time_unit,
         )
 
         if replace_current:

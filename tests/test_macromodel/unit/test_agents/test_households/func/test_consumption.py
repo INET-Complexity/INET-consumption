@@ -416,11 +416,15 @@ class TestCESHouseholdConsumption:
 
 class TestCreditAugmentedHouseholdConsumption:
     def test_compute_target_consumption_records_log_linear_decomposition_and_mpc(self):
+        # partial_adjustment_speed=0.4 (rather than 1.0) keeps this scenario's implied
+        # delta_log_consumption under the +-0.5 growth-sanity clip in _evaluate_target,
+        # so this test exercises the unclipped decomposition math. See
+        # test_compute_target_consumption_clips_extreme_growth below for the clip itself.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
             minimum_consumption_fraction=0.0,
-            partial_adjustment_speed=1.0,
+            partial_adjustment_speed=0.4,
             liquid_wealth_propensity=0.1,
             illiquid_wealth_propensity=0.2,
             housing_wealth_propensity=0.3,
@@ -505,7 +509,11 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.1 * 10.0 / 80.0)
         np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.2 * 30.0 / 80.0)
         np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.3 * 120.0 / 100.0)
-        np.testing.assert_allclose(result.sum(axis=1), 100.0 * np.exp(0.1 * 10.0 / 80.0 + 0.2 * 30.0 / 80.0 + 0.3 * 120.0 / 100.0))
+        long_run_log_consumption_to_income = 0.1 * 10.0 / 80.0 + 0.2 * 30.0 / 80.0 + 0.3 * 120.0 / 100.0
+        partial_adjustment_gap = 0.4 * (np.log(100.0 * np.exp(long_run_log_consumption_to_income)) - np.log(50.0))
+        np.testing.assert_allclose(result.sum(axis=1), 50.0 * np.exp(partial_adjustment_gap))
+        np.testing.assert_allclose(components["target_consumption_growth_clipped"], 0.0)
+        np.testing.assert_allclose(components["target_consumption_delta_log_consumption"], partial_adjustment_gap)
         np.testing.assert_allclose(components["target_consumption_interest_rate_cashflow"], 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.0)
         np.testing.assert_allclose(components["target_consumption_rent"], 0.0)
@@ -513,6 +521,59 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_mortgage_payment"], 0.0)
         np.testing.assert_allclose(components["target_consumption_owner_occupied"], 1.0)
         np.testing.assert_allclose(components["target_consumption_mortgagor"], 1.0)
+
+    def test_compute_target_consumption_clips_extreme_growth(self):
+        # permanent_income_propensity is large and permanent_income_log_ratio is an
+        # extreme outlier value, mimicking an unbounded income-belief-learning input
+        # (see GH issue #90). Without the +-0.5 growth-sanity clip in _evaluate_target,
+        # this would imply >e^10x real consumption growth in a single quarter.
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=1.0,
+            permanent_income_propensity=10.0,
+            house_price_propensity=0.0,
+        )
+
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(1, 40.0), np.full(1, 50.0)]),
+            saving_rates=np.zeros(1),
+            income=np.full(1, 100.0),
+            household_benefits=np.zeros(1),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 1)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.zeros(1),
+            illiquid_wealth=np.zeros(1),
+            housing_wealth=np.zeros(1),
+            rent=np.zeros(1),
+            mortgage_debt=np.zeros(1),
+            mortgage_payment=np.zeros(1),
+            owner_occupied=np.ones(1),
+            mortgagor=np.ones(1),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(1, 50.0),
+            lagged_income=np.full(1, 80.0),
+            lagged_liquid_wealth=np.zeros(1),
+            lagged_illiquid_wealth=np.zeros(1),
+            lagged_mortgage_debt=np.zeros(1),
+            lagged_consumption_loan_debt=np.zeros(1),
+            lagged_house_price_index=1.0,
+            permanent_income_log_ratio=np.full(1, 5.0),
+        )
+
+        components = consumption_obj.last_target_consumption_components
+        assert np.all(components["target_consumption_growth_clipped"] == 1.0)
+        np.testing.assert_allclose(components["target_consumption_delta_log_consumption"], 0.5)
+        np.testing.assert_allclose(result.sum(axis=1), 50.0 * np.exp(0.5))
 
     def test_compute_target_consumption_excludes_benefits_rent_and_scheduled_mortgage_from_target(self):
         consumption_obj = CreditAugmentedConsumption(

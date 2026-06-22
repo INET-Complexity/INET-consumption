@@ -797,9 +797,18 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         delta_log_consumption = (
             partial_adjustment_gap + income_growth_term + interest_rate_cashflow_term + uncertainty_term
         )
+        # Economic sanity bound on one-period real consumption growth, distinct from
+        # the +-50 exp-overflow guard below (which only prevents inf/nan, not implausible
+        # swings -- see GH issue #90). The model runs quarterly; +-0.5 log-units already
+        # allows roughly -39%/+65% real consumption growth in a single quarter, well beyond
+        # any realistic shock, so hitting this bound flags a misbehaving upstream input
+        # (e.g. an unbounded permanent_income_log_ratio) rather than genuine household behaviour.
+        growth_clip_bound = 0.5
+        delta_log_consumption_clipped = np.clip(delta_log_consumption, -growth_clip_bound, growth_clip_bound)
+        growth_clipped_flag = (np.abs(delta_log_consumption) > growth_clip_bound).astype(float)
         target_total_real = np.maximum(
             self.consumption_floor,
-            real_lagged_consumption * np.exp(np.clip(delta_log_consumption, -50.0, 50.0)),
+            real_lagged_consumption * np.exp(np.clip(delta_log_consumption_clipped, -50.0, 50.0)),
         )
         target_total = target_total_real * nominalizer
 
@@ -839,6 +848,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_uncertainty_delta": uncertainty_delta_arr,
             "target_consumption_owner_occupied": owner_occupied,
             "target_consumption_mortgagor": mortgagor,
+            "target_consumption_delta_log_consumption": delta_log_consumption_clipped,
+            "target_consumption_growth_clipped": growth_clipped_flag,
         }
         return components, target_total
 

@@ -606,9 +606,9 @@ class Households(Agent):
 
         When the resolver is active, later increments must consume the live
         post-drawdown residual from ``pre_grant_feasible_plan`` instead of
-        recomputing from raw liquidity shortfall. Increment 4 falls back to
-        the current raw-shortfall interpretation when the live carrier is not
-        active.
+        recomputing from raw liquidity shortfall. When the resolver is
+        disabled, this accessor must remain byte-identical to the existing
+        post-liquid-drawdown shadow handoff.
         """
         if self.uses_feasibility_resolver:
             if self.pre_grant_feasible_plan is None:
@@ -616,10 +616,12 @@ class Households(Agent):
                     "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
                     "has not been populated for the current planning pass."
                 )
-            return self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy()
+            residual = self.pre_grant_feasible_plan.residual_shortfall_after_lfa
+        else:
+            residual = self.ts.current("residual_shortfall_after_lfa")
 
-        liquidity_shortfall = np.asarray(self.ts.current("liquidity_shortfall"), dtype=float)
-        return np.where(np.isfinite(liquidity_shortfall), np.maximum(liquidity_shortfall, 0.0), 0.0)
+        residual = np.asarray(residual, dtype=float)
+        return np.where(np.isfinite(residual), np.maximum(residual, 0.0), 0.0)
 
     def compute_employee_income(
         self,

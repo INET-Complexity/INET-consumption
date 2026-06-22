@@ -1042,13 +1042,13 @@ class TestComputeAndRecordLiquidAssetDrawdown:
         assert test_households.uses_feasibility_resolver is True
         assert test_households.pre_grant_feasible_plan is None
 
-    def test__current_live_post_drawdown_residual_falls_back_to_clipped_liquidity_shortfall_when_disabled(
+    def test__current_live_post_drawdown_residual_falls_back_to_clipped_post_drawdown_residual_when_disabled(
         self, test_households
     ):
         n_households = test_households.ts.current("n_households")
-        liquidity_shortfall = np.resize(np.asarray([12.0, -3.0, np.nan, np.inf]), n_households)
+        residual_shortfall_after_lfa = np.resize(np.asarray([12.0, -3.0, np.nan, np.inf]), n_households)
         expected = np.resize(np.asarray([12.0, 0.0, 0.0, 0.0]), n_households)
-        test_households.ts.override_current("liquidity_shortfall", liquidity_shortfall)
+        test_households.ts.override_current("residual_shortfall_after_lfa", residual_shortfall_after_lfa)
         test_households.configure_feasibility_resolver(False)
 
         np.testing.assert_allclose(test_households.current_live_post_drawdown_residual(), expected)

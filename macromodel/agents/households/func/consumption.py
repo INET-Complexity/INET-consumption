@@ -714,6 +714,15 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_house_price_index if lagged_house_price_index is not None else house_price_index,
             default=1.0,
         )
+        # economy.ts["hpi"] is a chained index normalised to a base of 1.0 (economy.py),
+        # but house_price_propensity (gamma_4) is calibrated against a conventional
+        # base-100 house-price index. Rescale once, using the current-period level so
+        # the same factor applies to both the current and lagged series, only when the
+        # index still looks base-1.0-normalised; an already-rebased (e.g. base-100)
+        # input is left untouched. See GH issue #90.
+        if np.nanmax(np.abs(house_price_index_arr)) <= 10.0:
+            house_price_index_arr = house_price_index_arr * 100.0
+            lagged_house_price_index_arr = lagged_house_price_index_arr * 100.0
         real_borrowing_rate_arr = self._as_array(income, real_borrowing_rate, default=0.0)
         permanent_income_log_ratio_arr = self._as_array(income, permanent_income_log_ratio, default=0.0)
         consumer_debt_rate_delta_arr = self._as_array(income, consumer_debt_rate_delta, default=0.0)
@@ -742,12 +751,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         scale = float(population_scale_factor) if population_scale_factor else 1.0
         real_lagged_income_per_household = real_lagged_income / scale
 
-        net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / real_spendable_income
-        illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_spendable_income
+        # net_liquid_assets_term and illiquid_assets_term pair lagged (t-1) wealth
+        # stocks with income from the same period (real_lagged_income, lagged_deflator)
+        # rather than real_spendable_income (current_deflator), so the deflator cancels
+        # and the ratio is a clean nominal wealth-to-income ratio. Mixing deflators here
+        # would otherwise bake the realised one-period inflation rate into what should
+        # be a stable structural ratio.
+        net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / real_lagged_income
+        illiquid_assets_term = self.illiquid_wealth_propensity * real_illiquid_financial_assets / real_lagged_income
         house_price_term = self.house_price_propensity * np.log(
             real_lagged_house_price / real_lagged_income_per_household
         )
-        housing_wealth_term = self.housing_wealth_propensity * real_housing_wealth / real_lagged_income
+        # housing_wealth is current-period (current_deflator), so it is paired with
+        # real_spendable_income (also current_deflator) for the same reason.
+        housing_wealth_term = self.housing_wealth_propensity * real_housing_wealth / real_spendable_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
         real_borrowing_rate_term = self.real_borrowing_rate_propensity * real_borrowing_rate_arr
 

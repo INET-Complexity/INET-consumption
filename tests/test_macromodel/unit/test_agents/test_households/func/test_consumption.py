@@ -498,10 +498,14 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_real_net_liquid_assets"], 10.0)
         np.testing.assert_allclose(components["target_consumption_real_illiquid_financial_assets"], 30.0)
         np.testing.assert_allclose(components["target_consumption_real_housing_wealth"], 120.0)
-        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.01)
-        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.06)
-        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.45)
-        np.testing.assert_allclose(result.sum(axis=1), 100.0 * np.exp(0.52))
+        # liquid/illiquid wealth terms are paired with lagged income (80.0, same
+        # period as the lagged wealth stocks) rather than current income, and
+        # housing_wealth (current-period) is paired with current income (100.0) --
+        # see the deflator-consistency comment in CreditAugmentedConsumption._evaluate_target.
+        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.1 * 10.0 / 80.0)
+        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.2 * 30.0 / 80.0)
+        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.3 * 120.0 / 100.0)
+        np.testing.assert_allclose(result.sum(axis=1), 100.0 * np.exp(0.1 * 10.0 / 80.0 + 0.2 * 30.0 / 80.0 + 0.3 * 120.0 / 100.0))
         np.testing.assert_allclose(components["target_consumption_interest_rate_cashflow"], 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.0)
         np.testing.assert_allclose(components["target_consumption_rent"], 0.0)

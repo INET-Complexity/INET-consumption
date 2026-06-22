@@ -44,14 +44,61 @@ FRA:
         parameters:
           unemployed_reservation_wage_timespan: 8 # 0
 
+
   households:
     functions:
       consumption:
         name: CreditAugmentedConsumption
         path_name: consumption
         parameters:
+          # Full activation: pulls the calibrated Chauvin & Muellbauer (2018)
+          # propensities (long_run_intercept, real_borrowing_rate_propensity,
+          # liquid/illiquid/housing wealth, house_price, income_growth,
+          # interest_rate_cashflow, uncertainty, partial_adjustment_speed, etc.)
+          # from consumption_paper_parameters.yaml instead of the conservative
+          # diagnostic placeholders previously hardcoded below.
           paper_parameter_file: consumption_paper_parameters.yaml
           paper_parameter_ref: desired_consumption.credit_augmented_v1
+          # Local override: house_price_propensity (gamma_4 per the paper-symbol
+          # comment in consumption_paper_parameters.yaml's credit_augmented_v1
+          # block) disabled until CACF's house-price term is fully fixed. The
+          # term divides economy.ts["hpi"] -- a unitless chained index, base 1.0
+          # (economy.py:972) -- against currency-denominated household income
+          # (consumption.py's house_price_term). At the paper's -0.062
+          # coefficient this single term can dominate the entire
+          # target-consumption formula for low-income households.
+          # Correction: the population_scale_factor mitigation (commit 6bc1303d)
+          # IS wired through end-to-end (verified: households.states[
+          # "population_scale_factor"] == 5000.0 at runtime for FRA, threaded via
+          # households.py's compute_target_consumption call site) and does
+          # roughly halve the term (1.10 -> 0.57 log-units in a worked example),
+          # contrary to what an earlier version of this comment claimed. It is
+          # still insufficient on its own -- 0.57 remains an order of magnitude
+          # larger than the other propensity terms. consumption.py now also
+          # rescales house_price_index_arr/lagged_house_price_index_arr from the
+          # base-1.0 index convention to base-100 (the convention the paper
+          # calibration assumes) when the index still looks base-1.0-normalised,
+          # which further shrinks the term. Re-validate via a benchmark run
+          # before re-enabling this propensity. See GH issue #90.
+          house_price_propensity: 0.0
+          # --- Previously active conservative-diagnostic config (kept for reference) ---
+          # consumption_smoothing_fraction: 0.0
+          # consumption_smoothing_window: 12
+          # elasticity_of_substitution: 1.0
+          # minimum_consumption_fraction: 1.0
+          # # Stage 3 Increment 5: enable the learned income-belief / common
+          # # permanent-income forecast terms together (they share zeta and the
+          # # forecast call). The propensities below are CONSERVATIVE DIAGNOSTIC
+          # # placeholders pending calibration -- small fractional values so the
+          # # Stage 3 terms cannot dominate target consumption while the wiring is
+          # # validated end to end.
+          # uses_income_belief_learning: true
+          # permanent_income_propensity: 0.05
+          # uncertainty_propensity: 0.05
+          # # delta (quarterly discount) and S (horizon, quarters) feeding zeta.
+          # income_belief_learning_horizon:
+          #   paper_parameter_file: consumption_paper_parameters.yaml
+          #   paper_parameter_ref: income_belief_learning.permanent_income_log_ratio
           consumption_smoothing_fraction: 0.0
           consumption_smoothing_window: 12
           elasticity_of_substitution: 1.0

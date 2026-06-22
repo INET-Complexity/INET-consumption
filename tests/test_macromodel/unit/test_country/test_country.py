@@ -1449,6 +1449,55 @@ class TestCountry:
             equal_nan=True,
         )
 
+    def test__set_household_target_demand_routes_enabled_stage5_residual_through_live_accessor(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+        sentinel_residual = np.full(n_households, 17.0)
+        captured: dict[str, np.ndarray] = {}
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_consumption",
+            lambda **_kwargs: target_consumption,
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "current_live_post_drawdown_residual",
+            lambda: sentinel_residual,
+        )
+
+        def capture_borrow_vs_sell_choice(**kwargs):
+            captured["residual_shortfall_after_lfa"] = kwargs["residual_shortfall_after_lfa"].copy()
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_borrow_vs_sell_choice",
+            capture_borrow_vs_sell_choice,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        np.testing.assert_allclose(captured["residual_shortfall_after_lfa"], sentinel_residual)
+
     def test__set_household_target_demand_replace_current_refreshes_live_pre_grant_feasible_plan(
         self, test_country, monkeypatch
     ):

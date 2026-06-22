@@ -13,6 +13,7 @@ from macromodel.agents.households.func.portfolio_diagnostics import Stage4Househ
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
+from macromodel.configurations.households_configuration import HouseholdsConfiguration
 
 
 def _setup_emission_ts(households, n_hh, n_industries):
@@ -1007,6 +1008,39 @@ class TestComputeAndRecordLiquidAssetDrawdown:
             expected_loans,
             equal_nan=True,
         )
+
+    def test__configure_feasibility_resolver_clears_stale_pre_grant_feasible_plan(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        test_households.configure_feasibility_resolver(True)
+
+        assert test_households.pre_grant_feasible_plan is None
+
+    def test__current_live_post_drawdown_residual_raises_when_enabled_without_live_carrier(self, test_households):
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.current_live_post_drawdown_residual()
+
+    def test__reset_with_resolver_enabled_clears_stale_pre_grant_feasible_plan(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        configuration = HouseholdsConfiguration()
+        configuration.parameters.uses_feasibility_resolver = True
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        test_households.reset(configuration)
+
+        assert test_households.uses_feasibility_resolver is True
+        assert test_households.pre_grant_feasible_plan is None
 
     def test__current_live_post_drawdown_residual_falls_back_to_clipped_liquidity_shortfall_when_disabled(
         self, test_households

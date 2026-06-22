@@ -576,8 +576,7 @@ class Households(Agent):
     def configure_feasibility_resolver(self, uses_feasibility_resolver: bool) -> None:
         """Configure whether the live Stage 5 feasibility handoff is active."""
         self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
-        if not self.uses_feasibility_resolver:
-            self.pre_grant_feasible_plan = None
+        self.pre_grant_feasible_plan = None
 
     def clear_pre_grant_feasible_plan(self) -> None:
         """Clear the runtime Stage 5 live feasibility carrier."""
@@ -611,7 +610,12 @@ class Households(Agent):
         the current raw-shortfall interpretation when the live carrier is not
         active.
         """
-        if self.uses_feasibility_resolver and self.pre_grant_feasible_plan is not None:
+        if self.uses_feasibility_resolver:
+            if self.pre_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                    "has not been populated for the current planning pass."
+                )
             return self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy()
 
         liquidity_shortfall = np.asarray(self.ts.current("liquidity_shortfall"), dtype=float)

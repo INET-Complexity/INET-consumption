@@ -1103,14 +1103,16 @@ class Country:
                 funded_from_liquid_assets=self.households.ts.current("funded_from_liquid_assets"),
                 residual_shortfall_after_lfa=self.households.ts.current("residual_shortfall_after_lfa"),
             )
+            stage5_residual_shortfall = self.households.current_live_post_drawdown_residual()
         else:
             self.households.clear_pre_grant_feasible_plan()
+            stage5_residual_shortfall = residual_shortfall_after_lfa
         stage4_handoff = self.households.current_stage4_handoff_for_stage5(
             target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
         )
         self.households.compute_and_record_borrow_vs_sell_choice(
-            residual_shortfall_after_lfa=residual_shortfall_after_lfa,
+            residual_shortfall_after_lfa=stage5_residual_shortfall,
             banks=self.banks,
             stage4_handoff=stage4_handoff,
             replace_current=replace_current,

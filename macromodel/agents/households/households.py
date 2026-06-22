@@ -880,6 +880,7 @@ class Households(Agent):
         common_permanent_income_log_ratio: Optional[np.ndarray | float] = None,
         mortgage_payment: Optional[np.ndarray] = None,
         replace_current_diagnostics: bool = False,
+        time_unit: int = 12,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -918,6 +919,8 @@ class Households(Agent):
                 permanent-income component for opt-in learning rules
             mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
+            time_unit (int): Model period length in months, used by credit-augmented consumption
+                to annualize income in its calibrated wealth/income and price/income ratios
 
         Returns:
             np.ndarray: Target consumption by household
@@ -989,6 +992,7 @@ class Households(Agent):
                 permanent_income_log_ratio=permanent_income_log_ratio,
                 consumer_debt_rate_delta=consumer_debt_rate_delta,
                 uncertainty_delta=uncertainty_delta,
+                time_unit=time_unit,
             )
             self._append_target_consumption_diagnostics(
                 self.functions["consumption"],

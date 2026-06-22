@@ -126,6 +126,25 @@ def _benchmark_data_cache_spec(cfg: Config, raw_data_path: Path, config: Noteboo
     }
 
 
+REQUIRED_INDIVIDUAL_POPULATION_COLUMNS = frozenset(
+    {
+        "Gender",
+        "Age",
+        "Education",
+        "college",
+        "Activity Status",
+        "Employment Industry",
+        "Employee Income",
+        "Income from Unemployment Benefits",
+        "Income",
+        "Corresponding Household ID",
+        "Relation to Reference Person",
+        "Corresponding Invested Firm",
+        "Corresponding Invested Bank",
+    }
+)
+
+
 def _read_json_cache_spec(path: Path) -> dict[str, Any] | None:
     """Read cache metadata, returning None for missing or malformed metadata."""
     try:
@@ -151,6 +170,17 @@ def _benchmark_specs_match(cached_spec: Mapping[str, Any] | None, requested_spec
         if cached_spec.get(key) != requested_value:
             return False
     return True
+
+
+def _requires_population_schema_cache_rebuild(data: DataWrapper, country_iso3: str) -> bool:
+    """Return true when cached synthetic populations predate required columns."""
+    synthetic_country = data.synthetic_countries.get(country_iso3)
+    population = getattr(synthetic_country, "population", None)
+    individual_data = getattr(population, "individual_data", None)
+    columns = getattr(individual_data, "columns", None)
+    if columns is None:
+        return True
+    return not REQUIRED_INDIVIDUAL_POPULATION_COLUMNS.issubset(set(columns))
 
 
 def _load_data_config(cfg: Config) -> DataConfiguration:
@@ -319,6 +349,15 @@ def prepare_data(config: NotebookRunConfig) -> PreparedData:
             )
             creator.save(str(data_pkl_path))
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
+        elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+            print(f"Rebuilding stale population-schema data cache: {data_pkl_path}")
+            creator = DataWrapper.from_config(
+                configuration=data_config,
+                raw_data_path=raw_data_path,
+                single_hfcs_survey=config.single_hfcs_survey,
+            )
+            creator.save(str(data_pkl_path))
+            data = DataWrapper.init_from_pickle(str(data_pkl_path))
         else:
             creator = data
     else:
@@ -454,6 +493,16 @@ def run_benchmark(
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
         if _requires_cfc_rate_cache_rebuild(data, data_config):
             print(f"Rebuilding stale benchmark CFC-rate data cache: {data_pkl_path}")
+            data = DataWrapper.from_config(
+                configuration=data_config,
+                raw_data_path=raw_data_path,
+                single_hfcs_survey=config.single_hfcs_survey,
+            )
+            data.save(str(data_pkl_path))
+            _write_json_cache_spec(data_cache_spec_path, data_cache_spec)
+            data = DataWrapper.init_from_pickle(str(data_pkl_path))
+        elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+            print(f"Rebuilding stale benchmark population-schema data cache: {data_pkl_path}")
             data = DataWrapper.from_config(
                 configuration=data_config,
                 raw_data_path=raw_data_path,

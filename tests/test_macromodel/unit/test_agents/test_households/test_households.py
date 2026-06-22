@@ -39,6 +39,8 @@ def _setup_emission_ts(households, n_hh, n_industries):
 class TestHouseholds:
     def test__create(self, test_households):
         assert test_households.country_name == "FRA"
+        assert test_households.uses_feasibility_resolver is False
+        assert test_households.pre_grant_feasible_plan is None
 
     def test__households_states(self, test_households):
         assert test_households is not None
@@ -965,6 +967,57 @@ class TestComputeAndRecordLiquidAssetDrawdown:
             + test_households.ts.current("residual_shortfall_after_lfa"),
             expected_snapshot,
         )
+
+    def test__populate_pre_grant_feasible_plan_from_liquid_asset_drawdown_copies_shadow_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        liquidity_shortfall = np.resize(np.asarray([15.0, np.nan, -2.0]), n_households)
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        test_households.configure_feasibility_resolver(True)
+
+        expected_deposits = test_households.ts.current("wealth_deposits").copy()
+        expected_financial_assets = test_households.ts.current("wealth_financial_assets").copy()
+        expected_loans = test_households.ts.current("target_consumption_loans").copy()
+        residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=test_households.ts.current("liquidity_shortfall_before_repair"),
+            funded_from_liquid_assets=test_households.ts.current("funded_from_liquid_assets"),
+            residual_shortfall_after_lfa=residual,
+        )
+
+        assert test_households.pre_grant_feasible_plan is not None
+        np.testing.assert_allclose(
+            test_households.pre_grant_feasible_plan.liquidity_shortfall_before_repair,
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+        )
+        np.testing.assert_allclose(
+            test_households.pre_grant_feasible_plan.funded_from_liquid_assets,
+            test_households.ts.current("funded_from_liquid_assets"),
+        )
+        np.testing.assert_allclose(
+            test_households.current_live_post_drawdown_residual(),
+            test_households.ts.current("residual_shortfall_after_lfa"),
+        )
+        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), expected_deposits)
+        np.testing.assert_allclose(
+            test_households.ts.current("wealth_financial_assets"),
+            expected_financial_assets,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("target_consumption_loans"),
+            expected_loans,
+            equal_nan=True,
+        )
+
+    def test__current_live_post_drawdown_residual_falls_back_to_clipped_liquidity_shortfall_when_disabled(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        liquidity_shortfall = np.resize(np.asarray([12.0, -3.0, np.nan, np.inf]), n_households)
+        expected = np.resize(np.asarray([12.0, 0.0, 0.0, 0.0]), n_households)
+        test_households.ts.override_current("liquidity_shortfall", liquidity_shortfall)
+        test_households.configure_feasibility_resolver(False)
+
+        np.testing.assert_allclose(test_households.current_live_post_drawdown_residual(), expected)
 
 
 class TestComputeAndRecordBorrowVsSellChoice:

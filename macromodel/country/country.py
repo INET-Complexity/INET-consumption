@@ -1082,6 +1082,8 @@ class Country:
         # goods or credit demand at this increment. See
         # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
         # (Increment 0 section).
+        uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
+        self.households.configure_feasibility_resolver(uses_feasibility_resolver)
         scheduled_consumption_loan_payment = (
             self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
         )
@@ -1095,6 +1097,14 @@ class Country:
             liquidity_shortfall=liquidity_shortfall,
             replace_current=replace_current,
         )
+        if uses_feasibility_resolver:
+            self.households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+                liquidity_shortfall_before_repair=self.households.ts.current("liquidity_shortfall_before_repair"),
+                funded_from_liquid_assets=self.households.ts.current("funded_from_liquid_assets"),
+                residual_shortfall_after_lfa=self.households.ts.current("residual_shortfall_after_lfa"),
+            )
+        else:
+            self.households.clear_pre_grant_feasible_plan()
         stage4_handoff = self.households.current_stage4_handoff_for_stage5(
             target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,

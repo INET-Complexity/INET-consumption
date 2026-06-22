@@ -18,6 +18,7 @@ The implementation handles:
 """
 
 import warnings
+from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
 import h5py
@@ -133,6 +134,15 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
 }
 
 
+@dataclass
+class PreGrantFeasiblePlan:
+    """Minimal live Stage 5 pre-grant feasibility carrier for Increment 4."""
+
+    liquidity_shortfall_before_repair: np.ndarray
+    funded_from_liquid_assets: np.ndarray
+    residual_shortfall_after_lfa: np.ndarray
+
+
 class Households(Agent):
     """Economic agent representing household sector behavior.
 
@@ -174,6 +184,7 @@ class Households(Agent):
         consumption_weights_by_income: np.ndarray,
         investment_weights: np.ndarray,
         use_consumption_weights_by_income: bool,
+        uses_feasibility_resolver: bool,
         independents: list[str],
         substitution_bundles: Optional[list] = None,
         emission_fractions: Optional[EmissionFractions] = None,
@@ -191,6 +202,8 @@ class Households(Agent):
             consumption_weights_by_income (np.ndarray): Income-based consumption patterns
             investment_weights (np.ndarray): Industry-specific investment shares
             use_consumption_weights_by_income (bool): Whether to use income-based weights
+            uses_feasibility_resolver (bool): Whether the Stage 5 live
+                feasibility handoff is enabled.
             independents (list[str]): Independent variables for calculations
             substitution_bundles (Optional[list]): Substitution bundle configuration for CES consumption
             emission_fractions (Optional[EmissionFractions]): Per-industry emission fraction multipliers
@@ -225,6 +238,8 @@ class Households(Agent):
         self.investment_weights = investment_weights
 
         self.use_consumption_weights_by_income = use_consumption_weights_by_income
+        self.uses_feasibility_resolver = uses_feasibility_resolver
+        self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
 
         # Initialize substitution bundles and bundle matrix
         self.substitution_bundles = substitution_bundles if substitution_bundles is not None else []
@@ -520,6 +535,7 @@ class Households(Agent):
         states["corr_renters"] = [[int(x) for x in sublist if not pd.isna(x)] for sublist in corr_renters]
 
         use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
+        uses_feasibility_resolver = configuration.parameters.uses_feasibility_resolver
 
         independents = configuration.functions.saving_rates.parameters["independents"]
 
@@ -536,6 +552,7 @@ class Households(Agent):
             consumption_weights_by_income,
             investment_weights,
             use_consumption_weights_by_income,
+            uses_feasibility_resolver,
             independents,
             configuration.substitution_bundles,
             emission_fractions=emission_fractions,
@@ -553,6 +570,52 @@ class Households(Agent):
         """
         self.gen_reset()
         update_functions(functions=self.functions, model=configuration.functions, loc="macromodel.agents.households")
+        self.use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
+        self.configure_feasibility_resolver(configuration.parameters.uses_feasibility_resolver)
+
+    def configure_feasibility_resolver(self, uses_feasibility_resolver: bool) -> None:
+        """Configure whether the live Stage 5 feasibility handoff is active."""
+        self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
+        if not self.uses_feasibility_resolver:
+            self.pre_grant_feasible_plan = None
+
+    def clear_pre_grant_feasible_plan(self) -> None:
+        """Clear the runtime Stage 5 live feasibility carrier."""
+        self.pre_grant_feasible_plan = None
+
+    def populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+        self,
+        *,
+        liquidity_shortfall_before_repair: np.ndarray,
+        funded_from_liquid_assets: np.ndarray,
+        residual_shortfall_after_lfa: np.ndarray,
+    ) -> None:
+        """Populate the minimal Increment 4 live feasibility carrier.
+
+        The carrier is provisional pre-grant planning state only. It mirrors
+        the existing Stage 5 liquid-drawdown diagnostics and must not mutate
+        wealth or debt stocks.
+        """
+        self.pre_grant_feasible_plan = PreGrantFeasiblePlan(
+            liquidity_shortfall_before_repair=np.asarray(liquidity_shortfall_before_repair, dtype=float).copy(),
+            funded_from_liquid_assets=np.asarray(funded_from_liquid_assets, dtype=float).copy(),
+            residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float).copy(),
+        )
+
+    def current_live_post_drawdown_residual(self) -> np.ndarray:
+        """Return the sanctioned Stage 5 live residual read path.
+
+        When the resolver is active, later increments must consume the live
+        post-drawdown residual from ``pre_grant_feasible_plan`` instead of
+        recomputing from raw liquidity shortfall. Increment 4 falls back to
+        the current raw-shortfall interpretation when the live carrier is not
+        active.
+        """
+        if self.uses_feasibility_resolver and self.pre_grant_feasible_plan is not None:
+            return self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy()
+
+        liquidity_shortfall = np.asarray(self.ts.current("liquidity_shortfall"), dtype=float)
+        return np.where(np.isfinite(liquidity_shortfall), np.maximum(liquidity_shortfall, 0.0), 0.0)
 
     def compute_employee_income(
         self,

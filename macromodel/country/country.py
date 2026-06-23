@@ -1140,6 +1140,20 @@ class Country:
             current_ifa=self.households.ts.current("wealth_other_financial_assets"),
             replace_current=replace_current,
         )
+        # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
+        # with the DSTI-capped shadow_credit_requested value just computed
+        # above, so compute_target_credit() (called later, from
+        # prepare_credit_market_clearing()) can read it via
+        # current_live_credit_requested() instead of the legacy unbounded-gap
+        # formula. Must run after compute_and_record_residual_capacity_fallback
+        # (which produces shadow_credit_requested) and before
+        # compute_target_credit(). See
+        # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+        # (Increment 5 section).
+        if uses_feasibility_resolver:
+            self.households.populate_pre_grant_feasible_plan_credit_requested(
+                credit_requested=self.households.ts.current("shadow_credit_requested"),
+            )
 
         target_investment = self.households.compute_target_investment(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),

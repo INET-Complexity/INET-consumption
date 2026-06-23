@@ -1663,6 +1663,87 @@ class TestCountry:
             np.ones(n_households, dtype=bool),
         )
 
+    def test__set_household_target_demand_populates_credit_requested_carrier_when_enabled(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        sentinel_shadow_credit = np.full(n_households, 4242.0)
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        def stub_residual_capacity_fallback(**_kwargs):
+            # Isolates the Increment 5 carrier-sourcing wiring from the
+            # Increment 3 DSTI mechanics already covered above: writes a
+            # distinguishable shadow_credit_requested directly, the same way
+            # the real fallback would have, and nothing else.
+            test_country.households.ts.override_current("shadow_credit_requested", sentinel_shadow_credit)
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            stub_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert test_country.households.pre_grant_feasible_plan is not None
+        np.testing.assert_allclose(
+            test_country.households.pre_grant_feasible_plan.credit_requested,
+            sentinel_shadow_credit,
+        )
+
+    def test__set_household_target_demand_leaves_credit_requested_carrier_unset_when_disabled(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        # Set explicitly rather than relying on the dataclass default: Country's
+        # `configuration` constructor parameter defaults to a single shared
+        # `CountryConfiguration()` instance (Python mutable-default-argument
+        # pitfall, pre-existing and out of scope here), so an earlier test in
+        # this module that flips uses_feasibility_resolver=True can otherwise
+        # leak into this one.
+        test_country.configuration.households.parameters.uses_feasibility_resolver = False
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert test_country.households.pre_grant_feasible_plan is None
+
     def test__set_household_target_demand_falls_back_on_invalid_consumer_credit_config(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))

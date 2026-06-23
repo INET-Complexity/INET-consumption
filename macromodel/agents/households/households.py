@@ -18,7 +18,7 @@ The implementation handles:
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional, Tuple
 
 import h5py
@@ -131,16 +131,25 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "shadow_credit_requested": 0.0,
     "forced_liquidation_amount": 0.0,
     "residual_shortfall_after_caps": 0.0,
+    # Increment 5: the credit_requested value actually used for target_consumption_loans
+    # this period (mirrors the legacy formula when the resolver is off).
+    "live_credit_requested": 0.0,
 }
 
 
 @dataclass
 class PreGrantFeasiblePlan:
-    """Minimal live Stage 5 pre-grant feasibility carrier for Increment 4."""
+    """Minimal live Stage 5 pre-grant feasibility carrier.
+
+    ``credit_requested`` (Increment 5) defaults to ``None`` so that the
+    Increment 4 populate method, which constructs this dataclass without
+    knowledge of the field, keeps working unchanged.
+    """
 
     liquidity_shortfall_before_repair: np.ndarray
     funded_from_liquid_assets: np.ndarray
     residual_shortfall_after_lfa: np.ndarray
+    credit_requested: np.ndarray | None = None
 
 
 class Households(Agent):
@@ -622,6 +631,57 @@ class Households(Agent):
 
         residual = np.asarray(residual, dtype=float)
         return np.where(np.isfinite(residual), np.maximum(residual, 0.0), 0.0)
+
+    def populate_pre_grant_feasible_plan_credit_requested(
+        self,
+        *,
+        credit_requested: np.ndarray,
+    ) -> None:
+        """Extend the live Stage 5 carrier with Increment 5's credit_requested field.
+
+        Additive only: uses ``dataclasses.replace`` against the carrier
+        Increment 4 already populated earlier in the same planning pass, so
+        the Increment 4 populate method is untouched. Raises if that carrier
+        does not exist yet, since credit_requested has no meaning without
+        the Increment 4 fields it sits alongside.
+        """
+        if self.pre_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                "has not been populated for the current planning pass."
+            )
+        self.pre_grant_feasible_plan = replace(
+            self.pre_grant_feasible_plan,
+            credit_requested=np.asarray(credit_requested, dtype=float).copy(),
+        )
+
+    def current_live_credit_requested(self) -> np.ndarray:
+        """Return the sanctioned Stage 5 live credit-demand read path.
+
+        When the resolver is active, ``compute_target_credit`` must consume
+        this live, carrier-backed value instead of the legacy unbounded-gap
+        formula. When the resolver is disabled, this accessor must remain
+        byte-identical to the existing shadow diagnostic
+        (``shadow_credit_requested``).
+        """
+        if self.uses_feasibility_resolver:
+            if self.pre_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                    "has not been populated for the current planning pass."
+                )
+            if self.pre_grant_feasible_plan.credit_requested is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled and pre_grant_feasible_plan "
+                    "exists, but credit_requested has not been populated for the current "
+                    "planning pass."
+                )
+            credit_requested = self.pre_grant_feasible_plan.credit_requested
+        else:
+            credit_requested = self.ts.current("shadow_credit_requested")
+
+        credit_requested = np.asarray(credit_requested, dtype=float)
+        return np.where(np.isfinite(credit_requested), np.maximum(credit_requested, 0.0), 0.0)
 
     def compute_employee_income(
         self,
@@ -1872,15 +1932,23 @@ class Households(Agent):
         Args:
             current_sales (pd.DataFrame): Property transactions
         """
-        # Target consumption loans to cover immediate financing gaps
-        self.ts.target_consumption_loans.append(
-            self.functions["target_credit"].compute_target_consumption_loans(
-                target_consumption=self.ts.current("target_consumption"),
-                income=self.ts.current("expected_income"),
-                rent=self.ts.current("rent"),
-                wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
-            )
+        # Target consumption loans to cover immediate financing gaps. The legacy
+        # unbounded-gap formula is always computed first; Stage 5 Increment 5
+        # substitutes the DSTI-capped live carrier value only when the
+        # feasibility resolver is enabled, so flag-off behaviour is unchanged
+        # and live_credit_requested gives a like-for-like diagnostic either way.
+        legacy_target_consumption_loans = self.functions["target_credit"].compute_target_consumption_loans(
+            target_consumption=self.ts.current("target_consumption"),
+            income=self.ts.current("expected_income"),
+            rent=self.ts.current("rent"),
+            wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
         )
+        if self.uses_feasibility_resolver:
+            target_consumption_loans = self.current_live_credit_requested()
+        else:
+            target_consumption_loans = legacy_target_consumption_loans
+        self.ts.target_consumption_loans.append(target_consumption_loans)
+        self.ts.live_credit_requested.append(target_consumption_loans)
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])
         # Mortgages
         target_house_price = np.zeros(self.ts.current("n_households"))

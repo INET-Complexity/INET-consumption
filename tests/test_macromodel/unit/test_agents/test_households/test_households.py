@@ -1054,6 +1054,141 @@ class TestComputeAndRecordLiquidAssetDrawdown:
         np.testing.assert_allclose(test_households.current_live_post_drawdown_residual(), expected)
 
 
+class TestPopulateAndAccessLiveCreditRequested:
+    """Stage 5 (feasibility resolver) Increment 5: live credit_requested handoff."""
+
+    def test__populate_pre_grant_feasible_plan_credit_requested_raises_without_existing_carrier(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.populate_pre_grant_feasible_plan_credit_requested(
+                credit_requested=np.full(n_households, 5.0)
+            )
+
+    def test__populate_pre_grant_feasible_plan_credit_requested_extends_existing_carrier_in_place(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+        credit_requested = np.full(n_households, 7.0)
+
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+
+        plan = test_households.pre_grant_feasible_plan
+        assert plan is not None
+        np.testing.assert_allclose(plan.credit_requested, credit_requested)
+        # Increment 4's fields must be untouched by this additive extension.
+        np.testing.assert_allclose(plan.liquidity_shortfall_before_repair, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.funded_from_liquid_assets, np.full(n_households, 1.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_lfa, np.full(n_households, 2.0))
+
+    def test__current_live_credit_requested_raises_when_enabled_without_carrier(self, test_households):
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.current_live_credit_requested()
+
+    def test__current_live_credit_requested_raises_distinctly_when_carrier_missing_field(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        with pytest.raises(RuntimeError, match="credit_requested has not been populated"):
+            test_households.current_live_credit_requested()
+
+    def test__current_live_credit_requested_returns_carrier_value_when_enabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+        credit_requested = np.resize(np.asarray([9.0, -1.0, np.nan]), n_households)
+        expected = np.resize(np.asarray([9.0, 0.0, 0.0]), n_households)
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+
+        np.testing.assert_allclose(test_households.current_live_credit_requested(), expected)
+
+    def test__current_live_credit_requested_falls_back_to_shadow_credit_requested_when_disabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        shadow = np.resize(np.asarray([11.0, -2.0, np.inf]), n_households)
+        expected = np.resize(np.asarray([11.0, 0.0, 0.0]), n_households)
+        test_households.ts.override_current("shadow_credit_requested", shadow)
+        test_households.configure_feasibility_resolver(False)
+
+        np.testing.assert_allclose(test_households.current_live_credit_requested(), expected)
+
+
+class TestComputeTargetCreditLiveCreditRequested:
+    """Stage 5 (feasibility resolver) Increment 5: compute_target_credit() wiring."""
+
+    def test__compute_target_credit_flag_off_mirrors_legacy_formula_in_live_diagnostic(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(False)
+        target_consumption = np.zeros_like(test_households.ts.current("target_consumption"))
+        target_consumption[:, 0] = 200.0
+        test_households.ts.override_current("target_consumption", target_consumption)
+        test_households.ts.override_current("expected_income", np.full(n_households, 50.0))
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("wealth_financial_assets", np.zeros(n_households))
+        legacy = test_households.functions["target_credit"].compute_target_consumption_loans(
+            target_consumption=test_households.ts.current("target_consumption"),
+            income=test_households.ts.current("expected_income"),
+            rent=test_households.ts.current("rent"),
+            wealth_in_financial_assets=test_households.ts.current("wealth_financial_assets"),
+        )
+
+        test_households.compute_target_credit(current_sales=None)
+
+        np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), legacy)
+        np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), legacy)
+
+    def test__compute_target_credit_flag_on_uses_carrier_sentinel_with_no_parallel_recompute(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        sentinel = np.full(n_households, 12345.0)
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=sentinel)
+        # Legacy inputs would produce a very different value if any parallel
+        # recomputation path (re-deriving from target_consumption etc.) existed.
+        target_consumption = np.full_like(test_households.ts.current("target_consumption"), 999.0)
+        test_households.ts.override_current("target_consumption", target_consumption)
+        test_households.ts.override_current("expected_income", np.zeros(n_households))
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("wealth_financial_assets", np.zeros(n_households))
+
+        test_households.compute_target_credit(current_sales=None)
+
+        np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
+        np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
+
+    def test__compute_target_credit_raises_when_enabled_without_populated_credit_requested(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="credit_requested has not been populated"):
+            test_households.compute_target_credit(current_sales=None)
+
+
 class TestComputeAndRecordBorrowVsSellChoice:
     """Stage 5 (feasibility resolver) Increment 2: borrow-vs-sell diagnostic."""
 

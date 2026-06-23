@@ -1150,7 +1150,17 @@ class Country:
         # compute_target_credit(). See
         # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
         # (Increment 5 section).
-        if uses_feasibility_resolver:
+        #
+        # Only the replace_current=False pass matters: per the simulation
+        # orchestration, compute_target_credit() runs exactly once per period,
+        # from prepare_credit_market_clearing(), strictly between this method's
+        # two calls (update_pre_credit_planning_metrics -> ... ->
+        # update_post_labour_planning_metrics). Populating again on the
+        # replace_current=True pass would write a credit_requested value that
+        # is never read before next period's configure_feasibility_resolver()
+        # wipes the carrier -- dead work that could mislead a future reader
+        # into thinking the post-labour refresh matters.
+        if uses_feasibility_resolver and not replace_current:
             self.households.populate_pre_grant_feasible_plan_credit_requested(
                 credit_requested=self.households.ts.current("shadow_credit_requested"),
             )

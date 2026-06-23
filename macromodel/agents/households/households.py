@@ -650,8 +650,14 @@ class Households(Agent):
                 "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
                 "has not been populated for the current planning pass."
             )
+        # dataclasses.replace only shallow-copies: re-copy the Increment 4
+        # fields too, so the new carrier instance never aliases arrays with
+        # the old one it replaces.
         self.pre_grant_feasible_plan = replace(
             self.pre_grant_feasible_plan,
+            liquidity_shortfall_before_repair=self.pre_grant_feasible_plan.liquidity_shortfall_before_repair.copy(),
+            funded_from_liquid_assets=self.pre_grant_feasible_plan.funded_from_liquid_assets.copy(),
+            residual_shortfall_after_lfa=self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy(),
             credit_requested=np.asarray(credit_requested, dtype=float).copy(),
         )
 
@@ -1948,7 +1954,7 @@ class Households(Agent):
         else:
             target_consumption_loans = legacy_target_consumption_loans
         self.ts.target_consumption_loans.append(target_consumption_loans)
-        self.ts.live_credit_requested.append(target_consumption_loans)
+        self.ts.live_credit_requested.append(target_consumption_loans.copy())
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])
         # Mortgages
         target_house_price = np.zeros(self.ts.current("n_households"))

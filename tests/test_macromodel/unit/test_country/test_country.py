@@ -1744,6 +1744,69 @@ class TestCountry:
 
         assert test_country.households.pre_grant_feasible_plan is None
 
+    def test__set_household_target_demand_only_populates_credit_requested_on_first_pass(
+        self, test_country, monkeypatch
+    ):
+        # compute_target_credit() (the only reader of the carrier's
+        # credit_requested) runs from prepare_credit_market_clearing(), which
+        # the real simulation orchestration calls strictly between this
+        # method's replace_current=False and replace_current=True passes. A
+        # second populate on the True pass would write a value nothing ever
+        # reads before next period's configure_feasibility_resolver() wipes
+        # it. Pin that the True pass leaves the carrier's credit_requested
+        # exactly as the False pass left it, proving the True-pass populate
+        # is skipped rather than silently overwriting with a fresher (but
+        # never-consumed) shadow value.
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        first_pass_shadow_credit = np.full(n_households, 111.0)
+        second_pass_shadow_credit = np.full(n_households, 999.0)
+        shadow_credit_values = iter([first_pass_shadow_credit, second_pass_shadow_credit])
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        def stub_residual_capacity_fallback(**_kwargs):
+            test_country.households.ts.override_current("shadow_credit_requested", next(shadow_credit_values))
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            stub_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+        np.testing.assert_allclose(
+            test_country.households.pre_grant_feasible_plan.credit_requested,
+            first_pass_shadow_credit,
+        )
+
+        test_country._set_household_target_demand(replace_current=True)
+
+        # configure_feasibility_resolver() unconditionally wipes and Increment
+        # 4's populate unconditionally rebuilds the carrier on every pass, so
+        # credit_requested reverts to the dataclass default (None) rather than
+        # carrying over the first pass's value -- the key assertion is that it
+        # is NOT second_pass_shadow_credit, i.e. the True-pass populate call
+        # for credit_requested genuinely did not run.
+        assert test_country.households.pre_grant_feasible_plan.credit_requested is None
+
     def test__set_household_target_demand_falls_back_on_invalid_consumer_credit_config(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))

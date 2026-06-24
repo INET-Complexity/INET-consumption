@@ -3401,6 +3401,22 @@ def plot_mc(
                 col=col,
             )
 
+        # Overlay MC mean line for this subplot
+        mean_series = combined.groupby(level=1)[col_name].mean()
+        fig.add_trace(
+            go.Scatter(
+                x=mean_series.index,
+                y=mean_series.values,
+                mode="lines",
+                name="MC mean",
+                showlegend=(idx == 0),
+                line={"color": "black", "width": 2},
+                legendgroup="mc-mean",
+            ),
+            row=row,
+            col=col,
+        )
+
     title = country_code if country_code is not None else "Monte Carlo trajectories"
     fig.update_layout(
         height=base_height * no_rows,

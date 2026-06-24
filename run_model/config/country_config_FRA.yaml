@@ -81,6 +81,7 @@ FRA:
           # which further shrinks the term. Re-validate via a benchmark run
           # before re-enabling this propensity. See GH issue #90.
           house_price_propensity: 0.0
+          uses_continuous_wealth_calibration: false
           # uses_continuous_wealth_calibration defaults to False (see consumption.py).
           # Smoke-tested at seed-15 t_max=50 with it set to True on 2026-06-24: after
           # fixing the B-index normalization and wealth-drag-clip bound (review found

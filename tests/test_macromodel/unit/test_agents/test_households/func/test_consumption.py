@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from macromodel.agents.households.func.consumption import (
     CESHouseholdConsumption,
@@ -1067,3 +1068,131 @@ class TestCreditAugmentedHouseholdConsumption:
             components["target_consumption_log_long_run"][0], buggy_lower_bound, atol=1e-3
         )
         assert np.all(np.isfinite(result))
+
+    def test_evaluate_target_clip_income_to_consumption_ratio_invariant_under_time_unit(self):
+        # income_to_consumption_ratio = annual_spendable_income / annual_lagged_consumption
+        # annualizes both sides of a same-frequency flow ratio, so it must come out
+        # identical to real_spendable_income / real_lagged_consumption regardless of
+        # time_unit -- a second review round found a prior fix annualized only the
+        # numerator, which would make this ratio scale with annualization_factor
+        # (wrong: it should cancel). Same setup as the call-site test above
+        # (income=lagged_income=10, lagged_consumption=100, NLA/y=-4.5), run twice
+        # with time_unit=12 (annualization_factor=1) and time_unit=3 (factor=4); the
+        # clip's resulting lower bound must be identical across both.
+        def run_with_time_unit(time_unit):
+            consumption_obj = CreditAugmentedConsumption(
+                consumption_smoothing_fraction=0.0,
+                consumption_smoothing_window=1,
+                minimum_consumption_fraction=0.0,
+                partial_adjustment_speed=0.4,
+                illiquid_wealth_propensity=0.0,
+                housing_wealth_propensity=0.0,
+                house_price_propensity=0.0,
+                uses_continuous_wealth_calibration=True,
+            )
+            consumption_obj.compute_target_consumption(
+                expected_inflation=0.0,
+                current_cpi=1.0,
+                initial_cpi=1.0,
+                historic_consumption_sum=np.array([np.full(1, 40.0), np.full(1, 100.0)]),
+                saving_rates=np.zeros(1),
+                income=np.full(1, 10.0),
+                household_benefits=np.zeros(1),
+                consumption_weights=np.full(1, 1.0),
+                consumption_weights_by_income=np.zeros((1, 1)),
+                exogenous_total_consumption=np.zeros(1),
+                current_time=0,
+                take_consumption_weights_by_income_quantile=False,
+                tau_vat=0.0,
+                liquid_wealth=np.array([0.0]),
+                illiquid_wealth=np.array([0.0]),
+                housing_wealth=np.array([0.0]),
+                rent=np.zeros(1),
+                mortgage_debt=np.zeros(1),
+                mortgage_payment=np.zeros(1),
+                owner_occupied=np.ones(1),
+                mortgagor=np.ones(1),
+                house_price_index=1.0,
+                house_price_growth=0.0,
+                lagged_consumption=np.full(1, 100.0),
+                lagged_income=np.full(1, 10.0),
+                lagged_liquid_wealth=np.array([0.0]),
+                lagged_illiquid_wealth=np.array([0.0]),
+                lagged_mortgage_debt=np.zeros(1),
+                lagged_consumption_loan_debt=np.array([45.0]),
+                lagged_house_price_index=1.0,
+                time_unit=time_unit,
+            )
+            return consumption_obj.last_target_consumption_components
+
+        components_annual = run_with_time_unit(12)
+        components_quarterly = run_with_time_unit(3)
+        alpha_2_annual = components_annual["target_consumption_alpha_2"][0]
+        alpha_2_quarterly = components_quarterly["target_consumption_alpha_2"][0]
+        correct_lower_bound_annual = (1.0 - alpha_2_annual) - (10.0 / 100.0)
+        correct_lower_bound_quarterly = (1.0 - alpha_2_quarterly) - (10.0 / 100.0)
+        np.testing.assert_allclose(
+            components_annual["target_consumption_log_long_run"][0], correct_lower_bound_annual, atol=1e-9
+        )
+        np.testing.assert_allclose(
+            components_quarterly["target_consumption_log_long_run"][0], correct_lower_bound_quarterly, atol=1e-9
+        )
+
+    def test_time_unit_zero_raises(self):
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+        )
+        with pytest.raises(ValueError, match="time_unit"):
+            consumption_obj.compute_target_consumption(
+                expected_inflation=0.0,
+                current_cpi=1.0,
+                initial_cpi=1.0,
+                historic_consumption_sum=np.array([np.full(1, 40.0), np.full(1, 100.0)]),
+                saving_rates=np.zeros(1),
+                income=np.full(1, 10.0),
+                household_benefits=np.zeros(1),
+                consumption_weights=np.full(1, 1.0),
+                consumption_weights_by_income=np.zeros((1, 1)),
+                exogenous_total_consumption=np.zeros(1),
+                current_time=0,
+                take_consumption_weights_by_income_quantile=False,
+                tau_vat=0.0,
+                liquid_wealth=np.array([0.0]),
+                illiquid_wealth=np.array([0.0]),
+                housing_wealth=np.array([0.0]),
+                rent=np.zeros(1),
+                mortgage_debt=np.zeros(1),
+                mortgage_payment=np.zeros(1),
+                owner_occupied=np.ones(1),
+                mortgagor=np.ones(1),
+                house_price_index=1.0,
+                house_price_growth=0.0,
+                lagged_consumption=np.full(1, 100.0),
+                lagged_income=np.full(1, 10.0),
+                lagged_liquid_wealth=np.array([0.0]),
+                lagged_illiquid_wealth=np.array([0.0]),
+                lagged_mortgage_debt=np.zeros(1),
+                lagged_consumption_loan_debt=np.zeros(1),
+                lagged_house_price_index=1.0,
+                time_unit=0,
+            )
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"continuous_wealth_calibration": {"net_liquid_assets_ratio_bounds": (1.0, 1.0)}}, "Wealth-ratio"),
+            ({"continuous_wealth_calibration": {"b_raw_min": 1.0, "b_raw_max": 1.0}}, "b_raw"),
+            ({"continuous_wealth_calibration": {"alpha_2_low": 0.5, "alpha_2_high": 0.5}}, "alpha_2"),
+            ({"continuous_wealth_calibration": {"gamma_1_low": 0.1, "gamma_1_high": 0.1}}, "gamma_1"),
+        ],
+    )
+    def test_degenerate_continuous_calibration_bounds_raise_at_construction(self, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            CreditAugmentedConsumption(
+                consumption_smoothing_fraction=0.0,
+                consumption_smoothing_window=1,
+                minimum_consumption_fraction=0.0,
+                **kwargs,
+            )

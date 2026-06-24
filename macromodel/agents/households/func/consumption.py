@@ -683,8 +683,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         )
         self.continuous_wealth_calibration_b0 = calibration.get("b0", 0.428)
         # Fail fast on degenerate calibration bounds rather than letting them silently
-        # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration,
-        # since these are config-driven and only checked once per object lifetime here.
+        # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration
+        # (ratio/b_raw bounds), or silently invert the accessibility-to-coefficient
+        # mapping (alpha_2/gamma_1 ranges) -- these are config-driven and only checked
+        # once per object lifetime here.
         for lo, hi in self.continuous_wealth_calibration_ratio_bounds:
             if hi <= lo:
                 raise ValueError(f"Wealth-ratio calibration bounds must satisfy hi > lo, got ({lo}, {hi}).")
@@ -692,6 +694,16 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         if b_raw_max <= b_raw_min:
             raise ValueError(
                 f"b_raw calibration bounds must satisfy max > min, got ({b_raw_min}, {b_raw_max})."
+            )
+        alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
+        if alpha_2_hi <= alpha_2_lo:
+            raise ValueError(
+                f"alpha_2 calibration range must satisfy high > low, got ({alpha_2_lo}, {alpha_2_hi})."
+            )
+        gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
+        if gamma_1_hi <= gamma_1_lo:
+            raise ValueError(
+                f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi})."
             )
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
@@ -951,8 +963,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             # wealth_drag's ratios are annual_spendable_income-based, so this y must
             # be too, not real_lagged_income. Lagged C remains the best available
             # proxy for the target's own C -- the target itself isn't computed yet
-            # at this point in _evaluate_target.
-            income_to_consumption_ratio = annual_spendable_income / real_lagged_consumption
+            # at this point in _evaluate_target. Annualizing C alongside y keeps both
+            # sides of this flow-to-flow ratio on the same basis (it cancels back to
+            # real_spendable_income / real_lagged_consumption numerically, but written
+            # this way to make the matching-y reasoning auditable rather than relying
+            # on an algebraic cancellation a future edit could silently break).
+            annual_lagged_consumption = real_lagged_consumption * annualization_factor
+            income_to_consumption_ratio = annual_spendable_income / annual_lagged_consumption
             wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
                 wealth_drag, alpha_2, income_to_consumption_ratio
             )

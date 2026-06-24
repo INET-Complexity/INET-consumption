@@ -1961,9 +1961,7 @@ class Country:
                     + self.households.ts.dicts["income_social_transfers"][-5]
                     + self.households.ts.dicts["income_rental"][-5]
                 )
-                lagged_real_non_property_income = (
-                    lagged_non_property_income / self.economy.ts.dicts[cpi_series][-5][0]
-                )
+                lagged_real_non_property_income = lagged_non_property_income / self.economy.ts.dicts[cpi_series][-5][0]
             self.households.update_income_belief_learning_state(
                 current_income=self.households.compute_non_property_income() / self.economy.ts.current(cpi_series)[0],
                 lagged_income=lagged_real_non_property_income,

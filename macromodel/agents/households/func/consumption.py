@@ -692,19 +692,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 raise ValueError(f"Wealth-ratio calibration bounds must satisfy hi > lo, got ({lo}, {hi}).")
         b_raw_min, b_raw_max = self.continuous_wealth_calibration_b_raw_bounds
         if b_raw_max <= b_raw_min:
-            raise ValueError(
-                f"b_raw calibration bounds must satisfy max > min, got ({b_raw_min}, {b_raw_max})."
-            )
+            raise ValueError(f"b_raw calibration bounds must satisfy max > min, got ({b_raw_min}, {b_raw_max}).")
         alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
         if alpha_2_hi <= alpha_2_lo:
-            raise ValueError(
-                f"alpha_2 calibration range must satisfy high > low, got ({alpha_2_lo}, {alpha_2_hi})."
-            )
+            raise ValueError(f"alpha_2 calibration range must satisfy high > low, got ({alpha_2_lo}, {alpha_2_hi}).")
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
         if gamma_1_hi <= gamma_1_lo:
-            raise ValueError(
-                f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi})."
-            )
+            raise ValueError(f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi}).")
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
         self.mortgage_debt_propensity = mortgage_debt_propensity

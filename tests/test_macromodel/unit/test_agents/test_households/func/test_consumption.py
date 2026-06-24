@@ -892,16 +892,12 @@ class TestCreditAugmentedHouseholdConsumption:
         lower_expected = upper_expected - 0.25
 
         below_lower = np.array([lower_expected - 1.0])
-        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(
-            below_lower, alpha_2, income_to_consumption_ratio
-        )
+        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(below_lower, alpha_2, income_to_consumption_ratio)
         np.testing.assert_allclose(clipped, lower_expected)
         assert flag[0] == 1.0
 
         above_upper = np.array([upper_expected + 1.0])
-        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(
-            above_upper, alpha_2, income_to_consumption_ratio
-        )
+        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(above_upper, alpha_2, income_to_consumption_ratio)
         np.testing.assert_allclose(clipped, upper_expected)
         assert flag[0] == 1.0
 
@@ -1126,9 +1122,7 @@ class TestCreditAugmentedHouseholdConsumption:
         # tolerance-sensitive comparison.
         np.testing.assert_allclose(components["target_consumption_log_long_run"][0], correct_lower_bound, atol=1e-9)
         assert abs(correct_lower_bound - buggy_lower_bound) > 5.0  # sanity: bounds are far apart
-        assert not np.isclose(
-            components["target_consumption_log_long_run"][0], buggy_lower_bound, atol=1e-3
-        )
+        assert not np.isclose(components["target_consumption_log_long_run"][0], buggy_lower_bound, atol=1e-3)
         assert np.all(np.isfinite(result))
 
     def test_evaluate_target_clip_income_to_consumption_ratio_invariant_under_time_unit(self):

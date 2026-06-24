@@ -231,4 +231,4 @@ class SmoothTaylorRule(PolicyRate):
             )
             + shock
         )
-        return max(0.0, annual_rate / periods_per_year)
+        return min(max(-1.0, annual_rate / periods_per_year), 1)

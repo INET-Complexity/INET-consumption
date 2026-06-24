@@ -102,6 +102,7 @@ class HouseholdConsumption(ABC):
         permanent_income_log_ratio: float | np.ndarray = None,
         consumer_debt_rate_delta: float | np.ndarray = None,
         uncertainty_delta: float | np.ndarray = None,
+        population_scale_factor: float | None = None,
         time_unit: int = 12,
     ) -> np.ndarray:
         """Calculate target consumption levels.
@@ -136,6 +137,11 @@ class HouseholdConsumption(ABC):
             house_price_index (float | np.ndarray | None): House-price index level
             house_price_growth (float | np.ndarray | None): House-price growth proxy
             lagged_consumption (np.ndarray | None): Previous-period consumption
+            population_scale_factor (float | None): Synthetic-population scale
+                factor (e.g. FRA scale=5000) used to rescale model-internal
+                income back to per-household units where a rule mixes income
+                with an unscaled index (see GH issue #90). Ignored by rules
+                that do not need it.
 
         Returns:
             np.ndarray: Target consumption by household and industry
@@ -197,6 +203,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in default consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in default consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in default consumption
+        population_scale_factor: float | None = None,  # Ignored in default consumption
         time_unit: int = 12,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
@@ -382,6 +389,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in CES consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in CES consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in CES consumption
+        population_scale_factor: float | None = None,  # Ignored in CES consumption
         time_unit: int = 12,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
@@ -610,6 +618,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         house_price_floor: float = 1e-12,
         uses_income_belief_learning: bool = False,
         income_belief_learning_horizon: dict | None = None,
+        uses_continuous_wealth_calibration: bool = False,
+        continuous_wealth_calibration: dict | None = None,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -625,6 +635,70 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.liquid_wealth_propensity = liquid_wealth_propensity
         self.illiquid_wealth_propensity = illiquid_wealth_propensity
         self.housing_wealth_propensity = housing_wealth_propensity
+        # Continuous CACF household-group calibration (HFCS 2014 France-fitted):
+        # replaces the single global (permanent_income_propensity, liquid_wealth_propensity)
+        # pair with per-household alpha_2(B_i)/gamma_1(B_i), B_i a fitted accessibility
+        # index over winsorized NLA/y, IFA/y, HA/y. Off by default; when off, behaviour
+        # is byte-identical to the pre-existing global-coefficient path. See
+        # knowledge-vault/wiki/concepts/cacf-household-group-calibration.md
+        # ("Continuous Calibration Alternative") for the fitted constants' provenance.
+        self.uses_continuous_wealth_calibration = uses_continuous_wealth_calibration
+        calibration = continuous_wealth_calibration or {}
+        self.continuous_wealth_calibration_weights = (
+            calibration.get("weight_net_liquid_assets", 1.0),
+            calibration.get("weight_illiquid_financial_assets", 0.502),
+            calibration.get("weight_housing_assets", 0.287),
+        )
+        self.continuous_wealth_calibration_steepness = calibration.get("steepness", 34.3)
+        self.continuous_wealth_calibration_alpha_2_range = (
+            calibration.get("alpha_2_low", 0.2497),
+            calibration.get("alpha_2_high", 0.6997),
+        )
+        self.continuous_wealth_calibration_gamma_1_range = (
+            calibration.get("gamma_1_low", 0.0503),
+            calibration.get("gamma_1_high", 0.1997),
+        )
+        # [p5,p95] winsorization bounds for NLA/y, IFA/y, HA/y, fitted once on HFCS
+        # 2014 France micro-data (see the design doc's Cell-Size Check table).
+        # Calibration-fixed by design: not recomputed from the live simulated
+        # population each period.
+        self.continuous_wealth_calibration_ratio_bounds = (
+            calibration.get("net_liquid_assets_ratio_bounds", (-4.73, 2.15)),
+            calibration.get("illiquid_financial_assets_ratio_bounds", (0.0, 3.54)),
+            calibration.get("housing_assets_ratio_bounds", (0.0, 17.08)),
+        )
+        # Calibration-fixed B-index normalization range and logistic centre, computed
+        # once on the HFCS 2014 France cross-section with the weights/bounds above
+        # (B_raw = sum of weighted normalized ratios, each in [0,1] after clipping, so
+        # its theoretical range is [0, weight_net_liquid_assets + weight_illiquid_financial_assets
+        # + weight_housing_assets]; b0 is the population-weighted median of the resulting
+        # B_tilde). Must NOT be recomputed from the live simulated household batch each
+        # period -- doing so would make a household's alpha_2/gamma_1 depend on which
+        # other households happen to be in the same call, including the income-perturbed
+        # MPC probe in compute_target_consumption, contrary to the fixed mapping the
+        # weights/ranges above are fitted against.
+        self.continuous_wealth_calibration_b_raw_bounds = (
+            calibration.get("b_raw_min", 0.0),
+            calibration.get("b_raw_max", 1.789),
+        )
+        self.continuous_wealth_calibration_b0 = calibration.get("b0", 0.428)
+        # Fail fast on degenerate calibration bounds rather than letting them silently
+        # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration
+        # (ratio/b_raw bounds), or silently invert the accessibility-to-coefficient
+        # mapping (alpha_2/gamma_1 ranges) -- these are config-driven and only checked
+        # once per object lifetime here.
+        for lo, hi in self.continuous_wealth_calibration_ratio_bounds:
+            if hi <= lo:
+                raise ValueError(f"Wealth-ratio calibration bounds must satisfy hi > lo, got ({lo}, {hi}).")
+        b_raw_min, b_raw_max = self.continuous_wealth_calibration_b_raw_bounds
+        if b_raw_max <= b_raw_min:
+            raise ValueError(f"b_raw calibration bounds must satisfy max > min, got ({b_raw_min}, {b_raw_max}).")
+        alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
+        if alpha_2_hi <= alpha_2_lo:
+            raise ValueError(f"alpha_2 calibration range must satisfy high > low, got ({alpha_2_lo}, {alpha_2_hi}).")
+        gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
+        if gamma_1_hi <= gamma_1_lo:
+            raise ValueError(f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi}).")
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
         self.mortgage_debt_propensity = mortgage_debt_propensity
@@ -661,6 +735,69 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             return np.broadcast_to(value_array, reference.shape).astype(float)
         return value_array
 
+    def _compute_continuous_wealth_calibration(
+        self,
+        net_liquid_assets_ratio: np.ndarray,
+        illiquid_financial_assets_ratio: np.ndarray,
+        housing_assets_ratio: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Per-household alpha_2(B)/gamma_1(B) via the fitted accessibility-index mapping.
+
+        B is built from the three balance-sheet ratios, each first clipped to its
+        HFCS-fitted [p5,p95] bound (the issue #90 explosion mechanism is in the
+        ratios, not in B, so it must be bounded there), then normalized using the
+        calibration-fixed B_raw range and centred at the calibration-fixed B0 (both
+        fitted once on the HFCS cross-section, not recomputed from this call's
+        household batch -- a per-batch min/max/median would make alpha_2/gamma_1
+        depend on which other households happen to be evaluated in the same call).
+        Finally passed through a logistic. See cacf-household-group-calibration.md.
+        """
+        nla_bounds, ifa_bounds, ha_bounds = self.continuous_wealth_calibration_ratio_bounds
+        nla_clipped = np.clip(net_liquid_assets_ratio, nla_bounds[0], nla_bounds[1])
+        ifa_clipped = np.clip(illiquid_financial_assets_ratio, ifa_bounds[0], ifa_bounds[1])
+        ha_clipped = np.clip(housing_assets_ratio, ha_bounds[0], ha_bounds[1])
+
+        nla_norm = (nla_clipped - nla_bounds[0]) / (nla_bounds[1] - nla_bounds[0])
+        ifa_norm = (ifa_clipped - ifa_bounds[0]) / (ifa_bounds[1] - ifa_bounds[0])
+        ha_norm = (ha_clipped - ha_bounds[0]) / (ha_bounds[1] - ha_bounds[0])
+
+        weight_nla, weight_ifa, weight_ha = self.continuous_wealth_calibration_weights
+        b_raw = weight_nla * nla_norm + weight_ifa * ifa_norm + weight_ha * ha_norm
+        b_min, b_max = self.continuous_wealth_calibration_b_raw_bounds
+        b_tilde = (b_raw - b_min) / (b_max - b_min)
+        b0 = self.continuous_wealth_calibration_b0
+
+        steepness = self.continuous_wealth_calibration_steepness
+        logistic = 1.0 / (1.0 + np.exp(-steepness * (b_tilde - b0)))
+        alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
+        gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
+        alpha_2 = alpha_2_lo + (alpha_2_hi - alpha_2_lo) * logistic
+        # gamma_1 falls (not rises) as B rises, mirroring alpha_2's increase.
+        gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic
+        return alpha_2, gamma_1
+
+    @staticmethod
+    def _clip_wealth_drag(
+        wealth_drag: np.ndarray,
+        alpha_2: np.ndarray,
+        income_to_consumption_ratio: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Clip the combined wealth-drag term to the interval guaranteeing MPC_LR in [0,1].
+
+        MPC_LR = (C/y) * [(1-alpha_2) - wealth_drag]. Requiring MPC_LR >= 0 gives
+        wealth_drag <= 1-alpha_2 (the upper bound). Requiring MPC_LR <= 1 gives
+        (1-alpha_2) - wealth_drag <= y/C, i.e. wealth_drag >= (1-alpha_2) - y/C --
+        the lower bound uses income-over-consumption (y/C), not its reciprocal.
+        Backstop only -- the continuous mapping above should already keep most
+        households in range. See cacf-household-group-calibration.md, "Relationship
+        to the Issue #90/#93 Clip".
+        """
+        upper = 1.0 - alpha_2
+        lower = upper - income_to_consumption_ratio
+        clipped = np.clip(wealth_drag, lower, upper)
+        clipped_flag = (~np.isclose(wealth_drag, clipped)).astype(float)
+        return clipped, clipped_flag
+
     def _evaluate_target(
         self,
         income: np.ndarray,
@@ -689,6 +826,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_cpi: float | None,
         initial_cpi: float,
         expected_inflation: float,
+        population_scale_factor: float | None,
         time_unit: int,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
@@ -714,6 +852,15 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_house_price_index if lagged_house_price_index is not None else house_price_index,
             default=1.0,
         )
+        # economy.ts["hpi"] is a chained index normalised to a base of 1.0 (economy.py),
+        # but house_price_propensity (gamma_4) is calibrated against a conventional
+        # base-100 house-price index. Rescale once, using the current-period level so
+        # the same factor applies to both the current and lagged series, only when the
+        # index still looks base-1.0-normalised; an already-rebased (e.g. base-100)
+        # input is left untouched. See GH issue #90.
+        if np.nanmax(np.abs(house_price_index_arr)) <= 10.0:
+            house_price_index_arr = house_price_index_arr * 100.0
+            lagged_house_price_index_arr = lagged_house_price_index_arr * 100.0
         real_borrowing_rate_arr = self._as_array(income, real_borrowing_rate, default=0.0)
         permanent_income_log_ratio_arr = self._as_array(income, permanent_income_log_ratio, default=0.0)
         consumer_debt_rate_delta_arr = self._as_array(income, consumer_debt_rate_delta, default=0.0)
@@ -735,6 +882,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_lagged_housing_wealth = lagged_housing_wealth / lagged_deflator
         real_consumer_debt = lagged_consumption_loan_debt / lagged_deflator
         real_lagged_house_price = np.maximum(lagged_house_price_index_arr / lagged_deflator, self.house_price_floor)
+        # house_price_propensity is estimated on hp/y with y at per-household
+        # (unscaled) income; real_lagged_income carries the model's synthetic
+        # population_scale_factor (e.g. FRA scale=5000), so it must be divided
+        # back out before forming this ratio, or the index/income units mismatch
+        # by orders of magnitude (see GH issue #90).
+        scale = float(population_scale_factor) if population_scale_factor else 1.0
+        real_lagged_income_per_household = real_lagged_income / scale
 
         # The long-run propensities/intercept are calibrated against annual income, but
         # real_spendable_income/real_lagged_income are at model (period) frequency. Annualize
@@ -742,28 +896,107 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # ratios are on the same scale as the calibration; the level terms that convert the
         # ratio back into a period-frequency consumption target (log_long_run_target below,
         # and income_growth_term, where the factor cancels) stay on period income.
+        if time_unit <= 0:
+            raise ValueError(f"time_unit must be positive (months per model period), got {time_unit}.")
         annualization_factor = 12.0 / float(time_unit)
         annual_spendable_income = real_spendable_income * annualization_factor
-        annual_lagged_income = real_lagged_income * annualization_factor
+        annual_lagged_income_per_household = real_lagged_income_per_household * annualization_factor
 
-        net_liquid_assets_term = self.liquid_wealth_propensity * real_net_liquid_assets / annual_spendable_income
-        illiquid_assets_term = (
-            self.illiquid_wealth_propensity * real_illiquid_financial_assets / annual_spendable_income
+        # net_liquid_assets_ratio/illiquid_assets_ratio/housing_wealth_ratio feed both the
+        # legacy long-run terms below and the continuous wealth-calibration mapping
+        # (cacf-household-group-calibration.md). They are paired with current-period
+        # annual_spendable_income (not lagged income) to match main's convention, and
+        # annualized because the HFCS fit underlying the continuous mapping's [p5,p95]
+        # clip bounds and B-index constants used annual disp_income; leaving these at
+        # period frequency would rescale every household's ratio by annualization_factor
+        # and push them outside the calibrated bounds (see the elevated clip-fire-rate
+        # finding in the 2026-06-24 session notes).
+        #
+        # The wealth stocks above (real_net_liquid_assets, real_illiquid_financial_assets,
+        # real_lagged_housing_wealth) are deliberately lagged_deflator-based -- that is
+        # their own correct real value as of t-1, and other call sites/diagnostics rely
+        # on that. Dividing them directly by annual_spendable_income (current_deflator-
+        # based) would bake the realised one-period inflation rate (current_deflator /
+        # lagged_deflator) into the ratio. Re-deflate the same nominal stocks with
+        # current_deflator here, just for ratio formation, so the ratio's deflator
+        # cancels against annual_spendable_income's, consistent with pairing these
+        # ratios against current-period income.
+        current_period_net_liquid_assets = (
+            lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt
+        ) / current_deflator
+        current_period_illiquid_financial_assets = lagged_illiquid_wealth / current_deflator
+        current_period_lagged_housing_wealth = lagged_housing_wealth / current_deflator
+        net_liquid_assets_ratio = current_period_net_liquid_assets / annual_spendable_income
+        illiquid_assets_ratio = current_period_illiquid_financial_assets / annual_spendable_income
+        # Lagged (t-1), not current-period, housing wealth: main fixed a stale
+        # current/lagged mixup here (see test_consumption.py's split between
+        # target_consumption_real_housing_wealth and _real_lagged_housing_wealth).
+        housing_wealth_ratio = current_period_lagged_housing_wealth / annual_spendable_income
+        # house_price_term combines both unit fixes: per-household descaling (population
+        # scale factor, GH issue #90) and annualization (main), since house prices are
+        # quoted per household, not per the model's scaled synthetic population.
+        house_price_term = self.house_price_propensity * np.log(
+            real_lagged_house_price / annual_lagged_income_per_household
         )
-        house_price_term = self.house_price_propensity * np.log(real_lagged_house_price / annual_lagged_income)
-        housing_wealth_term = self.housing_wealth_propensity * real_lagged_housing_wealth / annual_spendable_income
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
         real_borrowing_rate_term = self.real_borrowing_rate_propensity * real_borrowing_rate_arr
 
-        long_run_log_consumption_to_income = (
-            self.long_run_intercept
-            + real_borrowing_rate_term
-            + permanent_income_term
-            + net_liquid_assets_term
-            + illiquid_assets_term
-            + house_price_term
-            + housing_wealth_term
-        )
+        wealth_drag_clipped_flag = np.zeros_like(real_spendable_income)
+        if self.uses_continuous_wealth_calibration:
+            alpha_2, gamma_1 = self._compute_continuous_wealth_calibration(
+                net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio
+            )
+            permanent_income_term = alpha_2 * permanent_income_log_ratio_arr
+            wealth_drag = (
+                gamma_1 * net_liquid_assets_ratio
+                + self.illiquid_wealth_propensity * illiquid_assets_ratio
+                + self.housing_wealth_propensity * housing_wealth_ratio
+            )
+            # MPC_LR = (C/y) * [(1-alpha_2) - (1/y)*(...)] (design doc) requires the
+            # SAME y in both the C/y multiplier and the wealth_drag bracket above --
+            # wealth_drag's ratios are annual_spendable_income-based, so this y must
+            # be too, not real_lagged_income. Lagged C remains the best available
+            # proxy for the target's own C -- the target itself isn't computed yet
+            # at this point in _evaluate_target. Annualizing C alongside y keeps both
+            # sides of this flow-to-flow ratio on the same basis (it cancels back to
+            # real_spendable_income / real_lagged_consumption numerically, but written
+            # this way to make the matching-y reasoning auditable rather than relying
+            # on an algebraic cancellation a future edit could silently break).
+            annual_lagged_consumption = real_lagged_consumption * annualization_factor
+            income_to_consumption_ratio = annual_spendable_income / annual_lagged_consumption
+            wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
+                wealth_drag, alpha_2, income_to_consumption_ratio
+            )
+            # These three diagnostics are the PRE-clip sub-terms (for transparency
+            # into each wealth channel's unclipped contribution); they will not sum
+            # to the post-clip `wealth_drag` below when the clip has fired -- use
+            # target_consumption_wealth_drag_clipped to detect that case.
+            net_liquid_assets_term = gamma_1 * net_liquid_assets_ratio
+            illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
+            housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio
+            long_run_log_consumption_to_income = (
+                self.long_run_intercept
+                + real_borrowing_rate_term
+                + permanent_income_term
+                + wealth_drag
+                + house_price_term
+            )
+        else:
+            alpha_2 = np.full_like(real_spendable_income, self.permanent_income_propensity)
+            gamma_1 = np.full_like(real_spendable_income, self.liquid_wealth_propensity)
+            net_liquid_assets_term = self.liquid_wealth_propensity * net_liquid_assets_ratio
+            illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
+            housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio
+            permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
+            long_run_log_consumption_to_income = (
+                self.long_run_intercept
+                + real_borrowing_rate_term
+                + permanent_income_term
+                + net_liquid_assets_term
+                + illiquid_assets_term
+                + house_price_term
+                + housing_wealth_term
+            )
         log_long_run_target = np.log(real_spendable_income) + long_run_log_consumption_to_income
         long_run_target_real = np.exp(np.clip(log_long_run_target, -50.0, 50.0))
 
@@ -784,9 +1017,18 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         delta_log_consumption = (
             partial_adjustment_gap + income_growth_term + interest_rate_cashflow_term + uncertainty_term
         )
+        # Economic sanity bound on one-period real consumption growth, distinct from
+        # the +-50 exp-overflow guard below (which only prevents inf/nan, not implausible
+        # swings -- see GH issue #90). The model runs quarterly; +-0.5 log-units already
+        # allows roughly -39%/+65% real consumption growth in a single quarter, well beyond
+        # any realistic shock, so hitting this bound flags a misbehaving upstream input
+        # (e.g. an unbounded permanent_income_log_ratio) rather than genuine household behaviour.
+        growth_clip_bound = 0.5
+        delta_log_consumption_clipped = np.clip(delta_log_consumption, -growth_clip_bound, growth_clip_bound)
+        growth_clipped_flag = (np.abs(delta_log_consumption) > growth_clip_bound).astype(float)
         target_total_real = np.maximum(
             self.consumption_floor,
-            real_lagged_consumption * np.exp(np.clip(delta_log_consumption, -50.0, 50.0)),
+            real_lagged_consumption * np.exp(np.clip(delta_log_consumption_clipped, -50.0, 50.0)),
         )
         target_total = target_total_real * nominalizer
 
@@ -813,6 +1055,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_mortgage_debt_diagnostic": mortgage_debt,
             "target_consumption_mortgage_payment_diagnostic": mortgage_payment,
             "target_consumption_house_price": house_price_term,
+            "target_consumption_alpha_2": alpha_2,
+            "target_consumption_gamma_1": gamma_1,
+            "target_consumption_wealth_drag_clipped": wealth_drag_clipped_flag,
             "target_consumption_interest_rate_cashflow": interest_rate_cashflow_term,
             "target_consumption_uncertainty": uncertainty_term,
             "target_consumption_partial_adjustment_gap": partial_adjustment_gap,
@@ -827,6 +1072,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_uncertainty_delta": uncertainty_delta_arr,
             "target_consumption_owner_occupied": owner_occupied,
             "target_consumption_mortgagor": mortgagor,
+            "target_consumption_delta_log_consumption": delta_log_consumption_clipped,
+            "target_consumption_growth_clipped": growth_clipped_flag,
         }
         return components, target_total
 
@@ -873,6 +1120,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,
         consumer_debt_rate_delta: float | np.ndarray = None,
         uncertainty_delta: float | np.ndarray = None,
+        population_scale_factor: float | None = None,
         time_unit: int = 12,
     ) -> np.ndarray:
         if lagged_consumption is None:
@@ -933,6 +1181,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            population_scale_factor=population_scale_factor,
             time_unit=time_unit,
         )
 
@@ -968,6 +1217,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            population_scale_factor=population_scale_factor,
             time_unit=time_unit,
         )
 
@@ -1044,6 +1294,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in exogenous consumption
         consumer_debt_rate_delta: float | np.ndarray = None,  # Ignored in exogenous consumption
         uncertainty_delta: float | np.ndarray = None,  # Ignored in exogenous consumption
+        population_scale_factor: float | None = None,  # Ignored in exogenous consumption
         time_unit: int = 12,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.

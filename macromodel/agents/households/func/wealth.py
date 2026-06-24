@@ -445,6 +445,13 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         lambda_kappa: float = 0.1,
         fixed_cost_share: float = 0.0,
         frm_coefficients_path: str | None = None,
+        settles_portfolio_choice: bool = False,
+        participation_source: str = "initial_ifa_positive",
+        liquid_return_source: str = "policy_rate_markup",
+        liquid_asset_policy_rate_markup: float | None = None,
+        dynamic_shifters_enabled: bool = False,
+        dynamic_shifters: dict | None = None,
+        data_paths: dict | None = None,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -461,6 +468,16 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"fixed_cost_share must be non-negative, got {fixed_cost_share}.")
         if uses_portfolio_choice:
             validate_target_share_source(target_share_source)
+        if settles_portfolio_choice:
+            raise ValueError("settles_portfolio_choice=True is out of scope for PaperAssetReturnWealthSetter.")
+        if dynamic_shifters_enabled:
+            raise ValueError("dynamic_shifters_enabled=True is out of scope for PaperAssetReturnWealthSetter.")
+        if liquid_asset_policy_rate_markup is not None:
+            raise ValueError("liquid_asset_policy_rate_markup is out of scope until settled portfolio wiring lands.")
+        if participation_source != "initial_ifa_positive":
+            raise ValueError(f"Unsupported participation_source: {participation_source}.")
+        if liquid_return_source != "policy_rate_markup":
+            raise ValueError(f"Unsupported liquid_return_source: {liquid_return_source}.")
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq

@@ -239,6 +239,42 @@ class TestHouseholds:
         assert captured["uncertainty_delta"] is None
         assert "income_belief_runtime_state" not in test_households.states
 
+    def test__update_income_belief_learning_state_persists_diagnostic_flags(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.states["income_belief_priors"] = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.5),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+
+        # No lagged_income yet (warm-up period): diagnostics should append zeros,
+        # not raise or leave the series un-appended.
+        before = len(test_households.ts.historic("income_belief_growth_clipped"))
+        test_households.update_income_belief_learning_state(
+            current_income=np.full(n_households, 100.0),
+            lagged_income=None,
+        )
+        assert len(test_households.ts.historic("income_belief_growth_clipped")) == before + 1
+        np.testing.assert_allclose(test_households.ts.current("income_belief_growth_clipped"), 0.0)
+        np.testing.assert_allclose(test_households.ts.current("income_belief_floor_used"), 0.0)
+        np.testing.assert_allclose(test_households.ts.current("income_belief_posterior_fallback_used"), 0.0)
+
+        # One household has a near-zero current income (e.g. a bad financial-asset
+        # draw under the old, now-fixed signal source) -- its growth should be both
+        # floored and clipped; the other household's normal growth should be neither.
+        current_income = np.array([1e-13, 110.0] + [100.0] * (n_households - 2))
+        lagged_income = np.full(n_households, 100.0)
+        test_households.update_income_belief_learning_state(
+            current_income=current_income,
+            lagged_income=lagged_income,
+        )
+        assert test_households.ts.current("income_belief_floor_used")[0] == 1.0
+        assert test_households.ts.current("income_belief_growth_clipped")[0] == 1.0
+        assert test_households.ts.current("income_belief_floor_used")[1] == 0.0
+        assert test_households.ts.current("income_belief_growth_clipped")[1] == 0.0
+
     def test__target_consumption_does_not_auto_wire_runtime_learning_state_for_opt_in_rule(self, test_households):
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries

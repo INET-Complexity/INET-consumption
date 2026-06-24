@@ -212,6 +212,38 @@ def test__income_belief_learning_handles_zero_income_floor():
     assert np.isfinite(outputs.income_signal).all()
     assert np.isfinite(outputs.posterior_mean).all()
     assert np.isfinite(outputs.posterior_variance).all()
+    # Both households' raw log-growth (~-32, ~+32) is far outside the default
+    # +-1.0 growth_clip_bound -- the floor alone (income_floor=1e-12) only keeps
+    # this finite, it does not keep it economically plausible. See GH issue #90.
+    assert outputs.growth_clipped.all()
+    assert np.all(np.abs(outputs.realised_income_growth) <= 1.0)
+
+
+def test__income_belief_learning_clips_extreme_growth_but_not_normal_growth():
+    priors = {
+        "income_belief_mu": np.array([0.0, 0.0]),
+        "income_belief_p": np.array([0.0, 0.0]),
+        "income_belief_rho": np.array([0.5, 0.5]),
+        "sigma2_xi": np.array([2.0, 2.0]),
+        "sigma2_v": np.array([1.0, 1.0]),
+    }
+
+    # Household 0: ~20% quarterly income growth, well inside the default bound.
+    # Household 1: a 50x income jump, far outside it.
+    outputs = compute_income_belief_learning_outputs(
+        current_income=np.array([120.0, 5000.0]),
+        lagged_income=np.array([100.0, 100.0]),
+        priors=priors,
+    )
+
+    raw_growth = np.log(np.array([120.0, 5000.0])) - np.log(np.array([100.0, 100.0]))
+    assert raw_growth[0] < 1.0
+    assert raw_growth[1] > 1.0
+
+    np.testing.assert_allclose(outputs.realised_income_growth[0], raw_growth[0])
+    np.testing.assert_allclose(outputs.realised_income_growth[1], 1.0)
+    assert not outputs.growth_clipped[0]
+    assert outputs.growth_clipped[1]
 
 
 def test__income_belief_learning_falls_back_to_zero_mean_on_non_finite_prior_mean():

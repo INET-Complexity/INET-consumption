@@ -22,6 +22,7 @@ class IncomeBeliefLearningOutputs:
     prediction_error: np.ndarray
     floor_used: np.ndarray
     posterior_fallback_used: np.ndarray
+    growth_clipped: np.ndarray
 
 
 def _household_array(priors: dict[str, np.ndarray], key: str, n_households: int) -> np.ndarray:
@@ -110,12 +111,21 @@ def compute_income_belief_learning_outputs(
     prior_mean: np.ndarray | None = None,
     prior_variance: np.ndarray | None = None,
     income_floor: float = 1e-12,
+    growth_clip_bound: float = 1.0,
 ) -> IncomeBeliefLearningOutputs:
     """Return one-period Bayesian income-learning outputs for households.
 
     ``current_income`` and ``lagged_income`` must already be real household
     income at ``t`` and ``t-4``. Increment 2 updates posterior beliefs only;
     final permanent-income and uncertainty terms are intentionally deferred.
+
+    ``growth_clip_bound`` bounds ``realised_income_growth`` to
+    ``[-growth_clip_bound, +growth_clip_bound]`` log-units before it enters the
+    Kalman update. ``income_floor`` (1e-12) only prevents ``log(0)``; on its own
+    it lets a household with near-zero or negative (e.g. a bad financial-asset
+    draw) income in one period imply tens of log-units of "growth", which then
+    persists in posterior_mean across periods (see GH issue #90). The default
+    of 1.0 (~2.7x) is already generous for one quarter.
     """
     current_income = np.asarray(current_income, dtype=float)
     lagged_income = np.asarray(lagged_income, dtype=float)
@@ -147,7 +157,9 @@ def compute_income_belief_learning_outputs(
     floor_used = (current_income <= income_floor) | (lagged_income <= income_floor)
     log_current_income = np.log(np.maximum(current_income, income_floor))
     log_lagged_income = np.log(np.maximum(lagged_income, income_floor))
-    realised_income_growth = log_current_income - log_lagged_income
+    raw_income_growth = log_current_income - log_lagged_income
+    realised_income_growth = np.clip(raw_income_growth, -growth_clip_bound, growth_clip_bound)
+    growth_clipped = np.abs(raw_income_growth) > growth_clip_bound
     common_income_growth_signal = float(log_current_income.mean() - log_lagged_income.mean())
     income_signal = realised_income_growth - common_income_growth_signal
     predicted_mean = rho * prior_mean
@@ -197,4 +209,5 @@ def compute_income_belief_learning_outputs(
         prediction_error=prediction_error,
         floor_used=floor_used,
         posterior_fallback_used=posterior_fallback_used,
+        growth_clipped=growth_clipped,
     )

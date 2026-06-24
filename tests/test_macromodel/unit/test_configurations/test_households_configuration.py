@@ -1,4 +1,7 @@
-from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from pathlib import Path
+
+from macromodel.agents.households.func.consumption import CreditAugmentedConsumption, DefaultHouseholdConsumption
+from macromodel.configurations import load_country_configuration
 from macromodel.configurations.households_configuration import (
     ConsumptionFunction,
     HouseholdsConfiguration,
@@ -34,3 +37,16 @@ def test_functions_from_model_instantiates_credit_augmented_consumption():
     functions = functions_from_model(configuration.functions, loc="macromodel.agents.households")
 
     assert isinstance(functions["consumption"], CreditAugmentedConsumption)
+
+
+def test_functions_from_model_instantiates_default_consumption_with_fra_cacf_parameters():
+    country_configuration = load_country_configuration(
+        Path("run_model/config/country_config_FRA.yaml"), country_iso3="FRA"
+    )
+    households_configuration = country_configuration.households
+    households_configuration.functions.consumption.name = "DefaultHouseholdConsumption"
+
+    functions = functions_from_model(households_configuration.functions, loc="macromodel.agents.households")
+
+    assert isinstance(functions["consumption"], DefaultHouseholdConsumption)
+    assert functions["consumption"].uses_income_belief_learning is False

@@ -1127,6 +1127,7 @@ class Households(Agent):
                 permanent_income_log_ratio=permanent_income_log_ratio,
                 consumer_debt_rate_delta=consumer_debt_rate_delta,
                 uncertainty_delta=uncertainty_delta,
+                population_scale_factor=self.states.get("population_scale_factor"),
                 time_unit=time_unit,
             )
             self._append_target_consumption_diagnostics(
@@ -1437,6 +1438,7 @@ class Households(Agent):
             )
         runtime_state = self._income_belief_runtime_state(priors)
         if lagged_income is None:
+            self._append_income_belief_diagnostics(None)
             return None
         outputs = compute_income_belief_learning_outputs(
             current_income=current_income,
@@ -1447,7 +1449,23 @@ class Households(Agent):
         )
         runtime_state["posterior_mean"] = outputs.posterior_mean.copy()
         runtime_state["posterior_variance"] = outputs.posterior_variance.copy()
+        self._append_income_belief_diagnostics(outputs)
         return outputs
+
+    def _append_income_belief_diagnostics(self, outputs: IncomeBeliefLearningOutputs | None) -> None:
+        """Persist floor/fallback/growth-clip flags so degenerate Kalman updates are
+        visible in runtime output instead of being silently discarded (see GH issue #90).
+        """
+        n_households = self.ts.current("n_households")
+        if outputs is None:
+            zero_series = np.zeros(n_households)
+            self.ts.income_belief_floor_used.append(zero_series.copy())
+            self.ts.income_belief_posterior_fallback_used.append(zero_series.copy())
+            self.ts.income_belief_growth_clipped.append(zero_series.copy())
+            return
+        self.ts.income_belief_floor_used.append(outputs.floor_used.astype(float))
+        self.ts.income_belief_posterior_fallback_used.append(outputs.posterior_fallback_used.astype(float))
+        self.ts.income_belief_growth_clipped.append(outputs.growth_clipped.astype(float))
 
     def current_income_belief_learning_inputs(
         self,
@@ -1567,6 +1585,11 @@ class Households(Agent):
             "target_consumption_uncertainty_delta",
             "target_consumption_owner_occupied",
             "target_consumption_mortgagor",
+            "target_consumption_delta_log_consumption",
+            "target_consumption_growth_clipped",
+            "target_consumption_alpha_2",
+            "target_consumption_gamma_1",
+            "target_consumption_wealth_drag_clipped",
         ]
 
     def _append_target_consumption_diagnostics(

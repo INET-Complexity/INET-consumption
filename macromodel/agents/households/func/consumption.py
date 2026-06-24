@@ -895,6 +895,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
                 wealth_drag, alpha_2, income_to_consumption_ratio
             )
+            # These three diagnostics are the PRE-clip sub-terms (for transparency
+            # into each wealth channel's unclipped contribution); they will not sum
+            # to the post-clip `wealth_drag` below when the clip has fired -- use
+            # target_consumption_wealth_drag_clipped to detect that case.
             net_liquid_assets_term = gamma_1 * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
             housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio

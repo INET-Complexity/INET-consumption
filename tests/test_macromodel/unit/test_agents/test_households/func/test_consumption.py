@@ -640,3 +640,170 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_mortgage_payment"], 0.0)
         np.testing.assert_allclose(components["target_consumption_rent_diagnostic"], 1_000.0)
         np.testing.assert_allclose(components["target_consumption_mortgage_payment_diagnostic"], 600.0)
+
+    def test_continuous_wealth_calibration_off_by_default(self):
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            permanent_income_propensity=0.55,
+            liquid_wealth_propensity=0.14,
+            house_price_propensity=0.0,
+        )
+        assert consumption_obj.uses_continuous_wealth_calibration is False
+
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(3, 40.0), np.full(3, 50.0)]),
+            saving_rates=np.zeros(3),
+            income=np.array([50.0, 100.0, 500.0]),
+            household_benefits=np.zeros(3),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 3)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([10.0, 999.0, 5_000.0]),
+            illiquid_wealth=np.array([0.0, 999.0, 2_000.0]),
+            housing_wealth=np.array([0.0, 120.0, 1_000.0]),
+            rent=np.zeros(3),
+            mortgage_debt=np.zeros(3),
+            mortgage_payment=np.zeros(3),
+            owner_occupied=np.ones(3),
+            mortgagor=np.ones(3),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(3, 50.0),
+            lagged_income=np.array([40.0, 80.0, 400.0]),
+            lagged_liquid_wealth=np.array([10.0, 60.0, 4_000.0]),
+            lagged_illiquid_wealth=np.array([0.0, 30.0, 1_500.0]),
+            lagged_mortgage_debt=np.zeros(3),
+            lagged_consumption_loan_debt=np.zeros(3),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        # Global scalars apply uniformly across households when the flag is off.
+        np.testing.assert_allclose(components["target_consumption_alpha_2"], 0.55)
+        np.testing.assert_allclose(components["target_consumption_gamma_1"], 0.14)
+        np.testing.assert_allclose(components["target_consumption_wealth_drag_clipped"], 0.0)
+        assert np.all(np.isfinite(result))
+
+    def test_continuous_wealth_calibration_alpha_2_rises_with_accessibility(self):
+        # A household with high NLA/IFA/HA ratios (more accessible wealth) should
+        # get a higher alpha_2 (more weight on permanent income, less on liquid
+        # wealth sensitivity) than a poor hand-to-mouth household, per the fitted
+        # NLA > IFA > HA accessibility ranking in cacf-household-group-calibration.md.
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            illiquid_wealth_propensity=0.022,
+            housing_wealth_propensity=0.013,
+            house_price_propensity=0.0,
+            uses_continuous_wealth_calibration=True,
+        )
+
+        # Three households spanning low to high wealth-to-income ratios.
+        income = np.array([100.0, 100.0, 100.0])
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(3, 40.0), np.full(3, 50.0)]),
+            saving_rates=np.zeros(3),
+            income=income,
+            household_benefits=np.zeros(3),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 3)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([0.0, 50.0, 200.0]),
+            illiquid_wealth=np.array([0.0, 30.0, 350.0]),
+            housing_wealth=np.array([0.0, 100.0, 1_700.0]),
+            rent=np.zeros(3),
+            mortgage_debt=np.zeros(3),
+            mortgage_payment=np.zeros(3),
+            owner_occupied=np.ones(3),
+            mortgagor=np.ones(3),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(3, 50.0),
+            lagged_income=income,
+            lagged_liquid_wealth=np.array([0.0, 50.0, 200.0]),
+            lagged_illiquid_wealth=np.array([0.0, 30.0, 350.0]),
+            lagged_mortgage_debt=np.zeros(3),
+            lagged_consumption_loan_debt=np.zeros(3),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        alpha_2 = components["target_consumption_alpha_2"]
+        gamma_1 = components["target_consumption_gamma_1"]
+        # Monotone in accessibility (poorest -> richest household).
+        assert alpha_2[0] < alpha_2[1] < alpha_2[2]
+        assert gamma_1[0] > gamma_1[1] > gamma_1[2]
+        # Bounded within the fitted ranges regardless of input.
+        assert np.all(alpha_2 >= consumption_obj.continuous_wealth_calibration_alpha_2_range[0])
+        assert np.all(alpha_2 <= consumption_obj.continuous_wealth_calibration_alpha_2_range[1])
+        assert np.all(gamma_1 >= consumption_obj.continuous_wealth_calibration_gamma_1_range[0])
+        assert np.all(gamma_1 <= consumption_obj.continuous_wealth_calibration_gamma_1_range[1])
+        assert np.all(np.isfinite(result))
+
+    def test_continuous_wealth_calibration_clip_backstops_near_zero_income(self):
+        # A household with near-zero lagged income blows up NLA/IFA/HA ratios
+        # (the issue #90 mechanism); the wealth-drag clip must keep MPC_LR-implying
+        # log-consumption-to-income finite and flag that it fired.
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            illiquid_wealth_propensity=0.022,
+            housing_wealth_propensity=0.013,
+            house_price_propensity=0.0,
+            uses_continuous_wealth_calibration=True,
+        )
+
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(2, 40.0), np.full(2, 50.0)]),
+            saving_rates=np.zeros(2),
+            income=np.array([100.0, 100.0]),
+            household_benefits=np.zeros(2),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 2)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([100.0, 100.0]),
+            illiquid_wealth=np.array([50.0, 50.0]),
+            housing_wealth=np.array([200.0, 200.0]),
+            rent=np.zeros(2),
+            mortgage_debt=np.zeros(2),
+            mortgage_payment=np.zeros(2),
+            owner_occupied=np.ones(2),
+            mortgagor=np.ones(2),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(2, 50.0),
+            # Second household has near-zero lagged income -- the issue #90 blowup case.
+            lagged_income=np.array([100.0, 1e-6]),
+            lagged_liquid_wealth=np.array([100.0, 100.0]),
+            lagged_illiquid_wealth=np.array([50.0, 50.0]),
+            lagged_mortgage_debt=np.zeros(2),
+            lagged_consumption_loan_debt=np.zeros(2),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        assert components["target_consumption_wealth_drag_clipped"][1] == 1.0
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= 0.0)

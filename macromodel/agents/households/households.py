@@ -1096,6 +1096,9 @@ class Households(Agent):
             "target_consumption_mortgagor",
             "target_consumption_delta_log_consumption",
             "target_consumption_growth_clipped",
+            "target_consumption_alpha_2",
+            "target_consumption_gamma_1",
+            "target_consumption_wealth_drag_clipped",
         ]
 
     def _append_target_consumption_diagnostics(

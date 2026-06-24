@@ -758,8 +758,11 @@ class TestCreditAugmentedHouseholdConsumption:
         assert np.all(np.isfinite(result))
 
     def test_continuous_wealth_calibration_clip_backstops_near_zero_income(self):
-        # A household with near-zero lagged income blows up NLA/IFA/HA ratios
-        # (the issue #90 mechanism); the wealth-drag clip must keep MPC_LR-implying
+        # A household with near-zero CURRENT income blows up NLA/IFA/HA ratios
+        # (the issue #90 mechanism), since net_liquid_assets_ratio/illiquid_assets_ratio/
+        # housing_wealth_ratio are denominated by annual_spendable_income (built from
+        # current-period income), not lagged income -- a near-zero lagged_income alone
+        # does not reach this denominator. The wealth-drag clip must keep MPC_LR-implying
         # log-consumption-to-income finite and flag that it fired.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
@@ -778,7 +781,8 @@ class TestCreditAugmentedHouseholdConsumption:
             initial_cpi=1.0,
             historic_consumption_sum=np.array([np.full(2, 40.0), np.full(2, 50.0)]),
             saving_rates=np.zeros(2),
-            income=np.array([100.0, 100.0]),
+            # Second household has near-zero current income -- the issue #90 blowup case.
+            income=np.array([100.0, 1e-6]),
             household_benefits=np.zeros(2),
             consumption_weights=np.full(1, 1.0),
             consumption_weights_by_income=np.zeros((1, 2)),
@@ -797,8 +801,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(2, 50.0),
-            # Second household has near-zero lagged income -- the issue #90 blowup case.
-            lagged_income=np.array([100.0, 1e-6]),
+            lagged_income=np.array([100.0, 100.0]),
             lagged_liquid_wealth=np.array([100.0, 100.0]),
             lagged_illiquid_wealth=np.array([50.0, 50.0]),
             lagged_mortgage_debt=np.zeros(2),

@@ -682,6 +682,17 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("b_raw_max", 1.789),
         )
         self.continuous_wealth_calibration_b0 = calibration.get("b0", 0.428)
+        # Fail fast on degenerate calibration bounds rather than letting them silently
+        # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration,
+        # since these are config-driven and only checked once per object lifetime here.
+        for lo, hi in self.continuous_wealth_calibration_ratio_bounds:
+            if hi <= lo:
+                raise ValueError(f"Wealth-ratio calibration bounds must satisfy hi > lo, got ({lo}, {hi}).")
+        b_raw_min, b_raw_max = self.continuous_wealth_calibration_b_raw_bounds
+        if b_raw_max <= b_raw_min:
+            raise ValueError(
+                f"b_raw calibration bounds must satisfy max > min, got ({b_raw_min}, {b_raw_max})."
+            )
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
         self.mortgage_debt_propensity = mortgage_debt_propensity
@@ -879,6 +890,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # ratios are on the same scale as the calibration; the level terms that convert the
         # ratio back into a period-frequency consumption target (log_long_run_target below,
         # and income_growth_term, where the factor cancels) stay on period income.
+        if time_unit <= 0:
+            raise ValueError(f"time_unit must be positive (months per model period), got {time_unit}.")
         annualization_factor = 12.0 / float(time_unit)
         annual_spendable_income = real_spendable_income * annualization_factor
         annual_lagged_income_per_household = real_lagged_income_per_household * annualization_factor
@@ -892,12 +905,27 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # period frequency would rescale every household's ratio by annualization_factor
         # and push them outside the calibrated bounds (see the elevated clip-fire-rate
         # finding in the 2026-06-24 session notes).
-        net_liquid_assets_ratio = real_net_liquid_assets / annual_spendable_income
-        illiquid_assets_ratio = real_illiquid_financial_assets / annual_spendable_income
+        #
+        # The wealth stocks above (real_net_liquid_assets, real_illiquid_financial_assets,
+        # real_lagged_housing_wealth) are deliberately lagged_deflator-based -- that is
+        # their own correct real value as of t-1, and other call sites/diagnostics rely
+        # on that. Dividing them directly by annual_spendable_income (current_deflator-
+        # based) would bake the realised one-period inflation rate (current_deflator /
+        # lagged_deflator) into the ratio. Re-deflate the same nominal stocks with
+        # current_deflator here, just for ratio formation, so the ratio's deflator
+        # cancels against annual_spendable_income's, consistent with pairing these
+        # ratios against current-period income.
+        current_period_net_liquid_assets = (
+            lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt
+        ) / current_deflator
+        current_period_illiquid_financial_assets = lagged_illiquid_wealth / current_deflator
+        current_period_lagged_housing_wealth = lagged_housing_wealth / current_deflator
+        net_liquid_assets_ratio = current_period_net_liquid_assets / annual_spendable_income
+        illiquid_assets_ratio = current_period_illiquid_financial_assets / annual_spendable_income
         # Lagged (t-1), not current-period, housing wealth: main fixed a stale
         # current/lagged mixup here (see test_consumption.py's split between
         # target_consumption_real_housing_wealth and _real_lagged_housing_wealth).
-        housing_wealth_ratio = real_lagged_housing_wealth / annual_spendable_income
+        housing_wealth_ratio = current_period_lagged_housing_wealth / annual_spendable_income
         # house_price_term combines both unit fixes: per-household descaling (population
         # scale factor, GH issue #90) and annualization (main), since house prices are
         # quoted per household, not per the model's scaled synthetic population.
@@ -918,10 +946,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 + self.illiquid_wealth_propensity * illiquid_assets_ratio
                 + self.housing_wealth_propensity * housing_wealth_ratio
             )
-            # Lagged C and lagged y (both real_lagged_*, same deflator) as the
-            # best available proxy for the target's own C/y -- the target itself
-            # isn't computed yet at this point in _evaluate_target.
-            income_to_consumption_ratio = real_lagged_income / real_lagged_consumption
+            # MPC_LR = (C/y) * [(1-alpha_2) - (1/y)*(...)] (design doc) requires the
+            # SAME y in both the C/y multiplier and the wealth_drag bracket above --
+            # wealth_drag's ratios are annual_spendable_income-based, so this y must
+            # be too, not real_lagged_income. Lagged C remains the best available
+            # proxy for the target's own C -- the target itself isn't computed yet
+            # at this point in _evaluate_target.
+            income_to_consumption_ratio = annual_spendable_income / real_lagged_consumption
             wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
                 wealth_drag, alpha_2, income_to_consumption_ratio
             )

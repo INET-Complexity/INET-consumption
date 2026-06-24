@@ -1446,6 +1446,7 @@ class Households(Agent):
             priors=priors,
             prior_mean=runtime_state["posterior_mean"],
             prior_variance=runtime_state["posterior_variance"],
+            growth_clip_bound=getattr(self.functions["consumption"], "income_belief_growth_clip_bound", 1.0),
         )
         runtime_state["posterior_mean"] = outputs.posterior_mean.copy()
         runtime_state["posterior_variance"] = outputs.posterior_variance.copy()

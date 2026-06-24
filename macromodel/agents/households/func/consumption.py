@@ -618,6 +618,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         house_price_floor: float = 1e-12,
         uses_income_belief_learning: bool = False,
         income_belief_learning_horizon: dict | None = None,
+        income_belief_growth_clip_bound: float = 1.0,
         uses_continuous_wealth_calibration: bool = False,
         continuous_wealth_calibration: dict | None = None,
     ):
@@ -629,6 +630,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         )
         # Income-belief learning is implemented by this rule only.
         self.uses_income_belief_learning = uses_income_belief_learning
+        self.income_belief_growth_clip_bound = income_belief_growth_clip_bound
         self.long_run_intercept = long_run_intercept
         self.real_borrowing_rate_propensity = real_borrowing_rate_propensity
         self.permanent_income_propensity = permanent_income_propensity

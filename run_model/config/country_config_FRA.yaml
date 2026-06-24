@@ -81,7 +81,7 @@ FRA:
           # which further shrinks the term. Re-validate via a benchmark run
           # before re-enabling this propensity. See GH issue #90.
           house_price_propensity: 0.0
-          uses_continuous_wealth_calibration: false
+          uses_continuous_wealth_calibration: true
           # uses_continuous_wealth_calibration defaults to False (see consumption.py).
           # Smoke-tested at seed-15 t_max=50 with it set to True on 2026-06-24: after
           # fixing the B-index normalization and wealth-drag-clip bound (review found
@@ -102,7 +102,7 @@ FRA:
           # # placeholders pending calibration -- small fractional values so the
           # # Stage 3 terms cannot dominate target consumption while the wiring is
           # # validated end to end.
-          # uses_income_belief_learning: true
+          uses_income_belief_learning: true
           # permanent_income_propensity: 0.05
           # uncertainty_propensity: 0.05
           # # delta (quarterly discount) and S (horizon, quarters) feeding zeta.
@@ -113,6 +113,7 @@ FRA:
           consumption_smoothing_window: 12
           elasticity_of_substitution: 1.0
           minimum_consumption_fraction: 1.0
+          income_belief_growth_clip_bound: 1.0
       financial_assets:
         name: DefaultFinancialAssets
         path_name: financial_assets
@@ -366,8 +367,8 @@ FRA:
           intermediate_inputs_target_considers_intermediate_inputs: 0.03  # 0.0
           intermediate_inputs_target_considers_labour_inputs: 0.53  # 0.0
           maximum_debt_to_equity_ratio: 2.0
-          inventory_adjustment_speed: 0.25
-          target_inventory_to_demand_fraction: 0.0 # 0.1
+          inventory_adjustment_speed: 0.1
+          target_inventory_to_demand_fraction: 0.05 # 0.1
       technical_coefficients_growth:
         name: SimpleTechnicalGrowth
         path_name: technical_coefficients_growth

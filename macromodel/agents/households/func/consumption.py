@@ -661,6 +661,21 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("illiquid_financial_assets_ratio_bounds", (0.0, 3.54)),
             calibration.get("housing_assets_ratio_bounds", (0.0, 17.08)),
         )
+        # Calibration-fixed B-index normalization range and logistic centre, computed
+        # once on the HFCS 2014 France cross-section with the weights/bounds above
+        # (B_raw = sum of weighted normalized ratios, each in [0,1] after clipping, so
+        # its theoretical range is [0, weight_net_liquid_assets + weight_illiquid_financial_assets
+        # + weight_housing_assets]; b0 is the population-weighted median of the resulting
+        # B_tilde). Must NOT be recomputed from the live simulated household batch each
+        # period -- doing so would make a household's alpha_2/gamma_1 depend on which
+        # other households happen to be in the same call, including the income-perturbed
+        # MPC probe in compute_target_consumption, contrary to the fixed mapping the
+        # weights/ranges above are fitted against.
+        self.continuous_wealth_calibration_b_raw_bounds = (
+            calibration.get("b_raw_min", 0.0),
+            calibration.get("b_raw_max", 1.789),
+        )
+        self.continuous_wealth_calibration_b0 = calibration.get("b0", 0.428)
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
         self.mortgage_debt_propensity = mortgage_debt_propensity
@@ -707,8 +722,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
         B is built from the three balance-sheet ratios, each first clipped to its
         HFCS-fitted [p5,p95] bound (the issue #90 explosion mechanism is in the
-        ratios, not in B, so it must be bounded there), then min-max normalized
-        and passed through a logistic. See cacf-household-group-calibration.md.
+        ratios, not in B, so it must be bounded there), then normalized using the
+        calibration-fixed B_raw range and centred at the calibration-fixed B0 (both
+        fitted once on the HFCS cross-section, not recomputed from this call's
+        household batch -- a per-batch min/max/median would make alpha_2/gamma_1
+        depend on which other households happen to be evaluated in the same call).
+        Finally passed through a logistic. See cacf-household-group-calibration.md.
         """
         nla_bounds, ifa_bounds, ha_bounds = self.continuous_wealth_calibration_ratio_bounds
         nla_clipped = np.clip(net_liquid_assets_ratio, nla_bounds[0], nla_bounds[1])
@@ -721,9 +740,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
         weight_nla, weight_ifa, weight_ha = self.continuous_wealth_calibration_weights
         b_raw = weight_nla * nla_norm + weight_ifa * ifa_norm + weight_ha * ha_norm
-        b_min, b_max = np.min(b_raw), np.max(b_raw)
-        b_tilde = (b_raw - b_min) / (b_max - b_min) if b_max > b_min else np.zeros_like(b_raw)
-        b0 = np.median(b_tilde)
+        b_min, b_max = self.continuous_wealth_calibration_b_raw_bounds
+        b_tilde = (b_raw - b_min) / (b_max - b_min)
+        b0 = self.continuous_wealth_calibration_b0
 
         steepness = self.continuous_wealth_calibration_steepness
         logistic = 1.0 / (1.0 + np.exp(-steepness * (b_tilde - b0)))
@@ -738,18 +757,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     def _clip_wealth_drag(
         wealth_drag: np.ndarray,
         alpha_2: np.ndarray,
-        consumption_to_income_ratio: np.ndarray,
+        income_to_consumption_ratio: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Clip the combined wealth-drag term to the interval guaranteeing MPC_LR in [0,1].
 
-        MPC_LR = (C/y) * [(1-alpha_2) - wealth_drag]; requiring 0 <= MPC_LR <= 1
-        is two inequalities in wealth_drag alone, giving the closed-form bound
-        below. Backstop only -- the continuous mapping above should already keep
-        most households in range. See cacf-household-group-calibration.md,
-        "Relationship to the Issue #90/#93 Clip".
+        MPC_LR = (C/y) * [(1-alpha_2) - wealth_drag]. Requiring MPC_LR >= 0 gives
+        wealth_drag <= 1-alpha_2 (the upper bound). Requiring MPC_LR <= 1 gives
+        (1-alpha_2) - wealth_drag <= y/C, i.e. wealth_drag >= (1-alpha_2) - y/C --
+        the lower bound uses income-over-consumption (y/C), not its reciprocal.
+        Backstop only -- the continuous mapping above should already keep most
+        households in range. See cacf-household-group-calibration.md, "Relationship
+        to the Issue #90/#93 Clip".
         """
         upper = 1.0 - alpha_2
-        lower = upper - consumption_to_income_ratio
+        lower = upper - income_to_consumption_ratio
         clipped = np.clip(wealth_drag, lower, upper)
         clipped_flag = (~np.isclose(wealth_drag, clipped)).astype(float)
         return clipped, clipped_flag
@@ -867,9 +888,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 + self.illiquid_wealth_propensity * illiquid_assets_ratio
                 + self.housing_wealth_propensity * housing_wealth_ratio
             )
-            consumption_to_income_ratio = real_lagged_consumption / real_lagged_income
+            # Lagged C and lagged y (both real_lagged_*, same deflator) as the
+            # best available proxy for the target's own C/y -- the target itself
+            # isn't computed yet at this point in _evaluate_target.
+            income_to_consumption_ratio = real_lagged_income / real_lagged_consumption
             wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
-                wealth_drag, alpha_2, consumption_to_income_ratio
+                wealth_drag, alpha_2, income_to_consumption_ratio
             )
             net_liquid_assets_term = gamma_1 * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio

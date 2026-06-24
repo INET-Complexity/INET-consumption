@@ -81,12 +81,15 @@ FRA:
           # which further shrinks the term. Re-validate via a benchmark run
           # before re-enabling this propensity. See GH issue #90.
           house_price_propensity: 0.0
-          # uses_continuous_wealth_calibration defaults to False (see consumption.py);
-          # smoke-tested at seed-15 t_max=50 with it set to True on 2026-06-24, but the
-          # clip backstop fires far more often (31-57%) than on the HFCS data it was
-          # fitted on (9.3%), since the model's synthetic wealth-to-income ratios run
-          # wider than the real cross-section -- the known, deferred income/population
-          # unit-reconciliation gap. Not yet enabled by default pending that fix.
+          # uses_continuous_wealth_calibration defaults to False (see consumption.py).
+          # Smoke-tested at seed-15 t_max=50 with it set to True on 2026-06-24: after
+          # fixing the B-index normalization and wealth-drag-clip bound (review found
+          # both used live per-batch stats / an inverted ratio instead of the fitted
+          # calibration constants), the clip backstop's fire rate fell from 31-57% to
+          # 14.7-44.5% across t=1..50 -- still above the HFCS-fitted 9.3%, consistent
+          # with the known, deferred income/population unit-reconciliation gap (the
+          # model's synthetic wealth-to-income ratios run wider than the real HFCS
+          # cross-section). Not yet enabled by default pending that fix.
           # --- Previously active conservative-diagnostic config (kept for reference) ---
           # consumption_smoothing_fraction: 0.0
           # consumption_smoothing_window: 12

@@ -13,6 +13,7 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 
@@ -24,15 +25,14 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
 
 from src.mpc_analysis import (  # noqa: E402
     MPC_PLOT_MEASURES,
-    PLOT_KINDS,
     MPCFilterConfig,
     add_mpc_bins,
     build_household_mpc_panel,
     filter_mpc_panel,
+    household_activity_bracket,
     make_household_metadata,
     period_to_year_month,
     summarize_mpc_bins,
-    write_distribution_plots,
 )
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
@@ -130,6 +130,7 @@ def _run_one(
     shock: bool,
     shock_period: int,
     shock_fraction: float,
+    horizon_periods: int,
     data_paths: DataPaths | None = None,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
@@ -138,6 +139,12 @@ def _run_one(
     is the initial state, metadata for binning is captured at HDF5 row
     ``shock_period``: the state immediately before the shock affects realised row
     ``shock_period + 1``.
+
+    Activity bracket is also captured at every HDF5 row in the MPC measurement
+    window (``shock_period`` through ``shock_period + horizon_periods``), as
+    ``activity_bracket_t0`` .. ``activity_bracket_t{horizon_periods}``. Activity
+    Status is a live model state, not a saved HDF5 series, so it can only be
+    captured via posthook while the simulation runs.
     """
     configuration = SimulationConfiguration.model_validate(
         {
@@ -150,23 +157,28 @@ def _run_one(
 
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
+    activity_bracket_columns: dict[str, np.ndarray] = {}
 
-    def capture_pre_shock_metadata(simulation: Simulation, t: int, _year: int, _month: int) -> None:
-        # Posthooks see the realised row for iteration ``t``. Capturing when
-        # ``t == shock_period - 1`` gives the pre-shock HDF5 row.
-        if t == shock_period - 1:
-            metadata.append(
-                make_household_metadata(
-                    simulation.countries[country_code],
-                    seed=seed,
-                    pre_shock_row=pre_shock_row,
-                )
-            )
+    def capture_window_metadata(simulation: Simulation, t: int, _year: int, _month: int) -> None:
+        # Posthooks see the realised row for iteration ``t``. ``offset`` counts
+        # periods from the pre-shock row (offset 0) through the end of the
+        # cumulative-MPC horizon (offset horizon_periods).
+        offset = t - (shock_period - 1)
+        if offset < 0 or offset > horizon_periods:
+            return
+        country = simulation.countries[country_code]
+        if offset == 0:
+            metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=pre_shock_row))
+        activity_bracket_columns[f"activity_bracket_t{offset}"] = household_activity_bracket(country)
 
     if shock_period == 0:
-        metadata.append(make_household_metadata(model.countries[country_code], seed=seed, pre_shock_row=0))
+        country = model.countries[country_code]
+        metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=0))
+        activity_bracket_columns["activity_bracket_t0"] = household_activity_bracket(country)
+        if horizon_periods > 0:
+            model.posthooks.append(capture_window_metadata)
     else:
-        model.posthooks.append(capture_pre_shock_metadata)
+        model.posthooks.append(capture_window_metadata)
 
     if shock:
         target_year, target_month = period_to_year_month(data.configuration.year, data.time_unit, shock_period)
@@ -182,11 +194,20 @@ def _run_one(
     model.run()
     if not metadata:
         raise ValueError("Pre-shock metadata was not captured; check shock_period and t_max.")
+    if len(activity_bracket_columns) != horizon_periods + 1:
+        raise ValueError(
+            f"Expected {horizon_periods + 1} activity bracket snapshots (t0..t{horizon_periods}); "
+            f"captured {len(activity_bracket_columns)}. Check shock_period, horizon_periods, and t_max."
+        )
+
+    result = metadata[0]
+    for column, values in activity_bracket_columns.items():
+        result[column] = values
 
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
     model.save(save_dir=seed_dir, file_name="multi_country_simulation.h5")
-    return metadata[0]
+    return result
 
 
 def _run_seed_pair(
@@ -200,9 +221,18 @@ def _run_seed_pair(
     shock_dir: Path,
     shock_period: int,
     shock_fraction: float,
+    horizon_periods: int,
     data_paths: DataPaths | None = None,
 ) -> pd.DataFrame:
-    """Run the baseline and shock simulations for one seed."""
+    """Run the baseline and shock simulations for one seed.
+
+    Activity-bracket columns from the shock run are merged in as
+    ``activity_bracket_shock_t*`` alongside the baseline run's
+    ``activity_bracket_t*`` columns (both share the ``activity_bracket_`` prefix
+    used by ``_keep_households_staying_in_activity_bracket``), so callers can
+    detect households whose activity bracket changes in either the factual or
+    counterfactual path during the MPC window.
+    """
     baseline_metadata = _run_one(
         data=data,
         country_configurations=country_configurations,
@@ -213,9 +243,10 @@ def _run_seed_pair(
         shock=False,
         shock_period=shock_period,
         shock_fraction=shock_fraction,
+        horizon_periods=horizon_periods,
         data_paths=data_paths,
     )
-    _run_one(
+    shock_metadata = _run_one(
         data=data,
         country_configurations=country_configurations,
         country_code=country_code,
@@ -225,9 +256,55 @@ def _run_seed_pair(
         shock=True,
         shock_period=shock_period,
         shock_fraction=shock_fraction,
+        horizon_periods=horizon_periods,
         data_paths=data_paths,
     )
-    return baseline_metadata
+    # Renamed to "activity_bracket_shock_t*" (not "shock_activity_bracket_t*") so the
+    # default "activity_bracket_" prefix used for filtering matches both baseline and
+    # shock columns.
+    activity_bracket_cols = [column for column in shock_metadata.columns if column.startswith("activity_bracket_t")]
+    shock_activity_bracket = shock_metadata[["household_id", *activity_bracket_cols]].rename(
+        columns={
+            column: f"activity_bracket_shock_{column.removeprefix('activity_bracket_')}"
+            for column in activity_bracket_cols
+        }
+    )
+    return baseline_metadata.merge(shock_activity_bracket, on="household_id", how="left")
+
+
+# Helper to keep only households whose activity bracket never switches during the MPC window
+def _keep_households_staying_in_activity_bracket(
+    panel: pd.DataFrame, activity_bracket_prefix: str = "activity_bracket_"
+) -> pd.DataFrame:
+    """Keep only households whose activity bracket is constant across all matched columns.
+
+    This expects the panel to carry one or more period-by-period activity
+    bracket codes with a shared prefix, for example ``activity_bracket_t0``,
+    ``activity_bracket_t1``, ``activity_bracket_shock_t0``, ... covering both
+    the baseline and shock runs. A household is "stable" if its bracket
+    (employed, unemployed, investor, or not economically active) never
+    switches across any of those columns; stable brackets other than employed
+    are kept too, since their MPC is still a valid data point. Only switchers
+    are dropped, to avoid attributing activity-bracket transition effects to
+    the income-shock MPC. This is a stricter filter than employment status
+    alone, since wage/hours-relevant transitions between, say, unemployed and
+    not-economically-active are also excluded. If no such columns are present,
+    raise an error so the caller knows the activity-bracket path needs to be
+    added upstream (typically in ``build_household_mpc_panel`` or the metadata
+    builder).
+    """
+    activity_bracket_cols = sorted(
+        column for column in panel.columns if column.startswith(activity_bracket_prefix)
+    )
+    if not activity_bracket_cols:
+        raise KeyError(
+            f"No columns starting with {activity_bracket_prefix!r} were found in the MPC panel. "
+            "Add activity-bracket columns upstream, then re-run with stay_in_activity_bracket_only=True."
+        )
+
+    status = panel[activity_bracket_cols].fillna(-1).astype(int)
+    stay_mask = status.nunique(axis=1).eq(1) & status.iloc[:, 0].ne(-1)
+    return panel.loc[stay_mask].copy()
 
 
 def run_mpc_experiment(
@@ -247,28 +324,30 @@ def run_mpc_experiment(
     backend: str = "loky",
     verbose: int = 0,
     batch_size: int = 1,
-    distribution_plot_kind: str = "violin",
     mpc_plot_measure: str | None = None,
     cpi_source: str = "cpi_fixed_basket",
     apply_mpc_filters: bool = True,
     mpc_filter_config: MPCFilterConfig | None = None,
-    mpc_plot_y_quantiles: tuple[float, float] | None = None,
-    mpc_plot_y_range: tuple[float, float] | None = None,
-    mpc_winsor_quantiles: tuple[float, float] | None = None,
+    stay_in_activity_bracket_only: bool = False,
+    activity_bracket_prefix: str = "activity_bracket_",
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
 
     ``n_jobs`` controls seed-level parallelism. Each job runs one baseline and
     one shock simulation for a seed, so ``n_jobs=1`` is serial and values above
     one use joblib workers.
+
+    Setting ``stay_in_activity_bracket_only=True`` drops households whose
+    activity bracket (employed, unemployed, investor, or not economically
+    active) switches at any point across the MPC measurement window, in either
+    the baseline or shock run. Households that are stable in any one bracket
+    throughout are kept.
     """
     seed_list = _validate_unique_seeds(seeds)
     if n_jobs == 0:
         raise ValueError("n_jobs must be non-zero.")
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1.")
-    if distribution_plot_kind not in PLOT_KINDS:
-        raise ValueError(f"distribution_plot_kind must be one of {sorted(PLOT_KINDS)}.")
     if mpc_plot_measure is not None and mpc_plot_measure not in MPC_PLOT_MEASURES:
         raise ValueError(f"mpc_plot_measure must be one of {sorted(MPC_PLOT_MEASURES)}.")
     if shock_period < 0 or shock_period >= t_max:
@@ -306,6 +385,7 @@ def run_mpc_experiment(
             shock_dir=shock_dir,
             shock_period=shock_period,
             shock_fraction=shock_fraction,
+            horizon_periods=horizon_periods,
             data_paths=data_paths,
         )
         for seed in seed_list
@@ -345,6 +425,11 @@ def run_mpc_experiment(
         panels.append(panel)
 
     raw_household_panel = add_mpc_bins(pd.concat(panels, ignore_index=True))
+    if stay_in_activity_bracket_only:
+        raw_household_panel = _keep_households_staying_in_activity_bracket(
+            raw_household_panel,
+            activity_bracket_prefix=activity_bracket_prefix,
+        )
     filter_config = mpc_filter_config or MPCFilterConfig(enabled=apply_mpc_filters)
     if not apply_mpc_filters and filter_config.enabled:
         filter_config = MPCFilterConfig(enabled=False)
@@ -363,16 +448,6 @@ def run_mpc_experiment(
     filter_report.to_csv(analysis_dir / "household_mpc_filter_report.csv", index=False)
     filtered_household_panel.to_csv(analysis_dir / "household_mpc_panel.csv", index=False)
     filtered_summary.to_csv(analysis_dir / "household_mpc_summary.csv", index=False)
-    for plot_mpc_column in plot_mpc_columns:
-        write_distribution_plots(
-            filtered_household_panel,
-            analysis_dir / "plots",
-            mpc_column=plot_mpc_column,
-            plot_kind=distribution_plot_kind,
-            y_quantiles=mpc_plot_y_quantiles,
-            y_range=mpc_plot_y_range,
-            winsor_quantiles=mpc_winsor_quantiles,
-        )
 
     return {
         "baseline_dir": baseline_dir,
@@ -401,49 +476,33 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", type=int, default=0, help="Joblib verbosity level.")
     parser.add_argument("--batch-size", type=int, default=1, help="Number of seeds batched per worker.")
     parser.add_argument(
-        "--distribution-plot-kind",
-        choices=("violin", "box"),
-        default="violin",
-        help="Distribution plot style. Use 'box' to omit violin traces.",
-    )
-    parser.add_argument(
         "--mpc-plot-measure",
         choices=("real", "nominal"),
         default=None,
         help=(
-            "MPC measure used in summaries and plots. By default, summaries use real MPC and plots include both "
-            "real and nominal MPC. Real deflates each path by its own CPI."
+            "MPC measure used for filtering and summaries. By default, summaries use real MPC. Real deflates "
+            "each path by its own CPI."
         ),
     )
     parser.add_argument("--cpi-source", default="cpi_fixed_basket", help="Saved economy CPI series for real MPCs.")
     parser.add_argument(
         "--no-mpc-filters",
         action="store_true",
-        help="Write summaries and plots from the raw MPC panel instead of the filtered analysis sample.",
+        help="Write summaries from the raw MPC panel instead of the filtered analysis sample.",
     )
     parser.add_argument(
-        "--mpc-plot-y-quantiles",
-        nargs=2,
-        type=float,
-        default=None,
-        metavar=("LOWER", "UPPER"),
-        help="Clip plot y-axis display to these MPC quantiles, e.g. 0.01 0.99. Does not change data.",
+        "--stay-in-activity-bracket-only",
+        action="store_true",
+        help=(
+            "Drop households whose activity bracket (employed, unemployed, investor, or not economically "
+            "active) switches during the MPC window, in either the baseline or shock run. Households stable "
+            "in any one bracket throughout are kept."
+        ),
     )
     parser.add_argument(
-        "--mpc-plot-y-range",
-        nargs=2,
-        type=float,
-        default=None,
-        metavar=("LOWER", "UPPER"),
-        help="Clip plot y-axis display to this fixed range. Does not change data.",
-    )
-    parser.add_argument(
-        "--mpc-winsor-quantiles",
-        nargs=2,
-        type=float,
-        default=None,
-        metavar=("LOWER", "UPPER"),
-        help="Winsorise plotted MPC values at these quantiles. Does not change saved panels or summaries.",
+        "--activity-bracket-prefix",
+        default="activity_bracket_",
+        help="Column prefix used to identify period-by-period activity bracket indicators in the MPC panel.",
     )
     args = parser.parse_args()
     args.seeds = _validate_unique_seeds(args.seeds)
@@ -468,12 +527,10 @@ if __name__ == "__main__":
         backend=parsed.backend,
         verbose=parsed.verbose,
         batch_size=parsed.batch_size,
-        distribution_plot_kind=parsed.distribution_plot_kind,
         mpc_plot_measure=parsed.mpc_plot_measure,
         cpi_source=parsed.cpi_source,
         apply_mpc_filters=not parsed.no_mpc_filters,
-        mpc_plot_y_quantiles=tuple(parsed.mpc_plot_y_quantiles) if parsed.mpc_plot_y_quantiles else None,
-        mpc_plot_y_range=tuple(parsed.mpc_plot_y_range) if parsed.mpc_plot_y_range else None,
-        mpc_winsor_quantiles=tuple(parsed.mpc_winsor_quantiles) if parsed.mpc_winsor_quantiles else None,
+        stay_in_activity_bracket_only=parsed.stay_in_activity_bracket_only,
+        activity_bracket_prefix=parsed.activity_bracket_prefix,
     )
     print({name: str(path) for name, path in outputs.items()})

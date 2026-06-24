@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
+from macromodel.agents.individuals.individual_properties import ActivityStatus
+
 TENURE_LABELS = {
     -1: "unknown",
     1: "owner_outright",
@@ -32,8 +34,9 @@ BINNING_VARIABLES = (
     "housing_tenure",
 )
 POSITIVE_ONLY_BINNING_VARIABLES = {"illiquid_financial_assets", "housing_wealth"}
-PLOT_KINDS = {"violin", "box"}
+PLOT_KINDS = {"violin", "box", "box_only"}
 MPC_PLOT_MEASURES = {"nominal", "real"}
+WINSOR_MODES = {"clip", "trim"}
 
 
 def _validate_quantile_pair(values: tuple[float, float] | None, *, name: str) -> tuple[float, float] | None:
@@ -324,6 +327,54 @@ def _household_head_age_proxy(country, *, n_households: int) -> np.ndarray:
         valid_ids = ids[(ids >= 0) & (ids < age_array.size)]
         if valid_ids.size:
             result[household_id] = np.nanmax(age_array[valid_ids])
+    return result
+
+
+ACTIVITY_BRACKET_CODES = {
+    "employed": 1,
+    "unemployed": 2,
+    "investor": 3,
+    "not_economically_active": 4,
+}
+
+
+def household_activity_bracket(country) -> np.ndarray:
+    """Return each household's labor-market activity bracket as an integer code.
+
+    A household's bracket is resolved from its linked individuals' Activity
+    Status by priority: employed > unemployed > investor (firm or bank) > not
+    economically active. Codes are listed in ``ACTIVITY_BRACKET_CODES``.
+
+    Activity Status is a live model state, not a saved HDF5 time series (unlike
+    income/consumption), so callers must capture this via a posthook during the
+    simulation run rather than reading it back from disk afterwards.
+    """
+    households = country.households
+    n_households = int(households.ts.current("n_households"))
+    activity = getattr(getattr(country, "individuals", None), "states", {}).get("Activity Status")
+    corr_individuals = getattr(households, "states", {}).get("corr_individuals")
+    if activity is None or corr_individuals is None:
+        return np.full(n_households, np.nan)
+
+    activity = np.asarray(activity)
+    employed_mask = activity == ActivityStatus.EMPLOYED
+    unemployed_mask = activity == ActivityStatus.UNEMPLOYED
+    investor_mask = (activity == ActivityStatus.FIRM_INVESTOR) | (activity == ActivityStatus.BANK_INVESTOR)
+
+    result = np.full(n_households, np.nan)
+    for household_id, individual_ids in enumerate(corr_individuals):
+        ids = np.asarray(individual_ids, dtype=int)
+        valid_ids = ids[(ids >= 0) & (ids < activity.size)]
+        if not valid_ids.size:
+            continue
+        if employed_mask[valid_ids].any():
+            result[household_id] = ACTIVITY_BRACKET_CODES["employed"]
+        elif unemployed_mask[valid_ids].any():
+            result[household_id] = ACTIVITY_BRACKET_CODES["unemployed"]
+        elif investor_mask[valid_ids].any():
+            result[household_id] = ACTIVITY_BRACKET_CODES["investor"]
+        else:
+            result[household_id] = ACTIVITY_BRACKET_CODES["not_economically_active"]
     return result
 
 
@@ -646,15 +697,20 @@ def make_distribution_plot(
     y_quantiles: tuple[float, float] | None = None,
     y_range: tuple[float, float] | None = None,
     winsor_quantiles: tuple[float, float] | None = None,
+    winsor_mode: str = "clip",
 ) -> go.Figure:
     """Create a distribution plot for one MPC binning variable.
 
-    Display filters are deliberately plot-only. ``winsor_quantiles`` clips the
-    plotted values for readability, while ``y_quantiles`` or ``y_range`` only
-    control the visible y-axis window.
+    Display filters are deliberately plot-only. ``winsor_quantiles`` adjusts the
+    plotted values for readability, either clipping them to the bounds
+    (``winsor_mode="clip"``, the default) or dropping values outside the
+    bounds entirely (``winsor_mode="trim"``). ``y_quantiles`` or ``y_range``
+    only control the visible y-axis window.
     """
     if plot_kind not in PLOT_KINDS:
         raise ValueError(f"plot_kind must be one of {sorted(PLOT_KINDS)}.")
+    if winsor_mode not in WINSOR_MODES:
+        raise ValueError(f"winsor_mode must be one of {sorted(WINSOR_MODES)}.")
     y_quantiles = _validate_quantile_pair(y_quantiles, name="y_quantiles")
     winsor_quantiles = _validate_quantile_pair(winsor_quantiles, name="winsor_quantiles")
     y_range = _validate_range_pair(y_range, name="y_range")
@@ -669,6 +725,10 @@ def make_distribution_plot(
     )
     y_quantile_range = tuple(plot_values.quantile(list(y_quantiles)).astype(float)) if y_quantiles is not None else None
 
+    if winsor_bounds is not None and winsor_mode == "trim":
+        in_bounds = plot_panel[mpc_column].between(winsor_bounds[0], winsor_bounds[1])
+        plot_panel = plot_panel.loc[in_bounds]
+
     fig = go.Figure()
     category_order = _bin_category_order(plot_panel[bin_column])
     for bin_value in category_order:
@@ -676,7 +736,7 @@ def make_distribution_plot(
         values = group[mpc_column].replace([np.inf, -np.inf], np.nan).dropna()
         if values.empty:
             continue
-        if winsor_bounds is not None:
+        if winsor_bounds is not None and winsor_mode == "clip":
             values = values.clip(lower=winsor_bounds[0], upper=winsor_bounds[1])
         if plot_kind == "violin":
             fig.add_trace(
@@ -696,7 +756,7 @@ def make_distribution_plot(
                     boxpoints=False,
                 )
             )
-        if plot_kind == "violin":
+        if plot_kind in ("violin", "box_only"):
             fig.add_trace(
                 go.Scatter(
                     x=[str(bin_value)],
@@ -732,6 +792,7 @@ def write_distribution_plots(
     y_quantiles: tuple[float, float] | None = None,
     y_range: tuple[float, float] | None = None,
     winsor_quantiles: tuple[float, float] | None = None,
+    winsor_mode: str = "clip",
 ) -> None:
     """Write one standalone Plotly HTML distribution plot per binning variable."""
     output_path = Path(output_dir)
@@ -745,5 +806,43 @@ def write_distribution_plots(
             y_quantiles=y_quantiles,
             y_range=y_range,
             winsor_quantiles=winsor_quantiles,
+            winsor_mode=winsor_mode,
         )
         fig.write_html(output_path / f"{mpc_column}_by_{variable}.html")
+
+
+def plot_mpc_panel(
+    panel: pd.DataFrame,
+    *,
+    variables: Iterable[str] = BINNING_VARIABLES,
+    mpc_columns: Iterable[str] = ("cmpc_4q",),
+    plot_kind: str = "violin",
+    y_quantiles: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    winsor_quantiles: tuple[float, float] | None = None,
+    winsor_mode: str = "clip",
+    show: bool = True,
+) -> list[go.Figure]:
+    """Build (and optionally display) distribution plots for selected variables/columns.
+
+    This is the notebook-facing counterpart to ``write_distribution_plots``: it
+    returns the Plotly figures directly instead of writing HTML files, so the
+    caller can customise the variable/column selection per call.
+    """
+    figures = []
+    for mpc_column in mpc_columns:
+        for variable in variables:
+            fig = make_distribution_plot(
+                panel,
+                variable=variable,
+                mpc_column=mpc_column,
+                plot_kind=plot_kind,
+                y_quantiles=y_quantiles,
+                y_range=y_range,
+                winsor_quantiles=winsor_quantiles,
+                winsor_mode=winsor_mode,
+            )
+            if show:
+                fig.show()
+            figures.append(fig)
+    return figures

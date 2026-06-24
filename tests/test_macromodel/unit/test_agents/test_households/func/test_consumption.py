@@ -809,11 +809,15 @@ class TestCreditAugmentedHouseholdConsumption:
         assert np.all(result >= 0.0)
 
     def test_clip_wealth_drag_bound_formula(self):
-        # Directly check the closed-form bound, not just that the flag fired:
-        # MPC_LR = (C/y)*[(1-alpha_2) - wealth_drag] in [0,1] requires
-        # wealth_drag in [(1-alpha_2) - y/C, 1-alpha_2]. Catches the y/C-vs-C/y
-        # inversion bug found in review: with income=50, consumption=200 (y/C=0.25,
-        # C/y=4), the two bounds differ enough to distinguish them numerically.
+        # Unit test of _clip_wealth_drag's own arithmetic in isolation: MPC_LR =
+        # (C/y)*[(1-alpha_2) - wealth_drag] in [0,1] requires wealth_drag in
+        # [(1-alpha_2) - y/C, 1-alpha_2]. This calls the static method directly
+        # with an already-correct y/C argument, so it verifies the formula but
+        # NOT the call site in _evaluate_target that computes that argument --
+        # see test_evaluate_target_clip_uses_income_to_consumption_ratio_at_call_site
+        # below for the end-to-end regression guard on the call site itself
+        # (a second review round found this test alone would not have caught
+        # the y/C-vs-C/y inversion bug, since the bug was at the call site).
         alpha_2 = np.array([0.4])
         income_to_consumption_ratio = np.array([50.0 / 200.0])
         upper_expected = 1.0 - 0.4
@@ -843,11 +847,18 @@ class TestCreditAugmentedHouseholdConsumption:
     def test_continuous_wealth_calibration_b_index_uses_fixed_constants_not_batch(self):
         # The B-index normalization (b_raw_min/max, b0) must be the calibration-fixed
         # constants from continuous_wealth_calibration_b_raw_bounds/_b0, not derived
-        # from whichever households happen to be in this call's batch. Verify by
-        # checking a single household's alpha_2/gamma_1 is unchanged whether it is
-        # evaluated alone or alongside other households with very different ratios
-        # (a batch-dependent np.min/np.max/np.median would change the lone household's
-        # result depending on who else is in the batch).
+        # from whichever households happen to be in this call's batch. A second review
+        # round found the original version of this test (comparing two
+        # compute_target_consumption calls with engineered companions) passed
+        # coincidentally against the pre-fix batch-dependent code too, because the
+        # test household's own raw B happened to land exactly at the batch median in
+        # both fixtures. This version instead compares against a direct call to the
+        # private mapping method for the household alone -- under the fixed
+        # (batch-independent) implementation these two code paths are provably
+        # identical for any inputs, since neither depends on which other households
+        # are present; under the batch-dependent bug they generally differ, since a
+        # batch of 1 always hits the b_max==b_min fallback (forcing B_tilde=0)
+        # while a batch of 4 with very different companions does not.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -859,56 +870,64 @@ class TestCreditAugmentedHouseholdConsumption:
             uses_continuous_wealth_calibration=True,
         )
 
-        def run(n_households, liquid, illiquid, housing):
-            income = np.full(n_households, 100.0)
-            consumption_obj.compute_target_consumption(
-                expected_inflation=0.0,
-                current_cpi=1.0,
-                initial_cpi=1.0,
-                historic_consumption_sum=np.array([np.full(n_households, 40.0), np.full(n_households, 50.0)]),
-                saving_rates=np.zeros(n_households),
-                income=income,
-                household_benefits=np.zeros(n_households),
-                consumption_weights=np.full(1, 1.0),
-                consumption_weights_by_income=np.zeros((1, n_households)),
-                exogenous_total_consumption=np.zeros(1),
-                current_time=0,
-                take_consumption_weights_by_income_quantile=False,
-                tau_vat=0.0,
-                liquid_wealth=liquid,
-                illiquid_wealth=illiquid,
-                housing_wealth=housing,
-                rent=np.zeros(n_households),
-                mortgage_debt=np.zeros(n_households),
-                mortgage_payment=np.zeros(n_households),
-                owner_occupied=np.ones(n_households),
-                mortgagor=np.ones(n_households),
-                house_price_index=1.0,
-                house_price_growth=0.0,
-                lagged_consumption=np.full(n_households, 50.0),
-                lagged_income=income,
-                lagged_liquid_wealth=liquid,
-                lagged_illiquid_wealth=illiquid,
-                lagged_mortgage_debt=np.zeros(n_households),
-                lagged_consumption_loan_debt=np.zeros(n_households),
-                lagged_house_price_index=1.0,
-            )
-            return consumption_obj.last_target_consumption_components["target_consumption_alpha_2"][0]
-
-        alpha_2_alone = run(1, np.array([20.0]), np.array([10.0]), np.array([50.0]))
-        alpha_2_with_others = run(
-            3,
-            np.array([20.0, 0.0, 5_000.0]),
-            np.array([10.0, 0.0, 2_000.0]),
-            np.array([50.0, 0.0, 10_000.0]),
+        # Household A's own ratios, evaluated alone via the private method.
+        nla_ratio_a = np.array([0.2])
+        ifa_ratio_a = np.array([0.1])
+        ha_ratio_a = np.array([0.5])
+        reference_alpha_2, reference_gamma_1 = consumption_obj._compute_continuous_wealth_calibration(
+            nla_ratio_a, ifa_ratio_a, ha_ratio_a
         )
-        np.testing.assert_allclose(alpha_2_alone, alpha_2_with_others)
 
-    def test_continuous_wealth_calibration_single_household_batch(self):
-        # A batch of one household must not collapse alpha_2/gamma_1 to a
-        # degenerate value -- the fixed B-index range/centre (not a live
-        # min/max/median over the batch) should place it at its own correct
-        # point in the mapping regardless of batch size.
+        # Same household A as the first of 4, alongside companions with
+        # deliberately very different (large) wealth-to-income ratios.
+        income = np.full(4, 100.0)
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(4, 40.0), np.full(4, 50.0)]),
+            saving_rates=np.zeros(4),
+            income=income,
+            household_benefits=np.zeros(4),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 4)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            # Household A: liquid=20, illiquid=10, housing=50 -> ratios (0.2, 0.1, 0.5).
+            # Companions: deliberately large and varied wealth-to-income ratios.
+            liquid_wealth=np.array([20.0, 0.0, 150.0, 200.0]),
+            illiquid_wealth=np.array([10.0, 0.0, 250.0, 300.0]),
+            housing_wealth=np.array([50.0, 0.0, 1_000.0, 1_500.0]),
+            rent=np.zeros(4),
+            mortgage_debt=np.zeros(4),
+            mortgage_payment=np.zeros(4),
+            owner_occupied=np.ones(4),
+            mortgagor=np.ones(4),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(4, 50.0),
+            lagged_income=income,
+            lagged_liquid_wealth=np.array([20.0, 0.0, 150.0, 200.0]),
+            lagged_illiquid_wealth=np.array([10.0, 0.0, 250.0, 300.0]),
+            lagged_mortgage_debt=np.zeros(4),
+            lagged_consumption_loan_debt=np.zeros(4),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        np.testing.assert_allclose(components["target_consumption_alpha_2"][0], reference_alpha_2[0])
+        np.testing.assert_allclose(components["target_consumption_gamma_1"][0], reference_gamma_1[0])
+        assert np.all(np.isfinite(result))
+
+    def test_continuous_wealth_calibration_single_household_batch_not_pinned_to_midpoint(self):
+        # Under the batch-dependent bug, a batch of exactly one household always
+        # hits the b_max==b_min fallback, forcing B_tilde=0=b0 and therefore
+        # alpha_2/gamma_1 to the EXACT midpoint of their ranges -- regardless of
+        # the household's actual wealth ratios. This is a clean, value-independent
+        # discriminator: under the fix, only a household whose true (calibration-
+        # fixed) B happens to equal the calibration-fixed b0 exactly would land on
+        # the midpoint, which a poor household with low/negative ratios will not.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -919,6 +938,8 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_propensity=0.0,
             uses_continuous_wealth_calibration=True,
         )
+        # A poor household: negative NLA/y, zero IFA/y and HA/y -- far from the
+        # population-median accessibility the fixed b0 is centred on.
         result = consumption_obj.compute_target_consumption(
             expected_inflation=0.0,
             current_cpi=1.0,
@@ -933,9 +954,9 @@ class TestCreditAugmentedHouseholdConsumption:
             current_time=0,
             take_consumption_weights_by_income_quantile=False,
             tau_vat=0.0,
-            liquid_wealth=np.array([20.0]),
-            illiquid_wealth=np.array([10.0]),
-            housing_wealth=np.array([50.0]),
+            liquid_wealth=np.array([0.0]),
+            illiquid_wealth=np.array([0.0]),
+            housing_wealth=np.array([0.0]),
             rent=np.zeros(1),
             mortgage_debt=np.zeros(1),
             mortgage_payment=np.zeros(1),
@@ -945,16 +966,99 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_growth=0.0,
             lagged_consumption=np.full(1, 50.0),
             lagged_income=np.full(1, 100.0),
-            lagged_liquid_wealth=np.array([20.0]),
-            lagged_illiquid_wealth=np.array([10.0]),
+            lagged_liquid_wealth=np.array([0.0]),
+            lagged_illiquid_wealth=np.array([0.0]),
+            # NLA/y = (0 - 0 - 300) / 100 = -3.0, within the (-4.73, 2.15) bound.
             lagged_mortgage_debt=np.zeros(1),
-            lagged_consumption_loan_debt=np.zeros(1),
+            lagged_consumption_loan_debt=np.array([300.0]),
             lagged_house_price_index=1.0,
         )
         components = consumption_obj.last_target_consumption_components
         alpha_2 = components["target_consumption_alpha_2"][0]
-        # Not pinned to the midpoint of the range (which a batch-of-one np.median
-        # bug would force); should reflect this household's own modest wealth ratios.
-        assert consumption_obj.continuous_wealth_calibration_alpha_2_range[0] < alpha_2
-        assert alpha_2 < consumption_obj.continuous_wealth_calibration_alpha_2_range[1]
+        gamma_1 = components["target_consumption_gamma_1"][0]
+        alpha_2_lo, alpha_2_hi = consumption_obj.continuous_wealth_calibration_alpha_2_range
+        gamma_1_lo, gamma_1_hi = consumption_obj.continuous_wealth_calibration_gamma_1_range
+        midpoint_alpha_2 = (alpha_2_lo + alpha_2_hi) / 2.0
+        midpoint_gamma_1 = (gamma_1_lo + gamma_1_hi) / 2.0
+        assert not np.isclose(alpha_2, midpoint_alpha_2, atol=1e-3)
+        assert not np.isclose(gamma_1, midpoint_gamma_1, atol=1e-3)
+        # A poor household (negative NLA/y, no other assets) should sit below the
+        # midpoint alpha_2 (lower smoothing capacity) and above midpoint gamma_1
+        # (higher liquid-wealth sensitivity).
+        assert alpha_2 < midpoint_alpha_2
+        assert gamma_1 > midpoint_gamma_1
+        assert np.all(np.isfinite(result))
+
+    def test_evaluate_target_clip_uses_income_to_consumption_ratio_at_call_site(self):
+        # End-to-end regression guard for the y/C-vs-C/y inversion bug at the
+        # _evaluate_target call site (test_clip_wealth_drag_bound_formula above
+        # only exercises _clip_wealth_drag's own arithmetic, not this call site).
+        # Household: lagged_income=10, lagged_consumption=100 -> y/C=0.1, C/y=10.
+        # Large negative NLA/y (no IFA/HA) drives wealth_drag well below the
+        # correct lower bound (1-alpha_2)-y/C but well ABOVE the buggy lower
+        # bound (1-alpha_2)-C/y=(1-alpha_2)-10 -- so the clip fires (and binds at
+        # the correct lower bound) only if the call site uses y/C, not C/y.
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            illiquid_wealth_propensity=0.0,
+            housing_wealth_propensity=0.0,
+            house_price_propensity=0.0,
+            uses_continuous_wealth_calibration=True,
+        )
+        result = consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(1, 40.0), np.full(1, 100.0)]),
+            saving_rates=np.zeros(1),
+            income=np.full(1, 10.0),
+            household_benefits=np.zeros(1),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, 1)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([0.0]),
+            illiquid_wealth=np.array([0.0]),
+            housing_wealth=np.array([0.0]),
+            rent=np.zeros(1),
+            mortgage_debt=np.zeros(1),
+            mortgage_payment=np.zeros(1),
+            owner_occupied=np.ones(1),
+            mortgagor=np.ones(1),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(1, 100.0),
+            lagged_income=np.full(1, 10.0),
+            lagged_liquid_wealth=np.array([0.0]),
+            lagged_illiquid_wealth=np.array([0.0]),
+            lagged_mortgage_debt=np.zeros(1),
+            # NLA/y = (0 - 0 - 45) / 10 = -4.5, within the (-4.73, 2.15) bound.
+            lagged_consumption_loan_debt=np.array([45.0]),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        alpha_2 = components["target_consumption_alpha_2"][0]
+        income_to_consumption_ratio = 10.0 / 100.0
+        correct_lower_bound = (1.0 - alpha_2) - income_to_consumption_ratio
+        buggy_lower_bound = (1.0 - alpha_2) - (100.0 / 10.0)
+
+        # The clip must have fired (raw wealth_drag is far below the correct
+        # lower bound) ...
+        assert components["target_consumption_wealth_drag_clipped"][0] == 1.0
+        # ... and target_consumption_log_long_run (= long_run_intercept [0] +
+        # real_borrowing_rate_term [0, unset] + permanent_income_term [0,
+        # permanent_income_log_ratio unset] + clipped wealth_drag + house_price_term
+        # [0]) must equal the CORRECT lower bound, not the buggy one -- the two
+        # differ by ~9.4 (1-alpha_2-0.1 vs 1-alpha_2-10), so this is not a
+        # tolerance-sensitive comparison.
+        np.testing.assert_allclose(components["target_consumption_log_long_run"][0], correct_lower_bound, atol=1e-9)
+        assert abs(correct_lower_bound - buggy_lower_bound) > 5.0  # sanity: bounds are far apart
+        assert not np.isclose(
+            components["target_consumption_log_long_run"][0], buggy_lower_bound, atol=1e-3
+        )
         assert np.all(np.isfinite(result))

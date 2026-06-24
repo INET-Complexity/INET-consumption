@@ -525,6 +525,68 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_owner_occupied"], 1.0)
         np.testing.assert_allclose(components["target_consumption_mortgagor"], 1.0)
 
+    def test_legacy_wealth_terms_are_deflator_consistent_under_realised_inflation(self):
+        # Regression guard: every other fixture in this file uses current_cpi==lagged_cpi
+        # (or omits lagged_cpi, which defaults to current_cpi), so a deflator mismatch
+        # in the legacy (uses_continuous_wealth_calibration=False, the production
+        # default) wealth-ratio terms would be numerically invisible everywhere else.
+        # net_liquid_assets_ratio/illiquid_assets_ratio/housing_wealth_ratio must divide
+        # the SAME current_deflator out of both the wealth-stock numerator and the
+        # income denominator, so the ratio reduces to nominal_stock / nominal_income
+        # with the realised one-period inflation rate (current_cpi/lagged_cpi) having
+        # NO effect -- if it baked in instead (a prior version of this fix did, for one
+        # review round), the ratio would scale by current_cpi/lagged_cpi here (1.10).
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            liquid_wealth_propensity=0.1,
+            illiquid_wealth_propensity=0.0,
+            housing_wealth_propensity=0.0,
+            house_price_propensity=0.0,
+            uses_continuous_wealth_calibration=False,
+        )
+        n_households = 1
+        consumption_obj.compute_target_consumption(
+            expected_inflation=0.0,
+            current_cpi=1.10,
+            initial_cpi=1.0,
+            lagged_cpi=1.0,
+            historic_consumption_sum=np.array([np.full(n_households, 40.0), np.full(n_households, 50.0)]),
+            saving_rates=np.zeros(n_households),
+            income=np.full(n_households, 100.0),
+            household_benefits=np.zeros(n_households),
+            consumption_weights=np.full(1, 1.0),
+            consumption_weights_by_income=np.zeros((1, n_households)),
+            exogenous_total_consumption=np.zeros(1),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.full(n_households, 999.0),
+            illiquid_wealth=np.full(n_households, 999.0),
+            housing_wealth=np.full(n_households, 999.0),
+            rent=np.zeros(n_households),
+            mortgage_debt=np.full(n_households, 999.0),
+            mortgage_payment=np.zeros(n_households),
+            owner_occupied=np.ones(n_households),
+            mortgagor=np.ones(n_households),
+            house_price_index=1.0,
+            house_price_growth=0.0,
+            lagged_consumption=np.full(n_households, 50.0),
+            lagged_income=np.array([80.0]),
+            lagged_liquid_wealth=np.array([60.0]),
+            lagged_illiquid_wealth=np.array([30.0]),
+            lagged_mortgage_debt=np.array([40.0]),
+            lagged_consumption_loan_debt=np.array([10.0]),
+            lagged_housing_wealth=np.array([120.0]),
+            lagged_house_price_index=1.0,
+        )
+        components = consumption_obj.last_target_consumption_components
+        # NLA nominal = 60-40-10=10, income nominal=100 -> 0.1*10/100=0.01, regardless
+        # of current_cpi/lagged_cpi.
+        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.01)
+
     def test_compute_target_consumption_clips_extreme_growth(self):
         # permanent_income_propensity is large and permanent_income_log_ratio is an
         # extreme outlier value, mimicking an unbounded income-belief-learning input

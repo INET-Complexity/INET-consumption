@@ -134,6 +134,25 @@ def test__paper_asset_return_wealth_setter_reuses_one_draw_until_wealth_update(m
     np.testing.assert_allclose(next_period_income, np.array([22.0, 44.0]))
 
 
+def test__paper_asset_return_wealth_setter_allows_planning_draw_before_period_binding(monkeypatch):
+    setter = _paper_setter()
+    opening_ifa = np.array([100.0, 200.0])
+    monkeypatch.setattr(setter, "draw_illiquid_return_rate", lambda: 0.1)
+
+    planning_income = setter.compute_income_from_financial_assets(opening_ifa)
+    realized_income = setter.compute_income_from_financial_assets(opening_ifa, period_index=1)
+    updated_ifa = setter.compute_wealth_in_other_financial_assets(
+        current_wealth_in_other_financial_assets=opening_ifa,
+        new_wealth_in_other_financial_assets=np.array([0.0, 0.0]),
+        used_up_wealth_in_other_financial_assets=np.array([0.0, 0.0]),
+        period_index=1,
+    )
+
+    np.testing.assert_allclose(planning_income, np.array([10.0, 20.0]))
+    np.testing.assert_allclose(realized_income, planning_income)
+    np.testing.assert_allclose(updated_ifa, np.array([110.0, 220.0]))
+
+
 def test__paper_asset_return_wealth_setter_requires_period_draw_before_wealth_update():
     setter = _paper_setter()
 

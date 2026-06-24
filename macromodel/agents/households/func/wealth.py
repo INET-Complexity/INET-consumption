@@ -548,8 +548,11 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         period_index: int | None = None,
     ) -> np.ndarray:
         if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
-            if period_index is not None and self._current_illiquid_return_period != period_index:
-                raise ValueError("Previous illiquid financial asset return has not been applied.")
+            if period_index is not None:
+                if self._current_illiquid_return_period is None:
+                    self._current_illiquid_return_period = period_index
+                elif self._current_illiquid_return_period != period_index:
+                    raise ValueError("Previous illiquid financial asset return has not been applied.")
             return self._current_return_amount_for(current_wealth_in_other_financial_assets)
         if period_index is not None and self._last_consumed_illiquid_return_period == period_index:
             raise ValueError("Illiquid financial asset return has already been applied for the current period.")
@@ -569,6 +572,17 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             return np.nan
         return self._current_illiquid_return_rate
 
+    def current_illiquid_return_amount(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        """Return the current-period illiquid asset return amount without consuming it."""
+        return self._current_return_amount_for(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
+
     def _current_return_amount_for(
         self,
         current_wealth_in_other_financial_assets: np.ndarray,
@@ -576,8 +590,11 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
     ) -> np.ndarray:
         if self._current_illiquid_return_amount is None or self._current_illiquid_return_consumed:
             raise ValueError("Illiquid financial asset return has not been drawn for the current period.")
-        if period_index is not None and self._current_illiquid_return_period != period_index:
-            raise ValueError("Stored illiquid financial asset return is for a different period.")
+        if period_index is not None:
+            if self._current_illiquid_return_period is None:
+                self._current_illiquid_return_period = period_index
+            elif self._current_illiquid_return_period != period_index:
+                raise ValueError("Previous illiquid financial asset return has not been applied.")
         if self._current_illiquid_return_amount.shape != current_wealth_in_other_financial_assets.shape:
             raise ValueError("Stored illiquid return amount does not match household financial-asset shape.")
         return self._current_illiquid_return_amount

@@ -2,10 +2,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import macromodel.agents.households.households as households_module
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
+from macromodel.agents.households.func.borrow_vs_sell import (
+    PREFERRED_MARGIN_BORROW,
+    PREFERRED_MARGIN_SELL,
+)
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
+from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
+from macromodel.configurations.households_configuration import HouseholdsConfiguration
 
 
 def _setup_emission_ts(households, n_hh, n_industries):
@@ -32,6 +40,8 @@ def _setup_emission_ts(households, n_hh, n_industries):
 class TestHouseholds:
     def test__create(self, test_households):
         assert test_households.country_name == "FRA"
+        assert test_households.uses_feasibility_resolver is False
+        assert test_households.pre_grant_feasible_plan is None
 
     def test__households_states(self, test_households):
         assert test_households is not None
@@ -880,3 +890,739 @@ class TestComputeStage4PortfolioDiagnostics:
 
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_liquid_return_rate"][-1]))
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_participation_probability"][-1]))
+
+
+class TestComputeAndRecordLiquidityShortfall:
+    """Stage 5 (feasibility resolver) Increment 0: liquidity-shortfall diagnostic."""
+
+    def test__defaults_to_expected_income_when_no_override_supplied(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.ts.override_current("income", np.full(n_households, 111.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+
+        shortfall = test_households.compute_and_record_liquidity_shortfall(
+            target_consumption=np.zeros((n_households, n_industries)),
+            scheduled_debt_service=np.zeros(n_households),
+        )
+
+        # target_consumption and scheduled_debt_service are both zero, so
+        # liquidity_shortfall == -income; must reflect expected_income (222),
+        # not income (111). See round-2 review finding in households.py's
+        # compute_and_record_liquidity_shortfall docstring.
+        np.testing.assert_allclose(shortfall, np.full(n_households, -222.0))
+
+    def test__income_override_takes_precedence_over_expected_income(self, test_households):
+        # Mirrors compute_target_consumption's own income_override semantics
+        # (test__target_consumption_uses_income_override above) so this
+        # diagnostic cannot silently diverge from compute_target_consumption's
+        # income basis if a future caller starts passing an override through
+        # _set_household_target_demand (round-3 review finding: pre-empts the
+        # same class of bug round 2 found, before it becomes live).
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+        income_override = np.full(n_households, 999.0)
+
+        shortfall = test_households.compute_and_record_liquidity_shortfall(
+            target_consumption=np.zeros((n_households, n_industries)),
+            scheduled_debt_service=np.zeros(n_households),
+            income_override=income_override,
+        )
+
+        np.testing.assert_allclose(shortfall, np.full(n_households, -999.0))
+
+
+class TestComputeAndRecordLiquidAssetDrawdown:
+    """Stage 5 (feasibility resolver) Increment 1: liquid-asset drawdown diagnostic."""
+
+    def test__liquid_asset_drawdown_appends_diagnostics_using_current_wealth_deposits(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        deposits = np.resize(np.asarray([50.0, 20.0, -5.0]), n_households)
+        liquidity_shortfall = np.resize(np.asarray([100.0, 10.0, 30.0]), n_households)
+        expected_funded = np.resize(np.asarray([50.0, 10.0, 0.0]), n_households)
+        expected_residual = np.resize(np.asarray([50.0, 0.0, 30.0]), n_households)
+        test_households.ts.override_current("wealth_deposits", deposits)
+
+        residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+            liquidity_shortfall,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("funded_from_liquid_assets"),
+            expected_funded,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_lfa"),
+            expected_residual,
+        )
+        np.testing.assert_allclose(residual, test_households.ts.current("residual_shortfall_after_lfa"))
+
+    def test__liquid_asset_drawdown_replace_current_overrides_latest_diagnostics(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        first_shortfall = np.full(n_households, 10.0)
+        second_shortfall = np.full(n_households, 25.0)
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 5.0))
+
+        test_households.compute_and_record_liquid_asset_drawdown(first_shortfall)
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "liquidity_shortfall_before_repair",
+                "funded_from_liquid_assets",
+                "residual_shortfall_after_lfa",
+            ]
+        }
+
+        test_households.compute_and_record_liquid_asset_drawdown(second_shortfall, replace_current=True)
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(test_households.ts.current("liquidity_shortfall_before_repair"), second_shortfall)
+        np.testing.assert_allclose(test_households.ts.current("funded_from_liquid_assets"), np.full(n_households, 5.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_lfa"),
+            np.full(n_households, 20.0),
+        )
+
+    def test__liquid_asset_drawdown_non_finite_shortfall_snapshot_is_recorded_as_zero(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        liquidity_shortfall = np.resize(np.asarray([np.nan, np.inf, -8.0, 5.0]), n_households)
+        expected_snapshot = np.resize(np.asarray([0.0, 0.0, 0.0, 5.0]), n_households)
+
+        test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+            expected_snapshot,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("funded_from_liquid_assets")
+            + test_households.ts.current("residual_shortfall_after_lfa"),
+            expected_snapshot,
+        )
+
+    def test__populate_pre_grant_feasible_plan_from_liquid_asset_drawdown_copies_shadow_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        liquidity_shortfall = np.resize(np.asarray([15.0, np.nan, -2.0]), n_households)
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        test_households.configure_feasibility_resolver(True)
+
+        expected_deposits = test_households.ts.current("wealth_deposits").copy()
+        expected_financial_assets = test_households.ts.current("wealth_financial_assets").copy()
+        expected_loans = test_households.ts.current("target_consumption_loans").copy()
+        residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=test_households.ts.current("liquidity_shortfall_before_repair"),
+            funded_from_liquid_assets=test_households.ts.current("funded_from_liquid_assets"),
+            residual_shortfall_after_lfa=residual,
+        )
+
+        assert test_households.pre_grant_feasible_plan is not None
+        np.testing.assert_allclose(
+            test_households.pre_grant_feasible_plan.liquidity_shortfall_before_repair,
+            test_households.ts.current("liquidity_shortfall_before_repair"),
+        )
+        np.testing.assert_allclose(
+            test_households.pre_grant_feasible_plan.funded_from_liquid_assets,
+            test_households.ts.current("funded_from_liquid_assets"),
+        )
+        np.testing.assert_allclose(
+            test_households.current_live_post_drawdown_residual(),
+            test_households.ts.current("residual_shortfall_after_lfa"),
+        )
+        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), expected_deposits)
+        np.testing.assert_allclose(
+            test_households.ts.current("wealth_financial_assets"),
+            expected_financial_assets,
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("target_consumption_loans"),
+            expected_loans,
+            equal_nan=True,
+        )
+
+    def test__configure_feasibility_resolver_clears_stale_pre_grant_feasible_plan(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        test_households.configure_feasibility_resolver(True)
+
+        assert test_households.pre_grant_feasible_plan is None
+
+    def test__current_live_post_drawdown_residual_raises_when_enabled_without_live_carrier(self, test_households):
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.current_live_post_drawdown_residual()
+
+    def test__reset_with_resolver_enabled_clears_stale_pre_grant_feasible_plan(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        configuration = HouseholdsConfiguration()
+        configuration.parameters.uses_feasibility_resolver = True
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        test_households.reset(configuration)
+
+        assert test_households.uses_feasibility_resolver is True
+        assert test_households.pre_grant_feasible_plan is None
+
+    def test__current_live_post_drawdown_residual_falls_back_to_clipped_post_drawdown_residual_when_disabled(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        residual_shortfall_after_lfa = np.resize(np.asarray([12.0, -3.0, np.nan, np.inf]), n_households)
+        expected = np.resize(np.asarray([12.0, 0.0, 0.0, 0.0]), n_households)
+        test_households.ts.override_current("residual_shortfall_after_lfa", residual_shortfall_after_lfa)
+        test_households.configure_feasibility_resolver(False)
+
+        np.testing.assert_allclose(test_households.current_live_post_drawdown_residual(), expected)
+
+
+class TestPopulateAndAccessLiveCreditRequested:
+    """Stage 5 (feasibility resolver) Increment 5: live credit_requested handoff."""
+
+    def test__populate_pre_grant_feasible_plan_credit_requested_raises_without_existing_carrier(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.populate_pre_grant_feasible_plan_credit_requested(
+                credit_requested=np.full(n_households, 5.0)
+            )
+
+    def test__populate_pre_grant_feasible_plan_credit_requested_extends_existing_carrier_in_place(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+        credit_requested = np.full(n_households, 7.0)
+
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+
+        plan = test_households.pre_grant_feasible_plan
+        assert plan is not None
+        np.testing.assert_allclose(plan.credit_requested, credit_requested)
+        # Increment 4's fields must be untouched by this additive extension.
+        np.testing.assert_allclose(plan.liquidity_shortfall_before_repair, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.funded_from_liquid_assets, np.full(n_households, 1.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_lfa, np.full(n_households, 2.0))
+
+    def test__current_live_credit_requested_raises_when_enabled_without_carrier(self, test_households):
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.current_live_credit_requested()
+
+    def test__current_live_credit_requested_raises_distinctly_when_carrier_missing_field(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        with pytest.raises(RuntimeError, match="credit_requested has not been populated"):
+            test_households.current_live_credit_requested()
+
+    def test__current_live_credit_requested_returns_carrier_value_when_enabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+        credit_requested = np.resize(np.asarray([9.0, -1.0, np.nan]), n_households)
+        expected = np.resize(np.asarray([9.0, 0.0, 0.0]), n_households)
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+
+        np.testing.assert_allclose(test_households.current_live_credit_requested(), expected)
+
+    def test__current_live_credit_requested_falls_back_to_shadow_credit_requested_when_disabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        shadow = np.resize(np.asarray([11.0, -2.0, np.inf]), n_households)
+        expected = np.resize(np.asarray([11.0, 0.0, 0.0]), n_households)
+        test_households.ts.override_current("shadow_credit_requested", shadow)
+        test_households.configure_feasibility_resolver(False)
+
+        np.testing.assert_allclose(test_households.current_live_credit_requested(), expected)
+
+
+class TestComputeTargetCreditLiveCreditRequested:
+    """Stage 5 (feasibility resolver) Increment 5: compute_target_credit() wiring."""
+
+    def test__compute_target_credit_flag_off_mirrors_legacy_formula_in_live_diagnostic(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(False)
+        target_consumption = np.zeros_like(test_households.ts.current("target_consumption"))
+        target_consumption[:, 0] = 200.0
+        test_households.ts.override_current("target_consumption", target_consumption)
+        test_households.ts.override_current("expected_income", np.full(n_households, 50.0))
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("wealth_financial_assets", np.zeros(n_households))
+        legacy = test_households.functions["target_credit"].compute_target_consumption_loans(
+            target_consumption=test_households.ts.current("target_consumption"),
+            income=test_households.ts.current("expected_income"),
+            rent=test_households.ts.current("rent"),
+            wealth_in_financial_assets=test_households.ts.current("wealth_financial_assets"),
+        )
+
+        test_households.compute_target_credit(current_sales=None)
+
+        np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), legacy)
+        np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), legacy)
+
+    def test__compute_target_credit_flag_on_uses_carrier_sentinel_with_no_parallel_recompute(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        sentinel = np.full(n_households, 12345.0)
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=sentinel)
+        # Legacy inputs would produce a very different value if any parallel
+        # recomputation path (re-deriving from target_consumption etc.) existed.
+        target_consumption = np.full_like(test_households.ts.current("target_consumption"), 999.0)
+        test_households.ts.override_current("target_consumption", target_consumption)
+        test_households.ts.override_current("expected_income", np.zeros(n_households))
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("wealth_financial_assets", np.zeros(n_households))
+
+        test_households.compute_target_credit(current_sales=None)
+
+        np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
+        np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
+
+    def test__compute_target_credit_raises_when_enabled_without_populated_credit_requested(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="credit_requested has not been populated"):
+            test_households.compute_target_credit(current_sales=None)
+
+
+class TestComputeAndRecordBorrowVsSellChoice:
+    """Stage 5 (feasibility resolver) Increment 2: borrow-vs-sell diagnostic."""
+
+    def test__uses_stage4_handoff_and_mean_offered_rate(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        residual = np.resize(np.asarray([10.0, 10.0]), n_households)
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current(
+            "portfolio_delta_tilde",
+            np.resize(np.asarray([0.0, -0.1]), n_households),
+        )
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_target_illiquid_assets", np.full(n_households, 10.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=residual,
+            banks=test_banks,
+            stage4_handoff=stage4_handoff,
+        )
+
+        np.testing.assert_array_equal(
+            preferred_margin[:2],
+            np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]),
+        )
+        np.testing.assert_allclose(preferred_amount[:2], [10.0, 10.0])
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[0], -0.02)
+        np.testing.assert_allclose(test_households.ts.current("borrow_vs_sell_spread")[1], 0.08)
+
+    def test__replace_current_overrides_latest_diagnostics_without_changing_lengths(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current("portfolio_delta_tilde", np.zeros(n_households))
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 10.0),
+            test_banks,
+            stage4_handoff,
+        )
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "preferred_margin_after_lfa",
+                "preferred_margin_amount",
+                "borrow_vs_sell_threshold",
+                "borrow_vs_sell_spread",
+                "borrow_vs_sell_l_tilde",
+                "borrow_vs_sell_comparison_valid_flag",
+            ]
+        }
+
+        preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 0.0),
+            test_banks,
+            stage4_handoff,
+            replace_current=True,
+        )
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(preferred_margin, np.zeros(n_households))
+        np.testing.assert_allclose(preferred_amount, np.zeros(n_households))
+
+    def test__does_not_mutate_core_balance_sheet_or_credit_targets(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"].phi_1 = 1.0
+        test_households.functions["wealth"].lambda_kappa = 0.5
+        test_households.ts.override_current("portfolio_delta_tilde", np.full(n_households, 1.0))
+        test_households.ts.override_current("portfolio_opening_tfa_scale", np.full(n_households, 100.0))
+        test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
+        test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
+        baseline = {
+            key: test_households.ts.current(key).copy()
+            for key in [
+                "wealth_deposits",
+                "wealth_other_financial_assets",
+                "target_consumption_loans",
+                "target_mortgage",
+                "debt_installments",
+            ]
+        }
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
+        stage4_handoff = {
+            "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
+            "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
+            "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
+            "r_kappa": test_households.ts.current("portfolio_illiquid_return_rate"),
+        }
+
+        test_households.compute_and_record_borrow_vs_sell_choice(
+            np.full(n_households, 10.0),
+            test_banks,
+            stage4_handoff,
+        )
+
+        for key, values in baseline.items():
+            np.testing.assert_allclose(test_households.ts.current(key), values)
+
+    def test__current_stage4_handoff_adds_positive_surplus_before_calling_stage4_helper(
+        self, test_households, monkeypatch
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        captured = {}
+
+        def fake_stage4_helper(**kwargs):
+            captured.update(kwargs)
+            return Stage4HouseholdDiagnostics(
+                portfolio_opening_tfa_scale=np.full(n_households, 100.0),
+                portfolio_target_tfa_base=np.full(n_households, 175.0),
+                portfolio_post_return_lfa=kwargs["post_surplus_lfa"],
+                portfolio_post_return_ifa=np.full(n_households, 25.0),
+                portfolio_investable_surplus=kwargs["investable_surplus"],
+                portfolio_target_illiquid_share=np.full(n_households, 0.65),
+                portfolio_target_share_clipped_flag=np.zeros(n_households, dtype=bool),
+                rebalancing=PortfolioRebalancingResult(
+                    portfolio_participates=np.ones(n_households, dtype=bool),
+                    actual_illiquid_share=np.zeros(n_households),
+                    target_illiquid_assets=np.zeros(n_households),
+                    delta_tilde=np.zeros(n_households),
+                    kappa_star_tilde=np.zeros(n_households),
+                    kappa_tilde=np.zeros(n_households),
+                    desired_illiquid_adjustment=np.zeros(n_households),
+                    adjustment_cost=np.zeros(n_households),
+                    counterfactual_lfa_flow=np.zeros(n_households),
+                    counterfactual_ifa_flow=np.zeros(n_households),
+                    inaction_flag=np.zeros(n_households, dtype=bool),
+                    upper_bound_flag=np.zeros(n_households, dtype=bool),
+                    lower_bound_flag=np.zeros(n_households, dtype=bool),
+                    infeasible_interval_flag=np.zeros(n_households, dtype=bool),
+                    no_financial_assets_flag=np.zeros(n_households, dtype=bool),
+                    portfolio_valid_flag=np.ones(n_households, dtype=bool),
+                ),
+            )
+
+        monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
+
+        test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(captured["investable_surplus"], np.full(n_households, 50.0))
+        np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 50.0))
+
+    def test__current_stage4_handoff_uses_post_return_ifa_before_calling_stage4_helper(
+        self, test_households, monkeypatch
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        test_households.functions["wealth"].compute_income_from_financial_assets(
+            current_wealth_in_other_financial_assets=test_households.ts.current("wealth_other_financial_assets"),
+        )
+        expected_post_return_ifa = (
+            test_households.ts.current("wealth_other_financial_assets")
+            + test_households.current_illiquid_financial_asset_return_amount()
+        )
+        captured = {}
+
+        def fake_stage4_helper(**kwargs):
+            captured.update(kwargs)
+            return Stage4HouseholdDiagnostics(
+                portfolio_opening_tfa_scale=np.full(n_households, 100.0),
+                portfolio_target_tfa_base=np.full(n_households, 175.0),
+                portfolio_post_return_lfa=kwargs["post_surplus_lfa"],
+                portfolio_post_return_ifa=kwargs["post_return_ifa"],
+                portfolio_investable_surplus=kwargs["investable_surplus"],
+                portfolio_target_illiquid_share=np.full(n_households, 0.65),
+                portfolio_target_share_clipped_flag=np.zeros(n_households, dtype=bool),
+                rebalancing=PortfolioRebalancingResult(
+                    portfolio_participates=np.ones(n_households, dtype=bool),
+                    actual_illiquid_share=np.zeros(n_households),
+                    target_illiquid_assets=np.zeros(n_households),
+                    delta_tilde=np.zeros(n_households),
+                    kappa_star_tilde=np.zeros(n_households),
+                    kappa_tilde=np.zeros(n_households),
+                    desired_illiquid_adjustment=np.zeros(n_households),
+                    adjustment_cost=np.zeros(n_households),
+                    counterfactual_lfa_flow=np.zeros(n_households),
+                    counterfactual_ifa_flow=np.zeros(n_households),
+                    inaction_flag=np.zeros(n_households, dtype=bool),
+                    upper_bound_flag=np.zeros(n_households, dtype=bool),
+                    lower_bound_flag=np.zeros(n_households, dtype=bool),
+                    infeasible_interval_flag=np.zeros(n_households, dtype=bool),
+                    no_financial_assets_flag=np.zeros(n_households, dtype=bool),
+                    portfolio_valid_flag=np.ones(n_households, dtype=bool),
+                ),
+            )
+
+        monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
+
+        test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(captured["post_return_ifa"], expected_post_return_ifa)
+
+    def test__current_stage4_handoff_draws_current_return_when_not_pre_drawn(self, test_households, monkeypatch):
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.0029,
+            mu_bond=0.0081,
+            sigma_eq=0.0,
+            sigma_bond=0.0,
+            rho=0.0,
+            equity_weight=0.5,
+            draw_scope="country_period",
+            uses_portfolio_choice=True,
+            target_share_source="scalar",
+            default_target_illiquid_share=0.65,
+            phi_1=5.0,
+            lambda_kappa=0.1,
+            fixed_cost_share=0.001,
+        )
+        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
+        monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
+
+        handoff = test_households.current_stage4_handoff_for_stage5(
+            target_consumption_total=np.full(n_households, 120.0),
+            scheduled_debt_service=np.full(n_households, 30.0),
+        )
+
+        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
+        np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
+
+
+class TestComputeAndRecordResidualCapacityFallback:
+    """Stage 5 (feasibility resolver) Increment 3: shadow residual-capacity fallback."""
+
+    def test__records_shadow_plan_without_touching_balance_sheet_state(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.0, 0.0]))
+        preferred_margin_after_lfa = np.resize(
+            np.asarray([PREFERRED_MARGIN_BORROW, PREFERRED_MARGIN_SELL]), n_households
+        )
+        preferred_margin_amount = np.resize(np.asarray([100.0, 25.0]), n_households)
+        income = np.full(n_households, 100.0)
+        scheduled_mortgage_payment = np.full(n_households, 0.0)
+        current_ifa = np.resize(np.asarray([0.0, 10.0]), n_households)
+        baseline = {
+            key: test_households.ts.current(key).copy()
+            for key in [
+                "wealth_deposits",
+                "wealth_other_financial_assets",
+                "target_consumption_loans",
+                "target_mortgage",
+                "debt_installments",
+            ]
+        }
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+        )
+
+        np.testing.assert_allclose(test_households.ts.current("dsti_headroom"), np.full(n_households, 10.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("borrow_planned"),
+            np.resize(np.asarray([100.0, 15.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidation_planned"),
+            np.resize(np.asarray([0.0, 10.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("shadow_credit_requested"),
+            np.resize(np.asarray([100.0, 15.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("forced_liquidation_amount"),
+            np.resize(np.asarray([0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_caps"),
+            np.resize(np.asarray([0.0, 0.0]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("dsti_cap_binding"),
+            np.resize(np.asarray([False, False]), n_households),
+        )
+
+        for key, values in baseline.items():
+            np.testing.assert_allclose(test_households.ts.current(key), values)
+
+    def test__replace_current_overrides_latest_diagnostics_without_changing_lengths(self, test_households, test_banks):
+        n_households = test_households.ts.current("n_households")
+        test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.0, 0.0]))
+        preferred_margin_after_lfa = np.full(n_households, PREFERRED_MARGIN_BORROW)
+        preferred_margin_amount = np.full(n_households, 12.0)
+        income = np.full(n_households, 100.0)
+        scheduled_mortgage_payment = np.full(n_households, 0.0)
+        current_ifa = np.full(n_households, 0.0)
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+        )
+        before_lengths = {
+            key: len(test_households.ts.dicts[key])
+            for key in [
+                "dsti_headroom",
+                "dsti_maximum_loan_size",
+                "dsti_cap_binding",
+                "borrow_planned",
+                "liquidation_planned",
+                "shadow_credit_requested",
+                "forced_liquidation_amount",
+                "residual_shortfall_after_caps",
+            ]
+        }
+
+        test_households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=preferred_margin_after_lfa,
+            preferred_margin_amount=preferred_margin_amount,
+            banks=test_banks,
+            income=income,
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=10,
+            dsti_limit=0.1,
+            current_ifa=current_ifa,
+            replace_current=True,
+        )
+
+        after_lengths = {key: len(test_households.ts.dicts[key]) for key in before_lengths}
+        assert after_lengths == before_lengths
+        np.testing.assert_allclose(test_households.ts.current("borrow_planned"), np.full(n_households, 12.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_after_caps"), np.full(n_households, 0.0)
+        )

@@ -18,6 +18,7 @@ The implementation handles:
 """
 
 import warnings
+from dataclasses import dataclass, replace
 from typing import Any, Optional, Tuple
 
 import h5py
@@ -28,11 +29,24 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.func.borrow_vs_sell import (
+    compute_borrow_vs_sell_choice,
+)
+from macromodel.agents.households.func.liquid_asset_drawdown import (
+    compute_liquid_asset_drawdown,
+)
+from macromodel.agents.households.func.liquidity_shortfall import (
+    compute_liquidity_shortfall,
+)
 from macromodel.agents.households.func.portfolio_diagnostics import (
     compute_stage4_household_diagnostics,
 )
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_household_head_covariates,
+)
+from macromodel.agents.households.func.residual_capacity_fallback import (
+    ResidualCapacityFallbackResult,
+    compute_residual_capacity_fallback,
 )
 from macromodel.agents.households.household_properties import HouseholdType
 from macromodel.agents.households.households_ts import create_households_timeseries
@@ -92,6 +106,51 @@ _STAGE4_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "portfolio_settlement_enabled": False,
 }
 
+# Stage 5 (feasibility resolver) diagnostic time series, registered at
+# Households init unconditionally — see
+# knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+# (Increments 0-1). These are diagnostics-only: they have no effect on goods
+# or credit demand at these increments.
+_STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
+    "liquidity_shortfall": 0.0,
+    "household_saving": 0.0,
+    "liquidity_shortfall_before_repair": 0.0,
+    "funded_from_liquid_assets": 0.0,
+    "residual_shortfall_after_lfa": 0.0,
+    "preferred_margin_after_lfa": 0.0,
+    "preferred_margin_amount": 0.0,
+    "borrow_vs_sell_threshold": 0.0,
+    "borrow_vs_sell_spread": 0.0,
+    "borrow_vs_sell_l_tilde": 0.0,
+    "borrow_vs_sell_comparison_valid_flag": False,
+    "dsti_headroom": 0.0,
+    "dsti_maximum_loan_size": 0.0,
+    "dsti_cap_binding": False,
+    "borrow_planned": 0.0,
+    "liquidation_planned": 0.0,
+    "shadow_credit_requested": 0.0,
+    "forced_liquidation_amount": 0.0,
+    "residual_shortfall_after_caps": 0.0,
+    # Increment 5: the credit_requested value actually used for target_consumption_loans
+    # this period (mirrors the legacy formula when the resolver is off).
+    "live_credit_requested": 0.0,
+}
+
+
+@dataclass
+class PreGrantFeasiblePlan:
+    """Minimal live Stage 5 pre-grant feasibility carrier.
+
+    ``credit_requested`` (Increment 5) defaults to ``None`` so that the
+    Increment 4 populate method, which constructs this dataclass without
+    knowledge of the field, keeps working unchanged.
+    """
+
+    liquidity_shortfall_before_repair: np.ndarray
+    funded_from_liquid_assets: np.ndarray
+    residual_shortfall_after_lfa: np.ndarray
+    credit_requested: np.ndarray | None = None
+
 
 class Households(Agent):
     """Economic agent representing household sector behavior.
@@ -134,6 +193,7 @@ class Households(Agent):
         consumption_weights_by_income: np.ndarray,
         investment_weights: np.ndarray,
         use_consumption_weights_by_income: bool,
+        uses_feasibility_resolver: bool,
         independents: list[str],
         substitution_bundles: Optional[list] = None,
         emission_fractions: Optional[EmissionFractions] = None,
@@ -151,6 +211,8 @@ class Households(Agent):
             consumption_weights_by_income (np.ndarray): Income-based consumption patterns
             investment_weights (np.ndarray): Industry-specific investment shares
             use_consumption_weights_by_income (bool): Whether to use income-based weights
+            uses_feasibility_resolver (bool): Whether the Stage 5 live
+                feasibility handoff is enabled.
             independents (list[str]): Independent variables for calculations
             substitution_bundles (Optional[list]): Substitution bundle configuration for CES consumption
             emission_fractions (Optional[EmissionFractions]): Per-industry emission fraction multipliers
@@ -185,6 +247,8 @@ class Households(Agent):
         self.investment_weights = investment_weights
 
         self.use_consumption_weights_by_income = use_consumption_weights_by_income
+        self.uses_feasibility_resolver = uses_feasibility_resolver
+        self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
 
         # Initialize substitution bundles and bundle matrix
         self.substitution_bundles = substitution_bundles if substitution_bundles is not None else []
@@ -447,6 +511,13 @@ class Households(Agent):
         for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
+        # Stage 5 (feasibility resolver): register diagnostic time series at
+        # init, for the same reason as the
+        # Stage 4 block above (TimeSeries.__getattr__ requires at least one
+        # prior assignment before .append(...) can be called).
+        for _field_name, _zero_value in _STAGE5_DIAGNOSTIC_INITIAL_VALUES.items():
+            ts[_field_name] = np.full(n_households_at_init, _zero_value)
+
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
 
@@ -473,6 +544,7 @@ class Households(Agent):
         states["corr_renters"] = [[int(x) for x in sublist if not pd.isna(x)] for sublist in corr_renters]
 
         use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
+        uses_feasibility_resolver = configuration.parameters.uses_feasibility_resolver
 
         independents = configuration.functions.saving_rates.parameters["independents"]
 
@@ -489,6 +561,7 @@ class Households(Agent):
             consumption_weights_by_income,
             investment_weights,
             use_consumption_weights_by_income,
+            uses_feasibility_resolver,
             independents,
             configuration.substitution_bundles,
             emission_fractions=emission_fractions,
@@ -506,6 +579,115 @@ class Households(Agent):
         """
         self.gen_reset()
         update_functions(functions=self.functions, model=configuration.functions, loc="macromodel.agents.households")
+        self.use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
+        self.configure_feasibility_resolver(configuration.parameters.uses_feasibility_resolver)
+
+    def configure_feasibility_resolver(self, uses_feasibility_resolver: bool) -> None:
+        """Configure whether the live Stage 5 feasibility handoff is active."""
+        self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
+        self.pre_grant_feasible_plan = None
+
+    def clear_pre_grant_feasible_plan(self) -> None:
+        """Clear the runtime Stage 5 live feasibility carrier."""
+        self.pre_grant_feasible_plan = None
+
+    def populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+        self,
+        *,
+        liquidity_shortfall_before_repair: np.ndarray,
+        funded_from_liquid_assets: np.ndarray,
+        residual_shortfall_after_lfa: np.ndarray,
+    ) -> None:
+        """Populate the minimal Increment 4 live feasibility carrier.
+
+        The carrier is provisional pre-grant planning state only. It mirrors
+        the existing Stage 5 liquid-drawdown diagnostics and must not mutate
+        wealth or debt stocks.
+        """
+        self.pre_grant_feasible_plan = PreGrantFeasiblePlan(
+            liquidity_shortfall_before_repair=np.asarray(liquidity_shortfall_before_repair, dtype=float).copy(),
+            funded_from_liquid_assets=np.asarray(funded_from_liquid_assets, dtype=float).copy(),
+            residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float).copy(),
+        )
+
+    def current_live_post_drawdown_residual(self) -> np.ndarray:
+        """Return the sanctioned Stage 5 live residual read path.
+
+        When the resolver is active, later increments must consume the live
+        post-drawdown residual from ``pre_grant_feasible_plan`` instead of
+        recomputing from raw liquidity shortfall. When the resolver is
+        disabled, this accessor must remain byte-identical to the existing
+        post-liquid-drawdown shadow handoff.
+        """
+        if self.uses_feasibility_resolver:
+            if self.pre_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                    "has not been populated for the current planning pass."
+                )
+            residual = self.pre_grant_feasible_plan.residual_shortfall_after_lfa
+        else:
+            residual = self.ts.current("residual_shortfall_after_lfa")
+
+        residual = np.asarray(residual, dtype=float)
+        return np.where(np.isfinite(residual), np.maximum(residual, 0.0), 0.0)
+
+    def populate_pre_grant_feasible_plan_credit_requested(
+        self,
+        *,
+        credit_requested: np.ndarray,
+    ) -> None:
+        """Extend the live Stage 5 carrier with Increment 5's credit_requested field.
+
+        Additive only: uses ``dataclasses.replace`` against the carrier
+        Increment 4 already populated earlier in the same planning pass, so
+        the Increment 4 populate method is untouched. Raises if that carrier
+        does not exist yet, since credit_requested has no meaning without
+        the Increment 4 fields it sits alongside.
+        """
+        if self.pre_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                "has not been populated for the current planning pass."
+            )
+        # dataclasses.replace only shallow-copies: re-copy the Increment 4
+        # fields too, so the new carrier instance never aliases arrays with
+        # the old one it replaces.
+        self.pre_grant_feasible_plan = replace(
+            self.pre_grant_feasible_plan,
+            liquidity_shortfall_before_repair=self.pre_grant_feasible_plan.liquidity_shortfall_before_repair.copy(),
+            funded_from_liquid_assets=self.pre_grant_feasible_plan.funded_from_liquid_assets.copy(),
+            residual_shortfall_after_lfa=self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy(),
+            credit_requested=np.asarray(credit_requested, dtype=float).copy(),
+        )
+
+    def current_live_credit_requested(self) -> np.ndarray:
+        """Return the sanctioned Stage 5 live credit-demand read path.
+
+        When the resolver is active, ``compute_target_credit`` must consume
+        this live, carrier-backed value instead of the legacy unbounded-gap
+        formula. When the resolver is disabled, this accessor must remain
+        byte-identical to the existing shadow diagnostic
+        (``shadow_credit_requested``).
+        """
+        if self.uses_feasibility_resolver:
+            if self.pre_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                    "has not been populated for the current planning pass."
+                )
+            if self.pre_grant_feasible_plan.credit_requested is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled and pre_grant_feasible_plan "
+                    "exists, but credit_requested has not been populated for the current "
+                    "planning pass."
+                )
+            credit_requested = self.pre_grant_feasible_plan.credit_requested
+        else:
+            credit_requested = self.ts.current("shadow_credit_requested")
+
+        credit_requested = np.asarray(credit_requested, dtype=float)
+        return np.where(np.isfinite(credit_requested), np.maximum(credit_requested, 0.0), 0.0)
 
     def compute_employee_income(
         self,
@@ -708,6 +890,17 @@ class Households(Agent):
             return np.nan
         return current_rate()
 
+    def current_illiquid_financial_asset_return_amount(self) -> np.ndarray:
+        """Return the current-period illiquid return amount vector, if available."""
+        current_amount = getattr(self.functions["wealth"], "current_illiquid_return_amount", None)
+        current_wealth = self.ts.current("wealth_other_financial_assets")
+        if current_amount is None:
+            return np.full(current_wealth.shape, np.nan)
+        try:
+            return current_amount(current_wealth_in_other_financial_assets=current_wealth)
+        except ValueError:
+            return np.full(current_wealth.shape, np.nan)
+
     def compute_expected_income(self) -> np.ndarray:
         """Calculate total expected income.
 
@@ -814,6 +1007,7 @@ class Households(Agent):
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
         lagged_house_price_index: Optional[float] = None,
+        lagged_housing_wealth: Optional[np.ndarray] = None,
         real_borrowing_rate: Optional[float] = None,
         consumer_debt_rate_delta: Optional[float] = None,
         permanent_income_log_ratio: Optional[np.ndarray] = None,
@@ -821,6 +1015,7 @@ class Households(Agent):
         common_permanent_income_log_ratio: Optional[np.ndarray | float] = None,
         mortgage_payment: Optional[np.ndarray] = None,
         replace_current_diagnostics: bool = False,
+        time_unit: int = 12,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -849,6 +1044,8 @@ class Households(Agent):
             house_price_index (Optional[float]): House-price index level used by credit-augmented consumption
             house_price_growth (Optional[float]): House-price growth proxy used by credit-augmented consumption
             lagged_house_price_index (Optional[float]): Lagged HPI index level for the paper house-price term
+            lagged_housing_wealth (Optional[np.ndarray]): Lagged gross housing wealth for the paper
+                housing-wealth term; defaults to the previous period's housing stock
             real_borrowing_rate (Optional[float]): Explicit real-rate proxy; defaults to zero placeholder
             consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
             permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
@@ -857,6 +1054,8 @@ class Households(Agent):
                 permanent-income component for opt-in learning rules
             mortgage_payment (Optional[np.ndarray]): Mortgage-only scheduled service by household
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
+            time_unit (int): Model period length in months, used by credit-augmented consumption
+                to annualize income in its calibrated wealth/income and price/income ratios
 
         Returns:
             np.ndarray: Target consumption by household
@@ -883,6 +1082,8 @@ class Households(Agent):
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
+            if lagged_housing_wealth is None:
+                lagged_housing_wealth = self.ts.prev("wealth_main_residence") + self.ts.prev("wealth_other_properties")
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
@@ -906,6 +1107,7 @@ class Households(Agent):
                 liquid_wealth=self.ts.current("wealth_deposits"),
                 illiquid_wealth=self.ts.current("wealth_other_financial_assets"),
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
+                lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
                 mortgage_debt=self.ts.current("mortgage_debt"),
                 mortgage_payment=mortgage_payment,
@@ -926,12 +1128,300 @@ class Households(Agent):
                 consumer_debt_rate_delta=consumer_debt_rate_delta,
                 uncertainty_delta=uncertainty_delta,
                 population_scale_factor=self.states.get("population_scale_factor"),
+                time_unit=time_unit,
             )
             self._append_target_consumption_diagnostics(
                 self.functions["consumption"],
                 replace_current=replace_current_diagnostics,
             )
             return target_consumption
+
+    def compute_and_record_liquidity_shortfall(
+        self,
+        target_consumption: np.ndarray,
+        scheduled_debt_service: np.ndarray,
+        income_override: Optional[np.ndarray] = None,
+        replace_current: bool = False,
+    ) -> np.ndarray:
+        """Compute and persist the Stage 5 (feasibility resolver) liquidity-shortfall diagnostic.
+
+        Diagnostics-only (Increment 0): appends ``liquidity_shortfall`` and
+        ``household_saving`` time series and has no effect on goods or credit
+        demand. Must be called after ``compute_target_consumption()`` for the
+        current period, since it consumes that period's ``target_consumption``.
+
+        Uses ``expected_income`` by default (the current-period income basis
+        used by ``compute_target_consumption()`` itself, see ``households.py``'s
+        ``income = self.ts.current("expected_income") if income_override is
+        None else income_override``), not ``income`` (the realized series,
+        which is only appended later in ``Country.update_realised_metrics()``
+        — after both call sites of this method run, per ``simulation.py``'s
+        per-period ordering). Using ``income`` would silently compare this
+        period's consumption plan against last period's realized income, an
+        off-by-one-period mismatch caught in round-2 review (not by the
+        original hand-computed unit tests, which use synthetic scalars and
+        can't see this ordering bug). ``income_override`` mirrors
+        ``compute_target_consumption()``'s own override parameter so that, if
+        a future caller ever passes an override there (e.g. a shock-test
+        scenario), this diagnostic stays on the same income basis rather than
+        silently reverting to ``expected_income`` underneath it — the same
+        class of bug round-2 found, pre-empted here rather than left latent.
+        ``Country._set_household_target_demand()`` does not pass an override
+        today, so this is currently always ``None`` in production.
+
+        See ``knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md``
+        (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
+        definition and the exit criterion.
+
+        Args:
+            target_consumption (np.ndarray): This period's per-household
+                target consumption, summed across goods (i.e. the same total
+                already returned by ``compute_target_consumption()``).
+            scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
+                consumer-loan instalments for the period, per household.
+            income_override (Optional[np.ndarray]): Explicit income basis,
+                forwarded unchanged if supplied; defaults to
+                ``self.ts.current("expected_income")`` otherwise, matching
+                ``compute_target_consumption()``'s own override semantics.
+            replace_current (bool): Replace the latest appended diagnostic
+                row instead of appending a new one (mirrors the
+                ``replace_current_diagnostics`` convention used elsewhere in
+                this class).
+
+        Returns:
+            np.ndarray: Per-household liquidity shortfall, ``L^d_it``.
+        """
+        income = self.ts.current("expected_income") if income_override is None else income_override
+        result = compute_liquidity_shortfall(
+            income=income,
+            target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service,
+        )
+        if replace_current:
+            self.ts.override_current("liquidity_shortfall", result.liquidity_shortfall)
+            self.ts.override_current("household_saving", result.household_saving)
+        else:
+            self.ts.liquidity_shortfall.append(result.liquidity_shortfall)
+            self.ts.household_saving.append(result.household_saving)
+        return result.liquidity_shortfall
+
+    def compute_and_record_liquid_asset_drawdown(
+        self,
+        liquidity_shortfall: np.ndarray,
+        replace_current: bool = False,
+    ) -> np.ndarray:
+        """Compute and persist the Stage 5 Increment 1 shadow drawdown diagnostic."""
+        liquidity_shortfall = np.asarray(liquidity_shortfall, dtype=float)
+        liquidity_shortfall_before_repair = np.where(
+            np.isfinite(liquidity_shortfall),
+            np.maximum(liquidity_shortfall, 0.0),
+            0.0,
+        )
+        result = compute_liquid_asset_drawdown(
+            liquidity_shortfall=liquidity_shortfall_before_repair,
+            available_lfa=self.ts.current("wealth_deposits"),
+        )
+        if replace_current:
+            self.ts.override_current("liquidity_shortfall_before_repair", liquidity_shortfall_before_repair)
+            self.ts.override_current("funded_from_liquid_assets", result.funded_from_liquid_assets)
+            self.ts.override_current("residual_shortfall_after_lfa", result.residual_shortfall_after_lfa)
+        else:
+            self.ts.liquidity_shortfall_before_repair.append(liquidity_shortfall_before_repair)
+            self.ts.funded_from_liquid_assets.append(result.funded_from_liquid_assets)
+            self.ts.residual_shortfall_after_lfa.append(result.residual_shortfall_after_lfa)
+        return result.residual_shortfall_after_lfa
+
+    def compute_and_record_borrow_vs_sell_choice(
+        self,
+        residual_shortfall_after_lfa: np.ndarray,
+        banks: Banks,
+        stage4_handoff: dict[str, np.ndarray],
+        replace_current: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute and persist the Stage 5 Increment 2 shadow branch choice."""
+        bank_rates = np.asarray(banks.ts.current("interest_rates_on_household_consumption_loans"), dtype=float)
+        corresponding_bank_ids = np.asarray(self.states["Corresponding Bank ID"], dtype=int)
+        if bank_rates.ndim == 0:
+            bank_rates = np.full(self.ts.current("n_households"), float(bank_rates), dtype=float)
+        elif bank_rates.ndim == 1:
+            if bank_rates.shape[0] == self.ts.current("n_households"):
+                pass
+            elif bank_rates.shape[0] == banks.ts.current("n_banks"):
+                bank_rates = bank_rates[corresponding_bank_ids]
+            else:
+                bank_rates = np.resize(bank_rates, banks.ts.current("n_banks"))[corresponding_bank_ids]
+        else:
+            raise ValueError(
+                "interest_rates_on_household_consumption_loans must be a scalar, one rate per household, "
+                "or one rate per bank."
+            )
+        result = compute_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float),
+            delta_tilde=stage4_handoff["delta_tilde"],
+            opening_tfa_scale=stage4_handoff["opening_tfa_scale"],
+            post_return_ifa=stage4_handoff["post_return_ifa"],
+            r_b=bank_rates,
+            r_kappa=stage4_handoff["r_kappa"],
+            phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
+            lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
+        )
+        if replace_current:
+            self.ts.override_current("preferred_margin_after_lfa", result.preferred_margin)
+            self.ts.override_current("preferred_margin_amount", result.preferred_amount)
+            self.ts.override_current("borrow_vs_sell_threshold", result.borrow_vs_sell_threshold)
+            self.ts.override_current("borrow_vs_sell_spread", result.borrow_vs_sell_spread)
+            self.ts.override_current("borrow_vs_sell_l_tilde", result.borrow_vs_sell_l_tilde)
+            self.ts.override_current("borrow_vs_sell_comparison_valid_flag", result.comparison_valid_flag)
+        else:
+            self.ts.preferred_margin_after_lfa.append(result.preferred_margin)
+            self.ts.preferred_margin_amount.append(result.preferred_amount)
+            self.ts.borrow_vs_sell_threshold.append(result.borrow_vs_sell_threshold)
+            self.ts.borrow_vs_sell_spread.append(result.borrow_vs_sell_spread)
+            self.ts.borrow_vs_sell_l_tilde.append(result.borrow_vs_sell_l_tilde)
+            self.ts.borrow_vs_sell_comparison_valid_flag.append(result.comparison_valid_flag)
+        return result.preferred_margin, result.preferred_amount
+
+    def compute_and_record_residual_capacity_fallback(
+        self,
+        preferred_margin_after_lfa: np.ndarray,
+        preferred_margin_amount: np.ndarray,
+        banks: Banks,
+        income: np.ndarray,
+        scheduled_mortgage_payment: np.ndarray,
+        consumer_loan_maturity: int,
+        dsti_limit: float,
+        current_ifa: np.ndarray,
+        replace_current: bool = False,
+    ) -> ResidualCapacityFallbackResult:
+        """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
+
+        This uses the provisional DSTI proxy only. It records the shadow plan
+        but does not touch live balances, debt service, or market-clearing
+        state.
+        """
+        bank_rates = np.asarray(banks.ts.current("interest_rates_on_household_consumption_loans"), dtype=float)
+        corresponding_bank_ids = np.asarray(self.states["Corresponding Bank ID"], dtype=int)
+        if bank_rates.ndim == 0:
+            bank_rates = np.full(self.ts.current("n_households"), float(bank_rates), dtype=float)
+        elif bank_rates.ndim == 1:
+            if bank_rates.shape[0] == self.ts.current("n_households"):
+                pass
+            elif bank_rates.shape[0] == banks.ts.current("n_banks"):
+                bank_rates = bank_rates[corresponding_bank_ids]
+            else:
+                bank_rates = np.resize(bank_rates, banks.ts.current("n_banks"))[corresponding_bank_ids]
+        else:
+            raise ValueError(
+                "interest_rates_on_household_consumption_loans must be a scalar, one rate per household, "
+                "or one rate per bank."
+            )
+
+        result = compute_residual_capacity_fallback(
+            preferred_margin_after_lfa=np.asarray(preferred_margin_after_lfa, dtype=float),
+            preferred_margin_amount=np.asarray(preferred_margin_amount, dtype=float),
+            income=np.asarray(income, dtype=float),
+            scheduled_mortgage_payment=np.asarray(scheduled_mortgage_payment, dtype=float),
+            r_b=bank_rates,
+            consumer_loan_maturity=consumer_loan_maturity,
+            dsti_limit=dsti_limit,
+            current_ifa=np.asarray(current_ifa, dtype=float),
+        )
+        if replace_current:
+            self.ts.override_current("dsti_headroom", result.dsti_headroom)
+            self.ts.override_current("dsti_maximum_loan_size", result.dsti_maximum_loan_size)
+            self.ts.override_current("dsti_cap_binding", result.dsti_cap_binding)
+            self.ts.override_current("borrow_planned", result.borrow_planned)
+            self.ts.override_current("liquidation_planned", result.liquidation_planned)
+            self.ts.override_current("shadow_credit_requested", result.shadow_credit_requested)
+            self.ts.override_current("forced_liquidation_amount", result.forced_liquidation_amount)
+            self.ts.override_current("residual_shortfall_after_caps", result.residual_shortfall_after_caps)
+        else:
+            self.ts.dsti_headroom.append(result.dsti_headroom)
+            self.ts.dsti_maximum_loan_size.append(result.dsti_maximum_loan_size)
+            self.ts.dsti_cap_binding.append(result.dsti_cap_binding)
+            self.ts.borrow_planned.append(result.borrow_planned)
+            self.ts.liquidation_planned.append(result.liquidation_planned)
+            self.ts.shadow_credit_requested.append(result.shadow_credit_requested)
+            self.ts.forced_liquidation_amount.append(result.forced_liquidation_amount)
+            self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
+        return result
+
+    def current_stage4_handoff_for_stage5(
+        self,
+        *,
+        target_consumption_total: np.ndarray,
+        scheduled_debt_service: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Build the current-period Stage 4 handoff needed by Stage 5.
+
+        This uses the same pure Stage 4 diagnostics helper as
+        ``compute_stage4_portfolio_diagnostics()`` but does not persist any
+        ``portfolio_*`` time series. When portfolio choice is disabled, the
+        returned arrays intentionally force the Increment 2 fallback path.
+        """
+        n_households = self.ts.current("n_households")
+        wealth_function = self.functions["wealth"]
+        if not getattr(wealth_function, "uses_portfolio_choice", False):
+            return {
+                "delta_tilde": np.full(n_households, np.nan),
+                "opening_tfa_scale": np.full(n_households, np.nan),
+                "post_return_ifa": np.full(n_households, np.nan),
+                "r_kappa": np.full(n_households, np.nan),
+            }
+
+        opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
+        current_return_amount = self.current_illiquid_financial_asset_return_amount()
+        if not np.all(np.isfinite(current_return_amount)):
+            current_return_amount = self.compute_income_from_financial_assets()
+        post_return_ifa = self.ts.current("wealth_other_financial_assets") + current_return_amount
+        investable_surplus = (
+            self.ts.current("expected_income")
+            - np.asarray(target_consumption_total, dtype=float)
+            - np.asarray(scheduled_debt_service, dtype=float)
+        )
+        post_surplus_lfa = self.ts.current("wealth_deposits")
+
+        frm_covariates = None
+        frm_magnitude_coefficients = None
+        population_scale_factor = None
+        net_wealth_scale_divisor = None
+        if wealth_function.target_share_source == "frm_magnitude":
+            tenure_status = self.states["Tenure Status of the Main Residence"]
+            frm_covariates = {
+                "age": self.states["household_head_age"],
+                "household_members_in_employment": self.states["household_members_in_employment"],
+                "investment_attitudes": self.states["Investment Attitudes"],
+                "mortgagor": (tenure_status == 2).astype(float),
+                "owner": (tenure_status == 1).astype(float),
+                "net_wealth": self.compute_net_wealth(),
+            }
+            frm_coefficients = self.states["frm_coefficients"]
+            frm_magnitude_coefficients = frm_coefficients.magnitude_coefficients
+            population_scale_factor = self.states["population_scale_factor"]
+            net_wealth_scale_divisor = frm_coefficients.net_wealth_scale_divisor
+
+        diagnostics = compute_stage4_household_diagnostics(
+            opening_tfa_scale=opening_tfa_scale,
+            post_surplus_lfa=post_surplus_lfa,
+            post_return_ifa=post_return_ifa,
+            investable_surplus=investable_surplus,
+            frm_covariates=frm_covariates,
+            frm_magnitude_coefficients=frm_magnitude_coefficients,
+            population_scale_factor=population_scale_factor,
+            net_wealth_scale_divisor=net_wealth_scale_divisor,
+            portfolio_participates=self.states["portfolio_participates"],
+            target_share_source=wealth_function.target_share_source,
+            default_target_illiquid_share=wealth_function.default_target_illiquid_share,
+            phi_1=wealth_function.phi_1,
+            lambda_kappa=wealth_function.lambda_kappa,
+            fixed_cost_share=wealth_function.fixed_cost_share,
+        )
+        return {
+            "delta_tilde": diagnostics.rebalancing.delta_tilde,
+            "opening_tfa_scale": diagnostics.portfolio_opening_tfa_scale,
+            "post_return_ifa": diagnostics.portfolio_post_return_ifa,
+            "r_kappa": np.full(n_households, self.current_illiquid_financial_asset_return_rate()),
+        }
 
     def update_income_belief_learning_state(
         self,
@@ -1072,6 +1562,7 @@ class Households(Agent):
             "target_consumption_real_net_liquid_assets",
             "target_consumption_real_illiquid_financial_assets",
             "target_consumption_real_housing_wealth",
+            "target_consumption_real_lagged_housing_wealth",
             "target_consumption_real_consumer_debt",
             "target_consumption_rent",
             "target_consumption_mortgage_debt",
@@ -1470,15 +1961,23 @@ class Households(Agent):
         Args:
             current_sales (pd.DataFrame): Property transactions
         """
-        # Target consumption loans to cover immediate financing gaps
-        self.ts.target_consumption_loans.append(
-            self.functions["target_credit"].compute_target_consumption_loans(
-                target_consumption=self.ts.current("target_consumption"),
-                income=self.ts.current("expected_income"),
-                rent=self.ts.current("rent"),
-                wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
-            )
+        # Target consumption loans to cover immediate financing gaps. The legacy
+        # unbounded-gap formula is always computed first; Stage 5 Increment 5
+        # substitutes the DSTI-capped live carrier value only when the
+        # feasibility resolver is enabled, so flag-off behaviour is unchanged
+        # and live_credit_requested gives a like-for-like diagnostic either way.
+        legacy_target_consumption_loans = self.functions["target_credit"].compute_target_consumption_loans(
+            target_consumption=self.ts.current("target_consumption"),
+            income=self.ts.current("expected_income"),
+            rent=self.ts.current("rent"),
+            wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
         )
+        if self.uses_feasibility_resolver:
+            target_consumption_loans = self.current_live_credit_requested()
+        else:
+            target_consumption_loans = legacy_target_consumption_loans
+        self.ts.target_consumption_loans.append(target_consumption_loans)
+        self.ts.live_credit_requested.append(target_consumption_loans.copy())
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])
         # Mortgages
         target_house_price = np.zeros(self.ts.current("n_households"))

@@ -79,6 +79,22 @@ from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.util.get_histogram import get_histogram
 
 
+def _positive_int_or_default(value: object, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _positive_float_or_default(value: object, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if np.isfinite(parsed) and parsed > 0.0 else default
+
+
 class Country:
     """A complete national economy with interacting agents and markets.
 
@@ -1020,6 +1036,8 @@ class Country:
             permanent_income_log_ratio = learning_inputs["permanent_income_log_ratio"]
             uncertainty_delta = learning_inputs["uncertainty_delta"]
 
+        scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
+
         target_consumption = self.households.compute_target_consumption(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             current_cpi=self.economy.current_consumer_price_level(),
@@ -1042,10 +1060,11 @@ class Country:
             lagged_house_price_index=self.economy.ts.prev("hpi")[0],
             real_borrowing_rate=0.0,
             consumer_debt_rate_delta=0.0,
-            mortgage_payment=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
+            mortgage_payment=scheduled_mortgage_payment,
             permanent_income_log_ratio=permanent_income_log_ratio,
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
+            time_unit=self.economy.time_unit,
         )
 
         if replace_current:
@@ -1055,6 +1074,96 @@ class Country:
                 self.households.ts.override_current("saving_rates_histogram", saving_rates_histogram)
         else:
             self.households.ts.target_consumption.append(target_consumption)
+
+        # Stage 5 (feasibility resolver), Increment 0: diagnostics-only liquidity-
+        # shortfall computation. Must run after target_consumption is finalized
+        # above (it consumes that value) and uses the same scheduled mortgage
+        # service already computed for compute_target_consumption, plus the
+        # parallel consumer-loan scheduled-service accessor. Has no effect on
+        # goods or credit demand at this increment. See
+        # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+        # (Increment 0 section).
+        uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
+        self.households.configure_feasibility_resolver(uses_feasibility_resolver)
+        scheduled_consumption_loan_payment = (
+            self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
+        )
+        scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
+        liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
+            target_consumption=self.households.ts.current("target_consumption"),
+            scheduled_debt_service=scheduled_debt_service,
+            replace_current=replace_current,
+        )
+        residual_shortfall_after_lfa = self.households.compute_and_record_liquid_asset_drawdown(
+            liquidity_shortfall=liquidity_shortfall,
+            replace_current=replace_current,
+        )
+        if uses_feasibility_resolver:
+            self.households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+                liquidity_shortfall_before_repair=self.households.ts.current("liquidity_shortfall_before_repair"),
+                funded_from_liquid_assets=self.households.ts.current("funded_from_liquid_assets"),
+                residual_shortfall_after_lfa=self.households.ts.current("residual_shortfall_after_lfa"),
+            )
+            stage5_residual_shortfall = self.households.current_live_post_drawdown_residual()
+        else:
+            self.households.clear_pre_grant_feasible_plan()
+            stage5_residual_shortfall = residual_shortfall_after_lfa
+        stage4_handoff = self.households.current_stage4_handoff_for_stage5(
+            target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service,
+        )
+        self.households.compute_and_record_borrow_vs_sell_choice(
+            residual_shortfall_after_lfa=stage5_residual_shortfall,
+            banks=self.banks,
+            stage4_handoff=stage4_handoff,
+            replace_current=replace_current,
+        )
+        consumer_credit_parameters = getattr(self.configuration, "consumer_credit", {}) or {}
+        consumer_credit_maturity = _positive_int_or_default(
+            consumer_credit_parameters.get(
+                "maturity_quarters", self.banks.parameters.household_consumption_loan_maturity
+            ),
+            self.banks.parameters.household_consumption_loan_maturity,
+        )
+        consumer_credit_dsti_limit = _positive_float_or_default(
+            consumer_credit_parameters.get("dsti_limit", 0.35),
+            0.35,
+        )
+        self.households.compute_and_record_residual_capacity_fallback(
+            preferred_margin_after_lfa=self.households.ts.current("preferred_margin_after_lfa"),
+            preferred_margin_amount=self.households.ts.current("preferred_margin_amount"),
+            banks=self.banks,
+            income=self.households.ts.current("expected_income"),
+            scheduled_mortgage_payment=scheduled_mortgage_payment,
+            consumer_loan_maturity=consumer_credit_maturity,
+            dsti_limit=consumer_credit_dsti_limit,
+            current_ifa=self.households.ts.current("wealth_other_financial_assets"),
+            replace_current=replace_current,
+        )
+        # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
+        # with the DSTI-capped shadow_credit_requested value just computed
+        # above, so compute_target_credit() (called later, from
+        # prepare_credit_market_clearing()) can read it via
+        # current_live_credit_requested() instead of the legacy unbounded-gap
+        # formula. Must run after compute_and_record_residual_capacity_fallback
+        # (which produces shadow_credit_requested) and before
+        # compute_target_credit(). See
+        # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
+        # (Increment 5 section).
+        #
+        # Only the replace_current=False pass matters: per the simulation
+        # orchestration, compute_target_credit() runs exactly once per period,
+        # from prepare_credit_market_clearing(), strictly between this method's
+        # two calls (update_pre_credit_planning_metrics -> ... ->
+        # update_post_labour_planning_metrics). Populating again on the
+        # replace_current=True pass would write a credit_requested value that
+        # is never read before next period's configure_feasibility_resolver()
+        # wipes the carrier -- dead work that could mislead a future reader
+        # into thinking the post-labour refresh matters.
+        if uses_feasibility_resolver and not replace_current:
+            self.households.populate_pre_grant_feasible_plan_credit_requested(
+                credit_requested=self.households.ts.current("shadow_credit_requested"),
+            )
 
         target_investment = self.households.compute_target_investment(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),

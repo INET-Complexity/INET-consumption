@@ -44,6 +44,7 @@ class TestDefaultHouseholdConsumption:
             current_time=0,
             take_consumption_weights_by_income_quantile=False,
             tau_vat=tau_vat,
+            lagged_housing_wealth=np.full(n_households, 120.0),
         )
 
         # Check output shape
@@ -135,6 +136,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.1,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
         }
 
         # CES without substitution data (should fall back to default)
@@ -184,6 +186,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.0,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
             "prices": current_prices,
             "initial_prices": initial_prices,
             "taxes": current_taxes,
@@ -352,6 +355,7 @@ class TestCESHouseholdConsumption:
             "current_time": 0,
             "take_consumption_weights_by_income_quantile": False,
             "tau_vat": 0.0,
+            "lagged_housing_wealth": np.full(n_households, 120.0),
             "prices": prices,
             "initial_prices": prices,
             "taxes": taxes,
@@ -447,7 +451,7 @@ class TestCreditAugmentedHouseholdConsumption:
         consumption_weights_by_income = np.zeros((n_industries, n_households))
         liquid_wealth = np.full(n_households, 999.0)
         illiquid_wealth = np.full(n_households, 999.0)
-        housing_wealth = np.full(n_households, 120.0)
+        housing_wealth = np.full(n_households, 999.0)
         rent = np.full(n_households, 10.0)
         mortgage_debt = np.full(n_households, 999.0)
         mortgage_payment = np.full(n_households, 5.0)
@@ -482,6 +486,7 @@ class TestCreditAugmentedHouseholdConsumption:
             lagged_illiquid_wealth=np.array([30.0]),
             lagged_mortgage_debt=np.array([40.0]),
             lagged_consumption_loan_debt=np.array([10.0]),
+            lagged_housing_wealth=np.array([120.0]),
             lagged_house_price_index=1.0,
         )
 
@@ -501,15 +506,12 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_real_lagged_consumption"], 50.0)
         np.testing.assert_allclose(components["target_consumption_real_net_liquid_assets"], 10.0)
         np.testing.assert_allclose(components["target_consumption_real_illiquid_financial_assets"], 30.0)
-        np.testing.assert_allclose(components["target_consumption_real_housing_wealth"], 120.0)
-        # liquid/illiquid wealth terms are paired with lagged income (80.0, same
-        # period as the lagged wealth stocks) rather than current income, and
-        # housing_wealth (current-period) is paired with current income (100.0) --
-        # see the deflator-consistency comment in CreditAugmentedConsumption._evaluate_target.
-        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.1 * 10.0 / 80.0)
-        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.2 * 30.0 / 80.0)
-        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.3 * 120.0 / 100.0)
-        long_run_log_consumption_to_income = 0.1 * 10.0 / 80.0 + 0.2 * 30.0 / 80.0 + 0.3 * 120.0 / 100.0
+        np.testing.assert_allclose(components["target_consumption_real_housing_wealth"], 999.0)
+        np.testing.assert_allclose(components["target_consumption_real_lagged_housing_wealth"], 120.0)
+        np.testing.assert_allclose(components["target_consumption_liquid_wealth"], 0.01)
+        np.testing.assert_allclose(components["target_consumption_illiquid_wealth"], 0.06)
+        np.testing.assert_allclose(components["target_consumption_housing_wealth"], 0.36)
+        long_run_log_consumption_to_income = 0.01 + 0.06 + 0.36
         partial_adjustment_gap = 0.4 * (np.log(100.0 * np.exp(long_run_log_consumption_to_income)) - np.log(50.0))
         np.testing.assert_allclose(result.sum(axis=1), 50.0 * np.exp(partial_adjustment_gap))
         np.testing.assert_allclose(components["target_consumption_growth_clipped"], 0.0)

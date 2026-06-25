@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
@@ -251,3 +252,100 @@ def test_run_mpc_experiment_rejects_zero_n_jobs(tmp_path, monkeypatch):
         assert "n_jobs must be non-zero" in str(exc)
     else:
         raise AssertionError("n_jobs=0 should be rejected")
+
+
+def test_keep_households_in_stable_effective_labor_state_requires_state_columns():
+    panel = pd.DataFrame(
+        {
+            "household_id": [0],
+            "activity_bracket_t0": [1],
+            "activity_bracket_t1": [1],
+        }
+    )
+
+    with pytest.raises(KeyError, match="worked_hours_"):
+        mpc_runner._keep_households_in_stable_effective_labor_state(panel)
+
+
+def test_run_mpc_experiment_strict_filter_excludes_hours_and_income_switchers(tmp_path, monkeypatch):
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
+    country_cfg = SimpleNamespace(assume_zero_growth=False)
+
+    monkeypatch.setattr(
+        mpc_runner,
+        "_prepare_mpc_inputs",
+        lambda **kwargs: (
+            SimpleNamespace(),
+            data,
+            {"ESP": country_cfg},
+            "ESP",
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "_run_seed_pair",
+        lambda **kwargs: pd.DataFrame({"seed": [kwargs["seed"]] * 3, "household_id": [0, 1, 2]}),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "build_household_mpc_panel",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "seed": [kwargs["metadata"]["seed"].iat[0]] * 3,
+                "household_id": [0, 1, 2],
+                "income": [200.0, 200.0, 200.0],
+                "baseline_consumption_impact": [100.0, 100.0, 100.0],
+                "shock_consumption_impact": [105.0, 105.0, 105.0],
+                "debt_asset_ratio": [0.0, 0.0, 0.0],
+                "real_cmpc_4q": [0.2, 0.2, 0.2],
+                "cmpc_4q": [0.2, 0.2, 0.2],
+                "activity_bracket_t0": [1, 1, 1],
+                "activity_bracket_t1": [1, 1, 1],
+                "activity_bracket_shock_t0": [1, 1, 1],
+                "activity_bracket_shock_t1": [1, 1, 1],
+                "worked_hours_t0": [1.0, 1.0, 1.0],
+                "worked_hours_t1": [1.0, 2.0, 1.0],
+                "worked_hours_shock_t0": [1.0, 1.0, 1.0],
+                "worked_hours_shock_t1": [1.0, 2.0, 1.0],
+                "labor_income_t0": [100.0, 100.0, 100.0],
+                "labor_income_t1": [100.0, 100.0, 100.0],
+                "labor_income_shock_t0": [100.0, 100.0, 100.0],
+                "labor_income_shock_t1": [100.0, 100.0, 120.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(mpc_runner, "add_mpc_bins", lambda panel: panel.assign(income_bin="all"))
+    monkeypatch.setattr(
+        mpc_runner,
+        "filter_mpc_panel",
+        lambda panel, config, required_mpc_columns=None: (
+            panel.copy(),
+            pd.DataFrame({"filter": ["identity"], "before": [len(panel)], "dropped": [0], "remaining": [len(panel)]}),
+        ),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "summarize_mpc_bins",
+        lambda panel, **kwargs: pd.DataFrame(
+            {"rows": [len(panel)], "ids": [",".join(panel["household_id"].astype(str))]}
+        ),
+    )
+
+    paths = mpc_runner.run_mpc_experiment(
+        seeds=[1],
+        t_max=10,
+        shock_period=2,
+        horizon_periods=4,
+        shock_fraction=0.01,
+        output_dir=tmp_path,
+        country_iso3="ESP",
+        apply_mpc_filters=False,
+        stable_effective_labor_state_only=True,
+    )
+
+    panel = pd.read_csv(paths["analysis_dir"] / "household_mpc_panel.csv")
+    summary = pd.read_csv(paths["analysis_dir"] / "household_mpc_summary.csv")
+
+    assert panel["household_id"].tolist() == [0]
+    assert str(summary.loc[0, "ids"]) == "0"

@@ -619,6 +619,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         uses_income_belief_learning: bool = False,
         income_belief_learning_horizon: dict | None = None,
         income_belief_growth_clip_bound: float = 1.0,
+        long_run_mpc_lower_bound: float = 0.0,
+        long_run_mpc_upper_bound: float = 1.0,
         uses_continuous_wealth_calibration: bool = False,
         continuous_wealth_calibration: dict | None = None,
     ):
@@ -631,6 +633,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # Income-belief learning is implemented by this rule only.
         self.uses_income_belief_learning = uses_income_belief_learning
         self.income_belief_growth_clip_bound = income_belief_growth_clip_bound
+        if long_run_mpc_upper_bound < long_run_mpc_lower_bound:
+            raise ValueError(
+                "long_run_mpc_upper_bound must be greater than or equal to "
+                f"long_run_mpc_lower_bound, got "
+                f"({long_run_mpc_lower_bound}, {long_run_mpc_upper_bound})."
+            )
+        self.long_run_mpc_lower_bound = long_run_mpc_lower_bound
+        self.long_run_mpc_upper_bound = long_run_mpc_upper_bound
         self.long_run_intercept = long_run_intercept
         self.real_borrowing_rate_propensity = real_borrowing_rate_propensity
         self.permanent_income_propensity = permanent_income_propensity
@@ -778,24 +788,25 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic
         return alpha_2, gamma_1
 
-    @staticmethod
     def _clip_wealth_drag(
+        self,
         wealth_drag: np.ndarray,
         alpha_2: np.ndarray,
         income_to_consumption_ratio: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Clip the combined wealth-drag term to the interval guaranteeing MPC_LR in [0,1].
+        """Clip the combined wealth-drag term to the interval guaranteeing MPC_LR in configured bounds.
 
-        MPC_LR = (C/y) * [(1-alpha_2) - wealth_drag]. Requiring MPC_LR >= 0 gives
-        wealth_drag <= 1-alpha_2 (the upper bound). Requiring MPC_LR <= 1 gives
-        (1-alpha_2) - wealth_drag <= y/C, i.e. wealth_drag >= (1-alpha_2) - y/C --
-        the lower bound uses income-over-consumption (y/C), not its reciprocal.
-        Backstop only -- the continuous mapping above should already keep most
-        households in range. See cacf-household-group-calibration.md, "Relationship
-        to the Issue #90/#93 Clip".
+        MPC_LR = (C/y) * [(1-alpha_2) - wealth_drag]. Requiring
+        long_run_mpc_lower_bound <= MPC_LR <= long_run_mpc_upper_bound gives
+        (1-alpha_2) - mpc_upper*(y/C) <= wealth_drag <=
+        (1-alpha_2) - mpc_lower*(y/C), where the bound uses
+        income-over-consumption (y/C), not its reciprocal. Backstop only -- the
+        continuous mapping above should already keep most households in range.
+        See cacf-household-group-calibration.md, "Relationship to the Issue
+        #90/#93 Clip".
         """
-        upper = 1.0 - alpha_2
-        lower = upper - income_to_consumption_ratio
+        upper = (1.0 - alpha_2) - self.long_run_mpc_lower_bound * income_to_consumption_ratio
+        lower = (1.0 - alpha_2) - self.long_run_mpc_upper_bound * income_to_consumption_ratio
         clipped = np.clip(wealth_drag, lower, upper)
         clipped_flag = (~np.isclose(wealth_drag, clipped)).astype(float)
         return clipped, clipped_flag

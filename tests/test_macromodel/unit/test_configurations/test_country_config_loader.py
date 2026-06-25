@@ -370,6 +370,8 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     assert params["interest_rate_cashflow_propensity"] == -0.003
     assert params["uncertainty_propensity"] == -0.005
     assert params["partial_adjustment_speed"] == 0.56
+    assert params["long_run_mpc_lower_bound"] == 0.0
+    assert params["long_run_mpc_upper_bound"] == 2.0
     assert params["consumption_smoothing_fraction"] == 0.0
     assert params["consumption_smoothing_window"] == 12
     assert params["elasticity_of_substitution"] == 1.0

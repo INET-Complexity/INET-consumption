@@ -1812,10 +1812,10 @@ class TestFirms:
             production_tax_obligation_preview=np.r_[5.0, np.zeros(n_firms - 1)],
         )
 
-        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 15.0)
-        assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 0.0)
+        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 30.0)
+        assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 1.0)
         assert np.isclose(test_firms.ts.current("target_overdraft_refinance_credit")[0], 0.0)
-        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 15.0)
+        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 29.0)
         assert np.isclose(test_firms.ts.current("target_long_term_credit")[0], 10.0)
         assert np.isclose(test_firms.ts.current("credit_budget_internal_cash")[0], 10.0)
         assert np.isclose(test_firms.ts.current("credit_budget_existing_overdraft")[0], 0.0)
@@ -1826,8 +1826,8 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("credit_budget_interest_obligations")[0], 4.0)
         assert np.isclose(test_firms.ts.current("credit_budget_debt_installments")[0], 1.0)
         assert np.isclose(test_firms.ts.current("credit_budget_hard_obligations")[0], 25.0)
-        assert np.isclose(test_firms.ts.current("credit_budget_cash_after_hard_obligations")[0], 5.0)
-        assert np.isclose(test_firms.ts.current("credit_budget_available_after_hard_and_overdraft")[0], 5.0)
+        assert np.isclose(test_firms.ts.current("credit_budget_cash_after_hard_obligations")[0], -15.0)
+        assert np.isclose(test_firms.ts.current("credit_budget_available_after_hard_and_overdraft")[0], -15.0)
         assert np.isclose(test_firms.ts.current("credit_budget_intermediate_costs")[0], 12.0)
         assert np.isclose(test_firms.ts.current("credit_budget_tfp_costs")[0], 3.0)
         assert np.isclose(test_firms.ts.current("credit_budget_working_capital_budget")[0], 15.0)
@@ -1836,7 +1836,7 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("credit_budget_investment_budget")[0], 10.0)
         assert np.isclose(
             test_firms.ts.current("credit_budget_remaining_internal_finance_after_working_capital")[0],
-            -10.0,
+            -30.0,
         )
         assert np.allclose(test_firms.ts.current("target_short_term_credit")[1:], 0.0)
         assert np.allclose(test_firms.ts.current("target_long_term_credit")[1:], 0.0)
@@ -1845,7 +1845,6 @@ class TestFirms:
         assert np.allclose(
             cash_after_hard,
             test_firms.ts.current("credit_budget_internal_cash")
-            + test_firms.ts.current("expected_sales")
             - test_firms.ts.current("credit_budget_hard_obligations"),
         )
         assert np.allclose(
@@ -1990,6 +1989,36 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 10.0)
         assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 0.0)
 
+    def test__compute_target_credit_rollover_ignores_expected_sales_when_sizing_shortfall(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+
+        test_firms.ts.override_current("deposits", np.r_[10.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("price", np.r_[20.0, np.ones(n_firms - 1)])
+        test_firms.ts.override_current("target_production", np.r_[10.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("corporate_taxes_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("interest_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_intermediate_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_capital_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("planned_technical_investment", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("planned_tfp_investment", np.zeros(n_firms))
+
+        test_firms.compute_target_credit(
+            estimated_growth=0.0,
+            estimated_inflation=0.0,
+            wage_obligation_preview=np.r_[7.0, np.zeros(n_firms - 1)],
+            production_tax_obligation_preview=np.zeros(n_firms),
+            interest_obligation_preview=np.r_[5.0, np.zeros(n_firms - 1)],
+            loan_interest_obligation_preview=np.r_[5.0, np.zeros(n_firms - 1)],
+            debt_installment_preview=np.r_[8.0, np.zeros(n_firms - 1)],
+        )
+
+        assert np.isclose(test_firms.ts.current("expected_sales")[0], 200.0)
+        assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 10.0)
+        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 10.0)
+        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 0.0)
+
     def test__compute_target_credit_includes_non_principal_hard_shortfall_in_ordinary_st(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries
@@ -2019,6 +2048,66 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 0.0)
         assert np.isclose(test_firms.ts.current("target_overdraft_refinance_credit")[0], 0.0)
         assert np.isclose(test_firms.ts.current("target_long_term_credit")[0], 0.0)
+
+    def test__compute_target_credit_ordinary_st_ignores_expected_sales_when_sizing_shortfall(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+
+        test_firms.ts.override_current("deposits", np.r_[5.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("price", np.r_[20.0, np.ones(n_firms - 1)])
+        test_firms.ts.override_current("target_production", np.r_[10.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("corporate_taxes_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("interest_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_intermediate_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_capital_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("planned_technical_investment", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("planned_tfp_investment", np.zeros(n_firms))
+
+        test_firms.compute_target_credit(
+            estimated_growth=0.0,
+            estimated_inflation=0.0,
+            wage_obligation_preview=np.r_[7.0, np.zeros(n_firms - 1)],
+            production_tax_obligation_preview=np.zeros(n_firms),
+            interest_obligation_preview=np.zeros(n_firms),
+            debt_installment_preview=np.zeros(n_firms),
+        )
+
+        assert np.isclose(test_firms.ts.current("expected_sales")[0], 200.0)
+        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 2.0)
+        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 2.0)
+        assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 0.0)
+        assert np.isclose(test_firms.ts.current("target_overdraft_refinance_credit")[0], 0.0)
+
+    def test__compute_target_credit_overdraft_refinance_ignores_expected_sales(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+
+        test_firms.ts.override_current("deposits", np.r_[-100.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("price", np.r_[20.0, np.ones(n_firms - 1)])
+        test_firms.ts.override_current("target_production", np.r_[10.0, np.zeros(n_firms - 1)])
+        test_firms.ts.override_current("corporate_taxes_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("interest_paid", np.zeros(n_firms))
+        test_firms.ts.override_current("debt_installments", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_intermediate_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("unconstrained_target_capital_inputs_costs", np.zeros(n_firms))
+        test_firms.ts.override_current("planned_technical_investment", np.zeros((n_firms, n_industries)))
+        test_firms.ts.override_current("planned_tfp_investment", np.zeros(n_firms))
+
+        test_firms.compute_target_credit(
+            estimated_growth=0.0,
+            estimated_inflation=0.0,
+            wage_obligation_preview=np.zeros(n_firms),
+            production_tax_obligation_preview=np.zeros(n_firms),
+            interest_obligation_preview=np.zeros(n_firms),
+            debt_installment_preview=np.zeros(n_firms),
+        )
+
+        assert np.isclose(test_firms.ts.current("expected_sales")[0], 200.0)
+        assert np.isclose(test_firms.ts.current("target_overdraft_refinance_credit")[0], 100.0)
+        assert np.isclose(test_firms.ts.current("target_short_term_credit")[0], 100.0)
+        assert np.isclose(test_firms.ts.current("target_debt_rollover_credit")[0], 0.0)
+        assert np.isclose(test_firms.ts.current("ordinary_target_short_term_credit")[0], 0.0)
 
     def test__plan_firm_debt_settlement_keeps_rollover_and_refinance_ring_fenced(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

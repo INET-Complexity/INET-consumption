@@ -89,6 +89,8 @@ desired_consumption:
     interest_rate_cashflow_propensity: -0.003
     uncertainty_propensity: -0.005
     partial_adjustment_speed: 0.56
+    long_run_mpc_lower_bound: 0.0
+    long_run_mpc_upper_bound: 2.0
     price_floor: 1.0e-12
     income_floor: 1.0e-12
     consumption_floor: 1.0e-12

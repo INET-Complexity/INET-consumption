@@ -2136,8 +2136,8 @@ def plot_output(
     line_color="#1f77b4",
     df_compare=None,
     compare_line_color="#d62728",
-    base_name="baseline",
-    compare_name="comparison",
+    base_name="scenario",
+    compare_name="benchmark",
     base_height=200,
     base_width=300,
 ):

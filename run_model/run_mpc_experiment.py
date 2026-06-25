@@ -293,9 +293,7 @@ def _keep_households_staying_in_activity_bracket(
     added upstream (typically in ``build_household_mpc_panel`` or the metadata
     builder).
     """
-    activity_bracket_cols = sorted(
-        column for column in panel.columns if column.startswith(activity_bracket_prefix)
-    )
+    activity_bracket_cols = sorted(column for column in panel.columns if column.startswith(activity_bracket_prefix))
     if not activity_bracket_cols:
         raise KeyError(
             f"No columns starting with {activity_bracket_prefix!r} were found in the MPC panel. "

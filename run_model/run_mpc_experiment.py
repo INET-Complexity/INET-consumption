@@ -24,12 +24,13 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
         sys.path.insert(0, path)
 
 from src.mpc_analysis import (  # noqa: E402
+    HOUSEHOLD_LABOR_STATE_COLUMNS,
     MPC_PLOT_MEASURES,
     MPCFilterConfig,
     add_mpc_bins,
     build_household_mpc_panel,
     filter_mpc_panel,
-    household_activity_bracket,
+    make_household_labor_state_snapshot,
     make_household_metadata,
     period_to_year_month,
     summarize_mpc_bins,
@@ -47,6 +48,7 @@ DEFAULT_T_MAX = 50
 DEFAULT_SHOCK_PERIOD = 20
 DEFAULT_HORIZON_PERIODS = 4
 DEFAULT_SHOCK_FRACTION = 0.01
+STATE_BIN_ROUND_DECIMALS = 8
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -140,11 +142,11 @@ def _run_one(
     ``shock_period``: the state immediately before the shock affects realised row
     ``shock_period + 1``.
 
-    Activity bracket is also captured at every HDF5 row in the MPC measurement
-    window (``shock_period`` through ``shock_period + horizon_periods``), as
-    ``activity_bracket_t0`` .. ``activity_bracket_t{horizon_periods}``. Activity
-    Status is a live model state, not a saved HDF5 series, so it can only be
-    captured via posthook while the simulation runs.
+    Household labour-state snapshots are also captured at every HDF5 row in the
+    MPC measurement window (``shock_period`` through ``shock_period +
+    horizon_periods``): activity bracket, aggregated worked hours, and
+    household labour income. These are live model states, not fully saved HDF5
+    series, so they must be captured via posthook while the simulation runs.
     """
     configuration = SimulationConfiguration.model_validate(
         {
@@ -157,7 +159,14 @@ def _run_one(
 
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
-    activity_bracket_columns: dict[str, np.ndarray] = {}
+    window_state_columns: dict[str, dict[str, np.ndarray]] = {
+        state_name: {} for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS
+    }
+
+    def capture_household_labor_state(country, *, offset: int) -> None:
+        snapshot = make_household_labor_state_snapshot(country)
+        for state_name, values in snapshot.items():
+            window_state_columns[state_name][f"{state_name}_t{offset}"] = values
 
     def capture_window_metadata(simulation: Simulation, t: int, _year: int, _month: int) -> None:
         # Posthooks see the realised row for iteration ``t``. ``offset`` counts
@@ -169,12 +178,12 @@ def _run_one(
         country = simulation.countries[country_code]
         if offset == 0:
             metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=pre_shock_row))
-        activity_bracket_columns[f"activity_bracket_t{offset}"] = household_activity_bracket(country)
+        capture_household_labor_state(country, offset=offset)
 
     if shock_period == 0:
         country = model.countries[country_code]
         metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=0))
-        activity_bracket_columns["activity_bracket_t0"] = household_activity_bracket(country)
+        capture_household_labor_state(country, offset=0)
         if horizon_periods > 0:
             model.posthooks.append(capture_window_metadata)
     else:
@@ -194,15 +203,17 @@ def _run_one(
     model.run()
     if not metadata:
         raise ValueError("Pre-shock metadata was not captured; check shock_period and t_max.")
-    if len(activity_bracket_columns) != horizon_periods + 1:
-        raise ValueError(
-            f"Expected {horizon_periods + 1} activity bracket snapshots (t0..t{horizon_periods}); "
-            f"captured {len(activity_bracket_columns)}. Check shock_period, horizon_periods, and t_max."
-        )
+    for state_name, state_columns in window_state_columns.items():
+        if len(state_columns) != horizon_periods + 1:
+            raise ValueError(
+                f"Expected {horizon_periods + 1} {state_name} snapshots (t0..t{horizon_periods}); "
+                f"captured {len(state_columns)}. Check shock_period, horizon_periods, and t_max."
+            )
 
     result = metadata[0]
-    for column, values in activity_bracket_columns.items():
-        result[column] = values
+    for state_columns in window_state_columns.values():
+        for column, values in state_columns.items():
+            result[column] = values
 
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
@@ -226,12 +237,10 @@ def _run_seed_pair(
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed.
 
-    Activity-bracket columns from the shock run are merged in as
-    ``activity_bracket_shock_t*`` alongside the baseline run's
-    ``activity_bracket_t*`` columns (both share the ``activity_bracket_`` prefix
-    used by ``_keep_households_staying_in_activity_bracket``), so callers can
-    detect households whose activity bracket changes in either the factual or
-    counterfactual path during the MPC window.
+    Labour-state columns from the shock run are merged in as
+    ``*_shock_t*`` alongside the baseline run's ``*_t*`` columns so callers can
+    detect households whose activity bracket, worked hours, or labour income
+    changes in either the factual or counterfactual path during the MPC window.
     """
     baseline_metadata = _run_one(
         data=data,
@@ -259,20 +268,57 @@ def _run_seed_pair(
         horizon_periods=horizon_periods,
         data_paths=data_paths,
     )
-    # Renamed to "activity_bracket_shock_t*" (not "shock_activity_bracket_t*") so the
-    # default "activity_bracket_" prefix used for filtering matches both baseline and
-    # shock columns.
-    activity_bracket_cols = [column for column in shock_metadata.columns if column.startswith("activity_bracket_t")]
-    shock_activity_bracket = shock_metadata[["household_id", *activity_bracket_cols]].rename(
+    shock_state_columns = [
+        column
+        for column in shock_metadata.columns
+        if any(column.startswith(f"{state_name}_t") for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS)
+    ]
+    shock_state_metadata = shock_metadata[["household_id", *shock_state_columns]].rename(
         columns={
-            column: f"activity_bracket_shock_{column.removeprefix('activity_bracket_')}"
-            for column in activity_bracket_cols
+            column: f"{column.split('_t', maxsplit=1)[0]}_shock_t{column.split('_t', maxsplit=1)[1]}"
+            for column in shock_state_columns
         }
     )
-    return baseline_metadata.merge(shock_activity_bracket, on="household_id", how="left")
+    return baseline_metadata.merge(shock_state_metadata, on="household_id", how="left")
 
 
-# Helper to keep only households whose activity bracket never switches during the MPC window
+def _resolve_identification_filter_mode(
+    *,
+    stay_in_activity_bracket_only: bool,
+    stable_effective_labor_state_only: bool,
+) -> str:
+    """Return the active opt-in MPC identification filter mode."""
+    if stay_in_activity_bracket_only and stable_effective_labor_state_only:
+        raise ValueError(
+            "Choose at most one MPC identification filter: "
+            "--stay-in-activity-bracket-only or --stable-effective-labor-state-only."
+        )
+    if stable_effective_labor_state_only:
+        return "effective_labor_state"
+    if stay_in_activity_bracket_only:
+        return "activity_bracket"
+    return "none"
+
+
+def _snapshot_columns(panel: pd.DataFrame, *, prefix: str, mode_label: str) -> list[str]:
+    columns = sorted(column for column in panel.columns if column.startswith(prefix))
+    if not columns:
+        raise KeyError(
+            f"No columns starting with {prefix!r} were found in the MPC panel. "
+            f"Add the required {mode_label} state snapshots upstream, then re-run the MPC experiment."
+        )
+    return columns
+
+
+def _rounded_global_bin_codes(frame: pd.DataFrame, *, round_decimals: int) -> pd.DataFrame:
+    numeric = frame.apply(pd.to_numeric, errors="coerce").round(round_decimals)
+    stacked = numeric.stack().dropna()
+    if stacked.empty:
+        raise ValueError("Cannot derive MPC state bins from entirely missing state snapshots.")
+    value_map = {value: code for code, value in enumerate(np.sort(stacked.unique()))}
+    return numeric.apply(lambda column: column.map(value_map).astype("Int64"))
+
+
 def _keep_households_staying_in_activity_bracket(
     panel: pd.DataFrame, activity_bracket_prefix: str = "activity_bracket_"
 ) -> pd.DataFrame:
@@ -293,16 +339,72 @@ def _keep_households_staying_in_activity_bracket(
     added upstream (typically in ``build_household_mpc_panel`` or the metadata
     builder).
     """
-    activity_bracket_cols = sorted(column for column in panel.columns if column.startswith(activity_bracket_prefix))
-    if not activity_bracket_cols:
-        raise KeyError(
-            f"No columns starting with {activity_bracket_prefix!r} were found in the MPC panel. "
-            "Add activity-bracket columns upstream, then re-run with stay_in_activity_bracket_only=True."
-        )
+    activity_bracket_cols = _snapshot_columns(
+        panel,
+        prefix=activity_bracket_prefix,
+        mode_label="activity-bracket",
+    )
 
     status = panel[activity_bracket_cols].fillna(-1).astype(int)
     stay_mask = status.nunique(axis=1).eq(1) & status.iloc[:, 0].ne(-1)
     return panel.loc[stay_mask].copy()
+
+
+def _keep_households_in_stable_effective_labor_state(panel: pd.DataFrame) -> pd.DataFrame:
+    """Keep households stable in activity, worked hours, and labour income.
+
+    Identification keeps only households whose labour micro-state is unchanged
+    across baseline and shock paths over the MPC window, so the estimated
+    consumption response is not contaminated by endogenous labour adjustment.
+
+    Worked-hours and labour-income bins are exact rounded-value state bins built
+    from the full baseline-plus-shock MPC window. This is intentionally stricter
+    than quantile binning: any meaningful within-window labour-state change gets
+    a different bin code and the household is excluded.
+    """
+    activity_columns = _snapshot_columns(
+        panel,
+        prefix="activity_bracket_",
+        mode_label="effective-labor-state",
+    )
+    worked_hours_columns = _snapshot_columns(
+        panel,
+        prefix="worked_hours_",
+        mode_label="effective-labor-state",
+    )
+    labor_income_columns = _snapshot_columns(
+        panel,
+        prefix="labor_income_",
+        mode_label="effective-labor-state",
+    )
+
+    result = panel.copy()
+    worked_hours_bins = _rounded_global_bin_codes(
+        result[worked_hours_columns],
+        round_decimals=STATE_BIN_ROUND_DECIMALS,
+    )
+    labor_income_bins = _rounded_global_bin_codes(
+        result[labor_income_columns],
+        round_decimals=STATE_BIN_ROUND_DECIMALS,
+    )
+    result[[f"{column}_bin" for column in worked_hours_columns]] = worked_hours_bins.set_axis(
+        [f"{column}_bin" for column in worked_hours_columns],
+        axis=1,
+    )
+    result[[f"{column}_bin" for column in labor_income_columns]] = labor_income_bins.set_axis(
+        [f"{column}_bin" for column in labor_income_columns],
+        axis=1,
+    )
+
+    activity_state = result[activity_columns].fillna(-1).astype(int)
+    worked_hours_state = result[[f"{column}_bin" for column in worked_hours_columns]]
+    labor_income_state = result[[f"{column}_bin" for column in labor_income_columns]]
+
+    activity_stable = activity_state.nunique(axis=1).eq(1) & activity_state.iloc[:, 0].ne(-1)
+    worked_hours_stable = worked_hours_state.notna().all(axis=1) & worked_hours_state.nunique(axis=1).eq(1)
+    labor_income_stable = labor_income_state.notna().all(axis=1) & labor_income_state.nunique(axis=1).eq(1)
+    stable_mask = activity_stable & worked_hours_stable & labor_income_stable
+    return result.loc[stable_mask].copy()
 
 
 def run_mpc_experiment(
@@ -327,6 +429,7 @@ def run_mpc_experiment(
     apply_mpc_filters: bool = True,
     mpc_filter_config: MPCFilterConfig | None = None,
     stay_in_activity_bracket_only: bool = False,
+    stable_effective_labor_state_only: bool = False,
     activity_bracket_prefix: str = "activity_bracket_",
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
@@ -340,6 +443,11 @@ def run_mpc_experiment(
     active) switches at any point across the MPC measurement window, in either
     the baseline or shock run. Households that are stable in any one bracket
     throughout are kept.
+
+    Setting ``stable_effective_labor_state_only=True`` applies a stricter MPC
+    identification rule: keep only households whose activity bracket,
+    aggregated worked-hours bin, and labour-income bin are each constant across
+    the full baseline-plus-shock MPC window.
     """
     seed_list = _validate_unique_seeds(seeds)
     if n_jobs == 0:
@@ -350,6 +458,10 @@ def run_mpc_experiment(
         raise ValueError(f"mpc_plot_measure must be one of {sorted(MPC_PLOT_MEASURES)}.")
     if shock_period < 0 or shock_period >= t_max:
         raise ValueError("shock_period must satisfy 0 <= shock_period < t_max.")
+    identification_filter_mode = _resolve_identification_filter_mode(
+        stay_in_activity_bracket_only=stay_in_activity_bracket_only,
+        stable_effective_labor_state_only=stable_effective_labor_state_only,
+    )
     output_dir = Path(output_dir)
     shock_row = shock_period + 1
     if shock_row + horizon_periods > t_max + 1:
@@ -423,11 +535,13 @@ def run_mpc_experiment(
         panels.append(panel)
 
     raw_household_panel = add_mpc_bins(pd.concat(panels, ignore_index=True))
-    if stay_in_activity_bracket_only:
+    if identification_filter_mode == "activity_bracket":
         raw_household_panel = _keep_households_staying_in_activity_bracket(
             raw_household_panel,
             activity_bracket_prefix=activity_bracket_prefix,
         )
+    elif identification_filter_mode == "effective_labor_state":
+        raw_household_panel = _keep_households_in_stable_effective_labor_state(raw_household_panel)
     filter_config = mpc_filter_config or MPCFilterConfig(enabled=apply_mpc_filters)
     if not apply_mpc_filters and filter_config.enabled:
         filter_config = MPCFilterConfig(enabled=False)
@@ -498,6 +612,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--stable-effective-labor-state-only",
+        action="store_true",
+        help=(
+            "Drop households unless their activity bracket, worked-hours state, and labour-income state are "
+            "all stable throughout the MPC window in both baseline and shock paths."
+        ),
+    )
+    parser.add_argument(
         "--activity-bracket-prefix",
         default="activity_bracket_",
         help="Column prefix used to identify period-by-period activity bracket indicators in the MPC panel.",
@@ -509,6 +631,10 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     parsed = _parse_args()
+    identification_filter_mode = _resolve_identification_filter_mode(
+        stay_in_activity_bracket_only=parsed.stay_in_activity_bracket_only,
+        stable_effective_labor_state_only=parsed.stable_effective_labor_state_only,
+    )
     outputs = run_mpc_experiment(
         seeds=parsed.seeds,
         t_max=parsed.t_max,
@@ -529,6 +655,12 @@ if __name__ == "__main__":
         cpi_source=parsed.cpi_source,
         apply_mpc_filters=not parsed.no_mpc_filters,
         stay_in_activity_bracket_only=parsed.stay_in_activity_bracket_only,
+        stable_effective_labor_state_only=parsed.stable_effective_labor_state_only,
         activity_bracket_prefix=parsed.activity_bracket_prefix,
     )
-    print({name: str(path) for name, path in outputs.items()})
+    print(
+        {
+            "identification_filter_mode": identification_filter_mode,
+            **{name: str(path) for name, path in outputs.items()},
+        }
+    )

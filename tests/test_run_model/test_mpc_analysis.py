@@ -4,6 +4,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pytest
 
 RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
@@ -16,6 +17,7 @@ from src.mpc_analysis import (  # noqa: E402
     build_household_mpc_panel,
     filter_mpc_panel,
     make_distribution_plot,
+    plot_mpc_panel,
     period_to_year_month,
     read_household_target_consumption_sum,
     summarize_mpc_bins,
@@ -470,6 +472,88 @@ def test_make_distribution_plot_can_use_box_only_traces():
     fig = make_distribution_plot(panel, variable="income", plot_kind="box")
 
     assert {trace.type for trace in fig.data} == {"box"}
+
+
+def test_plot_mpc_panel_can_save_boxplots(tmp_path, monkeypatch):
+    panel = pd.DataFrame(
+        {
+            "income_bin": ["Q1", "Q1", "Q2", "Q2"],
+            "income": [1, 2, 3, 4],
+            "cmpc_4q": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+    saved_heights = []
+
+    def fake_write_html(self, path, *args, **kwargs):
+        saved_heights.append(self.layout.height)
+        Path(path).write_text("<html></html>")
+
+    monkeypatch.setattr(go.Figure, "write_html", fake_write_html)
+
+    figures = plot_mpc_panel(
+        panel,
+        variables=["income"],
+        mpc_columns=["cmpc_4q"],
+        plot_kind="box",
+        output_dir=tmp_path,
+        show=False,
+    )
+
+    assert len(figures) == 1
+    assert (tmp_path / "cmpc_4q_by_income.html").exists()
+    assert saved_heights == [480]
+
+
+def test_plot_mpc_panel_can_save_png_boxplots(tmp_path, monkeypatch):
+    panel = pd.DataFrame(
+        {
+            "income_bin": ["Q1", "Q1", "Q2", "Q2"],
+            "income": [1, 2, 3, 4],
+            "cmpc_4q": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+
+    monkeypatch.setattr("src.mpc_analysis.importlib.util.find_spec", lambda name: object())
+
+    def fake_write_image(self, path, *args, **kwargs):
+        assert self.layout.height == 480
+        Path(path).write_bytes(b"png")
+
+    monkeypatch.setattr(go.Figure, "write_image", fake_write_image)
+
+    figures = plot_mpc_panel(
+        panel,
+        variables=["income"],
+        mpc_columns=["cmpc_4q"],
+        plot_kind="box",
+        output_dir=tmp_path,
+        output_format="png",
+        show=False,
+    )
+
+    assert len(figures) == 1
+    assert (tmp_path / "cmpc_4q_by_income.png").exists()
+
+
+def test_plot_mpc_panel_rejects_png_export_without_kaleido(tmp_path, monkeypatch):
+    panel = pd.DataFrame(
+        {
+            "income_bin": ["Q1", "Q2"],
+            "income": [1, 2],
+            "cmpc_4q": [0.1, 0.2],
+        }
+    )
+    monkeypatch.setattr("src.mpc_analysis.importlib.util.find_spec", lambda name: None)
+
+    with pytest.raises(RuntimeError, match="kaleido"):
+        plot_mpc_panel(
+            panel,
+            variables=["income"],
+            mpc_columns=["cmpc_4q"],
+            output_dir=tmp_path,
+            output_format="png",
+            show=False,
+        )
 
 
 def test_build_household_mpc_panel_requires_complete_household_ids(tmp_path):

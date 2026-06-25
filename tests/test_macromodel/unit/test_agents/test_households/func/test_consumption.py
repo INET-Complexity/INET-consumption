@@ -886,25 +886,24 @@ class TestCreditAugmentedHouseholdConsumption:
         # below for the end-to-end regression guard on the call site itself
         # (a second review round found this test alone would not have caught
         # the y/C-vs-C/y inversion bug, since the bug was at the call site).
+        consumption_obj = CreditAugmentedConsumption()
         alpha_2 = np.array([0.4])
         income_to_consumption_ratio = np.array([50.0 / 200.0])
         upper_expected = 1.0 - 0.4
         lower_expected = upper_expected - 0.25
 
         below_lower = np.array([lower_expected - 1.0])
-        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(below_lower, alpha_2, income_to_consumption_ratio)
+        clipped, flag = consumption_obj._clip_wealth_drag(below_lower, alpha_2, income_to_consumption_ratio)
         np.testing.assert_allclose(clipped, lower_expected)
         assert flag[0] == 1.0
 
         above_upper = np.array([upper_expected + 1.0])
-        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(above_upper, alpha_2, income_to_consumption_ratio)
+        clipped, flag = consumption_obj._clip_wealth_drag(above_upper, alpha_2, income_to_consumption_ratio)
         np.testing.assert_allclose(clipped, upper_expected)
         assert flag[0] == 1.0
 
         within_bounds = np.array([(lower_expected + upper_expected) / 2.0])
-        clipped, flag = CreditAugmentedConsumption._clip_wealth_drag(
-            within_bounds, alpha_2, income_to_consumption_ratio
-        )
+        clipped, flag = consumption_obj._clip_wealth_drag(within_bounds, alpha_2, income_to_consumption_ratio)
         np.testing.assert_allclose(clipped, within_bounds)
         assert flag[0] == 0.0
 

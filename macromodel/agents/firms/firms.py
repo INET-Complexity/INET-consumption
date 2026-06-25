@@ -1602,10 +1602,10 @@ class Firms(Agent):
             planned_technical_investment_costs=planned_technical_investment_costs,
             planned_tfp_investment_costs=planned_tfp_investment_costs,
         )
-        cash_after_hard_obligations = internal_cash + expected_sales - hard_obligations
+        cash_after_hard_obligations = internal_cash - hard_obligations
         non_debt_service_hard_obligation_shortfall = np.maximum(
             0.0,
-            non_debt_service_hard_obligations - (internal_cash + expected_sales),
+            non_debt_service_hard_obligations - internal_cash,
         )
         cash_after_non_debt_service_hard_obligations = internal_cash - non_debt_service_hard_obligations
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft

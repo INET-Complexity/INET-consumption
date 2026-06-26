@@ -523,6 +523,45 @@ def test_build_permanent_income_log_ratio_decomposition_df_reads_saved_household
     assert result.attrs["reducer"] == "mean"
 
 
+def test_build_permanent_income_log_ratio_decomposition_df_can_include_log_real_pc_income(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        country_group = handle.create_group("ESP")
+        household_group = country_group.create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+        household_group.create_dataset(
+            "income",
+            data=np.array([[100.0, 100.0], [110.0, 110.0]]),
+        )
+        country_group.create_group("economy").create_dataset(
+            "cpi_fixed_basket",
+            data=np.array([[1.0], [1.0]]),
+        )
+        country_group.create_group("individuals").create_dataset(
+            "n_individuals",
+            data=np.array([[2.0, 2.0]]),
+        )
+
+    result = nw.build_permanent_income_log_ratio_decomposition_df(
+        h5_path,
+        reducer="mean",
+        include_log_real_pc_income=True,
+    )
+
+    assert result["log_real_pc_income_t"].tolist() == [np.log(100.0), np.log(110.0)]
+
+
 def test_plot_permanent_income_log_ratio_decomposition_returns_three_traces(tmp_path):
     h5_path = tmp_path / "simulation_ESP.h5"
     with h5py.File(h5_path, "w") as handle:
@@ -576,6 +615,49 @@ def test_plot_permanent_income_log_ratio_decomposition_can_select_subset_of_colu
         "ln(y^p / y)",
         "common_log_ratio",
     ]
+
+
+def test_plot_permanent_income_log_ratio_decomposition_can_plot_log_real_pc_income(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        country_group = handle.create_group("ESP")
+        household_group = country_group.create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+        household_group.create_dataset(
+            "income",
+            data=np.array([[100.0, 100.0], [110.0, 110.0]]),
+        )
+        country_group.create_group("economy").create_dataset(
+            "cpi_fixed_basket",
+            data=np.array([[1.0], [1.0]]),
+        )
+        country_group.create_group("individuals").create_dataset(
+            "n_individuals",
+            data=np.array([[2.0, 2.0]]),
+        )
+
+    fig = nw.plot_permanent_income_log_ratio_decomposition(
+        h5_path,
+        columns=["ln_y_p_over_p", "log_real_pc_income_t"],
+        show=False,
+    )
+
+    assert [trace.name for trace in fig.data] == [
+        "ln(y^p / y)",
+        "log_real_pc_income_t",
+    ]
+    np.testing.assert_allclose(fig.data[1].y, np.array([np.log(100.0), np.log(110.0)]))
 
 
 def test_plot_permanent_income_log_ratio_decomposition_rejects_unknown_columns(tmp_path):

@@ -93,6 +93,7 @@ PERMANENT_INCOME_LOG_RATIO_LABELS = {
     "ln_y_p_over_p": "ln(y^p / y)",
     "zeta_times_posterior_mean": "zeta * posterior_mean",
     "common_log_ratio": "common_log_ratio",
+    "log_real_pc_income_t": "log_real_pc_income_t",
 }
 
 
@@ -130,11 +131,38 @@ def _resolve_single_country_code(handle: h5py.File, country_code: str | None) ->
     return str(country_codes[0])
 
 
+def _read_log_real_pc_income_series_from_h5(handle: h5py.File, country_code: str) -> np.ndarray:
+    try:
+        income = np.asarray(handle[f"{country_code}/households/income"], dtype=float)
+        cpi_fixed_basket = np.asarray(handle[f"{country_code}/economy/cpi_fixed_basket"], dtype=float).reshape(-1)
+        n_individuals = np.asarray(handle[f"{country_code}/individuals/n_individuals"], dtype=float).reshape(-1)
+    except KeyError as exc:
+        raise KeyError(
+            "HDF5 is missing one of the datasets required to reconstruct log_real_pc_income_t: "
+            "households/income, economy/cpi_fixed_basket, individuals/n_individuals."
+        ) from exc
+
+    if income.ndim != 2:
+        raise ValueError(f"Expected 2D household income time series, got shape {income.shape}.")
+
+    total_income_history = income.sum(axis=1)
+    if total_income_history.size != cpi_fixed_basket.size or total_income_history.size != n_individuals.size:
+        raise ValueError(
+            "income, cpi_fixed_basket, and n_individuals histories must have matching lengths to reconstruct "
+            "log_real_pc_income_t."
+        )
+
+    real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals
+    rebased_income_index = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
+    return np.log(rebased_income_index)
+
+
 def build_permanent_income_log_ratio_decomposition_df(
     source: str | Path | SimulationRunResult | BenchmarkResult,
     *,
     country_code: str | None = None,
     reducer: str = "mean",
+    include_log_real_pc_income: bool = False,
 ) -> pd.DataFrame:
     """Aggregate saved household ``ln(y^p / y)`` diagnostics into notebook-friendly series."""
     if reducer not in {"mean", "median"}:
@@ -166,6 +194,12 @@ def build_permanent_income_log_ratio_decomposition_df(
                 )
             series_by_name[output_name] = reducer_fn(values, axis=1)
 
+        if include_log_real_pc_income:
+            series_by_name["log_real_pc_income_t"] = _read_log_real_pc_income_series_from_h5(
+                handle,
+                resolved_country_code,
+            )
+
     decomposition_df = pd.DataFrame(series_by_name, index=pd.RangeIndex(expected_shape[0], name="period"))
     decomposition_df.attrs["country_code"] = resolved_country_code
     decomposition_df.attrs["model_h5_path"] = str(model_h5_path)
@@ -183,12 +217,8 @@ def plot_permanent_income_log_ratio_decomposition(
     show: bool = True,
 ) -> go.Figure:
     """Plot the aggregate ``ln(y^p / y) = zeta * posterior_mean + common_log_ratio`` decomposition."""
-    decomposition_df = build_permanent_income_log_ratio_decomposition_df(
-        source,
-        country_code=country_code,
-        reducer=reducer,
-    )
-    selected_columns = list(PERMANENT_INCOME_LOG_RATIO_LABELS) if columns is None else list(columns)
+    default_columns = list(PERMANENT_INCOME_LOG_RATIO_DATASETS)
+    selected_columns = default_columns if columns is None else list(columns)
     if not selected_columns:
         raise ValueError("columns must contain at least one decomposition series.")
     unknown_columns = [column for column in selected_columns if column not in PERMANENT_INCOME_LOG_RATIO_LABELS]
@@ -200,6 +230,13 @@ def plot_permanent_income_log_ratio_decomposition(
             + ", ".join(PERMANENT_INCOME_LOG_RATIO_LABELS)
             + "."
         )
+
+    decomposition_df = build_permanent_income_log_ratio_decomposition_df(
+        source,
+        country_code=country_code,
+        reducer=reducer,
+        include_log_real_pc_income="log_real_pc_income_t" in selected_columns,
+    )
 
     fig = go.Figure()
     for column in selected_columns:

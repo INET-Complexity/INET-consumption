@@ -147,6 +147,8 @@ def create_households_timeseries(
         target_consumption_real_lagged_house_price=np.zeros(len(data)),
         target_consumption_real_borrowing_rate=np.zeros(len(data)),
         target_consumption_permanent_income_log_ratio=np.zeros(len(data)),
+        target_consumption_permanent_income_log_ratio_individual=np.zeros(len(data)),
+        target_consumption_permanent_income_log_ratio_common=np.zeros(len(data)),
         target_consumption_consumer_debt_rate_delta=np.zeros(len(data)),
         target_consumption_interest_rate_cashflow_index=np.zeros(len(data)),
         target_consumption_uncertainty_delta=np.zeros(len(data)),

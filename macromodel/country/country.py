@@ -1026,6 +1026,8 @@ class Country:
         # rule does not opt in (default / non-FRA), both stay None and
         # compute_target_consumption reproduces the prior zero behaviour exactly.
         permanent_income_log_ratio = None
+        permanent_income_log_ratio_individual = None
+        permanent_income_log_ratio_common = None
         uncertainty_delta = None
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             common_log_ratio, common_forecast_variance = self._common_permanent_income_terms()
@@ -1034,6 +1036,8 @@ class Country:
                 common_forecast_variance=common_forecast_variance,
             )
             permanent_income_log_ratio = learning_inputs["permanent_income_log_ratio"]
+            permanent_income_log_ratio_individual = learning_inputs["permanent_income_log_ratio_individual"]
+            permanent_income_log_ratio_common = learning_inputs["permanent_income_log_ratio_common"]
             uncertainty_delta = learning_inputs["uncertainty_delta"]
 
         scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
@@ -1062,6 +1066,8 @@ class Country:
             consumer_debt_rate_delta=0.0,
             mortgage_payment=scheduled_mortgage_payment,
             permanent_income_log_ratio=permanent_income_log_ratio,
+            permanent_income_log_ratio_individual=permanent_income_log_ratio_individual,
+            permanent_income_log_ratio_common=permanent_income_log_ratio_common,
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
             time_unit=self.economy.time_unit,

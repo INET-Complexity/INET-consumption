@@ -362,6 +362,14 @@ class TestCountry:
         test_country._set_household_target_demand(replace_current=True)
         assert len(test_country.households.ts.historic("formula_implied_mpc")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption_permanent_income")) == diagnostic_len
+        assert (
+            len(test_country.households.ts.historic("target_consumption_permanent_income_log_ratio_individual"))
+            == diagnostic_len
+        )
+        assert (
+            len(test_country.households.ts.historic("target_consumption_permanent_income_log_ratio_common"))
+            == diagnostic_len
+        )
         assert len(test_country.households.ts.historic("target_consumption_real_net_liquid_assets")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption_owner_occupied")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption")) == target_len
@@ -381,6 +389,8 @@ class TestCountry:
             assert "target_consumption_real_lagged_housing_wealth" in household_group
             assert "target_consumption_interest_rate_cashflow" in household_group
             assert "target_consumption_partial_adjustment_gap" in household_group
+            assert "target_consumption_permanent_income_log_ratio_individual" in household_group
+            assert "target_consumption_permanent_income_log_ratio_common" in household_group
             assert "target_consumption_owner_occupied" in household_group
             assert "target_consumption_mortgagor" in household_group
             assert "subsistence_consumption_floor" not in household_group

@@ -79,9 +79,9 @@ class MPCFilterConfig:
     min_income: float | None = 100.0
     income_top_quantile: float | None = 0.99
     consumption_income_ratio_quantiles: tuple[float, float] | None = (0.01, 0.99)
-    income_growth_min: float | None = -0.8
-    income_growth_max: float | None = 5.0
-    max_debt_asset_ratio: float | None = 1.0
+    income_growth_min: float | None = None
+    income_growth_max: float | None = None
+    max_debt_asset_ratio: float | None = None
     gross_wealth_top_quantile: float | None = 0.999
     head_age_min: float | None = 25.0
     head_age_max: float | None = 75.0
@@ -297,6 +297,36 @@ def build_household_mpc_panel(
     panel[real_cumulative_mpc_column] = real_cumulative / real_shock_amount
     panel["target_real_mpc_impact"] = target_real_impact / real_shock_amount
     panel[target_real_cumulative_mpc_column] = target_real_cumulative / real_shock_amount
+    for periods in range(2, horizon_periods):
+        suffix = "4q" if periods == 4 else f"{periods}p"
+        nominal_horizon = _delta_at_and_cumulative(
+            baseline_consumption,
+            shock_consumption,
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        target_horizon = _delta_at_and_cumulative(
+            baseline_target,
+            shock_target,
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        real_horizon = _delta_at_and_cumulative(
+            _deflate_by_own_cpi(baseline_consumption, baseline_cpi),
+            _deflate_by_own_cpi(shock_consumption, shock_cpi),
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        target_real_horizon = _delta_at_and_cumulative(
+            _deflate_by_own_cpi(baseline_target, baseline_cpi),
+            _deflate_by_own_cpi(shock_target, shock_cpi),
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        panel[f"cmpc_{suffix}"] = nominal_horizon / shock_amount
+        panel[f"target_cmpc_{suffix}"] = target_horizon / shock_amount
+        panel[f"real_cmpc_{suffix}"] = real_horizon / real_shock_amount
+        panel[f"target_real_cmpc_{suffix}"] = target_real_horizon / real_shock_amount
     return panel
 
 

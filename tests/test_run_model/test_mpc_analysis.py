@@ -128,9 +128,12 @@ def test_build_household_mpc_panel_computes_impact_and_cumulative(tmp_path):
     assert panel["shock_amount"].iloc[0] == pytest.approx(20.0)
     assert panel.loc[0, "mpc_impact"] == pytest.approx(1.0 / 20.0)
     assert panel.loc[1, "mpc_impact"] == pytest.approx(2.0 / 20.0)
+    assert panel.loc[0, "cmpc_2p"] == pytest.approx((1.0 + 2.0) / 20.0)
     assert panel.loc[0, "cmpc_4q"] == pytest.approx((1.0 + 2.0 + 3.0) / 20.0)
+    assert panel.loc[1, "target_cmpc_2p"] == pytest.approx((2.0 + 3.0) / 20.0)
     assert panel.loc[1, "target_cmpc_4q"] == pytest.approx((2.0 + 3.0 + 4.0) / 20.0)
     assert panel.loc[0, "real_mpc_impact"] == pytest.approx(panel.loc[0, "mpc_impact"])
+    assert panel.loc[0, "real_cmpc_2p"] == pytest.approx(panel.loc[0, "cmpc_2p"])
     assert panel.loc[1, "target_real_cmpc_4q"] == pytest.approx(panel.loc[1, "target_cmpc_4q"])
 
 

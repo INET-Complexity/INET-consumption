@@ -17,7 +17,6 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
     data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
     calls = []
-    plot_calls = []
 
     monkeypatch.setattr(
         mpc_runner,
@@ -43,6 +42,8 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
             {
                 "seed": [kwargs["metadata"]["seed"].iat[0]],
                 "mpc_impact": [0.5],
+                "cmpc_2p": [0.45],
+                "cmpc_3p": [0.48],
                 "real_cmpc_4q": [0.4],
                 "cmpc_4q": [0.5],
             }
@@ -50,12 +51,6 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(mpc_runner, "add_mpc_bins", lambda panel: panel.assign(income_bin="all"))
     monkeypatch.setattr(mpc_runner, "summarize_mpc_bins", lambda panel, **kwargs: pd.DataFrame({"rows": [len(panel)]}))
-
-    def fake_write_distribution_plots(panel, output_dir, **kwargs):
-        plot_calls.append(kwargs)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(mpc_runner, "write_distribution_plots", fake_write_distribution_plots)
 
     paths = mpc_runner.run_mpc_experiment(
         seeds=[1, 2],
@@ -66,40 +61,22 @@ def test_run_mpc_experiment_accepts_n_jobs_in_python_api(tmp_path, monkeypatch):
         output_dir=str(tmp_path),
         country_iso3="ESP",
         n_jobs=1,
-        distribution_plot_kind="box",
         apply_mpc_filters=False,
-        mpc_plot_y_quantiles=(0.01, 0.99),
-        mpc_winsor_quantiles=(0.05, 0.95),
     )
 
     assert paths["analysis_dir"] == tmp_path / "analysis"
     assert [call[0] for call in calls] == [1, 2]
-    assert plot_calls == [
-        {
-            "mpc_column": "real_cmpc_4q",
-            "plot_kind": "box",
-            "y_quantiles": (0.01, 0.99),
-            "y_range": None,
-            "winsor_quantiles": (0.05, 0.95),
-        },
-        {
-            "mpc_column": "cmpc_4q",
-            "plot_kind": "box",
-            "y_quantiles": (0.01, 0.99),
-            "y_range": None,
-            "winsor_quantiles": (0.05, 0.95),
-        },
-    ]
     assert (tmp_path / "analysis" / "household_mpc_panel.csv").exists()
     assert (tmp_path / "analysis" / "household_mpc_panel_raw.csv").exists()
     assert (tmp_path / "analysis" / "household_mpc_panel_filtered.csv").exists()
     assert (tmp_path / "analysis" / "household_mpc_filter_report.csv").exists()
+    default_panel = pd.read_csv(tmp_path / "analysis" / "household_mpc_panel.csv")
+    assert {"mpc_impact", "cmpc_2p", "cmpc_3p", "cmpc_4q"}.issubset(default_panel.columns)
 
 
 def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, monkeypatch):
     data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
-    plot_panels = []
 
     monkeypatch.setattr(
         mpc_runner,
@@ -127,6 +104,8 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
                 "baseline_consumption_impact": [100.0, 40.0],
                 "shock_consumption_impact": [105.0, 42.0],
                 "debt_asset_ratio": [0.0, 0.0],
+                "cmpc_2p": [0.2, 0.7],
+                "cmpc_3p": [0.2, 0.75],
                 "real_cmpc_4q": [0.2, 0.8],
                 "cmpc_4q": [0.2, 0.8],
             }
@@ -141,12 +120,6 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
             {"rows": [len(panel)], "ids": [",".join(panel["household_id"].astype(str))]}
         ),
     )
-
-    def fake_write_distribution_plots(panel, output_dir, **kwargs):
-        plot_panels.append(panel.copy())
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-    monkeypatch.setattr(mpc_runner, "write_distribution_plots", fake_write_distribution_plots)
 
     mpc_runner.run_mpc_experiment(
         seeds=[1],
@@ -166,13 +139,12 @@ def test_run_mpc_experiment_routes_filtered_panel_to_default_outputs(tmp_path, m
     assert raw_panel["household_id"].tolist() == [0, 1]
     assert default_panel["household_id"].tolist() == [0]
     assert default_summary.loc[0, "rows"] == 1
-    assert plot_panels[0]["household_id"].tolist() == [0]
+    assert {"cmpc_2p", "cmpc_3p", "cmpc_4q"}.issubset(default_panel.columns)
 
 
 def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, monkeypatch):
     data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
     country_cfg = SimpleNamespace(assume_zero_growth=False)
-    plot_calls = []
 
     monkeypatch.setattr(
         mpc_runner,
@@ -201,6 +173,8 @@ def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, mon
                 "baseline_consumption_impact": [100.0],
                 "shock_consumption_impact": [105.0],
                 "debt_asset_ratio": [0.0],
+                "cmpc_2p": [0.25],
+                "cmpc_3p": [0.28],
                 "real_cmpc_4q": [0.2],
                 "cmpc_4q": [0.3],
             }
@@ -208,12 +182,6 @@ def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, mon
     )
     monkeypatch.setattr(mpc_runner, "add_mpc_bins", lambda panel: panel.assign(income_bin="all"))
     monkeypatch.setattr(mpc_runner, "summarize_mpc_bins", lambda panel, **kwargs: pd.DataFrame({"rows": [len(panel)]}))
-
-    def fake_write_distribution_plots(panel, output_dir, **kwargs):
-        plot_calls.append(kwargs)
-        output_dir.mkdir(parents=True)
-
-    monkeypatch.setattr(mpc_runner, "write_distribution_plots", fake_write_distribution_plots)
 
     mpc_runner.run_mpc_experiment(
         seeds=[1],
@@ -224,11 +192,10 @@ def test_run_mpc_experiment_respects_explicit_nominal_plot_measure(tmp_path, mon
         output_dir=tmp_path,
         country_iso3="ESP",
         mpc_plot_measure="nominal",
-        mpc_winsor_quantiles=(0.05, 0.95),
     )
 
-    assert [call["mpc_column"] for call in plot_calls] == ["cmpc_4q"]
-    assert plot_calls[0]["winsor_quantiles"] == (0.05, 0.95)
+    default_summary = pd.read_csv(tmp_path / "analysis" / "household_mpc_summary.csv")
+    assert default_summary.loc[0, "rows"] == 1
 
 
 def test_run_mpc_experiment_rejects_zero_n_jobs(tmp_path, monkeypatch):

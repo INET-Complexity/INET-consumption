@@ -85,15 +85,17 @@ class BenchmarkResult:
 
 
 PERMANENT_INCOME_LOG_RATIO_DATASETS = {
-    "ln_y_p_over_p": "target_consumption_permanent_income_log_ratio",
+    "ln_y_p_over_y": "target_consumption_permanent_income_log_ratio",
     "zeta_times_posterior_mean": "target_consumption_permanent_income_log_ratio_individual",
     "common_log_ratio": "target_consumption_permanent_income_log_ratio_common",
+
 }
 PERMANENT_INCOME_LOG_RATIO_LABELS = {
-    "ln_y_p_over_p": "ln(y^p / y)",
+    "ln_y_p_over_y": "ln(y^p / y)",
     "zeta_times_posterior_mean": "zeta * posterior_mean",
     "common_log_ratio": "common_log_ratio",
     "log_real_pc_income_t": "log_real_pc_income_t",
+    "real_pc_income_idx": "real_pc_income_idx",
 }
 
 
@@ -199,6 +201,8 @@ def build_permanent_income_log_ratio_decomposition_df(
                 handle,
                 resolved_country_code,
             )
+            series_by_name['real_pc_income_idx']=np.exp(series_by_name['log_real_pc_income_t'])
+
 
     decomposition_df = pd.DataFrame(series_by_name, index=pd.RangeIndex(expected_shape[0], name="period"))
     decomposition_df.attrs["country_code"] = resolved_country_code
@@ -235,7 +239,8 @@ def plot_permanent_income_log_ratio_decomposition(
         source,
         country_code=country_code,
         reducer=reducer,
-        include_log_real_pc_income="log_real_pc_income_t" in selected_columns,
+        include_log_real_pc_income=True,
+        # include_log_real_pc_income="log_real_pc_income_t" in selected_columns,
     )
 
     fig = go.Figure()

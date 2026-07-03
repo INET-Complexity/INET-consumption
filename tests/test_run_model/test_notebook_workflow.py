@@ -507,16 +507,16 @@ def test_build_permanent_income_log_ratio_decomposition_df_reads_saved_household
             data=np.array([[0.1, 0.1], [0.1, 0.1]]),
         )
 
-    result = nw.build_permanent_income_log_ratio_decomposition_df(h5_path, reducer="mean")
+        result = nw.build_permanent_income_log_ratio_decomposition_df(h5_path, reducer="mean")
 
-    expected = pd.DataFrame(
-        {
-            "ln_y_p_over_p": [0.4, 0.3],
-            "zeta_times_posterior_mean": [0.3, 0.2],
-            "common_log_ratio": [0.1, 0.1],
-        },
-        index=pd.RangeIndex(2, name="period"),
-    )
+        expected = pd.DataFrame(
+            {
+                "ln_y_p_over_y": [0.4, 0.3],
+                "zeta_times_posterior_mean": [0.3, 0.2],
+                "common_log_ratio": [0.1, 0.1],
+            },
+            index=pd.RangeIndex(2, name="period"),
+        )
     pd.testing.assert_frame_equal(result, expected)
     assert result.attrs["country_code"] == "ESP"
     assert result.attrs["model_h5_path"] == str(h5_path)
@@ -607,7 +607,7 @@ def test_plot_permanent_income_log_ratio_decomposition_can_select_subset_of_colu
 
     fig = nw.plot_permanent_income_log_ratio_decomposition(
         h5_path,
-        columns=["ln_y_p_over_p", "common_log_ratio"],
+        columns=["ln_y_p_over_y", "common_log_ratio"],
         show=False,
     )
 
@@ -649,7 +649,7 @@ def test_plot_permanent_income_log_ratio_decomposition_can_plot_log_real_pc_inco
 
     fig = nw.plot_permanent_income_log_ratio_decomposition(
         h5_path,
-        columns=["ln_y_p_over_p", "log_real_pc_income_t"],
+        columns=["ln_y_p_over_y", "log_real_pc_income_t"],
         show=False,
     )
 

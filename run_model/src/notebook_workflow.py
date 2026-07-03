@@ -97,6 +97,10 @@ PERMANENT_INCOME_LOG_RATIO_LABELS = {
     "log_real_pc_income_t": "log_real_pc_income_t",
     "real_pc_income_idx": "real_pc_income_idx",
 }
+PERMANENT_INCOME_LOG_RATIO_REQUIRES_LOG_REAL_PC_INCOME = {
+    "log_real_pc_income_t",
+    "real_pc_income_idx",
+}
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -234,13 +238,15 @@ def plot_permanent_income_log_ratio_decomposition(
             + ", ".join(PERMANENT_INCOME_LOG_RATIO_LABELS)
             + "."
         )
+    include_log_real_pc_income = any(
+        column in PERMANENT_INCOME_LOG_RATIO_REQUIRES_LOG_REAL_PC_INCOME for column in selected_columns
+    )
 
     decomposition_df = build_permanent_income_log_ratio_decomposition_df(
         source,
         country_code=country_code,
         reducer=reducer,
-        include_log_real_pc_income=True,
-        # include_log_real_pc_income="log_real_pc_income_t" in selected_columns,
+        include_log_real_pc_income=include_log_real_pc_income,
     )
 
     fig = go.Figure()

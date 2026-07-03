@@ -72,7 +72,7 @@ stage_2:
       gamma_2: 0.022   # illiquid_wealth_propensity (IFA/income)
       gamma_3: 0.013   # housing_wealth_propensity (HA/income)
       gamma_4: -0.062  # house_price_propensity (log house prices/income)
-      beta_1: 0.45     # income_growth_propensity
+      beta_1: 0.15     # income_growth_propensity
       beta_2: -0.003   # interest_rate_cashflow_propensity (to be calibrated)
       beta_3: -0.005   # uncertainty_propensity (to be calibrated)
       lambda: 0.56     # partial_adjustment_speed

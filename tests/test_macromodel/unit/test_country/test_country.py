@@ -20,6 +20,7 @@ from macro_data.readers.permanent_income_mapping import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
+from macromodel.agents.households.households import PostGrantFeasiblePlan
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
@@ -551,6 +552,71 @@ class TestCountry:
             captured["loan_interest_obligation_preview"],
             test_country.firms.ts.current("firm_settlement_scheduled_interest_due"),
         )
+
+    def test__reconcile_post_grant_feasible_plan_clears_settled_carrier_when_disabled(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", False)
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 1.0),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        test_country.reconcile_post_grant_feasible_plan()
+
+        assert test_country.households.post_grant_feasible_plan is None
+
+    def test__reconcile_post_grant_feasible_plan_reads_received_consumption_loans(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        credit_requested = np.full(n_households, 10.0)
+        planned_liquidation = np.full(n_households, 2.0)
+        credit_granted = np.full(n_households, 4.0)
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        test_country.households.configure_feasibility_resolver(True)
+        test_country.households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 15.0),
+            funded_from_liquid_assets=np.full(n_households, 5.0),
+            residual_shortfall_after_lfa=np.full(n_households, 10.0),
+        )
+        test_country.households.populate_pre_grant_feasible_plan_credit_requested(
+            credit_requested=credit_requested,
+        )
+        test_country.households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=planned_liquidation,
+            current_ifa=np.full(n_households, 100.0),
+        )
+        test_country.households.ts.override_current("received_consumption_loans", credit_granted)
+
+        test_country.reconcile_post_grant_feasible_plan()
+
+        plan = test_country.households.post_grant_feasible_plan
+        assert plan is not None
+        np.testing.assert_allclose(plan.credit_granted, credit_granted)
+        np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
+        np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation)
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 4.0))
+
+    def test__reconcile_post_grant_feasible_plan_raises_when_cleared_grant_missing(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        test_country.households.configure_feasibility_resolver(True)
+        test_country.households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_country.households.populate_pre_grant_feasible_plan_credit_requested(
+            credit_requested=np.zeros(n_households),
+        )
+        test_country.households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=np.zeros(n_households),
+            current_ifa=np.zeros(n_households),
+        )
+        test_country.households.ts.override_current("received_consumption_loans", np.full(n_households, np.nan))
+
+        with pytest.raises(RuntimeError, match="received_consumption_loans"):
+            test_country.reconcile_post_grant_feasible_plan()
 
     def test__prepare_goods_market_clearing_uses_prepared_activity_plan(self, test_country, monkeypatch):
         captured = {}

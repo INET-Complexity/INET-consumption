@@ -1356,6 +1356,29 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
+    def reconcile_post_grant_feasible_plan(self) -> None:
+        """Build settled household feasibility after consumer-credit clearing."""
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.clear_post_grant_feasible_plan()
+            return
+
+        n_households = self.households.ts.current("n_households")
+        credit_granted = np.asarray(self.households.ts.current("received_consumption_loans"), dtype=float)
+        if credit_granted.shape != (n_households,):
+            raise ValueError(
+                "received_consumption_loans must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {credit_granted.shape}."
+            )
+        if not np.all(np.isfinite(credit_granted)):
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires cleared received_consumption_loans "
+                "for every household."
+            )
+
+        self.households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=credit_granted,
+        )
+
     def compute_activity_tax_previews(
         self,
         activity_production: np.ndarray,

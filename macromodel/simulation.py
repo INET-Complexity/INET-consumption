@@ -428,6 +428,7 @@ class Simulation:
             country.clear_credit_market()
             country.process_housing_market_clearing()
             country.process_credit_market_clearing()
+            country.reconcile_post_grant_feasible_plan()
             country.prepare_post_credit_feasible_activity_plan()
             country.clear_labour_market()
             country.update_post_labour_planning_metrics()

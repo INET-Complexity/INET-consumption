@@ -1165,6 +1165,131 @@ class TestPopulateAndAccessLiveCreditRequested:
         np.testing.assert_allclose(test_households.current_live_credit_requested(), expected)
 
 
+class TestPopulateAndAccessLivePlannedLiquidation:
+    """Stage 5 (feasibility resolver) Increment 6: live liquidation handoff."""
+
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_raises_without_carrier(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+                planned_liquidation_total=np.full(n_households, 5.0),
+                current_ifa=np.full(n_households, 10.0),
+            )
+
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_extends_existing_carrier(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        credit_requested = np.full(n_households, 7.0)
+        planned_liquidation = np.full(n_households, 4.0)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+
+        test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=planned_liquidation,
+            current_ifa=np.full(n_households, 10.0),
+        )
+
+        plan = test_households.pre_grant_feasible_plan
+        assert plan is not None
+        np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation)
+        np.testing.assert_allclose(plan.credit_requested, credit_requested)
+        np.testing.assert_allclose(plan.liquidity_shortfall_before_repair, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.funded_from_liquid_assets, np.full(n_households, 1.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_lfa, np.full(n_households, 2.0))
+
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_clamps_invalid_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        planned_liquidation = np.resize(np.asarray([5.0, -2.0, np.nan, np.inf, 50.0]), n_households)
+        current_ifa = np.resize(np.asarray([10.0, 10.0, 10.0, 10.0, 12.0]), n_households)
+        expected = np.resize(np.asarray([5.0, 0.0, 0.0, 0.0, 12.0]), n_households)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=planned_liquidation,
+            current_ifa=current_ifa,
+        )
+
+        np.testing.assert_allclose(test_households.pre_grant_feasible_plan.planned_liquidation_total, expected)
+
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_copies_inputs(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        planned_liquidation = np.full(n_households, 5.0)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.full(n_households, 3.0),
+            funded_from_liquid_assets=np.full(n_households, 1.0),
+            residual_shortfall_after_lfa=np.full(n_households, 2.0),
+        )
+
+        test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=planned_liquidation,
+            current_ifa=np.full(n_households, 10.0),
+        )
+        planned_liquidation[:] = 99.0
+
+        np.testing.assert_allclose(
+            test_households.pre_grant_feasible_plan.planned_liquidation_total,
+            np.full(n_households, 5.0),
+        )
+
+    def test__current_live_planned_liquidation_total_raises_when_enabled_without_carrier(self, test_households):
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.current_live_planned_liquidation_total()
+
+    def test__current_live_planned_liquidation_total_raises_when_enabled_without_populated_field(
+        self, test_households
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="planned_liquidation_total has not been populated"):
+            test_households.current_live_planned_liquidation_total()
+
+    def test__current_live_planned_liquidation_total_returns_carrier_value_when_enabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=np.full(n_households, 6.0),
+            current_ifa=np.full(n_households, 10.0),
+        )
+
+        np.testing.assert_allclose(
+            test_households.current_live_planned_liquidation_total(),
+            np.full(n_households, 6.0),
+        )
+
+    def test__current_live_planned_liquidation_total_falls_back_to_shadow_when_disabled(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        shadow = np.resize(np.asarray([11.0, -2.0, np.inf]), n_households)
+        expected = np.resize(np.asarray([11.0, 0.0, 0.0]), n_households)
+        test_households.ts.override_current("liquidation_planned", shadow)
+        test_households.configure_feasibility_resolver(False)
+
+        np.testing.assert_allclose(test_households.current_live_planned_liquidation_total(), expected)
+
+
 class TestComputeTargetCreditLiveCreditRequested:
     """Stage 5 (feasibility resolver) Increment 5: compute_target_credit() wiring."""
 

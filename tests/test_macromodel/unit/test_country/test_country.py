@@ -1710,6 +1710,53 @@ class TestCountry:
             sentinel_shadow_credit,
         )
 
+    def test__set_household_target_demand_populates_planned_liquidation_carrier_when_enabled(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        liquidation_planned = np.full(n_households, 12.0)
+        forced_liquidation = np.full(n_households, 99.0)
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 50.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        def stub_residual_capacity_fallback(**_kwargs):
+            test_country.households.ts.override_current("shadow_credit_requested", np.zeros(n_households))
+            test_country.households.ts.override_current("liquidation_planned", liquidation_planned)
+            test_country.households.ts.override_current("forced_liquidation_amount", forced_liquidation)
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            stub_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert test_country.households.pre_grant_feasible_plan is not None
+        np.testing.assert_allclose(
+            test_country.households.pre_grant_feasible_plan.planned_liquidation_total,
+            liquidation_planned,
+        )
+
     def test__set_household_target_demand_leaves_credit_requested_carrier_unset_when_disabled(
         self, test_country, monkeypatch
     ):
@@ -1721,6 +1768,34 @@ class TestCountry:
         # pitfall, pre-existing and out of scope here), so an earlier test in
         # this module that flips uses_feasibility_resolver=True can otherwise
         # leak into this one.
+        test_country.configuration.households.parameters.uses_feasibility_resolver = False
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert test_country.households.pre_grant_feasible_plan is None
+
+    def test__set_household_target_demand_leaves_planned_liquidation_carrier_unset_when_disabled(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
         test_country.configuration.households.parameters.uses_feasibility_resolver = False
         target_consumption = np.zeros((n_households, n_industries))
         target_consumption[:, 0] = 300.0
@@ -1806,6 +1881,55 @@ class TestCountry:
         # is NOT second_pass_shadow_credit, i.e. the True-pass populate call
         # for credit_requested genuinely did not run.
         assert test_country.households.pre_grant_feasible_plan.credit_requested is None
+
+    def test__set_household_target_demand_only_populates_planned_liquidation_on_first_pass(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        first_pass_liquidation = np.full(n_households, 111.0)
+        second_pass_liquidation = np.full(n_households, 999.0)
+        liquidation_values = iter([first_pass_liquidation, second_pass_liquidation])
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 500.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        def stub_residual_capacity_fallback(**_kwargs):
+            test_country.households.ts.override_current("shadow_credit_requested", np.zeros(n_households))
+            test_country.households.ts.override_current("liquidation_planned", next(liquidation_values))
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            stub_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=False)
+        np.testing.assert_allclose(
+            test_country.households.pre_grant_feasible_plan.planned_liquidation_total,
+            first_pass_liquidation,
+        )
+
+        test_country._set_household_target_demand(replace_current=True)
+
+        assert test_country.households.pre_grant_feasible_plan.planned_liquidation_total is None
 
     def test__set_household_target_demand_falls_back_on_invalid_consumer_credit_config(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")

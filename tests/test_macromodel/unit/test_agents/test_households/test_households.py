@@ -1739,7 +1739,9 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 2.0))
         np.testing.assert_allclose(plan.planned_liquidation_total, np.full(n_households, 3.0))
-        np.testing.assert_allclose(test_households.ts.current("consumption_before_floor"), plan.consumption_before_floor)
+        np.testing.assert_allclose(
+            test_households.ts.current("consumption_before_floor"), plan.consumption_before_floor
+        )
         np.testing.assert_allclose(
             test_households.ts.current("residual_shortfall_before_floor"),
             plan.residual_shortfall_before_floor,

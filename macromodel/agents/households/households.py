@@ -868,8 +868,7 @@ class Households(Agent):
         field_value = getattr(self.post_grant_feasible_plan, field_name)
         if field_value is None:
             raise RuntimeError(
-                f"Stage 5 post-grant feasibility field {field_name} has not been populated "
-                "for the current period."
+                f"Stage 5 post-grant feasibility field {field_name} has not been populated for the current period."
             )
         value = np.asarray(field_value, dtype=float)
         return np.where(np.isfinite(value), np.maximum(value, 0.0), 0.0)
@@ -915,8 +914,7 @@ class Households(Agent):
             value = getattr(plan, field_name)
             if value is None:
                 raise RuntimeError(
-                    f"Stage 5 consumption-floor diagnostics require {field_name} "
-                    "to be populated by floor enforcement."
+                    f"Stage 5 consumption-floor diagnostics require {field_name} to be populated by floor enforcement."
                 )
             getattr(self.ts, field_name).append(np.asarray(value).copy())
 

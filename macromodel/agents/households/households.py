@@ -1082,6 +1082,8 @@ class Households(Agent):
         real_borrowing_rate: Optional[float] = None,
         consumer_debt_rate_delta: Optional[float] = None,
         permanent_income_log_ratio: Optional[np.ndarray] = None,
+        permanent_income_log_ratio_individual: Optional[np.ndarray] = None,
+        permanent_income_log_ratio_common: Optional[np.ndarray] = None,
         uncertainty_delta: Optional[np.ndarray] = None,
         common_permanent_income_log_ratio: Optional[np.ndarray | float] = None,
         mortgage_payment: Optional[np.ndarray] = None,
@@ -1120,6 +1122,10 @@ class Households(Agent):
             real_borrowing_rate (Optional[float]): Explicit real-rate proxy; defaults to zero placeholder
             consumer_debt_rate_delta (Optional[float]): Explicit consumer-debt-rate delta placeholder
             permanent_income_log_ratio (Optional[np.ndarray]): Explicit permanent-income placeholder
+            permanent_income_log_ratio_individual (Optional[np.ndarray]): Household-specific
+                ``zeta * posterior_mean`` component of ``ln(y^p / p)``
+            permanent_income_log_ratio_common (Optional[np.ndarray]): Broadcast
+                ``common_log_ratio`` component of ``ln(y^p / p)``
             uncertainty_delta (Optional[np.ndarray]): Explicit uncertainty placeholder
             common_permanent_income_log_ratio (Optional[np.ndarray | float]): Separately supplied macro
                 permanent-income component for opt-in learning rules
@@ -1201,6 +1207,26 @@ class Households(Agent):
                 population_scale_factor=self.states.get("population_scale_factor"),
                 time_unit=time_unit,
             )
+            components = getattr(self.functions["consumption"], "last_target_consumption_components", None)
+            if components is not None:
+                n_households = int(self.ts.current("n_households"))
+
+                def _diagnostic_array(values: Optional[np.ndarray]) -> np.ndarray:
+                    if values is None:
+                        return np.zeros(n_households)
+                    array = np.asarray(values, dtype=float)
+                    if array.ndim == 0:
+                        return np.full(n_households, float(array), dtype=float)
+                    return array
+
+                if permanent_income_log_ratio_individual is not None:
+                    components["target_consumption_permanent_income_log_ratio_individual"] = _diagnostic_array(
+                        permanent_income_log_ratio_individual
+                    )
+                if permanent_income_log_ratio_common is not None:
+                    components["target_consumption_permanent_income_log_ratio_common"] = _diagnostic_array(
+                        permanent_income_log_ratio_common
+                    )
             self._append_target_consumption_diagnostics(
                 self.functions["consumption"],
                 replace_current=replace_current_diagnostics,
@@ -1567,10 +1593,14 @@ class Households(Agent):
         zeta = self._income_belief_zeta(priors)
         common_log_ratio = 0.0 if common_permanent_income_log_ratio is None else common_permanent_income_log_ratio
         common_variance = 0.0 if common_forecast_variance is None else common_forecast_variance
+        individual_log_ratio = float(zeta) * runtime_state["posterior_mean"]
+        common_log_ratio_arr = np.full(runtime_state["posterior_mean"].shape, float(common_log_ratio), dtype=float)
         return {
             "permanent_income_log_ratio": compute_permanent_income_log_ratio(
                 runtime_state["posterior_mean"], zeta, common_log_ratio
             ),
+            "permanent_income_log_ratio_individual": individual_log_ratio,
+            "permanent_income_log_ratio_common": common_log_ratio_arr,
             "uncertainty_delta": compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance),
         }
 
@@ -1652,6 +1682,8 @@ class Households(Agent):
             "target_consumption_real_lagged_house_price",
             "target_consumption_real_borrowing_rate",
             "target_consumption_permanent_income_log_ratio",
+            "target_consumption_permanent_income_log_ratio_individual",
+            "target_consumption_permanent_income_log_ratio_common",
             "target_consumption_consumer_debt_rate_delta",
             "target_consumption_interest_rate_cashflow_index",
             "target_consumption_uncertainty_delta",

@@ -85,10 +85,12 @@ desired_consumption:
     mortgage_debt_propensity: 0.03
     mortgage_payment_propensity: 1.0
     house_price_propensity: -0.062
-    income_growth_propensity: 0.45
+    income_growth_propensity: 0.15
     interest_rate_cashflow_propensity: -0.003
     uncertainty_propensity: -0.005
     partial_adjustment_speed: 0.56
+    long_run_mpc_lower_bound: 0.0
+    long_run_mpc_upper_bound: 2.0
     price_floor: 1.0e-12
     income_floor: 1.0e-12
     consumption_floor: 1.0e-12

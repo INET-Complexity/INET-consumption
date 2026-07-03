@@ -361,15 +361,22 @@ def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_para
 
 def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+    with (_REPO_ROOT / "run_model/config/consumption_paper_parameters.yaml").open() as f:
+        paper_parameters = yaml.safe_load(f)
+    expected_income_growth_propensity = paper_parameters["desired_consumption"]["credit_augmented_v1"][
+        "income_growth_propensity"
+    ]
 
     params = config.households.functions.consumption.parameters
     assert "paper_parameter_file" not in params
     assert "paper_parameter_ref" not in params
     assert params["permanent_income_propensity"] == 0.55
-    assert params["income_growth_propensity"] == 0.45
+    assert params["income_growth_propensity"] == expected_income_growth_propensity
     assert params["interest_rate_cashflow_propensity"] == -0.003
     assert params["uncertainty_propensity"] == -0.005
     assert params["partial_adjustment_speed"] == 0.56
+    assert params["long_run_mpc_lower_bound"] == 0.0
+    assert params["long_run_mpc_upper_bound"] == 2.0
     assert params["consumption_smoothing_fraction"] == 0.0
     assert params["consumption_smoothing_window"] == 12
     assert params["elasticity_of_substitution"] == 1.0

@@ -7,6 +7,7 @@ adds pre-shock heterogeneity bins, and writes distribution plots.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,9 @@ POSITIVE_ONLY_BINNING_VARIABLES = {"illiquid_financial_assets", "housing_wealth"
 PLOT_KINDS = {"violin", "box", "box_only"}
 MPC_PLOT_MEASURES = {"nominal", "real"}
 WINSOR_MODES = {"clip", "trim"}
+PLOT_OUTPUT_FORMATS = {"html", "png", "both"}
+SAVED_PLOT_BASE_HEIGHT = 600
+SAVED_PLOT_HEIGHT_SCALE = 0.8
 
 
 def _validate_quantile_pair(values: tuple[float, float] | None, *, name: str) -> tuple[float, float] | None:
@@ -75,9 +79,9 @@ class MPCFilterConfig:
     min_income: float | None = 100.0
     income_top_quantile: float | None = 0.99
     consumption_income_ratio_quantiles: tuple[float, float] | None = (0.01, 0.99)
-    income_growth_min: float | None = -0.8
-    income_growth_max: float | None = 5.0
-    max_debt_asset_ratio: float | None = 1.0
+    income_growth_min: float | None = None
+    income_growth_max: float | None = None
+    max_debt_asset_ratio: float | None = None
     gross_wealth_top_quantile: float | None = 0.999
     head_age_min: float | None = 25.0
     head_age_max: float | None = 75.0
@@ -293,6 +297,36 @@ def build_household_mpc_panel(
     panel[real_cumulative_mpc_column] = real_cumulative / real_shock_amount
     panel["target_real_mpc_impact"] = target_real_impact / real_shock_amount
     panel[target_real_cumulative_mpc_column] = target_real_cumulative / real_shock_amount
+    for periods in range(2, horizon_periods):
+        suffix = "4q" if periods == 4 else f"{periods}p"
+        nominal_horizon = _delta_at_and_cumulative(
+            baseline_consumption,
+            shock_consumption,
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        target_horizon = _delta_at_and_cumulative(
+            baseline_target,
+            shock_target,
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        real_horizon = _delta_at_and_cumulative(
+            _deflate_by_own_cpi(baseline_consumption, baseline_cpi),
+            _deflate_by_own_cpi(shock_consumption, shock_cpi),
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        target_real_horizon = _delta_at_and_cumulative(
+            _deflate_by_own_cpi(baseline_target, baseline_cpi),
+            _deflate_by_own_cpi(shock_target, shock_cpi),
+            shock_row=shock_row,
+            horizon_periods=periods,
+        )[1]
+        panel[f"cmpc_{suffix}"] = nominal_horizon / shock_amount
+        panel[f"target_cmpc_{suffix}"] = target_horizon / shock_amount
+        panel[f"real_cmpc_{suffix}"] = real_horizon / real_shock_amount
+        panel[f"target_real_cmpc_{suffix}"] = target_real_horizon / real_shock_amount
     return panel
 
 
@@ -336,6 +370,11 @@ ACTIVITY_BRACKET_CODES = {
     "investor": 3,
     "not_economically_active": 4,
 }
+HOUSEHOLD_LABOR_STATE_COLUMNS = (
+    "activity_bracket",
+    "worked_hours",
+    "labor_income",
+)
 
 
 def household_activity_bracket(country) -> np.ndarray:
@@ -376,6 +415,63 @@ def household_activity_bracket(country) -> np.ndarray:
         else:
             result[household_id] = ACTIVITY_BRACKET_CODES["not_economically_active"]
     return result
+
+
+def household_worked_hours(country) -> np.ndarray:
+    """Return each household's total worked-hours proxy from linked individuals.
+
+    The model stores labour supply intensity as ``individuals.ts.current(
+    "labour_inputs")``. For MPC identification we aggregate that live state to
+    the household level so households can be dropped when their effective labour
+    supply changes within the measurement window.
+    """
+    households = country.households
+    n_households = int(households.ts.current("n_households"))
+    corr_individuals = getattr(households, "states", {}).get("corr_individuals")
+    if corr_individuals is None:
+        return np.full(n_households, np.nan)
+
+    individuals = getattr(country, "individuals", None)
+    try:
+        labour_inputs = np.asarray(individuals.ts.current("labour_inputs"), dtype=float)
+    except (AttributeError, KeyError):
+        labour_inputs = None
+    if labour_inputs is None:
+        return np.full(n_households, np.nan)
+
+    result = np.full(n_households, np.nan)
+    for household_id, individual_ids in enumerate(corr_individuals):
+        ids = np.asarray(individual_ids, dtype=int)
+        valid_ids = ids[(ids >= 0) & (ids < labour_inputs.size)]
+        if not valid_ids.size:
+            continue
+        household_hours = labour_inputs[valid_ids]
+        if np.any(np.isfinite(household_hours)):
+            result[household_id] = np.nansum(household_hours)
+    return result
+
+
+def household_labor_income(country) -> np.ndarray:
+    """Return each household's current labour income from employment."""
+    households = country.households
+    n_households = int(households.ts.current("n_households"))
+    try:
+        return np.asarray(households.ts.current("income_employee"), dtype=float)
+    except KeyError:
+        return np.full(n_households, np.nan)
+
+
+def make_household_labor_state_snapshot(country) -> dict[str, np.ndarray]:
+    """Capture the household labour-state vectors used for MPC identification."""
+    snapshot = {
+        "activity_bracket": household_activity_bracket(country),
+        "worked_hours": household_worked_hours(country),
+        "labor_income": household_labor_income(country),
+    }
+    lengths = {name: values.shape[0] for name, values in snapshot.items()}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"Household labour-state snapshots must share a common length, got {lengths}.")
+    return snapshot
 
 
 def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.DataFrame:
@@ -793,8 +889,9 @@ def write_distribution_plots(
     y_range: tuple[float, float] | None = None,
     winsor_quantiles: tuple[float, float] | None = None,
     winsor_mode: str = "clip",
+    output_format: str = "html",
 ) -> None:
-    """Write one standalone Plotly HTML distribution plot per binning variable."""
+    """Write one standalone Plotly plot per binning variable."""
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     for variable in BINNING_VARIABLES:
@@ -808,7 +905,12 @@ def write_distribution_plots(
             winsor_quantiles=winsor_quantiles,
             winsor_mode=winsor_mode,
         )
-        fig.write_html(output_path / f"{mpc_column}_by_{variable}.html")
+        _write_plot_outputs(
+            fig,
+            output_dir=output_path,
+            stem=f"{mpc_column}_by_{variable}",
+            output_format=output_format,
+        )
 
 
 def plot_mpc_panel(
@@ -821,14 +923,20 @@ def plot_mpc_panel(
     y_range: tuple[float, float] | None = None,
     winsor_quantiles: tuple[float, float] | None = None,
     winsor_mode: str = "clip",
+    output_dir: str | Path | None = None,
+    output_format: str = "html",
     show: bool = True,
 ) -> list[go.Figure]:
     """Build (and optionally display) distribution plots for selected variables/columns.
 
     This is the notebook-facing counterpart to ``write_distribution_plots``: it
-    returns the Plotly figures directly instead of writing HTML files, so the
-    caller can customise the variable/column selection per call.
+    returns the Plotly figures directly, while optionally writing HTML or PNG
+    files when ``output_dir`` is provided, so the caller can customise the
+    variable/column selection per call.
     """
+    resolved_output_dir = None if output_dir is None else Path(output_dir)
+    if resolved_output_dir is not None:
+        resolved_output_dir.mkdir(parents=True, exist_ok=True)
     figures = []
     for mpc_column in mpc_columns:
         for variable in variables:
@@ -842,7 +950,37 @@ def plot_mpc_panel(
                 winsor_quantiles=winsor_quantiles,
                 winsor_mode=winsor_mode,
             )
+            if resolved_output_dir is not None:
+                _write_plot_outputs(
+                    fig,
+                    output_dir=resolved_output_dir,
+                    stem=f"{mpc_column}_by_{variable}",
+                    output_format=output_format,
+                )
             if show:
                 fig.show()
             figures.append(fig)
     return figures
+
+
+def _write_plot_outputs(
+    fig: go.Figure,
+    *,
+    output_dir: Path,
+    stem: str,
+    output_format: str,
+) -> None:
+    """Persist Plotly figures in the requested output format."""
+    if output_format not in PLOT_OUTPUT_FORMATS:
+        raise ValueError(f"output_format must be one of {sorted(PLOT_OUTPUT_FORMATS)}.")
+    saved_fig = go.Figure(fig)
+    base_height = saved_fig.layout.height if saved_fig.layout.height is not None else SAVED_PLOT_BASE_HEIGHT
+    saved_fig.update_layout(height=int(round(base_height * SAVED_PLOT_HEIGHT_SCALE)))
+    if output_format in {"html", "both"}:
+        saved_fig.write_html(output_dir / f"{stem}.html")
+    if output_format in {"png", "both"}:
+        if importlib.util.find_spec("kaleido") is None:
+            raise RuntimeError(
+                "PNG export requires the optional 'kaleido' package. Install it, or use output_format='html'."
+            )
+        saved_fig.write_image(output_dir / f"{stem}.png")

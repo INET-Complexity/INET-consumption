@@ -457,6 +457,13 @@ class TestHouseholds:
         expected_log_ratio = zeta * runtime_state["posterior_mean"] + common_log_ratio
         expected_uncertainty = (zeta**2) * runtime_state["posterior_variance"] + common_forecast_variance
         np.testing.assert_allclose(inputs["permanent_income_log_ratio"], expected_log_ratio)
+        np.testing.assert_allclose(
+            inputs["permanent_income_log_ratio_individual"], zeta * runtime_state["posterior_mean"]
+        )
+        np.testing.assert_allclose(
+            inputs["permanent_income_log_ratio_common"],
+            np.full(n_households, common_log_ratio),
+        )
         np.testing.assert_allclose(inputs["uncertainty_delta"], expected_uncertainty)
         assert np.all(np.isfinite(inputs["permanent_income_log_ratio"]))
         assert np.all(np.isfinite(inputs["uncertainty_delta"]))
@@ -472,12 +479,22 @@ class TestHouseholds:
             tau_vat=0.0,
             assume_zero_growth=False,
             permanent_income_log_ratio=inputs["permanent_income_log_ratio"],
+            permanent_income_log_ratio_individual=inputs["permanent_income_log_ratio_individual"],
+            permanent_income_log_ratio_common=inputs["permanent_income_log_ratio_common"],
             uncertainty_delta=inputs["uncertainty_delta"],
         )
         components = test_households.functions["consumption"].last_target_consumption_components
         np.testing.assert_allclose(
             components["target_consumption_permanent_income_log_ratio"],
             expected_log_ratio,
+        )
+        np.testing.assert_allclose(
+            components["target_consumption_permanent_income_log_ratio_individual"],
+            zeta * runtime_state["posterior_mean"],
+        )
+        np.testing.assert_allclose(
+            components["target_consumption_permanent_income_log_ratio_common"],
+            np.full(n_households, common_log_ratio),
         )
         np.testing.assert_allclose(
             components["target_consumption_uncertainty_delta"],

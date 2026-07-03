@@ -2,6 +2,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import h5py
+import numpy as np
 import pandas as pd
 
 RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
@@ -123,6 +125,8 @@ def test_prepare_data_uses_deterministic_cache_path(tmp_path, monkeypatch):
     monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: env_cfg))
     monkeypatch.setattr(nw, "_load_data_config", lambda cfg: SimpleNamespace(name="data_config"))
     monkeypatch.setattr(nw, "DataWrapper", FakeDataWrapper)
+    monkeypatch.setattr(nw, "_requires_cfc_rate_cache_rebuild", lambda data, data_config: False)
+    monkeypatch.setattr(nw, "_requires_population_schema_cache_rebuild", lambda data, country_iso3: False)
 
     result = nw.prepare_data(nw.NotebookRunConfig(country_iso3="ESP"))
 
@@ -484,3 +488,422 @@ def test_run_benchmark_records_empty_overrides_when_none(tmp_path, monkeypatch):
     )
 
     assert result.benchmark_spec["overrides"] == {}
+
+
+def test_build_permanent_income_log_ratio_decomposition_df_reads_saved_household_diagnostics(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        household_group = handle.create_group("ESP").create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+
+        result = nw.build_permanent_income_log_ratio_decomposition_df(h5_path, reducer="mean")
+
+        expected = pd.DataFrame(
+            {
+                "ln_y_p_over_y": [0.4, 0.3],
+                "zeta_times_posterior_mean": [0.3, 0.2],
+                "common_log_ratio": [0.1, 0.1],
+            },
+            index=pd.RangeIndex(2, name="period"),
+        )
+    pd.testing.assert_frame_equal(result, expected)
+    assert result.attrs["country_code"] == "ESP"
+    assert result.attrs["model_h5_path"] == str(h5_path)
+    assert result.attrs["reducer"] == "mean"
+
+
+def test_build_permanent_income_log_ratio_decomposition_df_can_include_log_real_pc_income(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        country_group = handle.create_group("ESP")
+        household_group = country_group.create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+        household_group.create_dataset(
+            "income",
+            data=np.array([[100.0, 100.0], [110.0, 110.0]]),
+        )
+        country_group.create_group("economy").create_dataset(
+            "cpi_fixed_basket",
+            data=np.array([[1.0], [1.0]]),
+        )
+        country_group.create_group("individuals").create_dataset(
+            "n_individuals",
+            data=np.array([[2.0, 2.0]]),
+        )
+
+    result = nw.build_permanent_income_log_ratio_decomposition_df(
+        h5_path,
+        reducer="mean",
+        include_log_real_pc_income=True,
+    )
+
+    assert result["log_real_pc_income_t"].tolist() == [np.log(100.0), np.log(110.0)]
+
+
+def test_plot_permanent_income_log_ratio_decomposition_returns_three_traces(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        household_group = handle.create_group("ESP").create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+
+    fig = nw.plot_permanent_income_log_ratio_decomposition(h5_path, show=False)
+
+    assert [trace.name for trace in fig.data] == [
+        "ln(y^p / y)",
+        "zeta * posterior_mean",
+        "common_log_ratio",
+    ]
+
+
+def test_plot_permanent_income_log_ratio_decomposition_can_select_subset_of_columns(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        household_group = handle.create_group("ESP").create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+
+    fig = nw.plot_permanent_income_log_ratio_decomposition(
+        h5_path,
+        columns=["ln_y_p_over_y", "common_log_ratio"],
+        show=False,
+    )
+
+    assert [trace.name for trace in fig.data] == [
+        "ln(y^p / y)",
+        "common_log_ratio",
+    ]
+
+
+def test_plot_permanent_income_log_ratio_decomposition_can_plot_log_real_pc_income(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        country_group = handle.create_group("ESP")
+        household_group = country_group.create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+        household_group.create_dataset(
+            "income",
+            data=np.array([[100.0, 100.0], [110.0, 110.0]]),
+        )
+        country_group.create_group("economy").create_dataset(
+            "cpi_fixed_basket",
+            data=np.array([[1.0], [1.0]]),
+        )
+        country_group.create_group("individuals").create_dataset(
+            "n_individuals",
+            data=np.array([[2.0, 2.0]]),
+        )
+
+    fig = nw.plot_permanent_income_log_ratio_decomposition(
+        h5_path,
+        columns=["ln_y_p_over_y", "log_real_pc_income_t"],
+        show=False,
+    )
+
+    assert [trace.name for trace in fig.data] == [
+        "ln(y^p / y)",
+        "log_real_pc_income_t",
+    ]
+    np.testing.assert_allclose(fig.data[1].y, np.array([np.log(100.0), np.log(110.0)]))
+
+
+def test_plot_permanent_income_log_ratio_decomposition_rejects_unknown_columns(tmp_path):
+    h5_path = tmp_path / "simulation_ESP.h5"
+    with h5py.File(h5_path, "w") as handle:
+        household_group = handle.create_group("ESP").create_group("households")
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio",
+            data=np.array([[0.3, 0.5], [0.2, 0.4]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_individual",
+            data=np.array([[0.2, 0.4], [0.1, 0.3]]),
+        )
+        household_group.create_dataset(
+            "target_consumption_permanent_income_log_ratio_common",
+            data=np.array([[0.1, 0.1], [0.1, 0.1]]),
+        )
+
+    try:
+        nw.plot_permanent_income_log_ratio_decomposition(
+            h5_path,
+            columns=["not_a_real_column"],
+            show=False,
+        )
+    except ValueError as exc:
+        assert "Unknown columns requested" in str(exc)
+    else:
+        raise AssertionError("unknown decomposition columns should be rejected")
+
+
+def test_build_permanent_income_forecast_contribution_table_returns_regressor_contributions(monkeypatch):
+    class FakeSimulation:
+        def __init__(self, countries):
+            self.countries = countries
+
+    monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+
+    country = SimpleNamespace(
+        start_period=pd.Period("2014Q1", freq="Q"),
+        _permanent_income_forecast_inputs=SimpleNamespace(
+            coefficient_table=pd.DataFrame({"coefficient": [2.0, -1.0]}, index=["constant", "time_trend"]),
+            hac_covariance=pd.DataFrame(
+                np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]
+            ),
+            residual_variance=1.0,
+        ),
+        _permanent_income_design_matrix=pd.DataFrame(
+            {"constant": [1.0], "time_trend": [0.0]},
+            index=pd.PeriodIndex([pd.Period("2014Q1", freq="Q")]),
+        ),
+        economy=SimpleNamespace(
+            ts=SimpleNamespace(
+                dicts={
+                    "cpi_fixed_basket": [[100.0], [100.0], [100.0], [100.0], [100.0]],
+                    "unemployment_rate": [[0.05], [0.05], [0.05], [0.05], [0.05]],
+                }
+            )
+        ),
+        central_bank=SimpleNamespace(
+            ts=SimpleNamespace(dicts={"policy_rate": [[0.01], [0.01], [0.01], [0.01], [0.01]]})
+        ),
+        individuals=SimpleNamespace(
+            ts=SimpleNamespace(dicts={"n_individuals": [[10.0], [10.0], [10.0], [10.0], [10.0]]})
+        ),
+        households=SimpleNamespace(
+            ts=SimpleNamespace(
+                dicts={
+                    "income": [
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                    ]
+                }
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        nw,
+        "build_permanent_income_forecast_regressors",
+        lambda **kwargs: pd.Series({"constant": 1.0, "time_trend": float(kwargs["sources"].current_period.quarter)}),
+    )
+    monkeypatch.setattr(
+        nw,
+        "forecast_common_permanent_income",
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
+    )
+
+    result = nw.build_permanent_income_forecast_contribution_table(
+        FakeSimulation({"ESP": country}),
+        country_code="ESP",
+        periods=[1, 2],
+    )
+
+    assert list(result.columns) == [
+        "period",
+        "date",
+        "regressor",
+        "simulation_source",
+        "is_fixed",
+        "x_t",
+        "coefficient",
+        "contribution",
+        "point_forecast",
+    ]
+    assert result["period"].tolist() == [1, 1, 2, 2]
+    assert result["regressor"].tolist() == ["constant", "time_trend", "constant", "time_trend"]
+    assert (
+        result["simulation_source"].tolist() == ["frozen_design_matrix_initial_period", "simulation_period_index"] * 2
+    )
+    assert result["is_fixed"].tolist() == [True, False, True, False]
+    assert result["contribution"].tolist() == [2.0, -2.0, 2.0, -3.0]
+
+
+def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_regressors(monkeypatch):
+    class FakeSimulation:
+        def __init__(self, countries):
+            self.countries = countries
+
+    monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+
+    country = SimpleNamespace(
+        start_period=pd.Period("2014Q1", freq="Q"),
+        _permanent_income_forecast_inputs=SimpleNamespace(
+            coefficient_table=pd.DataFrame({"coefficient": [2.0, -1.0]}, index=["constant", "time_trend"]),
+            hac_covariance=pd.DataFrame(
+                np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]
+            ),
+            residual_variance=1.0,
+        ),
+        _permanent_income_design_matrix=pd.DataFrame(
+            {"constant": [1.0], "time_trend": [0.0]},
+            index=pd.PeriodIndex([pd.Period("2014Q1", freq="Q")]),
+        ),
+        economy=SimpleNamespace(
+            ts=SimpleNamespace(
+                dicts={
+                    "cpi_fixed_basket": [[100.0], [100.0], [100.0], [100.0], [100.0]],
+                    "unemployment_rate": [[0.05], [0.05], [0.05], [0.05], [0.05]],
+                }
+            )
+        ),
+        central_bank=SimpleNamespace(
+            ts=SimpleNamespace(dicts={"policy_rate": [[0.01], [0.01], [0.01], [0.01], [0.01]]})
+        ),
+        individuals=SimpleNamespace(
+            ts=SimpleNamespace(dicts={"n_individuals": [[10.0], [10.0], [10.0], [10.0], [10.0]]})
+        ),
+        households=SimpleNamespace(
+            ts=SimpleNamespace(
+                dicts={
+                    "income": [
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                    ]
+                }
+            )
+        ),
+    )
+
+    monkeypatch.setattr(
+        nw,
+        "build_permanent_income_forecast_regressors",
+        lambda **kwargs: pd.Series({"constant": 1.0, "time_trend": float(kwargs["sources"].current_period.quarter)}),
+    )
+    monkeypatch.setattr(
+        nw,
+        "forecast_common_permanent_income",
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
+    )
+
+    result = nw.build_permanent_income_forecast_contribution_table(
+        FakeSimulation({"ESP": country}),
+        country_code="ESP",
+        periods=[1],
+        include_fixed=False,
+    )
+
+    assert result["regressor"].tolist() == ["time_trend"]
+    assert result["simulation_source"].tolist() == ["simulation_period_index"]
+    assert result["is_fixed"].tolist() == [False]
+    assert result.attrs["include_fixed"] is False
+
+
+def test_build_permanent_income_forecast_contribution_table_recovers_missing_source_map(monkeypatch):
+    class FakeSimulation:
+        def __init__(self, countries):
+            self.countries = countries
+
+    monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+
+    country = SimpleNamespace(
+        start_period=pd.Period("2014Q1", freq="Q"),
+        _permanent_income_forecast_inputs=SimpleNamespace(
+            coefficient_table=pd.DataFrame({"coefficient": [-1.0]}, index=["time_trend"]),
+            hac_covariance=pd.DataFrame(np.eye(1), index=["time_trend"], columns=["time_trend"]),
+            residual_variance=1.0,
+        ),
+        _permanent_income_design_matrix=pd.DataFrame(
+            {"time_trend": [0.0]},
+            index=pd.PeriodIndex([pd.Period("2014Q1", freq="Q")]),
+        ),
+        economy=SimpleNamespace(
+            ts=SimpleNamespace(
+                dicts={
+                    "cpi_fixed_basket": [[100.0]],
+                    "unemployment_rate": [[0.05]],
+                }
+            )
+        ),
+        central_bank=SimpleNamespace(ts=SimpleNamespace(dicts={"policy_rate": [[0.01]]})),
+        individuals=SimpleNamespace(ts=SimpleNamespace(dicts={"n_individuals": [[10.0]]})),
+        households=SimpleNamespace(ts=SimpleNamespace(dicts={"income": [np.array([1000.0])]})),
+    )
+
+    monkeypatch.setattr(
+        nw,
+        "build_permanent_income_forecast_regressors",
+        lambda **kwargs: pd.Series({"time_trend": 1.0}),
+    )
+    monkeypatch.setattr(
+        nw,
+        "forecast_common_permanent_income",
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
+    )
+    monkeypatch.delattr(nw, "FORECAST_READER_TO_SIMULATION_SOURCE_NAME", raising=False)
+
+    result = nw.build_permanent_income_forecast_contribution_table(
+        FakeSimulation({"ESP": country}),
+        country_code="ESP",
+        periods=[0],
+        include_fixed=False,
+    )
+
+    assert result["regressor"].tolist() == ["time_trend"]
+    assert result["simulation_source"].tolist() == ["simulation_period_index"]
+    assert result["is_fixed"].tolist() == [False]

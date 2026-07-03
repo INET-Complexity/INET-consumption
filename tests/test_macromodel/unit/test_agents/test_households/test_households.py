@@ -457,7 +457,9 @@ class TestHouseholds:
         expected_log_ratio = zeta * runtime_state["posterior_mean"] + common_log_ratio
         expected_uncertainty = (zeta**2) * runtime_state["posterior_variance"] + common_forecast_variance
         np.testing.assert_allclose(inputs["permanent_income_log_ratio"], expected_log_ratio)
-        np.testing.assert_allclose(inputs["permanent_income_log_ratio_individual"], zeta * runtime_state["posterior_mean"])
+        np.testing.assert_allclose(
+            inputs["permanent_income_log_ratio_individual"], zeta * runtime_state["posterior_mean"]
+        )
         np.testing.assert_allclose(
             inputs["permanent_income_log_ratio_common"],
             np.full(n_households, common_log_ratio),

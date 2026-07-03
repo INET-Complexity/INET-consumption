@@ -88,7 +88,6 @@ PERMANENT_INCOME_LOG_RATIO_DATASETS = {
     "ln_y_p_over_y": "target_consumption_permanent_income_log_ratio",
     "zeta_times_posterior_mean": "target_consumption_permanent_income_log_ratio_individual",
     "common_log_ratio": "target_consumption_permanent_income_log_ratio_common",
-
 }
 PERMANENT_INCOME_LOG_RATIO_LABELS = {
     "ln_y_p_over_y": "ln(y^p / y)",
@@ -205,8 +204,7 @@ def build_permanent_income_log_ratio_decomposition_df(
                 handle,
                 resolved_country_code,
             )
-            series_by_name['real_pc_income_idx']=np.exp(series_by_name['log_real_pc_income_t'])
-
+            series_by_name["real_pc_income_idx"] = np.exp(series_by_name["log_real_pc_income_t"])
 
     decomposition_df = pd.DataFrame(series_by_name, index=pd.RangeIndex(expected_shape[0], name="period"))
     decomposition_df.attrs["country_code"] = resolved_country_code

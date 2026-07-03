@@ -700,7 +700,9 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
         start_period=pd.Period("2014Q1", freq="Q"),
         _permanent_income_forecast_inputs=SimpleNamespace(
             coefficient_table=pd.DataFrame({"coefficient": [2.0, -1.0]}, index=["constant", "time_trend"]),
-            hac_covariance=pd.DataFrame(np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]),
+            hac_covariance=pd.DataFrame(
+                np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]
+            ),
             residual_variance=1.0,
         ),
         _permanent_income_design_matrix=pd.DataFrame(
@@ -722,7 +724,17 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
             ts=SimpleNamespace(dicts={"n_individuals": [[10.0], [10.0], [10.0], [10.0], [10.0]]})
         ),
         households=SimpleNamespace(
-            ts=SimpleNamespace(dicts={"income": [np.array([1000.0]), np.array([1000.0]), np.array([1000.0]), np.array([1000.0]), np.array([1000.0])]})
+            ts=SimpleNamespace(
+                dicts={
+                    "income": [
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                    ]
+                }
+            )
         ),
     )
 
@@ -734,7 +746,9 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
     monkeypatch.setattr(
         nw,
         "forecast_common_permanent_income",
-        lambda x_t, forecast_inputs: SimpleNamespace(point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())),
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
     )
 
     result = nw.build_permanent_income_forecast_contribution_table(
@@ -756,7 +770,9 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
     ]
     assert result["period"].tolist() == [1, 1, 2, 2]
     assert result["regressor"].tolist() == ["constant", "time_trend", "constant", "time_trend"]
-    assert result["simulation_source"].tolist() == ["frozen_design_matrix_initial_period", "simulation_period_index"] * 2
+    assert (
+        result["simulation_source"].tolist() == ["frozen_design_matrix_initial_period", "simulation_period_index"] * 2
+    )
     assert result["is_fixed"].tolist() == [True, False, True, False]
     assert result["contribution"].tolist() == [2.0, -2.0, 2.0, -3.0]
 
@@ -772,7 +788,9 @@ def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_re
         start_period=pd.Period("2014Q1", freq="Q"),
         _permanent_income_forecast_inputs=SimpleNamespace(
             coefficient_table=pd.DataFrame({"coefficient": [2.0, -1.0]}, index=["constant", "time_trend"]),
-            hac_covariance=pd.DataFrame(np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]),
+            hac_covariance=pd.DataFrame(
+                np.eye(2), index=["constant", "time_trend"], columns=["constant", "time_trend"]
+            ),
             residual_variance=1.0,
         ),
         _permanent_income_design_matrix=pd.DataFrame(
@@ -794,7 +812,17 @@ def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_re
             ts=SimpleNamespace(dicts={"n_individuals": [[10.0], [10.0], [10.0], [10.0], [10.0]]})
         ),
         households=SimpleNamespace(
-            ts=SimpleNamespace(dicts={"income": [np.array([1000.0]), np.array([1000.0]), np.array([1000.0]), np.array([1000.0]), np.array([1000.0])]})
+            ts=SimpleNamespace(
+                dicts={
+                    "income": [
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                        np.array([1000.0]),
+                    ]
+                }
+            )
         ),
     )
 
@@ -806,7 +834,9 @@ def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_re
     monkeypatch.setattr(
         nw,
         "forecast_common_permanent_income",
-        lambda x_t, forecast_inputs: SimpleNamespace(point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())),
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
     )
 
     result = nw.build_permanent_income_forecast_contribution_table(
@@ -861,7 +891,9 @@ def test_build_permanent_income_forecast_contribution_table_recovers_missing_sou
     monkeypatch.setattr(
         nw,
         "forecast_common_permanent_income",
-        lambda x_t, forecast_inputs: SimpleNamespace(point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())),
+        lambda x_t, forecast_inputs: SimpleNamespace(
+            point_forecast=float((x_t * forecast_inputs.coefficient_table["coefficient"]).sum())
+        ),
     )
     monkeypatch.delattr(nw, "FORECAST_READER_TO_SIMULATION_SOURCE_NAME", raising=False)
 

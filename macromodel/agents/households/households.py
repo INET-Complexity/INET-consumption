@@ -134,6 +134,12 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     # Increment 5: the credit_requested value actually used for target_consumption_loans
     # this period (mirrors the legacy formula when the resolver is off).
     "live_credit_requested": 0.0,
+    "consumption_before_floor": 0.0,
+    "residual_shortfall_before_floor": 0.0,
+    "consumption_after_floor": 0.0,
+    "consumption_cut_amount": 0.0,
+    "remaining_subsistence_shortfall": 0.0,
+    "floor_binding": False,
 }
 
 
@@ -859,7 +865,13 @@ class Households(Agent):
                 "Stage 5 post-grant feasibility resolver is enabled but post_grant_feasible_plan "
                 "has not been populated for the current period."
             )
-        value = np.asarray(getattr(self.post_grant_feasible_plan, field_name), dtype=float)
+        field_value = getattr(self.post_grant_feasible_plan, field_name)
+        if field_value is None:
+            raise RuntimeError(
+                f"Stage 5 post-grant feasibility field {field_name} has not been populated "
+                "for the current period."
+            )
+        value = np.asarray(field_value, dtype=float)
         return np.where(np.isfinite(value), np.maximum(value, 0.0), 0.0)
 
     def current_post_grant_credit_granted(self) -> np.ndarray:
@@ -877,6 +889,36 @@ class Households(Agent):
     def current_post_grant_residual_shortfall(self) -> np.ndarray:
         """Return remaining shortfall after granted credit and planned liquidation."""
         return self._current_post_grant_feasible_plan_field("residual_shortfall_after_granted_credit")
+
+    def current_remaining_subsistence_shortfall(self) -> np.ndarray:
+        """Return the post-floor shortfall handoff for government support."""
+        return self._current_post_grant_feasible_plan_field("remaining_subsistence_shortfall")
+
+    def _record_consumption_floor_diagnostics(self) -> None:
+        """Persist floor diagnostics from the settled runtime carrier."""
+        plan = self.post_grant_feasible_plan
+        if plan is None:
+            raise RuntimeError(
+                "Stage 5 consumption-floor diagnostics require post_grant_feasible_plan "
+                "to be populated for the current period."
+            )
+
+        required_fields = (
+            "consumption_before_floor",
+            "residual_shortfall_before_floor",
+            "consumption_after_floor",
+            "consumption_cut_amount",
+            "remaining_subsistence_shortfall",
+            "floor_binding",
+        )
+        for field_name in required_fields:
+            value = getattr(plan, field_name)
+            if value is None:
+                raise RuntimeError(
+                    f"Stage 5 consumption-floor diagnostics require {field_name} "
+                    "to be populated by floor enforcement."
+                )
+            getattr(self.ts, field_name).append(np.asarray(value).copy())
 
     def apply_consumption_floor_to_post_grant_plan(
         self,
@@ -934,6 +976,7 @@ class Households(Agent):
             remaining_subsistence_shortfall=remaining_subsistence_shortfall.copy(),
             floor_binding=(consumption_cut_amount > 0.0).copy(),
         )
+        self._record_consumption_floor_diagnostics()
 
     def compute_employee_income(
         self,

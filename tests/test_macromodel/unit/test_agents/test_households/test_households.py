@@ -1647,6 +1647,142 @@ class TestPopulatePostGrantFeasiblePlan:
             np.resize(np.asarray([1.0, 0.0, 0.0, 0.0]), n_households),
         )
 
+    def test__consumption_floor_leaves_plan_unchanged_without_residual_shortfall(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        test_households.apply_consumption_floor_to_post_grant_plan(
+            consumption_before_floor=np.full(n_households, 100.0),
+            subsistence_floor=np.full(n_households, 80.0),
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.consumption_before_floor, np.full(n_households, 100.0))
+        np.testing.assert_allclose(plan.residual_shortfall_before_floor, np.zeros(n_households))
+        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 100.0))
+        np.testing.assert_allclose(plan.consumption_cut_amount, np.zeros(n_households))
+        np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.zeros(n_households))
+        np.testing.assert_array_equal(plan.floor_binding, np.zeros(n_households, dtype=bool))
+        np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
+        np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 2.0))
+        np.testing.assert_allclose(plan.planned_liquidation_total, np.full(n_households, 3.0))
+
+    def test__consumption_floor_reduces_consumption_toward_floor_and_preserves_remaining_shortfall(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        residual = np.resize(np.asarray([5.0, 30.0, 12.0, 0.0]), n_households)
+        consumption_before = np.resize(np.asarray([100.0, 100.0, 80.0, 50.0]), n_households)
+        subsistence_floor = np.resize(np.asarray([80.0, 85.0, 80.0, 40.0]), n_households)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=residual,
+        )
+
+        test_households.apply_consumption_floor_to_post_grant_plan(
+            consumption_before_floor=consumption_before,
+            subsistence_floor=subsistence_floor,
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        expected_cut = np.resize(np.asarray([5.0, 15.0, 0.0, 0.0]), n_households)
+        expected_consumption_after = consumption_before - expected_cut
+        np.testing.assert_allclose(plan.consumption_cut_amount, expected_cut)
+        np.testing.assert_allclose(plan.consumption_after_floor, expected_consumption_after)
+        np.testing.assert_allclose(
+            plan.remaining_subsistence_shortfall,
+            np.resize(np.asarray([0.0, 15.0, 12.0, 0.0]), n_households),
+        )
+        np.testing.assert_array_equal(plan.floor_binding, expected_cut > 0.0)
+        np.testing.assert_array_less(plan.consumption_after_floor - 1e-12, consumption_before + 1e-12)
+        np.testing.assert_allclose(
+            plan.consumption_before_floor,
+            plan.consumption_after_floor + plan.consumption_cut_amount,
+        )
+        np.testing.assert_array_less(subsistence_floor - 1e-12, plan.consumption_after_floor + 1e-12)
+
+    def test__consumption_floor_raises_without_settled_carrier(self, test_households):
+        n_households = test_households.ts.current("n_households")
+
+        with pytest.raises(RuntimeError, match="post_grant_feasible_plan"):
+            test_households.apply_consumption_floor_to_post_grant_plan(
+                consumption_before_floor=np.zeros(n_households),
+                subsistence_floor=np.zeros(n_households),
+            )
+
+    @pytest.mark.parametrize(
+        ("consumption_before_floor", "subsistence_floor"),
+        [
+            (np.asarray(100.0), np.zeros(3)),
+            (np.zeros(2), np.zeros(3)),
+            (np.zeros(3), np.zeros((3, 1))),
+        ],
+    )
+    def test__consumption_floor_rejects_bad_input_shapes(
+        self,
+        test_households,
+        consumption_before_floor,
+        subsistence_floor,
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        with pytest.raises(ValueError, match="must contain exactly one value per household"):
+            test_households.apply_consumption_floor_to_post_grant_plan(
+                consumption_before_floor=consumption_before_floor,
+                subsistence_floor=subsistence_floor,
+            )
+
+    def test__consumption_floor_clips_non_finite_inputs_without_aliasing(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        consumption_before = np.resize(np.asarray([100.0, np.nan, -5.0, np.inf]), n_households)
+        subsistence_floor = np.resize(np.asarray([80.0, np.nan, -3.0, np.inf]), n_households)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.resize(np.asarray([5.0, np.nan, -2.0, np.inf]), n_households),
+        )
+
+        test_households.apply_consumption_floor_to_post_grant_plan(
+            consumption_before_floor=consumption_before,
+            subsistence_floor=subsistence_floor,
+        )
+        consumption_before[:] = 99.0
+        subsistence_floor[:] = 88.0
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(
+            plan.consumption_before_floor,
+            np.resize(np.asarray([100.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            plan.residual_shortfall_before_floor,
+            np.resize(np.asarray([5.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            plan.consumption_after_floor,
+            np.resize(np.asarray([95.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            plan.consumption_cut_amount,
+            np.resize(np.asarray([5.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.zeros(n_households))
+
 
 class TestComputeTargetCreditLiveCreditRequested:
     """Stage 5 (feasibility resolver) Increment 5: compute_target_credit() wiring."""

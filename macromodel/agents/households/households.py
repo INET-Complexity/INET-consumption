@@ -161,6 +161,12 @@ class PostGrantFeasiblePlan:
     credit_rationing_gap: np.ndarray
     planned_liquidation_total: np.ndarray
     residual_shortfall_after_granted_credit: np.ndarray
+    consumption_before_floor: np.ndarray | None = None
+    residual_shortfall_before_floor: np.ndarray | None = None
+    consumption_after_floor: np.ndarray | None = None
+    consumption_cut_amount: np.ndarray | None = None
+    remaining_subsistence_shortfall: np.ndarray | None = None
+    floor_binding: np.ndarray | None = None
 
 
 class Households(Agent):
@@ -871,6 +877,63 @@ class Households(Agent):
     def current_post_grant_residual_shortfall(self) -> np.ndarray:
         """Return remaining shortfall after granted credit and planned liquidation."""
         return self._current_post_grant_feasible_plan_field("residual_shortfall_after_granted_credit")
+
+    def apply_consumption_floor_to_post_grant_plan(
+        self,
+        *,
+        consumption_before_floor: np.ndarray,
+        subsistence_floor: np.ndarray,
+    ) -> None:
+        """Apply Stage 5 Increment 8 floor arithmetic to the settled carrier."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 consumption-floor enforcement requires post_grant_feasible_plan "
+                "to be populated for the current period."
+            )
+
+        n_households = self.ts.current("n_households")
+        consumption_before = np.asarray(consumption_before_floor, dtype=float)
+        floor = np.asarray(subsistence_floor, dtype=float)
+        residual_shortfall = np.asarray(
+            self.post_grant_feasible_plan.residual_shortfall_after_granted_credit,
+            dtype=float,
+        )
+        for name, values in (
+            ("consumption_before_floor", consumption_before),
+            ("subsistence_floor", floor),
+            ("post_grant_feasible_plan.residual_shortfall_after_granted_credit", residual_shortfall),
+        ):
+            if values.shape != (n_households,):
+                raise ValueError(
+                    f"{name} must contain exactly one value per household; "
+                    f"expected shape {(n_households,)}, got {values.shape}."
+                )
+
+        cleaned_consumption_before = np.where(
+            np.isfinite(consumption_before),
+            np.maximum(consumption_before, 0.0),
+            0.0,
+        )
+        cleaned_floor = np.where(np.isfinite(floor), np.maximum(floor, 0.0), 0.0)
+        residual_before_floor = np.where(
+            np.isfinite(residual_shortfall),
+            np.maximum(residual_shortfall, 0.0),
+            0.0,
+        )
+        maximum_floor_cut = np.maximum(cleaned_consumption_before - cleaned_floor, 0.0)
+        consumption_cut_amount = np.minimum(residual_before_floor, maximum_floor_cut)
+        consumption_after_floor = cleaned_consumption_before - consumption_cut_amount
+        remaining_subsistence_shortfall = residual_before_floor - consumption_cut_amount
+
+        self.post_grant_feasible_plan = replace(
+            self.post_grant_feasible_plan,
+            consumption_before_floor=cleaned_consumption_before.copy(),
+            residual_shortfall_before_floor=residual_before_floor.copy(),
+            consumption_after_floor=consumption_after_floor.copy(),
+            consumption_cut_amount=consumption_cut_amount.copy(),
+            remaining_subsistence_shortfall=remaining_subsistence_shortfall.copy(),
+            floor_binding=(consumption_cut_amount > 0.0).copy(),
+        )
 
     def compute_employee_income(
         self,

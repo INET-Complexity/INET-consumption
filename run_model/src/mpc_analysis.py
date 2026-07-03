@@ -7,9 +7,9 @@ adds pre-shock heterogeneity bins, and writes distribution plots.
 
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Iterable
 from dataclasses import dataclass
-import importlib.util
 from pathlib import Path
 
 import h5py

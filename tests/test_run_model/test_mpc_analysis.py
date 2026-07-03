@@ -17,8 +17,8 @@ from src.mpc_analysis import (  # noqa: E402
     build_household_mpc_panel,
     filter_mpc_panel,
     make_distribution_plot,
-    plot_mpc_panel,
     period_to_year_month,
+    plot_mpc_panel,
     read_household_target_consumption_sum,
     summarize_mpc_bins,
 )

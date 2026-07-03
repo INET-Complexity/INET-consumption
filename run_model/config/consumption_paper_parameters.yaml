@@ -85,7 +85,7 @@ desired_consumption:
     mortgage_debt_propensity: 0.03
     mortgage_payment_propensity: 1.0
     house_price_propensity: -0.062
-    income_growth_propensity: 0.15
+    income_growth_propensity: 0.45
     interest_rate_cashflow_propensity: -0.003
     uncertainty_propensity: -0.005
     partial_adjustment_speed: 0.56

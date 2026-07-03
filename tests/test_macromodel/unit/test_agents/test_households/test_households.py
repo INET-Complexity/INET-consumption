@@ -1555,6 +1555,51 @@ class TestPopulatePostGrantFeasiblePlan:
             np.resize(np.asarray([3.0, 0.0, 0.0, 0.0]), n_households),
         )
 
+    def test__post_grant_accessors_return_settled_carrier_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=np.full(n_households, 1.0),
+        )
+
+        np.testing.assert_allclose(test_households.current_post_grant_credit_granted(), np.full(n_households, 4.0))
+        np.testing.assert_allclose(
+            test_households.current_post_grant_credit_rationing_gap(),
+            np.full(n_households, 2.0),
+        )
+        np.testing.assert_allclose(
+            test_households.current_post_grant_planned_liquidation_total(),
+            np.full(n_households, 3.0),
+        )
+        np.testing.assert_allclose(
+            test_households.current_post_grant_residual_shortfall(),
+            np.full(n_households, 1.0),
+        )
+
+    def test__post_grant_accessors_raise_without_settled_carrier(self, test_households):
+        with pytest.raises(RuntimeError, match="post_grant_feasible_plan"):
+            test_households.current_post_grant_residual_shortfall()
+
+    def test__post_grant_accessors_defensively_clip_invalid_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.resize(np.asarray([4.0, -2.0, np.nan, np.inf]), n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.resize(np.asarray([1.0, -3.0, np.nan, np.inf]), n_households),
+        )
+
+        np.testing.assert_allclose(
+            test_households.current_post_grant_credit_granted(),
+            np.resize(np.asarray([4.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.current_post_grant_residual_shortfall(),
+            np.resize(np.asarray([1.0, 0.0, 0.0, 0.0]), n_households),
+        )
+
 
 class TestComputeTargetCreditLiveCreditRequested:
     """Stage 5 (feasibility resolver) Increment 5: compute_target_credit() wiring."""

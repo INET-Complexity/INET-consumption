@@ -1504,6 +1504,9 @@ class Country:
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            # Post-credit Stage 5 consumers must read settled feasibility state.
+            self.households.current_post_grant_residual_shortfall()
         subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             subsistence_consumption=self.economy.ts.current("subsistence_consumption"),

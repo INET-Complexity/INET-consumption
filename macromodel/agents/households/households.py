@@ -836,6 +836,32 @@ class Households(Agent):
             ).copy(),
         )
 
+    def _current_post_grant_feasible_plan_field(self, field_name: str) -> np.ndarray:
+        """Return a settled Stage 5 carrier field for post-credit consumers."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 post-grant feasibility resolver is enabled but post_grant_feasible_plan "
+                "has not been populated for the current period."
+            )
+        value = np.asarray(getattr(self.post_grant_feasible_plan, field_name), dtype=float)
+        return np.where(np.isfinite(value), np.maximum(value, 0.0), 0.0)
+
+    def current_post_grant_credit_granted(self) -> np.ndarray:
+        """Return settled granted consumer credit from the post-grant carrier."""
+        return self._current_post_grant_feasible_plan_field("credit_granted")
+
+    def current_post_grant_credit_rationing_gap(self) -> np.ndarray:
+        """Return settled consumer-credit rationing from the post-grant carrier."""
+        return self._current_post_grant_feasible_plan_field("credit_rationing_gap")
+
+    def current_post_grant_planned_liquidation_total(self) -> np.ndarray:
+        """Return planned liquidation carried into the settled feasibility plan."""
+        return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
+
+    def current_post_grant_residual_shortfall(self) -> np.ndarray:
+        """Return remaining shortfall after granted credit and planned liquidation."""
+        return self._current_post_grant_feasible_plan_field("residual_shortfall_after_granted_credit")
+
     def compute_employee_income(
         self,
         individual_income: np.ndarray,

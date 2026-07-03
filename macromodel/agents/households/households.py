@@ -709,8 +709,19 @@ class Households(Agent):
                 "has not been populated for the current planning pass."
             )
 
+        n_households = self.ts.current("n_households")
         liquidation = np.asarray(planned_liquidation_total, dtype=float)
         ifa = np.asarray(current_ifa, dtype=float)
+        if liquidation.shape != (n_households,):
+            raise ValueError(
+                "planned_liquidation_total must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {liquidation.shape}."
+            )
+        if ifa.shape != (n_households,):
+            raise ValueError(
+                "current_ifa must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {ifa.shape}."
+            )
         feasible_ifa = np.where(np.isfinite(ifa), np.maximum(ifa, 0.0), 0.0)
         cleaned_liquidation = np.where(np.isfinite(liquidation), np.maximum(liquidation, 0.0), 0.0)
         cleaned_liquidation = np.minimum(cleaned_liquidation, feasible_ifa)

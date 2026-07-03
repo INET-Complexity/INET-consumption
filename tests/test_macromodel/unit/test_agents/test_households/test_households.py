@@ -1220,6 +1220,44 @@ class TestPopulateAndAccessLivePlannedLiquidation:
 
         np.testing.assert_allclose(test_households.pre_grant_feasible_plan.planned_liquidation_total, expected)
 
+    @pytest.mark.parametrize(
+        "planned_liquidation",
+        [
+            np.asarray(5.0),
+            np.asarray([1.0, 2.0]),
+            np.asarray([[1.0], [2.0], [3.0]]),
+        ],
+    )
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_rejects_bad_liquidation_shape(
+        self, test_households, planned_liquidation
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(ValueError, match="planned_liquidation_total must contain exactly one value per household"):
+            test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+                planned_liquidation_total=planned_liquidation,
+                current_ifa=np.full(n_households, 10.0),
+            )
+
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_rejects_bad_ifa_shape(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(ValueError, match="current_ifa must contain exactly one value per household"):
+            test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+                planned_liquidation_total=np.full(n_households, 5.0),
+                current_ifa=np.asarray([[10.0], [10.0], [10.0]]),
+            )
+
     def test__populate_pre_grant_feasible_plan_planned_liquidation_copies_inputs(self, test_households):
         n_households = test_households.ts.current("n_households")
         planned_liquidation = np.full(n_households, 5.0)

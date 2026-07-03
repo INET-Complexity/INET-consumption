@@ -42,6 +42,7 @@ class TestHouseholds:
         assert test_households.country_name == "FRA"
         assert test_households.uses_feasibility_resolver is False
         assert test_households.pre_grant_feasible_plan is None
+        assert test_households.post_grant_feasible_plan is None
 
     def test__households_states(self, test_households):
         assert test_households is not None
@@ -1069,10 +1070,17 @@ class TestComputeAndRecordLiquidAssetDrawdown:
             funded_from_liquid_assets=np.full(n_households, 1.0),
             residual_shortfall_after_lfa=np.full(n_households, 2.0),
         )
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 2.0),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
 
         test_households.configure_feasibility_resolver(True)
 
         assert test_households.pre_grant_feasible_plan is None
+        assert test_households.post_grant_feasible_plan is None
 
     def test__current_live_post_drawdown_residual_raises_when_enabled_without_live_carrier(self, test_households):
         test_households.configure_feasibility_resolver(True)
@@ -1339,6 +1347,215 @@ class TestPopulateAndAccessLivePlannedLiquidation:
         test_households.configure_feasibility_resolver(False)
 
         np.testing.assert_allclose(test_households.current_live_planned_liquidation_total(), expected)
+
+
+class TestPopulatePostGrantFeasiblePlan:
+    """Stage 5 Increment 7: settled post-grant feasibility carrier."""
+
+    @staticmethod
+    def _populate_pre_grant_plan(
+        test_households,
+        *,
+        residual_after_lfa,
+        credit_requested,
+        planned_liquidation,
+    ):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.asarray(residual_after_lfa, dtype=float) + 5.0,
+            funded_from_liquid_assets=np.full(n_households, 5.0),
+            residual_shortfall_after_lfa=residual_after_lfa,
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=credit_requested)
+        test_households.populate_pre_grant_feasible_plan_planned_liquidation(
+            planned_liquidation_total=planned_liquidation,
+            current_ifa=np.full(n_households, 100.0),
+        )
+
+    def test__full_grant_builds_settled_carrier_without_rationing(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        credit_requested = np.full(n_households, 8.0)
+        planned_liquidation = np.full(n_households, 4.0)
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 12.0),
+            credit_requested=credit_requested,
+            planned_liquidation=planned_liquidation,
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(credit_granted=credit_requested)
+
+        plan = test_households.post_grant_feasible_plan
+        assert plan is not None
+        np.testing.assert_allclose(plan.credit_granted, credit_requested)
+        np.testing.assert_allclose(plan.credit_rationing_gap, np.zeros(n_households))
+        np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation)
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.zeros(n_households))
+
+    def test__partial_grant_preserves_rationing_gap_and_residual(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 20.0),
+            credit_requested=np.full(n_households, 12.0),
+            planned_liquidation=np.full(n_households, 3.0),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 5.0),
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 5.0))
+        np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 7.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 12.0))
+
+    def test__zero_grant_is_explicit_and_never_falls_back_to_requested_credit(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 1.0),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.zeros(n_households),
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.credit_granted, np.zeros(n_households))
+        np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 9.0))
+
+    def test__post_grant_reconciliation_leaves_pre_grant_carrier_unchanged(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+        pre_grant_plan = test_households.pre_grant_feasible_plan
+        original_credit_requested = pre_grant_plan.credit_requested.copy()
+        original_planned_liquidation = pre_grant_plan.planned_liquidation_total.copy()
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 4.0),
+        )
+
+        np.testing.assert_allclose(pre_grant_plan.credit_requested, original_credit_requested)
+        np.testing.assert_allclose(pre_grant_plan.planned_liquidation_total, original_planned_liquidation)
+
+    def test__post_grant_carrier_does_not_alias_pre_grant_arrays_or_inputs(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        credit_granted = np.full(n_households, 4.0)
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(credit_granted=credit_granted)
+        credit_granted[:] = 99.0
+        test_households.pre_grant_feasible_plan.planned_liquidation_total[:] = 88.0
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
+        np.testing.assert_allclose(plan.planned_liquidation_total, np.full(n_households, 2.0))
+
+    def test__post_grant_reconciliation_raises_without_pre_grant_carrier(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+
+        with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=np.zeros(n_households),
+            )
+
+    def test__post_grant_reconciliation_raises_without_pre_grant_credit_requested(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="credit_requested"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=np.zeros(n_households),
+            )
+
+    def test__post_grant_reconciliation_raises_without_pre_grant_planned_liquidation(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(
+            credit_requested=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="planned_liquidation_total"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=np.zeros(n_households),
+            )
+
+    @pytest.mark.parametrize(
+        "credit_granted",
+        [
+            np.asarray(0.0),
+            np.asarray([1.0, 2.0]),
+            np.asarray([[1.0], [2.0], [3.0]]),
+        ],
+    )
+    def test__post_grant_reconciliation_rejects_bad_granted_credit_shape(
+        self, test_households, credit_granted
+    ):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.zeros(n_households),
+            credit_requested=np.zeros(n_households),
+            planned_liquidation=np.zeros(n_households),
+        )
+
+        with pytest.raises(ValueError, match="credit_granted must contain exactly one value per household"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=credit_granted,
+            )
+
+    def test__post_grant_reconciliation_clamps_non_finite_and_negative_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.resize(np.asarray([10.0, np.nan, -5.0, np.inf]), n_households),
+            credit_requested=np.resize(np.asarray([8.0, np.nan, -2.0, np.inf]), n_households),
+            planned_liquidation=np.resize(np.asarray([2.0, np.nan, -3.0, np.inf]), n_households),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.resize(np.asarray([5.0, np.nan, -4.0, np.inf]), n_households),
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(
+            plan.credit_granted,
+            np.resize(np.asarray([5.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            plan.credit_rationing_gap,
+            np.resize(np.asarray([3.0, 0.0, 0.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            plan.residual_shortfall_after_granted_credit,
+            np.resize(np.asarray([3.0, 0.0, 0.0, 0.0]), n_households),
+        )
 
 
 class TestComputeTargetCreditLiveCreditRequested:

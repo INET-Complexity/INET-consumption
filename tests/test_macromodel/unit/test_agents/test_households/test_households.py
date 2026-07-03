@@ -1178,9 +1178,7 @@ class TestPopulateAndAccessLivePlannedLiquidation:
                 current_ifa=np.full(n_households, 10.0),
             )
 
-    def test__populate_pre_grant_feasible_plan_planned_liquidation_extends_existing_carrier(
-        self, test_households
-    ):
+    def test__populate_pre_grant_feasible_plan_planned_liquidation_extends_existing_carrier(self, test_households):
         n_households = test_households.ts.current("n_households")
         credit_requested = np.full(n_households, 7.0)
         planned_liquidation = np.full(n_households, 4.0)
@@ -1248,9 +1246,7 @@ class TestPopulateAndAccessLivePlannedLiquidation:
         with pytest.raises(RuntimeError, match="pre_grant_feasible_plan"):
             test_households.current_live_planned_liquidation_total()
 
-    def test__current_live_planned_liquidation_total_raises_when_enabled_without_populated_field(
-        self, test_households
-    ):
+    def test__current_live_planned_liquidation_total_raises_when_enabled_without_populated_field(self, test_households):
         n_households = test_households.ts.current("n_households")
         test_households.configure_feasibility_resolver(True)
         test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(

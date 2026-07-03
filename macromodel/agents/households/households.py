@@ -2401,9 +2401,7 @@ class Households(Agent):
 
         target_consumption = self.ts.current("target_consumption")
         # Compute subsistence shortfall diagnostic (no effect on clearing budget)
-        shortfall = self._compute_subsistence_consumption_shortfall(
-            subsistence_consumption, target_consumption
-        )
+        shortfall = self._compute_subsistence_consumption_shortfall(subsistence_consumption, target_consumption)
         goods_consumption = target_consumption
         if self.uses_feasibility_resolver:
             self.apply_consumption_floor_to_post_grant_plan(

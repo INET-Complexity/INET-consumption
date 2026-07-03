@@ -1164,6 +1164,10 @@ class Country:
             self.households.populate_pre_grant_feasible_plan_credit_requested(
                 credit_requested=self.households.ts.current("shadow_credit_requested"),
             )
+            self.households.populate_pre_grant_feasible_plan_planned_liquidation(
+                planned_liquidation_total=self.households.ts.current("liquidation_planned"),
+                current_ifa=self.households.ts.current("wealth_other_financial_assets"),
+            )
 
         target_investment = self.households.compute_target_investment(
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),

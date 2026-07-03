@@ -150,6 +150,7 @@ class PreGrantFeasiblePlan:
     funded_from_liquid_assets: np.ndarray
     residual_shortfall_after_lfa: np.ndarray
     credit_requested: np.ndarray | None = None
+    planned_liquidation_total: np.ndarray | None = None
 
 
 class Households(Agent):
@@ -688,6 +689,76 @@ class Households(Agent):
 
         credit_requested = np.asarray(credit_requested, dtype=float)
         return np.where(np.isfinite(credit_requested), np.maximum(credit_requested, 0.0), 0.0)
+
+    def populate_pre_grant_feasible_plan_planned_liquidation(
+        self,
+        *,
+        planned_liquidation_total: np.ndarray,
+        current_ifa: np.ndarray,
+    ) -> None:
+        """Extend the live Stage 5 carrier with planned illiquid liquidation.
+
+        Increment 6 promotes the already-sanctioned Increment 3 liquidation
+        amount into the live carrier. It does not re-run borrow-vs-sell or
+        DSTI logic; validation here is limited to keeping runtime state finite
+        and within current illiquid-asset availability.
+        """
+        if self.pre_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                "has not been populated for the current planning pass."
+            )
+
+        n_households = self.ts.current("n_households")
+        liquidation = np.asarray(planned_liquidation_total, dtype=float)
+        ifa = np.asarray(current_ifa, dtype=float)
+        if liquidation.shape != (n_households,):
+            raise ValueError(
+                "planned_liquidation_total must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {liquidation.shape}."
+            )
+        if ifa.shape != (n_households,):
+            raise ValueError(
+                "current_ifa must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {ifa.shape}."
+            )
+        feasible_ifa = np.where(np.isfinite(ifa), np.maximum(ifa, 0.0), 0.0)
+        cleaned_liquidation = np.where(np.isfinite(liquidation), np.maximum(liquidation, 0.0), 0.0)
+        cleaned_liquidation = np.minimum(cleaned_liquidation, feasible_ifa)
+
+        self.pre_grant_feasible_plan = replace(
+            self.pre_grant_feasible_plan,
+            liquidity_shortfall_before_repair=self.pre_grant_feasible_plan.liquidity_shortfall_before_repair.copy(),
+            funded_from_liquid_assets=self.pre_grant_feasible_plan.funded_from_liquid_assets.copy(),
+            residual_shortfall_after_lfa=self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy(),
+            credit_requested=(
+                None
+                if self.pre_grant_feasible_plan.credit_requested is None
+                else self.pre_grant_feasible_plan.credit_requested.copy()
+            ),
+            planned_liquidation_total=cleaned_liquidation.copy(),
+        )
+
+    def current_live_planned_liquidation_total(self) -> np.ndarray:
+        """Return the sanctioned Stage 5 live planned-liquidation read path."""
+        if self.uses_feasibility_resolver:
+            if self.pre_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                    "has not been populated for the current planning pass."
+                )
+            if self.pre_grant_feasible_plan.planned_liquidation_total is None:
+                raise RuntimeError(
+                    "Stage 5 live feasibility resolver is enabled and pre_grant_feasible_plan "
+                    "exists, but planned_liquidation_total has not been populated for the "
+                    "current planning pass."
+                )
+            planned_liquidation = self.pre_grant_feasible_plan.planned_liquidation_total
+        else:
+            planned_liquidation = self.ts.current("liquidation_planned")
+
+        planned_liquidation = np.asarray(planned_liquidation, dtype=float)
+        return np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
 
     def compute_employee_income(
         self,

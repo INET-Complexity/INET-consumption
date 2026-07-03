@@ -153,6 +153,16 @@ class PreGrantFeasiblePlan:
     planned_liquidation_total: np.ndarray | None = None
 
 
+@dataclass
+class PostGrantFeasiblePlan:
+    """Settled Stage 5 feasibility carrier after consumer credit clearing."""
+
+    credit_granted: np.ndarray
+    credit_rationing_gap: np.ndarray
+    planned_liquidation_total: np.ndarray
+    residual_shortfall_after_granted_credit: np.ndarray
+
+
 class Households(Agent):
     """Economic agent representing household sector behavior.
 
@@ -250,6 +260,7 @@ class Households(Agent):
         self.use_consumption_weights_by_income = use_consumption_weights_by_income
         self.uses_feasibility_resolver = uses_feasibility_resolver
         self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
+        self.post_grant_feasible_plan: PostGrantFeasiblePlan | None = None
 
         # Initialize substitution bundles and bundle matrix
         self.substitution_bundles = substitution_bundles if substitution_bundles is not None else []
@@ -583,14 +594,25 @@ class Households(Agent):
         self.use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
         self.configure_feasibility_resolver(configuration.parameters.uses_feasibility_resolver)
 
-    def configure_feasibility_resolver(self, uses_feasibility_resolver: bool) -> None:
+    def configure_feasibility_resolver(
+        self,
+        uses_feasibility_resolver: bool,
+        *,
+        clear_post_grant: bool = True,
+    ) -> None:
         """Configure whether the live Stage 5 feasibility handoff is active."""
         self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
         self.pre_grant_feasible_plan = None
+        if clear_post_grant or not self.uses_feasibility_resolver:
+            self.post_grant_feasible_plan = None
 
     def clear_pre_grant_feasible_plan(self) -> None:
         """Clear the runtime Stage 5 live feasibility carrier."""
         self.pre_grant_feasible_plan = None
+
+    def clear_post_grant_feasible_plan(self) -> None:
+        """Clear the runtime Stage 5 settled feasibility carrier."""
+        self.post_grant_feasible_plan = None
 
     def populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
         self,
@@ -759,6 +781,96 @@ class Households(Agent):
 
         planned_liquidation = np.asarray(planned_liquidation, dtype=float)
         return np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
+
+    def populate_post_grant_feasible_plan_from_granted_credit(
+        self,
+        *,
+        credit_granted: np.ndarray,
+    ) -> None:
+        """Build the settled Stage 5 carrier from cleared consumer credit."""
+        if self.pre_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 live feasibility resolver is enabled but pre_grant_feasible_plan "
+                "has not been populated for the current planning pass."
+            )
+        if self.pre_grant_feasible_plan.credit_requested is None:
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires pre_grant_feasible_plan.credit_requested "
+                "to be populated for the current planning pass."
+            )
+        if self.pre_grant_feasible_plan.planned_liquidation_total is None:
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires "
+                "pre_grant_feasible_plan.planned_liquidation_total to be populated for the current "
+                "planning pass."
+            )
+
+        n_households = self.ts.current("n_households")
+        granted = np.asarray(credit_granted, dtype=float)
+        if granted.shape != (n_households,):
+            raise ValueError(
+                "credit_granted must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {granted.shape}."
+            )
+        if not np.all(np.isfinite(granted)):
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires finite cleared credit_granted for every household."
+            )
+
+        requested = np.asarray(self.pre_grant_feasible_plan.credit_requested, dtype=float)
+        planned_liquidation = np.asarray(self.pre_grant_feasible_plan.planned_liquidation_total, dtype=float)
+        residual_after_lfa = np.asarray(self.pre_grant_feasible_plan.residual_shortfall_after_lfa, dtype=float)
+        for name, values in (
+            ("pre_grant_feasible_plan.credit_requested", requested),
+            ("pre_grant_feasible_plan.planned_liquidation_total", planned_liquidation),
+            ("pre_grant_feasible_plan.residual_shortfall_after_lfa", residual_after_lfa),
+        ):
+            if values.shape != (n_households,):
+                raise ValueError(
+                    f"{name} must contain exactly one value per household; "
+                    f"expected shape {(n_households,)}, got {values.shape}."
+                )
+
+        cleaned_granted = np.where(np.isfinite(granted), np.maximum(granted, 0.0), 0.0)
+        cleaned_requested = np.where(np.isfinite(requested), np.maximum(requested, 0.0), 0.0)
+        cleaned_liquidation = np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
+        cleaned_residual_after_lfa = np.where(np.isfinite(residual_after_lfa), np.maximum(residual_after_lfa, 0.0), 0.0)
+
+        self.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=cleaned_granted.copy(),
+            credit_rationing_gap=np.maximum(cleaned_requested - cleaned_granted, 0.0).copy(),
+            planned_liquidation_total=cleaned_liquidation.copy(),
+            residual_shortfall_after_granted_credit=np.maximum(
+                cleaned_residual_after_lfa - cleaned_granted - cleaned_liquidation,
+                0.0,
+            ).copy(),
+        )
+
+    def _current_post_grant_feasible_plan_field(self, field_name: str) -> np.ndarray:
+        """Return a settled Stage 5 carrier field for post-credit consumers."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError(
+                "Stage 5 post-grant feasibility resolver is enabled but post_grant_feasible_plan "
+                "has not been populated for the current period."
+            )
+        value = np.asarray(getattr(self.post_grant_feasible_plan, field_name), dtype=float)
+        return np.where(np.isfinite(value), np.maximum(value, 0.0), 0.0)
+
+    def current_post_grant_credit_granted(self) -> np.ndarray:
+        """Return settled granted consumer credit from the post-grant carrier."""
+        return self._current_post_grant_feasible_plan_field("credit_granted")
+
+    def current_post_grant_credit_rationing_gap(self) -> np.ndarray:
+        """Return settled consumer-credit rationing from the post-grant carrier."""
+        return self._current_post_grant_feasible_plan_field("credit_rationing_gap")
+
+    def current_post_grant_planned_liquidation_total(self) -> np.ndarray:
+        """Return planned liquidation carried into the settled feasibility plan."""
+        return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
+
+    def current_post_grant_residual_shortfall(self) -> np.ndarray:
+        """Return remaining shortfall after granted credit and planned liquidation."""
+        return self._current_post_grant_feasible_plan_field("residual_shortfall_after_granted_credit")
 
     def compute_employee_income(
         self,

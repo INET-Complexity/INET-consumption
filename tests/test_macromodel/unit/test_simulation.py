@@ -96,6 +96,9 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
         def append_excess_demand_finance_potential_diagnostics(self):
             events.append("country.append_excess_demand_finance_potential_diagnostics")
 
+        def reconcile_post_grant_feasible_plan(self):
+            events.append("country.reconcile_post_grant_feasible_plan")
+
         def __getattr__(self, name):
             if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):
 
@@ -160,6 +163,9 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
     assert events.index("regional.sync") < events.index("country.prepare_credit_market_clearing")
     assert events.index("country.clear_credit_market") < events.index("country.process_housing_market_clearing")
     assert events.index("country.process_credit_market_clearing") < events.index(
+        "country.reconcile_post_grant_feasible_plan"
+    )
+    assert events.index("country.reconcile_post_grant_feasible_plan") < events.index(
         "country.prepare_post_credit_feasible_activity_plan"
     )
     assert events.index("country.prepare_post_credit_feasible_activity_plan") < events.index(
@@ -190,6 +196,9 @@ def test_iterate_skips_supply_capped_assignment_without_credit_supply_transient(
 
         def append_excess_demand_finance_potential_diagnostics(self):
             events.append("country.append_excess_demand_finance_potential_diagnostics")
+
+        def reconcile_post_grant_feasible_plan(self):
+            events.append("country.reconcile_post_grant_feasible_plan")
 
         def __getattr__(self, name):
             if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):

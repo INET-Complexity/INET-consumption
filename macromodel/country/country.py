@@ -1090,7 +1090,10 @@ class Country:
         # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
         # (Increment 0 section).
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
-        self.households.configure_feasibility_resolver(uses_feasibility_resolver)
+        self.households.configure_feasibility_resolver(
+            uses_feasibility_resolver,
+            clear_post_grant=not replace_current,
+        )
         scheduled_consumption_loan_payment = (
             self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
         )
@@ -1356,6 +1359,28 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
+    def reconcile_post_grant_feasible_plan(self) -> None:
+        """Build settled household feasibility after consumer-credit clearing."""
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.clear_post_grant_feasible_plan()
+            return
+
+        n_households = self.households.ts.current("n_households")
+        credit_granted = np.asarray(self.households.ts.current("received_consumption_loans"), dtype=float)
+        if credit_granted.shape != (n_households,):
+            raise ValueError(
+                "received_consumption_loans must contain exactly one value per household; "
+                f"expected shape {(n_households,)}, got {credit_granted.shape}."
+            )
+        if not np.all(np.isfinite(credit_granted)):
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires cleared received_consumption_loans for every household."
+            )
+
+        self.households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=credit_granted,
+        )
+
     def compute_activity_tax_previews(
         self,
         activity_production: np.ndarray,
@@ -1415,6 +1440,8 @@ class Country:
 
     def prepare_post_credit_feasible_activity_plan(self) -> None:
         """Revise firm activity after credit clears and before labour clearing."""
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.current_post_grant_residual_shortfall()
         n_firms = self.firms.ts.current("n_firms")
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
@@ -1481,6 +1508,9 @@ class Country:
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
         )
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            # Post-credit Stage 5 consumers must read settled feasibility state.
+            self.households.current_post_grant_residual_shortfall()
         subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             subsistence_consumption=self.economy.ts.current("subsistence_consumption"),

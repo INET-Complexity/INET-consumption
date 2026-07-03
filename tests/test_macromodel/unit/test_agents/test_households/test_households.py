@@ -1514,9 +1514,7 @@ class TestPopulatePostGrantFeasiblePlan:
             np.asarray([[1.0], [2.0], [3.0]]),
         ],
     )
-    def test__post_grant_reconciliation_rejects_bad_granted_credit_shape(
-        self, test_households, credit_granted
-    ):
+    def test__post_grant_reconciliation_rejects_bad_granted_credit_shape(self, test_households, credit_granted):
         n_households = test_households.ts.current("n_households")
         self._populate_pre_grant_plan(
             test_households,

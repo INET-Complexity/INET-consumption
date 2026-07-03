@@ -594,11 +594,17 @@ class Households(Agent):
         self.use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
         self.configure_feasibility_resolver(configuration.parameters.uses_feasibility_resolver)
 
-    def configure_feasibility_resolver(self, uses_feasibility_resolver: bool) -> None:
+    def configure_feasibility_resolver(
+        self,
+        uses_feasibility_resolver: bool,
+        *,
+        clear_post_grant: bool = True,
+    ) -> None:
         """Configure whether the live Stage 5 feasibility handoff is active."""
         self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
         self.pre_grant_feasible_plan = None
-        self.post_grant_feasible_plan = None
+        if clear_post_grant or not self.uses_feasibility_resolver:
+            self.post_grant_feasible_plan = None
 
     def clear_pre_grant_feasible_plan(self) -> None:
         """Clear the runtime Stage 5 live feasibility carrier."""
@@ -805,6 +811,11 @@ class Households(Agent):
             raise ValueError(
                 "credit_granted must contain exactly one value per household; "
                 f"expected shape {(n_households,)}, got {granted.shape}."
+            )
+        if not np.all(np.isfinite(granted)):
+            raise RuntimeError(
+                "Stage 5 post-grant reconciliation requires finite cleared credit_granted "
+                "for every household."
             )
 
         requested = np.asarray(self.pre_grant_feasible_plan.credit_requested, dtype=float)

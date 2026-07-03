@@ -505,6 +505,7 @@ class TestCountry:
         offered_wage_function = object()
         captured = {}
 
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", False)
         test_country.assume_zero_growth = True
         test_country.firms.ts.override_current("target_production", target_y)
         test_country.firms.ts.override_current("wage_tightness_markup", np.zeros(n_firms))
@@ -552,6 +553,40 @@ class TestCountry:
             captured["loan_interest_obligation_preview"],
             test_country.firms.ts.current("firm_settlement_scheduled_interest_due"),
         )
+
+    def test__prepare_post_credit_feasible_activity_plan_requires_post_grant_plan_when_resolver_enabled(
+        self, test_country, monkeypatch
+    ):
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+
+        with pytest.raises(RuntimeError, match="post_grant_feasible_plan"):
+            test_country.prepare_post_credit_feasible_activity_plan()
+
+    def test__prepare_post_credit_feasible_activity_plan_accepts_post_grant_plan_when_resolver_enabled(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **_kwargs: np.zeros(1))
+        monkeypatch.setattr(test_country.firms, "compute_interest_paid_on_deposits", lambda **_kwargs: np.zeros(1))
+        monkeypatch.setattr(test_country.firms, "prepare_feasible_activity_plan", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.firms, "apply_feasible_labour_demand", lambda: None)
+        monkeypatch.setattr(test_country, "update_firm_wage_offers", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            test_country,
+            "compute_post_credit_activity_tax_previews",
+            lambda: (np.zeros(1), np.zeros(1)),
+        )
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        test_country.prepare_post_credit_feasible_activity_plan()
+
+        np.testing.assert_allclose(test_country._post_credit_corporate_tax_obligation_preview, np.zeros(1))
 
     def test__reconcile_post_grant_feasible_plan_clears_settled_carrier_when_disabled(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
@@ -1992,6 +2027,51 @@ class TestCountry:
         # is NOT second_pass_shadow_credit, i.e. the True-pass populate call
         # for credit_requested genuinely did not run.
         assert test_country.households.pre_grant_feasible_plan.credit_requested is None
+
+    def test__set_household_target_demand_replace_current_preserves_post_grant_plan(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_industries = len(test_country.firms.ts.current("price"))
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        target_consumption = np.zeros((n_households, n_industries))
+        target_consumption[:, 0] = 300.0
+        post_grant_plan = PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 7.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=np.full(n_households, 5.0),
+        )
+
+        test_country.households.post_grant_feasible_plan = post_grant_plan
+        test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+
+        monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_mortgage_payments_by_household",
+            lambda: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_scheduled_consumption_loan_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+
+        def stub_residual_capacity_fallback(**_kwargs):
+            test_country.households.ts.override_current("shadow_credit_requested", np.full(n_households, 9.0))
+            return None
+
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_and_record_residual_capacity_fallback",
+            stub_residual_capacity_fallback,
+        )
+
+        test_country._set_household_target_demand(replace_current=True)
+
+        assert test_country.households.post_grant_feasible_plan is post_grant_plan
 
     def test__set_household_target_demand_only_populates_planned_liquidation_on_first_pass(
         self, test_country, monkeypatch

@@ -1090,7 +1090,10 @@ class Country:
         # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
         # (Increment 0 section).
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
-        self.households.configure_feasibility_resolver(uses_feasibility_resolver)
+        self.households.configure_feasibility_resolver(
+            uses_feasibility_resolver,
+            clear_post_grant=not replace_current,
+        )
         scheduled_consumption_loan_payment = (
             self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
         )
@@ -1438,6 +1441,8 @@ class Country:
 
     def prepare_post_credit_feasible_activity_plan(self) -> None:
         """Revise firm activity after credit clears and before labour clearing."""
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.current_post_grant_residual_shortfall()
         n_firms = self.firms.ts.current("n_firms")
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],

@@ -1374,8 +1374,7 @@ class Country:
             )
         if not np.all(np.isfinite(credit_granted)):
             raise RuntimeError(
-                "Stage 5 post-grant reconciliation requires cleared received_consumption_loans "
-                "for every household."
+                "Stage 5 post-grant reconciliation requires cleared received_consumption_loans for every household."
             )
 
         self.households.populate_post_grant_feasible_plan_from_granted_credit(

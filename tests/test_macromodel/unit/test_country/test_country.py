@@ -2028,9 +2028,7 @@ class TestCountry:
         # for credit_requested genuinely did not run.
         assert test_country.households.pre_grant_feasible_plan.credit_requested is None
 
-    def test__set_household_target_demand_replace_current_preserves_post_grant_plan(
-        self, test_country, monkeypatch
-    ):
+    def test__set_household_target_demand_replace_current_preserves_post_grant_plan(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.configuration.households.parameters.uses_feasibility_resolver = True

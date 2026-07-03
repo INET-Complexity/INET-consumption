@@ -814,8 +814,7 @@ class Households(Agent):
             )
         if not np.all(np.isfinite(granted)):
             raise RuntimeError(
-                "Stage 5 post-grant reconciliation requires finite cleared credit_granted "
-                "for every household."
+                "Stage 5 post-grant reconciliation requires finite cleared credit_granted for every household."
             )
 
         requested = np.asarray(self.pre_grant_feasible_plan.credit_requested, dtype=float)

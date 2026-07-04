@@ -43,6 +43,15 @@ class TestHouseholds:
         assert test_households.uses_feasibility_resolver is False
         assert test_households.pre_grant_feasible_plan is None
         assert test_households.post_grant_feasible_plan is None
+        for field_name in [
+            "consumption_before_floor",
+            "residual_shortfall_before_floor",
+            "consumption_after_floor",
+            "consumption_cut_amount",
+            "remaining_subsistence_shortfall",
+            "floor_binding",
+        ]:
+            assert field_name in test_households.ts.get_keys()
 
     def test__households_states(self, test_households):
         assert test_households is not None
@@ -1730,6 +1739,20 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 2.0))
         np.testing.assert_allclose(plan.planned_liquidation_total, np.full(n_households, 3.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("consumption_before_floor"), plan.consumption_before_floor
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("residual_shortfall_before_floor"),
+            plan.residual_shortfall_before_floor,
+        )
+        np.testing.assert_allclose(test_households.ts.current("consumption_after_floor"), plan.consumption_after_floor)
+        np.testing.assert_allclose(test_households.ts.current("consumption_cut_amount"), plan.consumption_cut_amount)
+        np.testing.assert_allclose(
+            test_households.ts.current("remaining_subsistence_shortfall"),
+            plan.remaining_subsistence_shortfall,
+        )
+        np.testing.assert_array_equal(test_households.ts.current("floor_binding"), plan.floor_binding)
 
     def test__consumption_floor_reduces_consumption_toward_floor_and_preserves_remaining_shortfall(
         self,
@@ -1767,6 +1790,10 @@ class TestPopulatePostGrantFeasiblePlan:
             plan.consumption_after_floor + plan.consumption_cut_amount,
         )
         np.testing.assert_array_less(subsistence_floor - 1e-12, plan.consumption_after_floor + 1e-12)
+        np.testing.assert_allclose(
+            test_households.current_remaining_subsistence_shortfall(),
+            plan.remaining_subsistence_shortfall,
+        )
 
     def test__consumption_floor_raises_without_settled_carrier(self, test_households):
         n_households = test_households.ts.current("n_households")
@@ -1776,6 +1803,18 @@ class TestPopulatePostGrantFeasiblePlan:
                 consumption_before_floor=np.zeros(n_households),
                 subsistence_floor=np.zeros(n_households),
             )
+
+    def test__remaining_subsistence_shortfall_accessor_raises_before_floor_enforcement(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="remaining_subsistence_shortfall"):
+            test_households.current_remaining_subsistence_shortfall()
 
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),

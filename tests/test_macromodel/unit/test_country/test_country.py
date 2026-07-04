@@ -708,6 +708,31 @@ class TestCountry:
 
         assert calls["households"] == 1
 
+    def test__prepare_goods_market_clearing_publishes_post_floor_remaining_shortfall(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        sentinel_shortfall = np.full(n_households, 7.0)
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **_kwargs: None)
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        def capture_household_goods_prep(**_kwargs):
+            return sentinel_shortfall
+
+        monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
+
+        test_country.prepare_goods_market_clearing()
+
+        np.testing.assert_allclose(
+            test_country.economy.ts.current("subsistence_consumption_shortfall"),
+            sentinel_shortfall,
+        )
+
     def test__excess_demand_finance_diagnostic_only_appends_diagnostics(self, test_country, monkeypatch):
         n_firms = test_country.firms.ts.current("n_firms")
         wage_preview = np.full(n_firms, 2.0)

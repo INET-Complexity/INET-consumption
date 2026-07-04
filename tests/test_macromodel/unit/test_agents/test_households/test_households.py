@@ -671,9 +671,14 @@ class TestHouseholds:
             consumption_to_buy,
             target_consumption * (plan.consumption_after_floor / target_consumption.sum(axis=1))[:, None],
         )
-        np.testing.assert_allclose(test_households.ts.current("target_consumption"), target_consumption)
+        np.testing.assert_allclose(test_households.ts.current("target_consumption"), consumption_to_buy)
         np.testing.assert_allclose(goods_to_buy - consumption_to_buy, target_investment)
-        np.testing.assert_allclose(shortfall, np.zeros(n_households))
+        np.testing.assert_allclose(shortfall, plan.remaining_subsistence_shortfall)
+
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", goods_to_buy.copy())
+        test_households.update_consumption_and_investment(tau_vat=0.0, tau_cf=0.0)
+        np.testing.assert_allclose(test_households.ts.current("consumption"), plan.consumption_after_floor)
+        np.testing.assert_allclose(test_households.ts.current("investment"), target_investment)
 
     def test__prepare_goods_market_clearing_floor_does_not_mutate_credit_liquidation_or_balance_sheet(
         self,
@@ -738,6 +743,28 @@ class TestHouseholds:
             test_households.prepare_goods_market_clearing(
                 exchange_rate_usd_to_lcu=1.0,
                 subsistence_consumption=np.zeros(n_households),
+            )
+
+    def test__prepare_goods_market_clearing_requires_subsistence_floor_when_resolver_enabled(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+        test_households.ts.override_current("target_consumption", np.ones((n_households, n_industries)))
+        test_households.ts.override_current("target_investment", np.zeros((n_households, n_industries)))
+
+        with pytest.raises(RuntimeError, match="subsistence_consumption"):
+            test_households.prepare_goods_market_clearing(
+                exchange_rate_usd_to_lcu=1.0,
+                subsistence_consumption=None,
             )
 
     def test__paper_asset_returns_do_not_override_expected_financial_income(self, test_households, monkeypatch):

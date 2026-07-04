@@ -582,6 +582,65 @@ class TestHouseholds:
         np.testing.assert_allclose(goods_to_buy.sum(axis=1), expected_goods_budget.sum(axis=1))
         np.testing.assert_allclose(shortfall, floor - current_consumption_budget)
 
+    def test__prepare_goods_market_clearing_applies_floor_by_proportional_consumption_scaling(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        basket_weights = np.arange(n_industries, 0, -1, dtype=float)
+        target_consumption = np.tile(100.0 * basket_weights / basket_weights.sum(), (n_households, 1))
+        target_investment = np.full((n_households, n_industries), 5.0)
+        residual_shortfall = np.full(n_households, 30.0)
+        floor = np.full(n_households, 80.0)
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=residual_shortfall,
+        )
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        test_households.ts.override_current("target_investment", target_investment.copy())
+        test_households.exchange_rate_usd_to_lcu = 1.0
+
+        shortfall = test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=floor,
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        goods_to_buy = test_households.transactor_buyer_states["Initial Goods"]
+        consumption_to_buy = goods_to_buy - target_investment
+        np.testing.assert_allclose(plan.consumption_before_floor, target_consumption.sum(axis=1))
+        np.testing.assert_allclose(plan.consumption_cut_amount, np.full(n_households, 20.0))
+        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 80.0))
+        np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.full(n_households, 10.0))
+        np.testing.assert_allclose(consumption_to_buy.sum(axis=1), plan.consumption_after_floor)
+        np.testing.assert_allclose(
+            consumption_to_buy,
+            target_consumption * (plan.consumption_after_floor / target_consumption.sum(axis=1))[:, None],
+        )
+        np.testing.assert_allclose(test_households.ts.current("target_consumption"), target_consumption)
+        np.testing.assert_allclose(goods_to_buy - consumption_to_buy, target_investment)
+        np.testing.assert_allclose(shortfall, np.zeros(n_households))
+
+    def test__prepare_goods_market_clearing_requires_post_grant_plan_when_resolver_enabled(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.configure_feasibility_resolver(True)
+        test_households.ts.override_current("target_consumption", np.ones((n_households, n_industries)))
+        test_households.ts.override_current("target_investment", np.zeros((n_households, n_industries)))
+
+        with pytest.raises(RuntimeError, match="post_grant_feasible_plan"):
+            test_households.prepare_goods_market_clearing(
+                exchange_rate_usd_to_lcu=1.0,
+                subsistence_consumption=np.zeros(n_households),
+            )
+
     def test__paper_asset_returns_do_not_override_expected_financial_income(self, test_households, monkeypatch):
         from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 

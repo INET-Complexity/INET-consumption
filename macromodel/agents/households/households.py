@@ -2399,18 +2399,45 @@ class Households(Agent):
         # Exchange rates
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
+        target_consumption = self.ts.current("target_consumption")
         # Compute subsistence shortfall diagnostic (no effect on clearing budget)
-        shortfall = self._compute_subsistence_consumption_shortfall(
-            subsistence_consumption, self.ts.current("target_consumption")
-        )
+        shortfall = self._compute_subsistence_consumption_shortfall(subsistence_consumption, target_consumption)
+        goods_consumption = target_consumption
+        if self.uses_feasibility_resolver:
+            self.apply_consumption_floor_to_post_grant_plan(
+                consumption_before_floor=target_consumption.sum(axis=1),
+                subsistence_floor=subsistence_consumption,
+            )
+            goods_consumption = self._scale_consumption_matrix_to_household_totals(
+                target_consumption=target_consumption,
+                household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
+            )
 
         # Prepare goods market clearing
-        self.prepare_buying_goods()
+        self.prepare_buying_goods(target_consumption=goods_consumption)
         self.prepare_selling_goods()
 
         return shortfall
 
-    def prepare_buying_goods(self) -> None:
+    @staticmethod
+    def _scale_consumption_matrix_to_household_totals(
+        *,
+        target_consumption: np.ndarray,
+        household_consumption_total: np.ndarray,
+    ) -> np.ndarray:
+        """Scale each household consumption row to a settled total."""
+        consumption = np.asarray(target_consumption, dtype=float)
+        totals = np.asarray(household_consumption_total, dtype=float)
+        row_sums = consumption.sum(axis=1)
+        scale = np.divide(
+            totals,
+            row_sums,
+            out=np.zeros_like(totals),
+            where=row_sums > 0.0,
+        )
+        return consumption * scale[:, None]
+
+    def prepare_buying_goods(self, target_consumption: np.ndarray | None = None) -> None:
         """Prepare goods purchase decisions.
 
         Sets up buying based on:
@@ -2418,7 +2445,8 @@ class Households(Agent):
         - Target investment
         - Exchange rates
         """
-        goods_budget = self.ts.current("target_consumption") + self.ts.current("target_investment")
+        consumption = self.ts.current("target_consumption") if target_consumption is None else target_consumption
+        goods_budget = consumption + self.ts.current("target_investment")
         self.set_goods_to_buy(1.0 / self.exchange_rate_usd_to_lcu * goods_budget)
 
     def prepare_selling_goods(self) -> None:

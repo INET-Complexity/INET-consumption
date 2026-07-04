@@ -2430,21 +2430,26 @@ class Households(Agent):
         Args:
             exchange_rate_usd_to_lcu (float): USD to local currency rate
             subsistence_consumption (np.ndarray | None): CU-adjusted subsistence
-                floor used only to compute a diagnostic shortfall series.
+                floor used to settle the final household consumption target
+                when the feasibility resolver is active.
 
         Returns:
-            np.ndarray: Per-household subsistence consumption shortfall
-                (floor minus current consumption budget, clipped at zero).
-                Diagnostic only; has no effect on goods-market clearing.
+            np.ndarray: Per-household remaining subsistence shortfall after
+                floor enforcement when the feasibility resolver is active;
+                otherwise the pre-floor diagnostic gap to the floor.
         """
         # Exchange rates
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
 
         target_consumption = self.ts.current("target_consumption")
-        # Compute subsistence shortfall diagnostic (no effect on clearing budget)
         shortfall = self._compute_subsistence_consumption_shortfall(subsistence_consumption, target_consumption)
         goods_consumption = target_consumption
         if self.uses_feasibility_resolver:
+            if subsistence_consumption is None:
+                raise RuntimeError(
+                    "Stage 5 consumption-floor enforcement requires subsistence_consumption "
+                    "to be populated for the current period."
+                )
             self.apply_consumption_floor_to_post_grant_plan(
                 consumption_before_floor=target_consumption.sum(axis=1),
                 subsistence_floor=subsistence_consumption,
@@ -2453,6 +2458,8 @@ class Households(Agent):
                 target_consumption=target_consumption,
                 household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
             )
+            self.ts.override_current("target_consumption", goods_consumption)
+            shortfall = self.current_remaining_subsistence_shortfall()
 
         # Prepare goods market clearing
         self.prepare_buying_goods(target_consumption=goods_consumption)

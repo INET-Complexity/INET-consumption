@@ -591,6 +591,47 @@ class TestHouseholds:
         np.testing.assert_allclose(goods_to_buy.sum(axis=1), expected_goods_budget.sum(axis=1))
         np.testing.assert_allclose(shortfall, floor - current_consumption_budget)
 
+    def test__prepare_goods_market_clearing_resolver_off_ignores_floor_enforcement(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        target_consumption = np.full((n_households, n_industries), 10.0)
+        target_investment = np.full((n_households, n_industries), 2.0)
+        floor = np.full(n_households, 1.0)
+        test_households.configure_feasibility_resolver(False)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=np.full(n_households, 999.0),
+        )
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        test_households.ts.override_current("target_investment", target_investment.copy())
+        diagnostic_lengths = {
+            key: len(test_households.ts.historic(key))
+            for key in [
+                "consumption_before_floor",
+                "residual_shortfall_before_floor",
+                "consumption_after_floor",
+                "consumption_cut_amount",
+                "remaining_subsistence_shortfall",
+                "floor_binding",
+            ]
+        }
+
+        shortfall = test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=floor,
+        )
+
+        goods_to_buy = test_households.transactor_buyer_states["Initial Goods"]
+        np.testing.assert_allclose(goods_to_buy, target_consumption + target_investment)
+        np.testing.assert_allclose(shortfall, np.zeros(n_households))
+        assert test_households.post_grant_feasible_plan.consumption_after_floor is None
+        assert diagnostic_lengths == {key: len(test_households.ts.historic(key)) for key in diagnostic_lengths}
+
     def test__prepare_goods_market_clearing_applies_floor_by_proportional_consumption_scaling(
         self,
         test_households,
@@ -630,9 +671,63 @@ class TestHouseholds:
             consumption_to_buy,
             target_consumption * (plan.consumption_after_floor / target_consumption.sum(axis=1))[:, None],
         )
-        np.testing.assert_allclose(test_households.ts.current("target_consumption"), target_consumption)
+        np.testing.assert_allclose(test_households.ts.current("target_consumption"), consumption_to_buy)
         np.testing.assert_allclose(goods_to_buy - consumption_to_buy, target_investment)
-        np.testing.assert_allclose(shortfall, np.zeros(n_households))
+        np.testing.assert_allclose(shortfall, plan.remaining_subsistence_shortfall)
+
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", goods_to_buy.copy())
+        test_households.update_consumption_and_investment(tau_vat=0.0, tau_cf=0.0)
+        np.testing.assert_allclose(test_households.ts.current("consumption"), plan.consumption_after_floor)
+        np.testing.assert_allclose(test_households.ts.current("investment"), target_investment)
+
+    def test__prepare_goods_market_clearing_floor_does_not_mutate_credit_liquidation_or_balance_sheet(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        target_consumption = np.full((n_households, n_industries), 20.0)
+        target_investment = np.full((n_households, n_industries), 3.0)
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=np.full(n_households, 30.0),
+        )
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        test_households.ts.override_current("target_investment", target_investment.copy())
+        invariant_keys = [
+            "target_consumption_loans",
+            "received_consumption_loans",
+            "liquidation_planned",
+            "wealth_deposits",
+            "wealth_financial_assets",
+            "wealth_real_assets",
+            "wealth",
+            "consumption_loan_debt",
+            "mortgage_debt",
+            "debt",
+        ]
+        before = {key: np.asarray(test_households.ts.current(key)).copy() for key in invariant_keys}
+        plan_before = test_households.post_grant_feasible_plan
+        credit_granted_before = plan_before.credit_granted.copy()
+        credit_rationing_gap_before = plan_before.credit_rationing_gap.copy()
+        planned_liquidation_before = plan_before.planned_liquidation_total.copy()
+        residual_shortfall_before = plan_before.residual_shortfall_after_granted_credit.copy()
+
+        test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=np.full(n_households, 50.0),
+        )
+
+        plan_after = test_households.post_grant_feasible_plan
+        for key, value in before.items():
+            np.testing.assert_allclose(test_households.ts.current(key), value, equal_nan=True)
+        np.testing.assert_allclose(plan_after.credit_granted, credit_granted_before)
+        np.testing.assert_allclose(plan_after.credit_rationing_gap, credit_rationing_gap_before)
+        np.testing.assert_allclose(plan_after.planned_liquidation_total, planned_liquidation_before)
+        np.testing.assert_allclose(plan_after.residual_shortfall_after_granted_credit, residual_shortfall_before)
 
     def test__prepare_goods_market_clearing_requires_post_grant_plan_when_resolver_enabled(
         self,
@@ -648,6 +743,28 @@ class TestHouseholds:
             test_households.prepare_goods_market_clearing(
                 exchange_rate_usd_to_lcu=1.0,
                 subsistence_consumption=np.zeros(n_households),
+            )
+
+    def test__prepare_goods_market_clearing_requires_subsistence_floor_when_resolver_enabled(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+        test_households.ts.override_current("target_consumption", np.ones((n_households, n_industries)))
+        test_households.ts.override_current("target_investment", np.zeros((n_households, n_industries)))
+
+        with pytest.raises(RuntimeError, match="subsistence_consumption"):
+            test_households.prepare_goods_market_clearing(
+                exchange_rate_usd_to_lcu=1.0,
+                subsistence_consumption=None,
             )
 
     def test__paper_asset_returns_do_not_override_expected_financial_income(self, test_households, monkeypatch):

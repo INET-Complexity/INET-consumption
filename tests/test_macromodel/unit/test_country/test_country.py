@@ -83,6 +83,100 @@ class TestCountry:
     def test__country(self, test_country):
         assert test_country is not None
 
+    def test__stage5_subsistence_support_defaults_to_empty_current_period_vector(self, test_country):
+        n_households = test_country.households.ts.current("n_households")
+
+        np.testing.assert_allclose(
+            test_country.current_stage5_subsistence_support_by_household(),
+            np.zeros(n_households),
+        )
+        assert test_country.current_stage5_subsistence_support_total() == 0.0
+
+    def test__compute_stage5_subsistence_support_clips_invalid_values(self):
+        shortfall = np.array([5.0, 0.0, -1.0, np.nan, np.inf])
+
+        support = country_module.compute_stage5_subsistence_support(shortfall)
+
+        np.testing.assert_allclose(support, np.array([5.0, 0.0, 0.0, 0.0, 0.0]))
+
+    def test__stage5_subsistence_support_stores_copy_and_derives_aggregate(self, test_country):
+        n_households = test_country.households.ts.current("n_households")
+        support = np.arange(n_households, dtype=float)
+
+        test_country.set_stage5_subsistence_support_by_household(support)
+        support[:] = -1.0
+
+        expected = np.arange(n_households, dtype=float)
+        np.testing.assert_allclose(test_country.current_stage5_subsistence_support_by_household(), expected)
+        assert test_country.current_stage5_subsistence_support_total() == float(expected.sum())
+
+    def test__stage5_subsistence_support_accessor_returns_copy(self, test_country):
+        n_households = test_country.households.ts.current("n_households")
+        support = np.full(n_households, 2.0)
+        test_country.set_stage5_subsistence_support_by_household(support)
+
+        returned = test_country.current_stage5_subsistence_support_by_household()
+        returned[:] = 0.0
+
+        np.testing.assert_allclose(
+            test_country.current_stage5_subsistence_support_by_household(),
+            np.full(n_households, 2.0),
+        )
+
+    def test__stage5_subsistence_support_rejects_non_household_shape(self, test_country):
+        n_households = test_country.households.ts.current("n_households")
+
+        with pytest.raises(ValueError, match="one value per household"):
+            test_country.set_stage5_subsistence_support_by_household(np.zeros((n_households, 1)))
+
+    @pytest.mark.parametrize("bad_value", [-1.0, np.nan, np.inf])
+    def test__stage5_subsistence_support_rejects_invalid_amounts(self, test_country, bad_value):
+        n_households = test_country.households.ts.current("n_households")
+        support = np.zeros(n_households)
+        support[0] = bad_value
+
+        with pytest.raises(ValueError, match="finite|non-negative"):
+            test_country.set_stage5_subsistence_support_by_household(support)
+
+    def test__stage5_subsistence_support_can_be_cleared(self, test_country):
+        n_households = test_country.households.ts.current("n_households")
+        test_country.set_stage5_subsistence_support_by_household(np.full(n_households, 3.0))
+
+        test_country.clear_stage5_subsistence_support()
+
+        np.testing.assert_allclose(
+            test_country.current_stage5_subsistence_support_by_household(),
+            np.zeros(n_households),
+        )
+
+    def test__benefit_planning_clears_stage5_subsistence_support_before_next_settlement(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_individuals = len(test_country.individuals.states["Activity Status"])
+        ordinary_transfers = np.full(n_households, 5.0)
+        test_country.set_stage5_subsistence_support_by_household(np.full(n_households, 3.0))
+        monkeypatch.setattr(test_country.central_government, "update_benefits", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_unemployment_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(n_individuals),
+        )
+        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_social_transfer_income",
+            lambda **_kwargs: ordinary_transfers,
+        )
+
+        test_country._update_benefit_planning_metrics()
+
+        assert test_country.current_stage5_subsistence_support_total() == 0.0
+        np.testing.assert_allclose(
+            test_country.compute_realised_household_social_transfers(),
+            ordinary_transfers,
+        )
+
     def test__income_belief_fields_not_persisted_by_default(self, datawrapper, tmp_path):
         synthetic_country = datawrapper.synthetic_countries["FRA"]
         country_configuration = CountryConfiguration()
@@ -700,6 +794,7 @@ class TestCountry:
 
         def capture_household_goods_prep(**_kwargs):
             calls["households"] += 1
+            test_country.households.post_grant_feasible_plan.remaining_subsistence_shortfall = np.zeros(n_households)
             return np.zeros(n_households)
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -707,6 +802,26 @@ class TestCountry:
         test_country.prepare_goods_market_clearing()
 
         assert calls["households"] == 1
+
+    def test__prepare_goods_market_clearing_raises_when_remaining_shortfall_missing(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **_kwargs: None)
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "prepare_goods_market_clearing",
+            lambda **_kwargs: np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="remaining_subsistence_shortfall"):
+            test_country.prepare_goods_market_clearing()
 
     def test__prepare_goods_market_clearing_publishes_post_floor_remaining_shortfall(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
@@ -722,6 +837,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
+            test_country.households.post_grant_feasible_plan.remaining_subsistence_shortfall = sentinel_shortfall
             return sentinel_shortfall
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -731,6 +847,57 @@ class TestCountry:
         np.testing.assert_allclose(
             test_country.economy.ts.current("subsistence_consumption_shortfall"),
             sentinel_shortfall,
+        )
+        np.testing.assert_allclose(
+            test_country.current_stage5_subsistence_support_by_household(),
+            sentinel_shortfall,
+        )
+
+    def test__prepare_goods_market_clearing_books_zero_stage5_support_for_zero_shortfall(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **_kwargs: None)
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        def capture_household_goods_prep(**_kwargs):
+            test_country.households.post_grant_feasible_plan.remaining_subsistence_shortfall = np.zeros(n_households)
+            return np.zeros(n_households)
+
+        monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
+
+        test_country.prepare_goods_market_clearing()
+
+        np.testing.assert_allclose(
+            test_country.current_stage5_subsistence_support_by_household(),
+            np.zeros(n_households),
+        )
+
+    def test__compute_realised_household_social_transfers_adds_stage5_support_once(self, test_country, monkeypatch):
+        n_households = test_country.households.ts.current("n_households")
+        ordinary_transfers = np.full(n_households, 5.0)
+        real_support = np.full(n_households, 3.0)
+        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_social_transfer_income",
+            lambda **_kwargs: ordinary_transfers,
+        )
+        test_country.set_stage5_subsistence_support_by_household(real_support)
+
+        realised_transfers = test_country.compute_realised_household_social_transfers()
+
+        np.testing.assert_allclose(realised_transfers, ordinary_transfers + 2.0 * real_support)
+        assert np.isclose(
+            realised_transfers.sum() - ordinary_transfers.sum(),
+            2.0 * test_country.current_stage5_subsistence_support_total(),
         )
 
     def test__excess_demand_finance_diagnostic_only_appends_diagnostics(self, test_country, monkeypatch):

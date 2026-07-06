@@ -95,6 +95,12 @@ def _positive_float_or_default(value: object, default: float) -> float:
     return parsed if np.isfinite(parsed) and parsed > 0.0 else default
 
 
+def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarray) -> np.ndarray:
+    """Return cleaned real Stage 5 support implied by the post-floor shortfall."""
+    shortfall = np.asarray(remaining_subsistence_shortfall, dtype=float)
+    return np.where(np.isfinite(shortfall) & (shortfall > 0.0), shortfall, 0.0)
+
+
 class Country:
     """A complete national economy with interacting agents and markets.
 
@@ -264,6 +270,45 @@ class Country:
         )
         self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
         self._permanent_income_design_matrix = permanent_income_design_matrix
+        self._stage5_subsistence_support_by_household: np.ndarray | None = None
+
+    def clear_stage5_subsistence_support(self) -> None:
+        """Clear current-period Stage 5 emergency subsistence support."""
+        self._stage5_subsistence_support_by_household = None
+
+    def set_stage5_subsistence_support_by_household(self, support_by_household: np.ndarray) -> None:
+        """Store targeted current-period Stage 5 support, one value per household."""
+        support = np.asarray(support_by_household, dtype=float)
+        expected_shape = (self.households.ts.current("n_households"),)
+        if support.shape != expected_shape:
+            raise ValueError(
+                "Stage 5 subsistence support must contain one value per household; "
+                f"expected shape {expected_shape}, got {support.shape}."
+            )
+        if not np.all(np.isfinite(support)):
+            raise ValueError("Stage 5 subsistence support must contain only finite real amounts.")
+        if np.any(support < 0.0):
+            raise ValueError("Stage 5 subsistence support must be non-negative for every household.")
+        self._stage5_subsistence_support_by_household = support.copy()
+
+    def current_stage5_subsistence_support_by_household(self) -> np.ndarray:
+        """Return the current-period targeted Stage 5 support vector."""
+        if self._stage5_subsistence_support_by_household is None:
+            return np.zeros(self.households.ts.current("n_households"), dtype=float)
+        return self._stage5_subsistence_support_by_household.copy()
+
+    def current_stage5_subsistence_support_total(self) -> float:
+        """Return aggregate Stage 5 support derived from the household vector."""
+        return float(self.current_stage5_subsistence_support_by_household().sum())
+
+    def compute_realised_household_social_transfers(self) -> np.ndarray:
+        """Return ordinary transfers plus targeted Stage 5 support for this period."""
+        current_cpi = self.economy.current_consumer_price_level()
+        ordinary_transfers = self.households.compute_social_transfer_income(
+            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
+            cpi=current_cpi,
+        )
+        return ordinary_transfers + current_cpi * self.current_stage5_subsistence_support_by_household()
 
     @classmethod
     def from_pickled_country(
@@ -940,6 +985,7 @@ class Country:
         self._set_household_target_demand(replace_current=True)
 
     def _update_benefit_planning_metrics(self) -> None:
+        self.clear_stage5_subsistence_support()
         # The central government updates unemployment benefits paid to individuals and social transfers to households
         self.central_government.update_benefits(
             historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
@@ -1515,6 +1561,11 @@ class Country:
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
             subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
         )
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            support_by_household = compute_stage5_subsistence_support(
+                self.households.current_remaining_subsistence_shortfall()
+            )
+            self.set_stage5_subsistence_support_by_household(support_by_household)
         self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
         self.government_entities.prepare_goods_market_clearing(
             n_industries=self.economy.n_industries,
@@ -1966,12 +2017,7 @@ class Country:
             )
         )
         self.households.ts.total_income_employee.append([self.households.ts.current("income_employee").sum()])
-        self.households.ts.income_social_transfers.append(
-            self.households.compute_social_transfer_income(
-                total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-                cpi=self.economy.current_consumer_price_level(),
-            )
-        )
+        self.households.ts.income_social_transfers.append(self.compute_realised_household_social_transfers())
         self.households.ts.total_income_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
         )
@@ -2173,6 +2219,7 @@ class Country:
                     "nominal_amount_spent_in_lcu"
                 ),
                 interest_payments_on_debt=self.central_government.ts.current("interest_payments_on_debt")[0],
+                stage5_subsistence_support_total=self.current_stage5_subsistence_support_total(),
             )
         )
         self.central_government.ts.debt.append(self.central_government.compute_debt())

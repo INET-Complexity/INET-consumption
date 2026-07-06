@@ -385,6 +385,7 @@ class CentralGovernment(Agent):
         current_cpi: float,
         current_government_nominal_amount_spent: np.ndarray,
         interest_payments_on_debt: float,
+        stage5_subsistence_support_total: float = 0.0,
     ) -> np.ndarray:
         """Calculate the government deficit.
 
@@ -402,6 +403,7 @@ class CentralGovernment(Agent):
             current_cpi (float): Current consumer price index
             current_government_nominal_amount_spent (np.ndarray): Spending
             interest_payments_on_debt (float): Interest payments on public debt
+            stage5_subsistence_support_total (float): Real targeted Stage 5 support
 
         Returns:
             np.ndarray: Government deficit (positive = deficit)
@@ -411,7 +413,9 @@ class CentralGovernment(Agent):
             np.sum(current_ind_activity == ActivityStatus.UNEMPLOYED)
             * self.ts.current("unemployment_benefits_by_individual")[0]
         )
-        total_household_social_transfers = current_cpi * self.ts.current("total_other_benefits")[0]
+        total_household_social_transfers = current_cpi * (
+            self.ts.current("total_other_benefits")[0] + stage5_subsistence_support_total
+        )
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(
             [

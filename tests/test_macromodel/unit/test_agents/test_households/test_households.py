@@ -58,11 +58,10 @@ class TestHouseholds:
         ]:
             assert field_name in test_households.ts.get_keys()
 
-    def test__received_consumption_loans_starts_finite_and_zero(self, test_households):
+    def test__received_consumption_loans_starts_unsettled(self, test_households):
         received_consumption_loans = np.asarray(test_households.ts.current("received_consumption_loans"), dtype=float)
 
-        assert np.all(np.isfinite(received_consumption_loans))
-        np.testing.assert_allclose(received_consumption_loans, 0.0)
+        assert np.isnan(received_consumption_loans).all()
 
     def test__households_states(self, test_households):
         assert test_households is not None

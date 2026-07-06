@@ -219,7 +219,7 @@ def create_households_timeseries(
         mortgage_debt=initial_mortgage_debt,
         total_mortgage_debt=[np.sum(initial_mortgage_debt)],
         consumption_loan_debt=initial_consumption_loan_debt,
-        received_consumption_loans=np.zeros(len(data)),
+        received_consumption_loans=np.full(len(data), np.nan),
         total_consumption_loan_debt=[np.sum(initial_consumption_loan_debt)],
         debt=initial_debt,
         total_received_consumption_loans=[0.0],

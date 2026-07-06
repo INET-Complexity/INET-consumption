@@ -92,6 +92,13 @@ class TestCountry:
         )
         assert test_country.current_stage5_subsistence_support_total() == 0.0
 
+    def test__compute_stage5_subsistence_support_clips_invalid_values(self):
+        shortfall = np.array([5.0, 0.0, -1.0, np.nan, np.inf])
+
+        support = country_module.compute_stage5_subsistence_support(shortfall)
+
+        np.testing.assert_allclose(support, np.array([5.0, 0.0, 0.0, 0.0, 0.0]))
+
     def test__stage5_subsistence_support_stores_copy_and_derives_aggregate(self, test_country):
         n_households = test_country.households.ts.current("n_households")
         support = np.arange(n_households, dtype=float)
@@ -795,6 +802,28 @@ class TestCountry:
         test_country.prepare_goods_market_clearing()
 
         assert calls["households"] == 1
+
+    def test__prepare_goods_market_clearing_raises_when_remaining_shortfall_missing(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **_kwargs: None)
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "prepare_goods_market_clearing",
+            lambda **_kwargs: np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="remaining_subsistence_shortfall"):
+            test_country.prepare_goods_market_clearing()
 
     def test__prepare_goods_market_clearing_publishes_post_floor_remaining_shortfall(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")

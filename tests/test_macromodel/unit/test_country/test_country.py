@@ -803,9 +803,7 @@ class TestCountry:
 
         assert calls["households"] == 1
 
-    def test__prepare_goods_market_clearing_raises_when_remaining_shortfall_missing(
-        self, test_country, monkeypatch
-    ):
+    def test__prepare_goods_market_clearing_raises_when_remaining_shortfall_missing(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
         monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)

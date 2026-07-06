@@ -403,18 +403,22 @@ class CentralGovernment(Agent):
             current_cpi (float): Current consumer price index
             current_government_nominal_amount_spent (np.ndarray): Spending
             interest_payments_on_debt (float): Interest payments on public debt
-            stage5_subsistence_support_total (float): Real targeted Stage 5 support
+            stage5_subsistence_support_total (float): Nominal settled Stage 5 support
+                already merged into realised household transfers
 
         Returns:
             np.ndarray: Government deficit (positive = deficit)
         """
-        # Benefit stocks are stored in real units; fiscal expenditure is nominalised once here.
+        # Legacy benefit stocks are stored in real units and are nominalised once
+        # here. Settled Stage 5 support is already persisted in nominal terms on
+        # the household late-settlement path, so it must be added after that
+        # nominalisation to avoid double counting CPI.
         total_unemployment_benefits = current_cpi * (
             np.sum(current_ind_activity == ActivityStatus.UNEMPLOYED)
             * self.ts.current("unemployment_benefits_by_individual")[0]
         )
-        total_household_social_transfers = current_cpi * (
-            self.ts.current("total_other_benefits")[0] + stage5_subsistence_support_total
+        total_household_social_transfers = (
+            current_cpi * self.ts.current("total_other_benefits")[0] + stage5_subsistence_support_total
         )
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(

@@ -853,9 +853,7 @@ class TestCountry:
             np.zeros(n_households),
         )
 
-    def test__compute_realised_household_social_transfers_adds_stage5_support_once(
-        self, test_country, monkeypatch
-    ):
+    def test__compute_realised_household_social_transfers_adds_stage5_support_once(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         ordinary_transfers = np.full(n_households, 5.0)
         real_support = np.full(n_households, 3.0)

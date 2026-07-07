@@ -109,24 +109,24 @@ class TestCentralGovernment:
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
 
-    def test__compute_deficit_includes_real_stage5_subsistence_support_once(self, test_central_government):
+    def test__compute_deficit_includes_nominal_stage5_subsistence_support_once(self, test_central_government):
         current_cpi = 2.0
         current_ind_activity = np.array([ActivityStatus.EMPLOYED])
         current_government_spending = np.array([10.0])
         interest_payments = 5.0
         revenue = test_central_government.ts.current("revenue")[0]
         other_benefits = test_central_government.ts.current("total_other_benefits")[0]
-        real_stage5_support = 7.0
+        nominal_stage5_support = 7.0
 
         deficit = test_central_government.compute_deficit(
             current_ind_activity=current_ind_activity,
             current_cpi=current_cpi,
             current_government_nominal_amount_spent=current_government_spending,
             interest_payments_on_debt=interest_payments,
-            stage5_subsistence_support_total=real_stage5_support,
+            stage5_subsistence_support_total=nominal_stage5_support,
         )
 
-        expected_benefits = current_cpi * (other_benefits + real_stage5_support)
+        expected_benefits = current_cpi * other_benefits + nominal_stage5_support
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
 

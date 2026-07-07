@@ -301,14 +301,34 @@ class Country:
         """Return aggregate Stage 5 support derived from the household vector."""
         return float(self.current_stage5_subsistence_support_by_household().sum())
 
+    def compute_realised_stage5_subsistence_support(self) -> np.ndarray:
+        """Return the settled Stage 5 support amount added to realised transfers."""
+        current_cpi = self.economy.current_consumer_price_level()
+        return current_cpi * self.current_stage5_subsistence_support_by_household()
+
+    def current_settled_stage5_subsistence_support_total(self) -> float:
+        """Return aggregate settled Stage 5 support from the persisted household series."""
+        return float(np.asarray(self.households.ts.current("stage5_subsistence_support"), dtype=float).sum())
+
+    def current_stage5_subsistence_support_fiscal_increment(self) -> float:
+        """Return the nominal fiscal expenditure increment implied by settled Stage 5 support."""
+        return self.current_settled_stage5_subsistence_support_total()
+
     def compute_realised_household_social_transfers(self) -> np.ndarray:
         """Return ordinary transfers plus targeted Stage 5 support for this period."""
-        current_cpi = self.economy.current_consumer_price_level()
         ordinary_transfers = self.households.compute_social_transfer_income(
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=current_cpi,
+            cpi=self.economy.current_consumer_price_level(),
         )
-        return ordinary_transfers + current_cpi * self.current_stage5_subsistence_support_by_household()
+        return ordinary_transfers + self.compute_realised_stage5_subsistence_support()
+
+    def settle_household_social_transfers(self) -> None:
+        """Persist settled Stage 5 support on the same late path as realised transfers."""
+        realised_transfers = self.compute_realised_household_social_transfers()
+        realised_support = self.compute_realised_stage5_subsistence_support()
+        self.households.ts.stage5_subsistence_support.append(realised_support)
+        self.households.ts.income_social_transfers.append(realised_transfers)
+        self.households.ts.total_income_social_transfers.append([realised_transfers.sum()])
 
     @classmethod
     def from_pickled_country(
@@ -1426,6 +1446,7 @@ class Country:
         self.households.populate_post_grant_feasible_plan_from_granted_credit(
             credit_granted=credit_granted,
         )
+        self.households.persist_post_grant_planned_liquidation_total()
 
     def compute_activity_tax_previews(
         self,
@@ -1562,6 +1583,10 @@ class Country:
             subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
         )
         if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.record_pre_support_payment_suspension_diagnostics(
+                scheduled_consumer_payments=self.credit_market.compute_scheduled_consumption_loan_payments_by_household(),
+                scheduled_mortgage_payments=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
+            )
             support_by_household = compute_stage5_subsistence_support(
                 self.households.current_remaining_subsistence_shortfall()
             )
@@ -2017,10 +2042,7 @@ class Country:
             )
         )
         self.households.ts.total_income_employee.append([self.households.ts.current("income_employee").sum()])
-        self.households.ts.income_social_transfers.append(self.compute_realised_household_social_transfers())
-        self.households.ts.total_income_social_transfers.append(
-            [self.households.ts.current("income_social_transfers").sum()]
-        )
+        self.settle_household_social_transfers()
         self.households.ts.income_financial_assets.append(
             self.households.compute_income_from_financial_assets(period_index=period_index)
         )
@@ -2219,7 +2241,7 @@ class Country:
                     "nominal_amount_spent_in_lcu"
                 ),
                 interest_payments_on_debt=self.central_government.ts.current("interest_payments_on_debt")[0],
-                stage5_subsistence_support_total=self.current_stage5_subsistence_support_total(),
+                stage5_subsistence_support_total=self.current_stage5_subsistence_support_fiscal_increment(),
             )
         )
         self.central_government.ts.debt.append(self.central_government.compute_debt())

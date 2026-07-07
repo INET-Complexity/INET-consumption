@@ -38,6 +38,9 @@ from macromodel.agents.households.func.liquid_asset_drawdown import (
 from macromodel.agents.households.func.liquidity_shortfall import (
     compute_liquidity_shortfall,
 )
+from macromodel.agents.households.func.payment_suspension import (
+    compute_stage5_payment_suspension_diagnostics,
+)
 from macromodel.agents.households.func.portfolio_diagnostics import (
     compute_stage4_household_diagnostics,
 )
@@ -140,6 +143,10 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "consumption_cut_amount": 0.0,
     "remaining_subsistence_shortfall": 0.0,
     "floor_binding": False,
+    "consumer_payment_suspension_needed": False,
+    "consumer_payment_suspension_amount": 0.0,
+    "mortgage_payment_suspension_needed": False,
+    "mortgage_payment_suspension_amount": 0.0,
 }
 
 
@@ -885,6 +892,13 @@ class Households(Agent):
         """Return planned liquidation carried into the settled feasibility plan."""
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
 
+    def persist_post_grant_planned_liquidation_total(self) -> None:
+        """Pin the household-panel liquidation series to the settled post-grant source."""
+        self.ts.override_current(
+            "liquidation_planned",
+            self.current_post_grant_planned_liquidation_total().copy(),
+        )
+
     def current_post_grant_residual_shortfall(self) -> np.ndarray:
         """Return remaining shortfall after granted credit and planned liquidation."""
         return self._current_post_grant_feasible_plan_field("residual_shortfall_after_granted_credit")
@@ -892,6 +906,23 @@ class Households(Agent):
     def current_remaining_subsistence_shortfall(self) -> np.ndarray:
         """Return the post-floor shortfall handoff for government support."""
         return self._current_post_grant_feasible_plan_field("remaining_subsistence_shortfall")
+
+    def record_pre_support_payment_suspension_diagnostics(
+        self,
+        *,
+        scheduled_consumer_payments: np.ndarray,
+        scheduled_mortgage_payments: np.ndarray,
+    ) -> None:
+        """Persist diagnostic-only payment suspensions from the settled pre-support path."""
+        diagnostics = compute_stage5_payment_suspension_diagnostics(
+            remaining_subsistence_shortfall=self.current_remaining_subsistence_shortfall(),
+            scheduled_consumer_payments=scheduled_consumer_payments,
+            scheduled_mortgage_payments=scheduled_mortgage_payments,
+        )
+        self.ts.consumer_payment_suspension_needed.append(diagnostics.consumer_payment_suspension_needed)
+        self.ts.consumer_payment_suspension_amount.append(diagnostics.consumer_payment_suspension_amount)
+        self.ts.mortgage_payment_suspension_needed.append(diagnostics.mortgage_payment_suspension_needed)
+        self.ts.mortgage_payment_suspension_amount.append(diagnostics.mortgage_payment_suspension_amount)
 
     def _record_consumption_floor_diagnostics(self) -> None:
         """Persist floor diagnostics from the settled runtime carrier."""

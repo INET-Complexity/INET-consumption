@@ -50,8 +50,18 @@ class TestHouseholds:
             "consumption_cut_amount",
             "remaining_subsistence_shortfall",
             "floor_binding",
+            "stage5_subsistence_support",
+            "consumer_payment_suspension_needed",
+            "consumer_payment_suspension_amount",
+            "mortgage_payment_suspension_needed",
+            "mortgage_payment_suspension_amount",
         ]:
             assert field_name in test_households.ts.get_keys()
+
+    def test__received_consumption_loans_starts_unsettled(self, test_households):
+        received_consumption_loans = np.asarray(test_households.ts.current("received_consumption_loans"), dtype=float)
+
+        assert np.isnan(received_consumption_loans).all()
 
     def test__households_states(self, test_households):
         assert test_households is not None
@@ -618,6 +628,10 @@ class TestHouseholds:
                 "consumption_cut_amount",
                 "remaining_subsistence_shortfall",
                 "floor_binding",
+                "consumer_payment_suspension_needed",
+                "consumer_payment_suspension_amount",
+                "mortgage_payment_suspension_needed",
+                "mortgage_payment_suspension_amount",
             ]
         }
 
@@ -679,6 +693,46 @@ class TestHouseholds:
         test_households.update_consumption_and_investment(tau_vat=0.0, tau_cf=0.0)
         np.testing.assert_allclose(test_households.ts.current("consumption"), plan.consumption_after_floor)
         np.testing.assert_allclose(test_households.ts.current("investment"), target_investment)
+
+    def test__prepare_goods_market_clearing_persists_consumption_cut_reconciliation(
+        self,
+        test_households,
+    ):
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        target_consumption = np.full((n_households, n_industries), 25.0)
+        target_investment = np.full((n_households, n_industries), 4.0)
+        residual_shortfall = np.resize(np.asarray([10.0, 35.0, 0.0, 12.0]), n_households)
+        floor = np.full(n_households, 80.0)
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.full(n_households, 4.0),
+            credit_rationing_gap=np.full(n_households, 2.0),
+            planned_liquidation_total=np.full(n_households, 3.0),
+            residual_shortfall_after_granted_credit=residual_shortfall,
+        )
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        test_households.ts.override_current("target_investment", target_investment.copy())
+        test_households.exchange_rate_usd_to_lcu = 1.0
+
+        test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=floor,
+        )
+
+        persisted_before = test_households.ts.current("consumption_before_floor")
+        persisted_after = test_households.ts.current("consumption_after_floor")
+        persisted_cut = test_households.ts.current("consumption_cut_amount")
+
+        np.testing.assert_allclose(persisted_before, target_consumption.sum(axis=1))
+        np.testing.assert_allclose(
+            persisted_cut,
+            persisted_before - persisted_after,
+        )
+        np.testing.assert_allclose(
+            persisted_cut,
+            test_households.post_grant_feasible_plan.consumption_cut_amount,
+        )
 
     def test__prepare_goods_market_clearing_floor_does_not_mutate_credit_liquidation_or_balance_sheet(
         self,
@@ -1684,6 +1738,27 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
         np.testing.assert_allclose(plan.planned_liquidation_total, np.full(n_households, 2.0))
 
+    def test__persist_post_grant_planned_liquidation_total_copies_settled_values(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 4.0),
+        )
+        test_households.ts.override_current("liquidation_planned", np.full(n_households, 99.0))
+
+        test_households.persist_post_grant_planned_liquidation_total()
+        test_households.post_grant_feasible_plan.planned_liquidation_total[:] = 77.0
+
+        np.testing.assert_allclose(
+            test_households.ts.current("liquidation_planned"),
+            np.full(n_households, 2.0),
+        )
+
     def test__post_grant_reconciliation_raises_without_pre_grant_carrier(self, test_households):
         n_households = test_households.ts.current("n_households")
         test_households.configure_feasibility_resolver(True)
@@ -1932,6 +2007,39 @@ class TestPopulatePostGrantFeasiblePlan:
 
         with pytest.raises(RuntimeError, match="remaining_subsistence_shortfall"):
             test_households.current_remaining_subsistence_shortfall()
+
+    def test__record_pre_support_payment_suspension_diagnostics_uses_settled_remaining_shortfall(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        residual = np.resize(np.asarray([0.0, 8.0, 25.0, 4.0]), n_households)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+            remaining_subsistence_shortfall=residual.copy(),
+        )
+
+        test_households.record_pre_support_payment_suspension_diagnostics(
+            scheduled_consumer_payments=np.resize(np.asarray([3.0, 10.0, 10.0, 0.0]), n_households),
+            scheduled_mortgage_payments=np.resize(np.asarray([7.0, 2.0, 20.0, 5.0]), n_households),
+        )
+
+        np.testing.assert_allclose(
+            test_households.ts.current("consumer_payment_suspension_amount"),
+            np.resize(np.asarray([0.0, 8.0, 10.0, 0.0]), n_households),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("mortgage_payment_suspension_amount"),
+            np.resize(np.asarray([0.0, 0.0, 15.0, 4.0]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("consumer_payment_suspension_needed"),
+            np.resize(np.asarray([False, True, True, False]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("mortgage_payment_suspension_needed"),
+            np.resize(np.asarray([False, False, True, True]), n_households),
+        )
 
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),

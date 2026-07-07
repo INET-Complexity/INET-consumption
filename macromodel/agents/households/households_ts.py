@@ -186,6 +186,7 @@ def create_households_timeseries(
         expected_income_employee=data["Employee Income"].values,
         income_social_transfers=data["Regular Social Transfers"].values,
         total_income_social_transfers=[data["Regular Social Transfers"].values.sum()],
+        stage5_subsistence_support=np.zeros(len(data)),
         expected_income_social_transfers=data["Regular Social Transfers"].values,
         income_rental=data["Rental Income from Real Estate"].values,
         total_income_rental=[data["Rental Income from Real Estate"].values.sum()],

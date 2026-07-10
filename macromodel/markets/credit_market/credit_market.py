@@ -681,6 +681,8 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit settlement differs from the cleared bank-by-household grant.")
         if not np.allclose(settlement.sum(axis=0), granted, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit settlement does not reconcile with received_consumption_loans.")
+        if consumer_loan_maturity <= 0:
+            raise ValueError("consumer_loan_maturity must be positive for consumer-debt remodulation.")
 
         opening_principal = self._serviceable_loans_this_period["cons_loans"][0]
         if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
@@ -703,9 +705,6 @@ class CreditMarket:
     ) -> None:
         """Refinance newly borrowing households into one aggregate consumer-loan schedule."""
         from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
-
-        if consumer_loan_maturity <= 0:
-            raise ValueError("consumer_loan_maturity must be positive for consumer-debt remodulation.")
 
         loans = self.states["cons_loans"]
         settled_principal = settled_loans[0].sum(axis=0)

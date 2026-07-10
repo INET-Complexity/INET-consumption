@@ -206,6 +206,28 @@ def test_zero_granted_consumption_loan_settlement_books_nothing(test_credit_mark
     np.testing.assert_allclose(test_credit_market.states["cons_loans"], opening_consumption_loans)
 
 
+def test_invalid_consumer_loan_maturity_rejects_settlement_without_booking(test_credit_market):
+    test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
+    settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])
+    settlement[0, 0] = 5.0
+    pending_loans = np.zeros_like(test_credit_market.states["cons_loans"])
+    pending_loans[0] = settlement
+    pending_loans[1][settlement > 0.0] = 0.02
+    pending_loans[2][settlement > 0.0] = 1.0
+    test_credit_market._pending_consumer_loans_this_period = pending_loans.copy()
+    opening_loans = test_credit_market.states["cons_loans"].copy()
+
+    with np.testing.assert_raises_regex(ValueError, "consumer_loan_maturity must be positive"):
+        test_credit_market.settle_granted_consumption_loans(
+            credit_granted=settlement.sum(axis=0),
+            granted_consumer_credit_by_bank_and_household=settlement,
+            consumer_loan_maturity=0,
+        )
+
+    np.testing.assert_allclose(test_credit_market.states["cons_loans"], opening_loans)
+    np.testing.assert_allclose(test_credit_market.pending_granted_consumption_loans(), settlement)
+
+
 def test_granted_consumer_credit_remodulates_the_aggregate_household_schedule():
     cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
     cons_loans[0, 0, 0] = 100.0

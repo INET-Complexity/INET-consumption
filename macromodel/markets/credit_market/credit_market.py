@@ -285,6 +285,7 @@ class CreditMarket:
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period: np.ndarray | None = None
+        self._consumer_loan_remodulation_maturity: int | None = None
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._reset_firm_service_period_tracking()
@@ -378,6 +379,7 @@ class CreditMarket:
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period = None
+        self._consumer_loan_remodulation_maturity = None
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._reset_firm_service_period_tracking()
@@ -477,6 +479,7 @@ class CreditMarket:
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period = None
+        self._consumer_loan_remodulation_maturity = None
         self._reset_firm_service_period_tracking()
 
         credit_supply_temperature = float(
@@ -681,17 +684,18 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit settlement differs from the cleared bank-by-household grant.")
         if not np.allclose(settlement.sum(axis=0), granted, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit settlement does not reconcile with received_consumption_loans.")
-        if consumer_loan_maturity <= 0:
+        if (
+            isinstance(consumer_loan_maturity, bool)
+            or not isinstance(consumer_loan_maturity, (int, np.integer))
+            or consumer_loan_maturity <= 0
+        ):
             raise ValueError("consumer_loan_maturity must be positive for consumer-debt remodulation.")
 
         opening_principal = self._serviceable_loans_this_period["cons_loans"][0]
         if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit principal was mutated before Stage 6 settlement.")
         self._add_new_loans("cons_loans", pending_loans)
-        self._remodulate_settled_consumer_loan_schedule(
-            settled_loans=pending_loans,
-            consumer_loan_maturity=consumer_loan_maturity,
-        )
+        self._consumer_loan_remodulation_maturity = consumer_loan_maturity
         booked_principal = self.states["cons_loans"][0] - opening_principal
         if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
@@ -1140,7 +1144,14 @@ class CreditMarket:
         """
         if self._pending_consumer_loans_this_period is not None:
             raise RuntimeError("Consumer-credit settlement must be booked before household loan servicing.")
+        new_consumer_loans = self._new_loans_this_period["cons_loans"].copy()
         principal_paid, interest_paid, interest_by_bank = self._service_loans(("cons_loans", "mort_loans"))
+        if self._consumer_loan_remodulation_maturity is not None:
+            self._remodulate_settled_consumer_loan_schedule(
+                settled_loans=new_consumer_loans,
+                consumer_loan_maturity=self._consumer_loan_remodulation_maturity,
+            )
+            self._consumer_loan_remodulation_maturity = None
         self._last_interest_by_household = interest_paid
         self._last_interest_by_bank += interest_by_bank
         return principal_paid

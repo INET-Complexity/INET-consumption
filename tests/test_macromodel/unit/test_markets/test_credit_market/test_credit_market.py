@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import (
@@ -206,7 +207,8 @@ def test_zero_granted_consumption_loan_settlement_books_nothing(test_credit_mark
     np.testing.assert_allclose(test_credit_market.states["cons_loans"], opening_consumption_loans)
 
 
-def test_invalid_consumer_loan_maturity_rejects_settlement_without_booking(test_credit_market):
+@pytest.mark.parametrize("consumer_loan_maturity", [0, float("nan"), 1.5])
+def test_invalid_consumer_loan_maturity_rejects_settlement_without_booking(test_credit_market, consumer_loan_maturity):
     test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])
     settlement[0, 0] = 5.0
@@ -221,7 +223,7 @@ def test_invalid_consumer_loan_maturity_rejects_settlement_without_booking(test_
         test_credit_market.settle_granted_consumption_loans(
             credit_granted=settlement.sum(axis=0),
             granted_consumer_credit_by_bank_and_household=settlement,
-            consumer_loan_maturity=0,
+            consumer_loan_maturity=consumer_loan_maturity,
         )
 
     np.testing.assert_allclose(test_credit_market.states["cons_loans"], opening_loans)
@@ -233,6 +235,7 @@ def test_granted_consumer_credit_remodulates_the_aggregate_household_schedule():
     cons_loans[0, 0, 0] = 100.0
     cons_loans[1, 0, 0] = 0.02
     cons_loans[2, 0, 0] = 100.0 * _annuity_payment_factor(0.02, 8)
+    opening_payment = cons_loans[2, 0, 0]
     market = CreditMarket.from_data(
         country_name="TST",
         st_loans=_empty_loan_state(n_banks=2, n_borrowers=1),
@@ -252,13 +255,17 @@ def test_granted_consumer_credit_remodulates_the_aggregate_household_schedule():
         granted_consumer_credit_by_bank_and_household=settled_loans[0],
         consumer_loan_maturity=8,
     )
+    principal_paid = market.pay_household_installments()
 
-    expected_schedule = 150.0 * _annuity_payment_factor(0.04, 8)
-    np.testing.assert_allclose(market.states["cons_loans"][0, :, 0], np.array([100.0, 50.0]))
+    expected_old_principal_paid = opening_payment - 100.0 * 0.02
+    expected_principal = 150.0 - expected_old_principal_paid
+    expected_schedule = expected_principal * _annuity_payment_factor(0.04, 8)
+    np.testing.assert_allclose(principal_paid, np.array([expected_old_principal_paid]))
+    np.testing.assert_allclose(market.states["cons_loans"][0, :, 0].sum(), expected_principal)
     np.testing.assert_allclose(market.states["cons_loans"][1, :, 0], np.array([0.04, 0.04]))
     np.testing.assert_allclose(
         market.states["cons_loans"][2, :, 0],
-        expected_schedule * np.array([100.0 / 150.0, 50.0 / 150.0]),
+        expected_schedule * market.states["cons_loans"][0, :, 0] / expected_principal,
     )
     np.testing.assert_allclose(
         market.compute_scheduled_consumption_loan_payments_by_household(),

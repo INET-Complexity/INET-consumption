@@ -1,7 +1,11 @@
 import numpy as np
 
 from macromodel.markets.credit_market.credit_market import CreditMarket
-from macromodel.markets.credit_market.func.clearing import DefaultCreditMarketClearer, PolednaCreditMarketClearer
+from macromodel.markets.credit_market.func.clearing import (
+    DefaultCreditMarketClearer,
+    PolednaCreditMarketClearer,
+    _annuity_payment_factor,
+)
 
 
 class TestCreditMarket:
@@ -154,6 +158,7 @@ def test_resolver_enabled_clear_defers_consumer_loan_booking_to_settlement(test_
     market.settle_granted_consumption_loans(
         credit_granted=granted,
         granted_consumer_credit_by_bank_and_household=settlement,
+        consumer_loan_maturity=test_banks.parameters.household_consumption_loan_maturity,
     )
 
     np.testing.assert_allclose(market.states["cons_loans"][0], settlement)
@@ -178,6 +183,7 @@ def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides
     test_credit_market.settle_granted_consumption_loans(
         credit_granted=granted,
         granted_consumer_credit_by_bank_and_household=settlement,
+        consumer_loan_maturity=4,
     )
 
     np.testing.assert_allclose(test_credit_market.states["cons_loans"][0].sum(axis=0), granted)
@@ -194,9 +200,49 @@ def test_zero_granted_consumption_loan_settlement_books_nothing(test_credit_mark
     test_credit_market.settle_granted_consumption_loans(
         credit_granted=np.zeros(opening_consumption_loans.shape[2]),
         granted_consumer_credit_by_bank_and_household=new_loans[0],
+        consumer_loan_maturity=4,
     )
 
     np.testing.assert_allclose(test_credit_market.states["cons_loans"], opening_consumption_loans)
+
+
+def test_granted_consumer_credit_remodulates_the_aggregate_household_schedule():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[0, 0, 0] = 100.0
+    cons_loans[1, 0, 0] = 0.02
+    cons_loans[2, 0, 0] = 100.0 * _annuity_payment_factor(0.02, 8)
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(n_banks=2, n_borrowers=1),
+        lt_loans=_empty_loan_state(n_banks=2, n_borrowers=1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(n_banks=2, n_borrowers=1),
+    )
+    market._serviceable_loans_this_period["cons_loans"] = cons_loans.copy()
+    settled_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    settled_loans[0, 1, 0] = 50.0
+    settled_loans[1, 1, 0] = 0.04
+    settled_loans[2, 1, 0] = 50.0 * _annuity_payment_factor(0.04, 8)
+    market._pending_consumer_loans_this_period = settled_loans
+
+    market.settle_granted_consumption_loans(
+        credit_granted=np.array([50.0]),
+        granted_consumer_credit_by_bank_and_household=settled_loans[0],
+        consumer_loan_maturity=8,
+    )
+
+    expected_schedule = 150.0 * _annuity_payment_factor(0.04, 8)
+    np.testing.assert_allclose(market.states["cons_loans"][0, :, 0], np.array([100.0, 50.0]))
+    np.testing.assert_allclose(market.states["cons_loans"][1, :, 0], np.array([0.04, 0.04]))
+    np.testing.assert_allclose(
+        market.states["cons_loans"][2, :, 0],
+        expected_schedule * np.array([100.0 / 150.0, 50.0 / 150.0]),
+    )
+    np.testing.assert_allclose(
+        market.compute_scheduled_consumption_loan_payments_by_household(),
+        np.array([expected_schedule]),
+    )
+    np.testing.assert_allclose(market.states["mort_loans"], np.zeros_like(market.states["mort_loans"]))
 
 
 def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_market):
@@ -209,10 +255,12 @@ def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_
     test_credit_market.settle_granted_consumption_loans(
         credit_granted=settlement.sum(axis=0),
         granted_consumer_credit_by_bank_and_household=settlement,
+        consumer_loan_maturity=4,
     )
 
     with np.testing.assert_raises_regex(RuntimeError, "already been booked"):
         test_credit_market.settle_granted_consumption_loans(
             credit_granted=settlement.sum(axis=0),
             granted_consumer_credit_by_bank_and_household=settlement,
+            consumer_loan_maturity=4,
         )

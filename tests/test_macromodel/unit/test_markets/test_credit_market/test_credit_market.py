@@ -111,9 +111,7 @@ def test_poledna_clearer_integrates_with_credit_market_array_contract(test_banks
     assert market.states["st_loans"][2, :, 0].sum() > 0.0
 
 
-def test_resolver_enabled_clear_defers_consumer_loan_booking_to_settlement(
-    test_banks, test_firms, test_households
-):
+def test_resolver_enabled_clear_defers_consumer_loan_booking_to_settlement(test_banks, test_firms, test_households):
     n_banks = test_banks.ts.current("n_banks")
     n_firms = test_firms.ts.current("n_firms")
     n_households = test_households.ts.current("n_households")
@@ -162,9 +160,7 @@ def test_resolver_enabled_clear_defers_consumer_loan_booking_to_settlement(
 
 
 def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides(test_credit_market):
-    test_credit_market._serviceable_loans_this_period["cons_loans"] = (
-        test_credit_market.states["cons_loans"].copy()
-    )
+    test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])
     settlement[0, 0] = 3.0
     if settlement.shape[0] > 1:
@@ -190,9 +186,7 @@ def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides
 
 
 def test_zero_granted_consumption_loan_settlement_books_nothing(test_credit_market):
-    test_credit_market._serviceable_loans_this_period["cons_loans"] = (
-        test_credit_market.states["cons_loans"].copy()
-    )
+    test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     opening_consumption_loans = test_credit_market.states["cons_loans"].copy()
     new_loans = np.zeros_like(opening_consumption_loans)
     test_credit_market._pending_consumer_loans_this_period = new_loans
@@ -206,9 +200,7 @@ def test_zero_granted_consumption_loan_settlement_books_nothing(test_credit_mark
 
 
 def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_market):
-    test_credit_market._serviceable_loans_this_period["cons_loans"] = (
-        test_credit_market.states["cons_loans"].copy()
-    )
+    test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])
     settlement[0, 0] = 5.0
     new_loans = np.zeros_like(test_credit_market.states["cons_loans"])

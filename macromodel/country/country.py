@@ -1598,6 +1598,10 @@ class Country:
                 scheduled_consumer_payments=self.credit_market.compute_scheduled_consumption_loan_payments_by_household(),
                 scheduled_mortgage_payments=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
             )
+            self.households.record_stage6_consumer_distress_state(
+                scheduled_consumer_payments=self.credit_market.compute_scheduled_consumption_loan_payments_by_household(),
+                time_unit=self.economy.time_unit,
+            )
             support_by_household = compute_stage5_subsistence_support(
                 self.households.current_remaining_subsistence_shortfall()
             )

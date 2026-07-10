@@ -32,6 +32,9 @@ from macromodel.agents.banks.banks import Banks
 from macromodel.agents.households.func.borrow_vs_sell import (
     compute_borrow_vs_sell_choice,
 )
+from macromodel.agents.households.func.consumer_distress import (
+    compute_stage6_consumer_distress_state,
+)
 from macromodel.agents.households.func.liquid_asset_drawdown import (
     compute_liquid_asset_drawdown,
 )
@@ -147,6 +150,19 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
     "mortgage_payment_suspension_amount": 0.0,
+}
+
+# Stage 6 (consumer credit): persistent, settled distress state. These fields
+# are initialised independently from Stage 5's diagnostic-only carrier because
+# FICP is a live gate on subsequent consumer-credit demand.
+_STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
+    "actual_consumer_payment": 0.0,
+    "consumer_payment_missed": False,
+    "missed_payment_count_consumer": 0.0,
+    # See func.consumer_distress: 0=current, 1=delinquent, 2=FICP.
+    "consumer_distress_state": 0.0,
+    "ficp_state": False,
+    "ficp_exclusion_remaining_periods": 0.0,
 }
 
 
@@ -552,6 +568,11 @@ class Households(Agent):
         for _field_name, _zero_value in _STAGE5_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
+        # Stage 6 Increment 3: keep authoritative consumer-credit distress
+        # state distinct from the Stage 5 pre-support diagnostic layer.
+        for _field_name, _zero_value in _STAGE6_DISTRESS_INITIAL_VALUES.items():
+            ts[_field_name] = np.full(n_households_at_init, _zero_value)
+
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
 
@@ -953,6 +974,29 @@ class Households(Agent):
         self.ts.consumer_payment_suspension_amount.append(diagnostics.consumer_payment_suspension_amount)
         self.ts.mortgage_payment_suspension_needed.append(diagnostics.mortgage_payment_suspension_needed)
         self.ts.mortgage_payment_suspension_amount.append(diagnostics.mortgage_payment_suspension_amount)
+
+    def record_stage6_consumer_distress_state(
+        self,
+        *,
+        scheduled_consumer_payments: np.ndarray,
+        time_unit: int,
+    ) -> None:
+        """Persist Stage 6 consumer distress from settled, read-only Stage 5 outcomes."""
+        if time_unit <= 0 or 12 % time_unit != 0:
+            raise ValueError("time_unit must be a positive divisor of 12.")
+        state = compute_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled_consumer_payments,
+            consumer_payment_suspension_amount=self.ts.current("consumer_payment_suspension_amount"),
+            prior_missed_payment_count_consumer=self.ts.current("missed_payment_count_consumer"),
+            prior_ficp_exclusion_remaining_periods=self.ts.current("ficp_exclusion_remaining_periods"),
+            ficp_exclusion_periods=5 * (12 // time_unit),
+        )
+        self.ts.actual_consumer_payment.append(state.actual_consumer_payment)
+        self.ts.consumer_payment_missed.append(state.consumer_payment_missed)
+        self.ts.missed_payment_count_consumer.append(state.missed_payment_count_consumer)
+        self.ts.consumer_distress_state.append(state.consumer_distress_state)
+        self.ts.ficp_state.append(state.ficp_state)
+        self.ts.ficp_exclusion_remaining_periods.append(state.ficp_exclusion_remaining_periods)
 
     def _record_consumption_floor_diagnostics(self) -> None:
         """Persist floor diagnostics from the settled runtime carrier."""
@@ -2357,6 +2401,7 @@ class Households(Agent):
             target_consumption_loans = self.current_live_credit_requested()
         else:
             target_consumption_loans = legacy_target_consumption_loans
+        target_consumption_loans = np.where(self.ts.current("ficp_state"), 0.0, target_consumption_loans)
         self.ts.target_consumption_loans.append(target_consumption_loans)
         self.ts.live_credit_requested.append(target_consumption_loans.copy())
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])

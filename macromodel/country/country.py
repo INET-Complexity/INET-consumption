@@ -1455,6 +1455,7 @@ class Country:
         self.credit_market.settle_granted_consumption_loans(
             credit_granted=settled_plan.credit_granted,
             granted_consumer_credit_by_bank_and_household=settled_plan.granted_consumer_credit_by_bank_and_household,
+            consumer_loan_maturity=self.banks.parameters.household_consumption_loan_maturity,
         )
         self.households.persist_post_grant_planned_liquidation_total()
 

@@ -656,8 +656,9 @@ class CreditMarket:
         *,
         credit_granted: np.ndarray,
         granted_consumer_credit_by_bank_and_household: np.ndarray,
+        consumer_loan_maturity: int,
     ) -> None:
-        """Book consumer-credit principal from the settled Stage 6 carrier exactly once."""
+        """Book and remodulate consumer debt from the settled Stage 6 carrier."""
         if self._pending_consumer_loans_this_period is None:
             raise RuntimeError("Consumer-credit settlement has already been booked or was not cleared this period.")
         pending_loans = self._pending_consumer_loans_this_period
@@ -685,10 +686,57 @@ class CreditMarket:
         if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit principal was mutated before Stage 6 settlement.")
         self._add_new_loans("cons_loans", pending_loans)
+        self._remodulate_settled_consumer_loan_schedule(
+            settled_loans=pending_loans,
+            consumer_loan_maturity=consumer_loan_maturity,
+        )
         booked_principal = self.states["cons_loans"][0] - opening_principal
         if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
         self._pending_consumer_loans_this_period = None
+
+    def _remodulate_settled_consumer_loan_schedule(
+        self,
+        *,
+        settled_loans: np.ndarray,
+        consumer_loan_maturity: int,
+    ) -> None:
+        """Refinance newly borrowing households into one aggregate consumer-loan schedule."""
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        if consumer_loan_maturity <= 0:
+            raise ValueError("consumer_loan_maturity must be positive for consumer-debt remodulation.")
+
+        loans = self.states["cons_loans"]
+        settled_principal = settled_loans[0].sum(axis=0)
+        remodulated = settled_principal > 0.0
+        if not np.any(remodulated):
+            return
+
+        settled_rate = np.divide(
+            (settled_loans[0] * settled_loans[1]).sum(axis=0),
+            settled_principal,
+            out=np.zeros_like(settled_principal),
+            where=remodulated,
+        )
+        aggregate_principal = loans[0].sum(axis=0)
+        aggregate_payment = aggregate_principal * _annuity_payment_factor(
+            settled_rate,
+            consumer_loan_maturity,
+        )
+        payment_shares = np.divide(
+            loans[0],
+            aggregate_principal[None, :],
+            out=np.zeros_like(loans[0]),
+            where=aggregate_principal[None, :] > 0.0,
+        )
+
+        loans[1][:, remodulated] = np.where(
+            loans[0][:, remodulated] > 0.0,
+            settled_rate[None, remodulated],
+            0.0,
+        )
+        loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
 
     def _service_loans(self, loan_keys: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Service loans that existed before current-quarter origination."""

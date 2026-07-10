@@ -47,7 +47,9 @@ def compute_stage6_consumer_distress_state(
         ("prior_ficp_exclusion_remaining_periods", prior_exclusion),
     ):
         if values.shape != expected_shape:
-            raise ValueError(f"{name} must match scheduled_consumer_payments shape {expected_shape}; got {values.shape}.")
+            raise ValueError(
+                f"{name} must match scheduled_consumer_payments shape {expected_shape}; got {values.shape}."
+            )
     if ficp_exclusion_periods <= 0:
         raise ValueError("ficp_exclusion_periods must be positive.")
 

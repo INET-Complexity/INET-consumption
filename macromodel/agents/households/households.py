@@ -174,6 +174,9 @@ class PostGrantFeasiblePlan:
     credit_rationing_gap: np.ndarray
     planned_liquidation_total: np.ndarray
     residual_shortfall_after_granted_credit: np.ndarray
+    granted_consumer_credit_by_bank_and_household: np.ndarray | None = None
+    consumer_debt_liability_booking: np.ndarray | None = None
+    bank_consumer_loan_asset_booking: np.ndarray | None = None
     consumption_before_floor: np.ndarray | None = None
     residual_shortfall_before_floor: np.ndarray | None = None
     consumption_after_floor: np.ndarray | None = None
@@ -805,6 +808,7 @@ class Households(Agent):
         self,
         *,
         credit_granted: np.ndarray,
+        granted_consumer_credit_by_bank_and_household: np.ndarray | None = None,
     ) -> None:
         """Build the settled Stage 5 carrier from cleared consumer credit."""
         if self.pre_grant_feasible_plan is None:
@@ -855,6 +859,27 @@ class Households(Agent):
         cleaned_liquidation = np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
         cleaned_residual_after_lfa = np.where(np.isfinite(residual_after_lfa), np.maximum(residual_after_lfa, 0.0), 0.0)
 
+        settlement_matrix = None
+        liability_booking = None
+        bank_asset_booking = None
+        if granted_consumer_credit_by_bank_and_household is not None:
+            settlement_matrix = np.asarray(granted_consumer_credit_by_bank_and_household, dtype=float)
+            if settlement_matrix.ndim != 2 or settlement_matrix.shape[1] != n_households:
+                raise ValueError(
+                    "granted_consumer_credit_by_bank_and_household must be a two-dimensional "
+                    "bank-by-household matrix with one column per household."
+                )
+            if not np.all(np.isfinite(settlement_matrix)) or np.any(settlement_matrix < 0.0):
+                raise RuntimeError(
+                    "Stage 6 granted-credit settlement requires finite, non-negative bank-by-household values."
+                )
+            liability_booking = settlement_matrix.sum(axis=0)
+            if not np.allclose(liability_booking, cleaned_granted, rtol=1e-10, atol=1e-8):
+                raise RuntimeError(
+                    "Stage 6 granted-credit settlement does not reconcile with household credit_granted."
+                )
+            bank_asset_booking = settlement_matrix.sum(axis=1)
+
         self.post_grant_feasible_plan = PostGrantFeasiblePlan(
             credit_granted=cleaned_granted.copy(),
             credit_rationing_gap=np.maximum(cleaned_requested - cleaned_granted, 0.0).copy(),
@@ -863,6 +888,11 @@ class Households(Agent):
                 cleaned_residual_after_lfa - cleaned_granted - cleaned_liquidation,
                 0.0,
             ).copy(),
+            granted_consumer_credit_by_bank_and_household=(
+                None if settlement_matrix is None else settlement_matrix.copy()
+            ),
+            consumer_debt_liability_booking=None if liability_booking is None else liability_booking.copy(),
+            bank_consumer_loan_asset_booking=None if bank_asset_booking is None else bank_asset_booking.copy(),
         )
 
     def _current_post_grant_feasible_plan_field(self, field_name: str) -> np.ndarray:

@@ -1701,6 +1701,44 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
         np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 9.0))
 
+    def test__post_grant_carrier_reconciles_household_and_bank_settlement(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        credit_granted = np.arange(1.0, n_households + 1.0)
+        settlement = np.zeros((2, n_households))
+        settlement[0] = credit_granted * 0.25
+        settlement[1] = credit_granted * 0.75
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=credit_granted,
+            credit_requested=credit_granted,
+            planned_liquidation=np.zeros(n_households),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=credit_granted,
+            granted_consumer_credit_by_bank_and_household=settlement,
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.granted_consumer_credit_by_bank_and_household, settlement)
+        np.testing.assert_allclose(plan.consumer_debt_liability_booking, credit_granted)
+        np.testing.assert_allclose(plan.bank_consumer_loan_asset_booking, settlement.sum(axis=1))
+
+    def test__post_grant_carrier_rejects_non_reconciling_bank_settlement(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.ones(n_households),
+            credit_requested=np.ones(n_households),
+            planned_liquidation=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="does not reconcile"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=np.ones(n_households),
+                granted_consumer_credit_by_bank_and_household=np.zeros((2, n_households)),
+            )
+
     def test__post_grant_reconciliation_leaves_pre_grant_carrier_unchanged(self, test_households):
         n_households = test_households.ts.current("n_households")
         self._populate_pre_grant_plan(

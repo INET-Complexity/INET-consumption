@@ -1443,8 +1443,18 @@ class Country:
                 "Stage 5 post-grant reconciliation requires cleared received_consumption_loans for every household."
             )
 
+        granted_consumer_credit_by_bank_and_household = self.credit_market.pending_granted_consumption_loans()
+
         self.households.populate_post_grant_feasible_plan_from_granted_credit(
             credit_granted=credit_granted,
+            granted_consumer_credit_by_bank_and_household=granted_consumer_credit_by_bank_and_household,
+        )
+        settled_plan = self.households.post_grant_feasible_plan
+        if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:
+            raise RuntimeError("Stage 6 consumer-credit settlement carrier was not populated.")
+        self.credit_market.settle_granted_consumption_loans(
+            credit_granted=settled_plan.credit_granted,
+            granted_consumer_credit_by_bank_and_household=settled_plan.granted_consumer_credit_by_bank_and_household,
         )
         self.households.persist_post_grant_planned_liquidation_total()
 

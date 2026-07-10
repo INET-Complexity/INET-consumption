@@ -284,6 +284,7 @@ class CreditMarket:
         self.initial_states = initial_states
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._pending_consumer_loans_this_period: np.ndarray | None = None
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._reset_firm_service_period_tracking()
@@ -376,6 +377,7 @@ class CreditMarket:
         self.ts.reset()
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._pending_consumer_loans_this_period = None
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._reset_firm_service_period_tracking()
@@ -474,6 +476,7 @@ class CreditMarket:
         """
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._pending_consumer_loans_this_period = None
         self._reset_firm_service_period_tracking()
 
         credit_supply_temperature = float(
@@ -521,7 +524,10 @@ class CreditMarket:
         # principal-weighted instead of added as an interest cash-flow amount.
         self._add_new_loans("st_loans", new_st_loans)
         self._add_new_loans("lt_loans", new_lt_loans)
-        self._add_new_loans("cons_loans", new_cons_loans)
+        if households.uses_feasibility_resolver:
+            self._pending_consumer_loans_this_period = new_cons_loans.copy()
+        else:
+            self._add_new_loans("cons_loans", new_cons_loans)
         self._add_new_loans("mort_loans", new_mort_loans)
 
         # Calculate aggregates for firms
@@ -592,6 +598,7 @@ class CreditMarket:
             self.states["st_loans"][0].sum(axis=1)
             + self.states["lt_loans"][0].sum(axis=1)
             + self.states["cons_loans"][0].sum(axis=1)
+            + (new_cons_loans[0].sum(axis=1) if households.uses_feasibility_resolver else 0.0)
             + self.states["mort_loans"][0].sum(axis=1)
         )
         banks.ts.new_loans_fraction_firms.append(
@@ -604,7 +611,8 @@ class CreditMarket:
         )
         banks.ts.new_loans_fraction_hh_cons.append(
             np.divide(
-                self.states["cons_loans"][0].sum(axis=1),
+                self.states["cons_loans"][0].sum(axis=1)
+                + (new_cons_loans[0].sum(axis=1) if households.uses_feasibility_resolver else 0.0),
                 total_loans_by_bank,
                 out=np.zeros(banks.ts.current("n_banks")),
                 where=total_loans_by_bank != 0.0,
@@ -636,6 +644,51 @@ class CreditMarket:
             where=total_principal > 0.0,
         )
         loans[2] += new_loans[2]
+
+    def pending_granted_consumption_loans(self) -> np.ndarray:
+        """Return the unbooked bank-by-household consumer-credit grant matrix."""
+        if self._pending_consumer_loans_this_period is None:
+            raise RuntimeError("No unbooked consumer-credit settlement is available for this period.")
+        return self._pending_consumer_loans_this_period[0].copy()
+
+    def settle_granted_consumption_loans(
+        self,
+        *,
+        credit_granted: np.ndarray,
+        granted_consumer_credit_by_bank_and_household: np.ndarray,
+    ) -> None:
+        """Book consumer-credit principal from the settled Stage 6 carrier exactly once."""
+        if self._pending_consumer_loans_this_period is None:
+            raise RuntimeError("Consumer-credit settlement has already been booked or was not cleared this period.")
+        pending_loans = self._pending_consumer_loans_this_period
+        settlement = np.asarray(granted_consumer_credit_by_bank_and_household, dtype=float)
+        granted = np.asarray(credit_granted, dtype=float)
+        expected_households = self.states["cons_loans"].shape[2]
+        if granted.shape != (expected_households,):
+            raise ValueError(
+                "credit_granted must contain exactly one value per household; "
+                f"expected shape {(expected_households,)}, got {granted.shape}."
+            )
+        if settlement.shape != pending_loans[0].shape:
+            raise ValueError(
+                "granted_consumer_credit_by_bank_and_household must match the cleared bank-by-household "
+                "consumer-credit shape."
+            )
+        if not np.all(np.isfinite(settlement)) or np.any(settlement < 0.0):
+            raise RuntimeError("Consumer-credit settlement contains non-finite or negative granted principal.")
+        if not np.allclose(settlement, pending_loans[0], rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Consumer-credit settlement differs from the cleared bank-by-household grant.")
+        if not np.allclose(settlement.sum(axis=0), granted, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Consumer-credit settlement does not reconcile with received_consumption_loans.")
+
+        opening_principal = self._serviceable_loans_this_period["cons_loans"][0]
+        if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Consumer-credit principal was mutated before Stage 6 settlement.")
+        self._add_new_loans("cons_loans", pending_loans)
+        booked_principal = self.states["cons_loans"][0] - opening_principal
+        if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
+        self._pending_consumer_loans_this_period = None
 
     def _service_loans(self, loan_keys: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Service loans that existed before current-quarter origination."""
@@ -1038,6 +1091,8 @@ class CreditMarket:
         Current-quarter originations are excluded from same-quarter service.
         Interest due is stored for `compute_interest_paid_by_household`.
         """
+        if self._pending_consumer_loans_this_period is not None:
+            raise RuntimeError("Consumer-credit settlement must be booked before household loan servicing.")
         principal_paid, interest_paid, interest_by_bank = self._service_loans(("cons_loans", "mort_loans"))
         self._last_interest_by_household = interest_paid
         self._last_interest_by_bank += interest_by_bank

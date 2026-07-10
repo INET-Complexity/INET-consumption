@@ -162,8 +162,11 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
     assert events.count("country.clear_labour_market") == 1
     assert events.index("regional.sync") < events.index("country.prepare_credit_market_clearing")
     assert events.index("country.clear_credit_market") < events.index("country.process_housing_market_clearing")
-    assert events.index("country.process_credit_market_clearing") < events.index(
+    assert events.index("country.clear_credit_market") < events.index(
         "country.reconcile_post_grant_feasible_plan"
+    )
+    assert events.index("country.reconcile_post_grant_feasible_plan") < events.index(
+        "country.process_credit_market_clearing"
     )
     assert events.index("country.reconcile_post_grant_feasible_plan") < events.index(
         "country.prepare_post_credit_feasible_activity_plan"

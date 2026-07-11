@@ -382,9 +382,10 @@ class Banks(Agent):
         )
 
     def compute_cash_distributable_profits(self) -> np.ndarray:
-        """Return bank profit backed by current cash interest receipts."""
+        """Return current cash-backed profit excluding prior income collection."""
         return (
             self.ts.current("interest_received_on_loans")
+            - self.ts.current("consumer_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
         )

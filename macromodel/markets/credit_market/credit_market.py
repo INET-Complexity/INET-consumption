@@ -788,8 +788,8 @@ class CreditMarket:
         """Capture opening household service after consumer-credit booking."""
         if self._pending_consumer_loans_this_period is not None:
             raise RuntimeError("Consumer-credit settlement must be booked before household service is snapshotted.")
-        if self._consumer_payment_settlement is not None:
-            raise RuntimeError("Household service cannot be resnapshotted after consumer settlement.")
+        if self._household_service_snapshot is not None:
+            raise RuntimeError("Household service has already been snapshotted for this period.")
         cons = self._serviceable_loans_this_period["cons_loans"].copy()
         mort = self._serviceable_loans_this_period["mort_loans"].copy()
         opening_interest_arrears = self._consumer_interest_arrears_by_cell.copy()
@@ -1600,10 +1600,15 @@ class CreditMarket:
         Returns:
             Tuple[float, float]: Total consumer loans and mortgages written off
         """
-        cons_amount = self.states["cons_loans"][0][:, household_id].sum()
+        cons_amount = (
+            self.states["cons_loans"][0][:, household_id].sum()
+            + self._consumer_interest_arrears_by_cell[:, household_id].sum()
+        )
         mort_amount = self.states["mort_loans"][0][:, household_id].sum()
         self.states["cons_loans"][:, :, household_id] = 0.0
         self.states["mort_loans"][:, :, household_id] = 0.0
+        self._consumer_interest_arrears_by_cell[:, household_id] = 0.0
+        self._consumer_principal_arrears_by_cell[:, household_id] = 0.0
         return cons_amount, mort_amount
 
     def remove_loans_by_bank(self, bank_id: int | np.ndarray) -> None:
@@ -1618,6 +1623,8 @@ class CreditMarket:
         self.states["lt_loans"][:, bank_id] = 0.0
         self.states["cons_loans"][:, bank_id] = 0.0
         self.states["mort_loans"][:, bank_id] = 0.0
+        self._consumer_interest_arrears_by_cell[bank_id] = 0.0
+        self._consumer_principal_arrears_by_cell[bank_id] = 0.0
         self._firm_interest_arrears_by_cell["st_loans"][bank_id] = 0.0
         self._firm_interest_arrears_by_cell["lt_loans"][bank_id] = 0.0
         self._firm_principal_arrears_by_cell["st_loans"][bank_id] = 0.0

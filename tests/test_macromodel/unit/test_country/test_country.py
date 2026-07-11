@@ -731,6 +731,7 @@ class TestCountry:
             "settle_granted_consumption_loans",
             lambda **kwargs: settled.update(kwargs),
         )
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
 
         test_country.reconcile_post_grant_feasible_plan()
 
@@ -1097,6 +1098,7 @@ class TestCountry:
             lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
         )
         monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
 
         monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
@@ -1169,6 +1171,7 @@ class TestCountry:
             lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
         )
         monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
 
         monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
@@ -1241,6 +1244,7 @@ class TestCountry:
             lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
         )
         monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
         test_country.households.pre_grant_feasible_plan.credit_requested[:] = 99.0
 

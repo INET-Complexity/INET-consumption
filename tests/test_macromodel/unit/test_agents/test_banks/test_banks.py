@@ -78,7 +78,7 @@ class TestBanks:
         test_banks.ts.override_current("firm_default_credit_loss", np.zeros(n_banks))
 
         np.testing.assert_allclose(test_banks.compute_profits(), np.full(n_banks, 14.0))
-        np.testing.assert_allclose(test_banks.compute_cash_distributable_profits(), np.full(n_banks, 10.0))
+        np.testing.assert_allclose(test_banks.compute_cash_distributable_profits(), np.full(n_banks, 7.0))
 
     # def test__banks_states(self, test_banks):
     #     assert test_banks is not None

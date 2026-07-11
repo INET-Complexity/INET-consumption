@@ -69,6 +69,17 @@ class TestBanks:
 
         assert np.allclose(test_banks.compute_equity(profit_taxes=0.0), np.full(n_banks, 104.0))
 
+    def test__accrued_consumer_interest_is_accounting_profit_but_not_cash_distributable(self, test_banks):
+        n_banks = test_banks.ts.current("n_banks")
+        test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))
+        test_banks.ts.override_current("consumer_opening_interest_arrears_collected", np.full(n_banks, 3.0))
+        test_banks.ts.override_current("consumer_interest_accrued", np.full(n_banks, 7.0))
+        test_banks.ts.override_current("interest_received_on_deposits", np.zeros(n_banks))
+        test_banks.ts.override_current("firm_default_credit_loss", np.zeros(n_banks))
+
+        np.testing.assert_allclose(test_banks.compute_profits(), np.full(n_banks, 14.0))
+        np.testing.assert_allclose(test_banks.compute_cash_distributable_profits(), np.full(n_banks, 10.0))
+
     # def test__banks_states(self, test_banks):
     #     assert test_banks is not None
     #     for state in [

@@ -81,6 +81,7 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         deposits=bank_data["Deposits"].values,
         deposits_histogram=get_histogram(bank_data["Deposits"].values, scale),
         profits=bank_data["Profits"].values,
+        cash_distributable_profits=bank_data["Profits"].values,
         expected_profits=bank_data["Profits"].values,
         profits_histogram=get_histogram(bank_data["Profits"].values, scale),
         market_share=bank_data["Market Share"].values,
@@ -106,6 +107,9 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         + bank_data["Mortgages to Households"].values,
         #
         interest_received_on_loans=bank_data["Interest received from Loans"].values,
+        consumer_opening_interest_arrears_collected=np.zeros(len(bank_data)),
+        consumer_interest_accrued=np.zeros(len(bank_data)),
+        recognized_interest_received_on_loans=bank_data["Interest received from Loans"].values,
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
         interest_received=bank_data["Interest received from Loans"].values
         + bank_data["Interest received from Deposits"].values,

@@ -375,6 +375,16 @@ class Banks(Agent):
         """
         return (
             self.ts.current("interest_received_on_loans")
+            - self.ts.current("consumer_opening_interest_arrears_collected")
+            + self.ts.current("consumer_interest_accrued")
+            + self.ts.current("interest_received_on_deposits")
+            - self.ts.current("firm_default_credit_loss")
+        )
+
+    def compute_cash_distributable_profits(self) -> np.ndarray:
+        """Return bank profit backed by current cash interest receipts."""
+        return (
+            self.ts.current("interest_received_on_loans")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
         )
@@ -465,7 +475,7 @@ class Banks(Agent):
         else:
             return np.full(self.ts.current("n_banks"), 1.0 / self.ts.current("n_banks"))
 
-    def compute_equity(self, profit_taxes: float) -> np.ndarray:
+    def compute_equity(self, profit_taxes: float, taxable_profits: np.ndarray | None = None) -> np.ndarray:
         """Calculate bank equity.
 
         Considers:
@@ -479,11 +489,9 @@ class Banks(Agent):
         Returns:
             np.ndarray: Equity by bank
         """
-        return (
-            self.ts.current("equity")
-            + self.ts.current("profits")
-            - profit_taxes * np.maximum(0.0, self.ts.current("profits"))
-        )
+        if taxable_profits is None:
+            taxable_profits = self.ts.current("profits")
+        return self.ts.current("equity") + self.ts.current("profits") - profit_taxes * np.maximum(0.0, taxable_profits)
 
     def compute_liability(self) -> np.ndarray:
         """Calculate total bank liabilities.

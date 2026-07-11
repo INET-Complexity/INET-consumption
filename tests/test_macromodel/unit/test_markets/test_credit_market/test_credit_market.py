@@ -293,3 +293,82 @@ def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_
             granted_consumer_credit_by_bank_and_household=settlement,
             consumer_loan_maturity=4,
         )
+
+
+def test_household_service_snapshot_excludes_current_consumer_originations():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[0, 0, 0] = 100.0
+    cons_loans[1, 0, 0] = 0.02
+    cons_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(2, 1),
+    )
+    new_loans = _empty_loan_state(2, 1)
+    new_loans[0, 1, 0] = 50.0
+    new_loans[1, 1, 0] = 0.04
+    new_loans[2, 1, 0] = 10.0
+    market._pending_consumer_loans_this_period = new_loans
+    market.settle_granted_consumption_loans(
+        credit_granted=np.array([50.0]),
+        granted_consumer_credit_by_bank_and_household=new_loans[0],
+        consumer_loan_maturity=8,
+    )
+
+    snapshot = market.prepare_household_service_snapshot()
+
+    np.testing.assert_allclose(snapshot.consumer_total_due, np.array([30.0]))
+    np.testing.assert_allclose(snapshot.newly_granted_consumer_loans, new_loans)
+    with pytest.raises(ValueError):
+        snapshot.consumer_total_due[0] = 0.0
+
+
+def test_partial_consumer_payment_respects_interest_before_principal():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[0, :, 0] = 100.0
+    cons_loans[1, :, 0] = 0.10
+    cons_loans[2, :, 0] = 60.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(2, 1),
+    )
+    snapshot = market.prepare_household_service_snapshot()
+
+    settlement = market.settle_consumer_payments(snapshot.consumer_total_due - 5.0)
+
+    np.testing.assert_allclose(settlement.actual_payment, np.array([5.0]))
+    np.testing.assert_allclose(settlement.interest_paid, np.array([5.0]))
+    np.testing.assert_allclose(settlement.principal_paid, np.array([0.0]))
+    np.testing.assert_allclose(market.states["cons_loans"][0, :, 0], np.array([100.0, 100.0]))
+    np.testing.assert_allclose(market.compute_consumer_interest_accrued_by_bank(), np.array([7.5, 7.5]))
+
+
+def test_consumer_arrears_reconcile_household_and_bank_assets_without_double_counting_principal():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[0, :, 0] = np.array([80.0, 120.0])
+    cons_loans[1, :, 0] = 0.10
+    cons_loans[2, :, 0] = np.array([30.0, 45.0])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(2, 1),
+    )
+    snapshot = market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(snapshot.consumer_total_due)
+
+    household_debt = market.compute_outstanding_consumption_loans_by_household()
+    bank_assets = market.compute_outstanding_household_consumption_loans_by_bank()
+    np.testing.assert_allclose(household_debt.sum(), bank_assets.sum())
+    np.testing.assert_allclose(
+        household_debt.sum(),
+        market.states["cons_loans"][0].sum() + market._consumer_interest_arrears_by_cell.sum(),
+    )
+    assert np.all(market._consumer_principal_arrears_by_cell <= market.states["cons_loans"][0])

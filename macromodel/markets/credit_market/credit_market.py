@@ -111,9 +111,15 @@ def _copy_firm_service_schedule(schedule: dict[str, np.ndarray]) -> dict[str, np
 def _scheduled_service_components(
     loans: np.ndarray,
     opening_principal_arrears: np.ndarray | None = None,
+    *,
+    principal_arrears_accrue_interest: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return scheduled interest and principal due for a loan state."""
-    interest_due = loans[0] * loans[1]
+    principal_arrears = (
+        np.zeros_like(loans[0]) if opening_principal_arrears is None else np.maximum(opening_principal_arrears, 0.0)
+    )
+    interest_base = loans[0] if principal_arrears_accrue_interest else np.maximum(loans[0] - principal_arrears, 0.0)
+    interest_due = interest_base * loans[1]
     raw_principal_due = np.minimum(
         loans[0],
         np.maximum(loans[2] - interest_due, 0.0),
@@ -123,7 +129,7 @@ def _scheduled_service_components(
     else:
         principal_due = np.minimum(
             raw_principal_due,
-            np.maximum(loans[0] - np.maximum(opening_principal_arrears, 0.0), 0.0),
+            np.maximum(loans[0] - principal_arrears, 0.0),
         )
     return interest_due, principal_due
 
@@ -774,6 +780,7 @@ class CreditMarket:
         cons_interest, cons_principal = _scheduled_service_components(
             cons,
             opening_principal_arrears=self._consumer_principal_arrears_by_cell,
+            principal_arrears_accrue_interest=False,
         )
         mort_interest, mort_principal = _scheduled_service_components(mort)
         consumer = (
@@ -805,6 +812,7 @@ class CreditMarket:
         cons_interest, cons_principal = _scheduled_service_components(
             cons,
             opening_principal_arrears=opening_principal_arrears,
+            principal_arrears_accrue_interest=False,
         )
         mort_interest, mort_principal = _scheduled_service_components(mort)
         consumer_total = (opening_interest_arrears + opening_principal_arrears + cons_interest + cons_principal).sum(
@@ -906,6 +914,8 @@ class CreditMarket:
             opening_interest_arrears_collected_by_cell=paid_opening_interest.copy(),
             newly_accrued_interest_by_cell=newly_accrued_interest.copy(),
         )
+        for value in settlement.__dict__.values():
+            value.setflags(write=False)
         self._consumer_payment_settlement = settlement
         return settlement
 
@@ -1392,6 +1402,9 @@ class CreditMarket:
             if key == "cons_loans":
                 ind &= np.isclose(self._consumer_interest_arrears_by_cell, 0.0, atol=1e-2)
             loans[:, ind] = 0.0
+            if key == "cons_loans":
+                self._consumer_interest_arrears_by_cell[ind] = 0.0
+                self._consumer_principal_arrears_by_cell[ind] = 0.0
             if key in ("st_loans", "lt_loans"):
                 self._firm_interest_arrears_by_cell[key][ind] = 0.0
                 self._firm_principal_arrears_by_cell[key][ind] = 0.0
@@ -1465,10 +1478,13 @@ class CreditMarket:
     def compute_opening_scheduled_consumption_payments_by_household(self) -> np.ndarray:
         """Return this period's immutable opening consumer service."""
         if self._household_service_snapshot is None:
-            scheduled = self.compute_scheduled_consumption_loan_payments_by_household()
-            arrears = self.compute_opening_consumer_arrears_by_household()
-            return scheduled + arrears if scheduled.shape == arrears.shape else scheduled
+            consumer_service, _ = self.preview_opening_household_service()
+            return consumer_service
         return self.current_household_service_snapshot().consumer_total_due.copy()
+
+    def consumer_payments_settled(self) -> bool:
+        """Return whether authoritative consumer settlement already ran this period."""
+        return self._consumer_payment_settlement is not None
 
     def current_consumer_payment_settlement(self) -> ConsumerPaymentSettlement:
         if self._consumer_payment_settlement is None:
@@ -1600,14 +1616,10 @@ class CreditMarket:
         Returns:
             Tuple[float, float]: Total consumer loans and mortgages written off
         """
-        cons_amount = (
-            self.states["cons_loans"][0][:, household_id].sum()
-            + self._consumer_interest_arrears_by_cell[:, household_id].sum()
-        )
+        cons_amount = self.states["cons_loans"][0][:, household_id].sum()
         mort_amount = self.states["mort_loans"][0][:, household_id].sum()
         self.states["cons_loans"][:, :, household_id] = 0.0
         self.states["mort_loans"][:, :, household_id] = 0.0
-        self._consumer_interest_arrears_by_cell[:, household_id] = 0.0
         self._consumer_principal_arrears_by_cell[:, household_id] = 0.0
         return cons_amount, mort_amount
 
@@ -1623,7 +1635,6 @@ class CreditMarket:
         self.states["lt_loans"][:, bank_id] = 0.0
         self.states["cons_loans"][:, bank_id] = 0.0
         self.states["mort_loans"][:, bank_id] = 0.0
-        self._consumer_interest_arrears_by_cell[bank_id] = 0.0
         self._consumer_principal_arrears_by_cell[bank_id] = 0.0
         self._firm_interest_arrears_by_cell["st_loans"][bank_id] = 0.0
         self._firm_interest_arrears_by_cell["lt_loans"][bank_id] = 0.0

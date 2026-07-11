@@ -1125,13 +1125,17 @@ class Country:
                 if scheduled_mortgage_payment.shape != expected_shape:
                     scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
             else:
-                scheduled_consumption_loan_payment = (
-                    self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
-                )
-                opening_consumer_arrears = self.credit_market.compute_opening_consumer_arrears_by_household()
-                if opening_consumer_arrears.shape == scheduled_consumption_loan_payment.shape:
-                    scheduled_consumption_loan_payment = scheduled_consumption_loan_payment + opening_consumer_arrears
-                scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
+                (
+                    scheduled_consumption_loan_payment,
+                    scheduled_mortgage_payment,
+                ) = self.credit_market.preview_opening_household_service()
+                expected_shape = (self.households.ts.current("n_households"),)
+                if scheduled_consumption_loan_payment.shape != expected_shape:
+                    scheduled_consumption_loan_payment = (
+                        self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
+                    )
+                if scheduled_mortgage_payment.shape != expected_shape:
+                    scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
         else:
             scheduled_mortgage_payment = self.credit_market.compute_scheduled_mortgage_payments_by_household()
             scheduled_consumption_loan_payment = (
@@ -1492,6 +1496,8 @@ class Country:
 
     def settle_authoritative_household_payments(self) -> None:
         """Apply the floor, settle consumer service, and commit household debt once."""
+        if self.credit_market.consumer_payments_settled():
+            raise RuntimeError("Authoritative household payments have already been settled for this period.")
         target_consumption = self.households.ts.current("target_consumption")
         subsistence_consumption = self.economy.ts.current("subsistence_consumption")
         self.households.apply_consumption_floor_to_post_grant_plan(
@@ -1510,10 +1516,10 @@ class Country:
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)
         self.households.ts.total_debt_installments.append([debt_installments.sum()])
-        self.households.ts.actual_consumer_payment.append(settlement.actual_payment)
-        self.households.ts.unpaid_consumer_payment.append(settlement.unpaid_payment)
-        self.households.ts.consumer_interest_paid.append(settlement.interest_paid)
-        self.households.ts.consumer_principal_paid.append(settlement.principal_paid)
+        self.households.ts.actual_consumer_payment.append(settlement.actual_payment.copy())
+        self.households.ts.unpaid_consumer_payment.append(settlement.unpaid_payment.copy())
+        self.households.ts.consumer_interest_paid.append(settlement.interest_paid.copy())
+        self.households.ts.consumer_principal_paid.append(settlement.principal_paid.copy())
         self.credit_market.finalize_household_consumer_schedule()
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
         self.households.ts.consumption_loan_debt.append(

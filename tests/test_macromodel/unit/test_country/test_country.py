@@ -2891,3 +2891,18 @@ class TestCountry:
 
         assert captured["consumer_loan_maturity"] == test_country.banks.parameters.household_consumption_loan_maturity
         assert captured["dsti_limit"] == 0.35
+
+    def test__authoritative_household_settlement_rejects_retry_before_mutation(self, test_country, monkeypatch):
+        monkeypatch.setattr(test_country.credit_market, "consumer_payments_settled", lambda: True)
+
+        def fail_if_called(**_kwargs):
+            pytest.fail("The floor must not be reapplied on a repeated settlement call.")
+
+        monkeypatch.setattr(
+            test_country.households,
+            "apply_consumption_floor_to_post_grant_plan",
+            fail_if_called,
+        )
+
+        with pytest.raises(RuntimeError, match="already been settled"):
+            test_country.settle_authoritative_household_payments()

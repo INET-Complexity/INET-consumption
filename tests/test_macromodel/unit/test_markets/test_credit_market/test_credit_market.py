@@ -347,6 +347,29 @@ def test_partial_consumer_payment_respects_interest_before_principal():
     np.testing.assert_allclose(settlement.principal_paid, np.array([0.0]))
     np.testing.assert_allclose(market.states["cons_loans"][0, :, 0], np.array([100.0, 100.0]))
     np.testing.assert_allclose(market.compute_consumer_interest_accrued_by_bank(), np.array([7.5, 7.5]))
+    with pytest.raises(ValueError):
+        settlement.actual_payment[0] = 0.0
+
+
+def test_opening_principal_arrears_do_not_accrue_consumer_interest():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[:, 0, 0] = np.array([100.0, 0.1, 30.0])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    market._consumer_principal_arrears_by_cell[0, 0] = 20.0
+
+    consumer_service, _ = market.preview_opening_household_service()
+    snapshot = market.prepare_household_service_snapshot()
+
+    np.testing.assert_allclose(snapshot.consumer_contractual_interest_by_cell, [[8.0]])
+    np.testing.assert_allclose(snapshot.consumer_contractual_principal_by_cell, [[22.0]])
+    np.testing.assert_allclose(consumer_service, [50.0])
+    np.testing.assert_allclose(snapshot.consumer_total_due, consumer_service)
 
 
 def test_consumer_arrears_reconcile_household_and_bank_assets_without_double_counting_principal():
@@ -426,7 +449,7 @@ def test_consumer_arrears_carry_collect_once_and_remodulate_new_credit_next_peri
         np.array([10.0, 0.0]),
     )
     np.testing.assert_allclose(market.compute_consumer_interest_accrued_by_bank(), np.zeros(2))
-    np.testing.assert_allclose(market.compute_recognized_interest_received_by_bank(), np.array([10.0, 0.0]))
+    np.testing.assert_allclose(market.compute_recognized_interest_received_by_bank(), np.array([8.0, 0.0]))
 
     market.finalize_household_consumer_schedule()
     assert market.compute_scheduled_consumption_loan_payments_by_household()[0] > 0.0
@@ -434,7 +457,7 @@ def test_consumer_arrears_carry_collect_once_and_remodulate_new_credit_next_peri
     np.testing.assert_allclose(market._consumer_principal_arrears_by_cell, np.zeros((2, 1)))
 
 
-def test_consumer_arrears_are_cleared_with_household_and_bank_loan_removal():
+def test_loan_removal_preserves_interest_arrears_and_clears_principal_status():
     cons_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
     cons_loans[0] = np.array([[100.0, 20.0], [50.0, 30.0]])
     market = CreditMarket.from_data(
@@ -449,13 +472,33 @@ def test_consumer_arrears_are_cleared_with_household_and_bank_loan_removal():
 
     consumer_writeoff, _ = market.remove_loans_to_households(0)
 
-    np.testing.assert_allclose(consumer_writeoff, 158.0)
-    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell[:, 0], np.zeros(2))
+    np.testing.assert_allclose(consumer_writeoff, 150.0)
+    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell[:, 0], np.array([5.0, 3.0]))
     np.testing.assert_allclose(market._consumer_principal_arrears_by_cell[:, 0], np.zeros(2))
 
     market.remove_loans_by_bank(0)
-    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell[0], np.zeros(2))
+    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell[0], np.array([5.0, 2.0]))
     np.testing.assert_allclose(market._consumer_principal_arrears_by_cell[0], np.zeros(2))
+
+
+def test_remove_repaid_consumer_loans_clears_rounding_residual_arrears():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[0, 0, 0] = 0.005
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    market._consumer_interest_arrears_by_cell[0, 0] = 0.005
+    market._consumer_principal_arrears_by_cell[0, 0] = 0.004
+
+    market.remove_repaid_loans(("cons_loans",))
+
+    np.testing.assert_allclose(market.states["cons_loans"], 0.0)
+    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell, 0.0)
+    np.testing.assert_allclose(market._consumer_principal_arrears_by_cell, 0.0)
 
 
 def test_household_service_snapshot_has_one_writer_per_period():

@@ -24,25 +24,27 @@ class Stage6ConsumerDistressState:
 def compute_stage6_consumer_distress_state(
     *,
     scheduled_consumer_payments: np.ndarray,
-    consumer_payment_suspension_amount: np.ndarray,
+    actual_consumer_payments: np.ndarray,
+    unpaid_consumer_payments: np.ndarray,
     prior_missed_payment_count_consumer: np.ndarray,
     prior_ficp_exclusion_remaining_periods: np.ndarray,
     ficp_exclusion_periods: int,
 ) -> Stage6ConsumerDistressState:
-    """Classify settled consumer-credit payments without changing their settlement.
+    """Classify authoritative consumer-payment settlement without mutating it.
 
-    Stage 5 supplies the read-only suspended amount.  The settled actual payment
-    is therefore scheduled service less that suspension.  The second missed
-    consumer payment triggers a five-year FICP exclusion, represented in model
-    periods by ``ficp_exclusion_periods``.
+    Misses accumulate over the household's history. The second miss starts the
+    configured FICP exclusion; while that exclusion is active, a fully paid
+    period decrements its remaining duration but does not reset the miss count.
     """
     scheduled = np.asarray(scheduled_consumer_payments, dtype=float)
-    suspension = np.asarray(consumer_payment_suspension_amount, dtype=float)
+    actual_payment = np.asarray(actual_consumer_payments, dtype=float)
+    unpaid_payment = np.asarray(unpaid_consumer_payments, dtype=float)
     prior_count = np.asarray(prior_missed_payment_count_consumer, dtype=float)
     prior_exclusion = np.asarray(prior_ficp_exclusion_remaining_periods, dtype=float)
     expected_shape = scheduled.shape
     for name, values in (
-        ("consumer_payment_suspension_amount", suspension),
+        ("actual_consumer_payments", actual_payment),
+        ("unpaid_consumer_payments", unpaid_payment),
         ("prior_missed_payment_count_consumer", prior_count),
         ("prior_ficp_exclusion_remaining_periods", prior_exclusion),
     ):
@@ -52,12 +54,21 @@ def compute_stage6_consumer_distress_state(
             )
     if ficp_exclusion_periods <= 0:
         raise ValueError("ficp_exclusion_periods must be positive.")
+    for name, values in (
+        ("scheduled_consumer_payments", scheduled),
+        ("actual_consumer_payments", actual_payment),
+        ("unpaid_consumer_payments", unpaid_payment),
+    ):
+        if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+            raise ValueError(f"{name} must contain finite, non-negative values.")
+    actual_exceeds_scheduled = (actual_payment > scheduled) & ~np.isclose(actual_payment, scheduled)
+    if np.any(actual_exceeds_scheduled) or not np.allclose(
+        actual_payment + unpaid_payment,
+        scheduled,
+    ):
+        raise ValueError("Settled actual and unpaid consumer payments must reconcile with scheduled service.")
 
-    cleaned_scheduled = np.where(np.isfinite(scheduled), np.maximum(scheduled, 0.0), 0.0)
-    cleaned_suspension = np.where(np.isfinite(suspension), np.maximum(suspension, 0.0), 0.0)
-    cleaned_suspension = np.minimum(cleaned_suspension, cleaned_scheduled)
-    actual_payment = cleaned_scheduled - cleaned_suspension
-    payment_missed = cleaned_suspension > 0.0
+    payment_missed = unpaid_payment > 0.0
 
     cleaned_prior_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0).astype(int)
     cleaned_prior_exclusion = np.where(np.isfinite(prior_exclusion), np.maximum(prior_exclusion, 0.0), 0.0).astype(int)

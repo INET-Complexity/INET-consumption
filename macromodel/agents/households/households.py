@@ -156,6 +156,7 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
 # are initialised independently from Stage 5's diagnostic-only carrier because
 # FICP is a live gate on subsequent consumer-credit demand.
 _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
+    "scheduled_consumer_payment": 0.0,
     "actual_consumer_payment": 0.0,
     "unpaid_consumer_payment": 0.0,
     "consumer_interest_paid": 0.0,
@@ -982,19 +983,21 @@ class Households(Agent):
         self,
         *,
         scheduled_consumer_payments: np.ndarray,
+        actual_consumer_payments: np.ndarray,
+        unpaid_consumer_payments: np.ndarray,
         time_unit: int,
     ) -> None:
-        """Persist Stage 6 consumer distress from settled, read-only Stage 5 outcomes."""
+        """Persist Stage 6 distress from the authoritative consumer settlement."""
         if time_unit <= 0 or 12 % time_unit != 0:
             raise ValueError("time_unit must be a positive divisor of 12.")
         state = compute_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled_consumer_payments,
-            consumer_payment_suspension_amount=self.ts.current("consumer_payment_suspension_amount"),
+            actual_consumer_payments=actual_consumer_payments,
+            unpaid_consumer_payments=unpaid_consumer_payments,
             prior_missed_payment_count_consumer=self.ts.current("missed_payment_count_consumer"),
             prior_ficp_exclusion_remaining_periods=self.ts.current("ficp_exclusion_remaining_periods"),
             ficp_exclusion_periods=5 * (12 // time_unit),
         )
-        self.ts.actual_consumer_payment.append(state.actual_consumer_payment)
         self.ts.consumer_payment_missed.append(state.consumer_payment_missed)
         self.ts.missed_payment_count_consumer.append(state.missed_payment_count_consumer)
         self.ts.consumer_distress_state.append(state.consumer_distress_state)

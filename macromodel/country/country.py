@@ -1516,6 +1516,7 @@ class Country:
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)
         self.households.ts.total_debt_installments.append([debt_installments.sum()])
+        self.households.ts.scheduled_consumer_payment.append(settlement.scheduled_payment.copy())
         self.households.ts.actual_consumer_payment.append(settlement.actual_payment.copy())
         self.households.ts.unpaid_consumer_payment.append(settlement.unpaid_payment.copy())
         self.households.ts.consumer_interest_paid.append(settlement.interest_paid.copy())
@@ -1536,6 +1537,12 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+        self.households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=settlement.scheduled_payment,
+            actual_consumer_payments=settlement.actual_payment,
+            unpaid_consumer_payments=settlement.unpaid_payment,
+            time_unit=self.economy.time_unit,
+        )
 
     def compute_activity_tax_previews(
         self,

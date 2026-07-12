@@ -56,6 +56,7 @@ class TestHouseholds:
             "consumer_payment_suspension_amount",
             "mortgage_payment_suspension_needed",
             "mortgage_payment_suspension_amount",
+            "scheduled_consumer_payment",
             "actual_consumer_payment",
             "consumer_payment_missed",
             "missed_payment_count_consumer",
@@ -2089,20 +2090,19 @@ class TestPopulatePostGrantFeasiblePlan:
     def test__record_stage6_consumer_distress_state_tracks_misses_and_ficp(self, test_households):
         n_households = test_households.ts.current("n_households")
         scheduled = np.resize(np.asarray([10.0, 10.0, 10.0, 10.0]), n_households)
+        actual = np.resize(np.asarray([10.0, 5.0, 10.0, 10.0]), n_households)
         test_households.ts.override_current(
             "consumer_payment_suspension_amount",
-            np.resize(np.asarray([0.0, 5.0, 0.0, 0.0]), n_households),
+            scheduled.copy(),
         )
 
         test_households.record_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=actual,
+            unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
         )
 
-        np.testing.assert_allclose(
-            test_households.ts.current("actual_consumer_payment"),
-            np.resize(np.asarray([10.0, 5.0, 10.0, 10.0]), n_households),
-        )
         np.testing.assert_array_equal(
             test_households.ts.current("consumer_distress_state"),
             np.resize(np.asarray([CURRENT, DELINQUENT, CURRENT, CURRENT]), n_households),
@@ -2112,12 +2112,11 @@ class TestPopulatePostGrantFeasiblePlan:
             np.resize(np.asarray([0, 1, 0, 0]), n_households),
         )
 
-        test_households.ts.override_current(
-            "consumer_payment_suspension_amount",
-            np.resize(np.asarray([0.0, 1.0, 0.0, 0.0]), n_households),
-        )
+        actual = np.resize(np.asarray([10.0, 9.0, 10.0, 10.0]), n_households)
         test_households.record_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=actual,
+            unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
         )
 

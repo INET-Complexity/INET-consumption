@@ -106,6 +106,10 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         + bank_data["Mortgages to Households"].values,
         #
         interest_received_on_loans=bank_data["Interest received from Loans"].values,
+        consumer_interest_arrears_collected=np.zeros(len(bank_data)),
+        consumer_interest_accrued=np.zeros(len(bank_data)),
+        recognized_interest_income_on_loans=bank_data["Interest received from Loans"].values,
+        cash_distributable_profit=bank_data["Profits"].values,
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
         interest_received=bank_data["Interest received from Loans"].values
         + bank_data["Interest received from Deposits"].values,

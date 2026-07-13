@@ -99,6 +99,9 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
         def reconcile_post_grant_feasible_plan(self):
             events.append("country.reconcile_post_grant_feasible_plan")
 
+        def settle_deferred_household_service(self):
+            events.append("country.settle_deferred_household_service")
+
         def __getattr__(self, name):
             if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):
 
@@ -174,6 +177,9 @@ def test_iterate_runs_credit_and_feasibility_before_single_labour_clear(monkeypa
     )
     assert events.index("country.clear_labour_market") < events.index("country.update_post_labour_planning_metrics")
     assert events.index("country.update_post_labour_planning_metrics") < events.index(
+        "country.settle_deferred_household_service"
+    )
+    assert events.index("country.settle_deferred_household_service") < events.index(
         "country.prepare_goods_market_clearing"
     )
     assert events.index("goods.clear") < events.index("country.append_excess_demand_finance_potential_diagnostics")
@@ -200,6 +206,9 @@ def test_iterate_skips_supply_capped_assignment_without_credit_supply_transient(
 
         def reconcile_post_grant_feasible_plan(self):
             events.append("country.reconcile_post_grant_feasible_plan")
+
+        def settle_deferred_household_service(self):
+            events.append("country.settle_deferred_household_service")
 
         def __getattr__(self, name):
             if name.startswith(("initialisation", "estimation", "target", "update", "prepare", "clear", "process")):

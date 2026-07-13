@@ -54,6 +54,7 @@ class TestBanks:
     def test__compute_profits_subtracts_firm_default_credit_loss(self, test_banks):
         n_banks = test_banks.ts.current("n_banks")
         test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))
+        test_banks.ts.override_current("recognized_interest_income_on_loans", np.full(n_banks, 10.0))
         test_banks.ts.override_current("interest_received_on_deposits", np.full(n_banks, 2.0))
         test_banks.ts.override_current("firm_default_credit_loss", np.full(n_banks, 7.0))
 
@@ -63,11 +64,22 @@ class TestBanks:
         n_banks = test_banks.ts.current("n_banks")
         test_banks.ts.override_current("equity", np.full(n_banks, 100.0))
         test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))
+        test_banks.ts.override_current("recognized_interest_income_on_loans", np.full(n_banks, 10.0))
         test_banks.ts.override_current("interest_received_on_deposits", np.zeros(n_banks))
         test_banks.ts.override_current("firm_default_credit_loss", np.full(n_banks, 6.0))
         test_banks.ts.override_current("profits", test_banks.compute_profits())
 
         assert np.allclose(test_banks.compute_equity(profit_taxes=0.0), np.full(n_banks, 104.0))
+
+    def test__compute_profits_uses_recognized_interest_income(self, test_banks):
+        n_banks = test_banks.ts.current("n_banks")
+        test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))
+        test_banks.ts.override_current("recognized_interest_income_on_loans", np.full(n_banks, 8.0))
+        test_banks.ts.override_current("interest_received_on_deposits", np.zeros(n_banks))
+        test_banks.ts.override_current("firm_default_credit_loss", np.zeros(n_banks))
+
+        assert np.allclose(test_banks.compute_profits(), np.full(n_banks, 8.0))
+        assert np.allclose(test_banks.compute_cash_distributable_profit(), np.full(n_banks, 10.0))
 
     # def test__banks_states(self, test_banks):
     #     assert test_banks is not None

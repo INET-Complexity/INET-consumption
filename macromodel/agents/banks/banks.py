@@ -373,6 +373,22 @@ class Banks(Agent):
         Returns:
             np.ndarray: Total profits by bank
         """
+        if "recognized_interest_income_on_loans" in self.ts.dicts:
+            loan_interest = self.ts.current("recognized_interest_income_on_loans")
+        else:
+            loan_interest = self.ts.current("interest_received_on_loans")
+            if "consumer_interest_arrears_collected" in self.ts.dicts:
+                loan_interest = loan_interest - self.ts.current("consumer_interest_arrears_collected")
+            if "consumer_interest_accrued" in self.ts.dicts:
+                loan_interest = loan_interest + self.ts.current("consumer_interest_accrued")
+        return (
+            loan_interest
+            + self.ts.current("interest_received_on_deposits")
+            - self.ts.current("firm_default_credit_loss")
+        )
+
+    def compute_cash_distributable_profit(self) -> np.ndarray:
+        """Return profit supported by cash receipts rather than new accruals."""
         return (
             self.ts.current("interest_received_on_loans")
             + self.ts.current("interest_received_on_deposits")

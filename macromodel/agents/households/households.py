@@ -156,7 +156,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
 # are initialised independently from Stage 5's diagnostic-only carrier because
 # FICP is a live gate on subsequent consumer-credit demand.
 _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
+    "scheduled_consumer_payment": 0.0,
     "actual_consumer_payment": 0.0,
+    "unpaid_consumer_payment": 0.0,
+    "consumer_interest_paid": 0.0,
+    "consumer_principal_paid": 0.0,
     "consumer_payment_missed": False,
     "missed_payment_count_consumer": 0.0,
     # See func.consumer_distress: 0=current, 1=delinquent, 2=FICP.
@@ -997,6 +1001,22 @@ class Households(Agent):
         self.ts.consumer_distress_state.append(state.consumer_distress_state)
         self.ts.ficp_state.append(state.ficp_state)
         self.ts.ficp_exclusion_remaining_periods.append(state.ficp_exclusion_remaining_periods)
+
+    def record_consumer_payment_settlement(
+        self,
+        *,
+        scheduled_service: np.ndarray,
+        actual_payment: np.ndarray,
+        unpaid_service: np.ndarray,
+        interest_paid: np.ndarray,
+        principal_paid: np.ndarray,
+    ) -> None:
+        """Persist 3a settlement diagnostics without changing distress state."""
+        self.ts.scheduled_consumer_payment.append(np.asarray(scheduled_service, dtype=float).copy())
+        self.ts.actual_consumer_payment.append(np.asarray(actual_payment, dtype=float).copy())
+        self.ts.unpaid_consumer_payment.append(np.asarray(unpaid_service, dtype=float).copy())
+        self.ts.consumer_interest_paid.append(np.asarray(interest_paid, dtype=float).copy())
+        self.ts.consumer_principal_paid.append(np.asarray(principal_paid, dtype=float).copy())
 
     def _record_consumption_floor_diagnostics(self) -> None:
         """Persist floor diagnostics from the settled runtime carrier."""
@@ -2556,15 +2576,9 @@ class Households(Agent):
                     "Stage 5 consumption-floor enforcement requires subsistence_consumption "
                     "to be populated for the current period."
                 )
-            self.apply_consumption_floor_to_post_grant_plan(
-                consumption_before_floor=target_consumption.sum(axis=1),
+            goods_consumption = self.prepare_post_grant_consumption_floor(
                 subsistence_floor=subsistence_consumption,
             )
-            goods_consumption = self._scale_consumption_matrix_to_household_totals(
-                target_consumption=target_consumption,
-                household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
-            )
-            self.ts.override_current("target_consumption", goods_consumption)
             shortfall = self.current_remaining_subsistence_shortfall()
 
         # Prepare goods market clearing
@@ -2572,6 +2586,25 @@ class Households(Agent):
         self.prepare_selling_goods()
 
         return shortfall
+
+    def prepare_post_grant_consumption_floor(self, *, subsistence_floor: np.ndarray) -> np.ndarray:
+        """Apply and persist the post-grant floor before deferred debt settlement."""
+        if not self.uses_feasibility_resolver:
+            return self.ts.current("target_consumption")
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError("Stage 5 consumption-floor enforcement requires post_grant_feasible_plan.")
+        target_consumption = self.ts.current("target_consumption")
+        if self.post_grant_feasible_plan.consumption_after_floor is None:
+            self.apply_consumption_floor_to_post_grant_plan(
+                consumption_before_floor=target_consumption.sum(axis=1),
+                subsistence_floor=subsistence_floor,
+            )
+        goods_consumption = self._scale_consumption_matrix_to_household_totals(
+            target_consumption=target_consumption,
+            household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
+        )
+        self.ts.override_current("target_consumption", goods_consumption)
+        return goods_consumption
 
     @staticmethod
     def _scale_consumption_matrix_to_household_totals(

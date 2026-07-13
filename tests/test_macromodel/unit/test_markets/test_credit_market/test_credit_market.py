@@ -293,3 +293,80 @@ def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_
             granted_consumer_credit_by_bank_and_household=settlement,
             consumer_loan_maturity=4,
         )
+
+
+def _deferred_consumer_market(consumer_loans: np.ndarray) -> CreditMarket:
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(consumer_loans.shape[1], 1),
+        lt_loans=_empty_loan_state(consumer_loans.shape[1], 1),
+        cons_loans=consumer_loans,
+        mort_loans=_empty_loan_state(consumer_loans.shape[1], consumer_loans.shape[2]),
+    )
+    market.prepare_household_service_snapshot()
+    return market
+
+
+def test_deferred_consumer_settlement_full_payment_clears_opening_service():
+    loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    loans[0, 0, 0] = 100.0
+    loans[1, 0, 0] = 0.1
+    loans[2, 0, 0] = 20.0
+    market = _deferred_consumer_market(loans)
+
+    settlement = market.settle_deferred_consumer_service(np.array([0.0]))
+
+    np.testing.assert_allclose(settlement.actual_payment, np.array([20.0]))
+    np.testing.assert_allclose(settlement.unpaid_service, np.array([0.0]))
+    np.testing.assert_allclose(settlement.interest_paid, np.array([10.0]))
+    np.testing.assert_allclose(settlement.principal_paid, np.array([10.0]))
+    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell, 0.0)
+    np.testing.assert_allclose(market._consumer_principal_arrears_by_cell, 0.0)
+    assert not market.household_service_snapshot().consumer_total_due.flags.writeable
+    assert not market.household_service_snapshot().newly_granted_consumer_loans.flags.writeable
+
+
+def test_household_service_snapshot_rejects_invalid_opening_arrears():
+    loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    market._consumer_interest_arrears_by_cell[0, 0] = -1.0
+
+    with pytest.raises(RuntimeError, match="finite and non-negative"):
+        market.prepare_household_service_snapshot()
+
+
+def test_deferred_consumer_settlement_partial_payment_preserves_principal_arrears():
+    loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    loans[0, 0, 0] = 100.0
+    loans[1, 0, 0] = 0.1
+    loans[2, 0, 0] = 20.0
+    market = _deferred_consumer_market(loans)
+
+    settlement = market.settle_deferred_consumer_service(np.array([10.0]))
+
+    np.testing.assert_allclose(settlement.actual_payment, np.array([10.0]))
+    np.testing.assert_allclose(settlement.interest_paid, np.array([10.0]))
+    np.testing.assert_allclose(settlement.principal_paid, np.array([0.0]))
+    np.testing.assert_allclose(settlement.unpaid_principal_by_cell, np.array([[10.0]]))
+    np.testing.assert_allclose(market.compute_outstanding_consumption_loans_by_household(), np.array([100.0]))
+
+
+def test_deferred_consumer_settlement_allocates_partial_interest_pro_rata_across_banks():
+    loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    loans[0, :, 0] = 50.0
+    loans[1, :, 0] = 0.1
+    loans[2, :, 0] = 10.0
+    market = _deferred_consumer_market(loans)
+
+    settlement = market.settle_deferred_consumer_service(np.array([15.0]))
+
+    np.testing.assert_allclose(settlement.interest_paid_by_cell, np.array([[2.5], [2.5]]))
+    np.testing.assert_allclose(settlement.principal_paid, np.array([0.0]))
+    np.testing.assert_allclose(settlement.unpaid_interest_by_cell, np.array([[2.5], [2.5]]))
+    np.testing.assert_allclose(market.compute_outstanding_household_consumption_loans_by_bank(), np.array([52.5, 52.5]))

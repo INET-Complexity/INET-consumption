@@ -1398,32 +1398,51 @@ class Country:
             scheduled_principal_due=staged_firm_installments["scheduled_principal_due"],
         )
 
-        # Handle household debt installments
-        self.households.ts.debt_installments.append(self.credit_market.pay_household_installments())
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.credit_market.pay_household_installments()
+            return
+
+        self._commit_household_service_result(self.credit_market.pay_household_installments())
+
+    def _commit_household_service_result(self, principal_paid: np.ndarray) -> None:
+        """Commit household loan service series once for the current period."""
+        self.households.ts.debt_installments.append(principal_paid)
         self.households.ts.total_debt_installments.append([self.households.ts.current("debt_installments").sum()])
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
-
-        # Calculate household debt
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
         )
         self.households.ts.mortgage_debt.append(self.credit_market.compute_outstanding_mortgages_by_household())
         self.households.ts.debt.append(self.households.compute_debt())
         self.households.ts.debt_histogram.append(get_histogram(self.households.ts.current("debt"), self.scale))
-
-        # Calculate the interest on loans paid by households
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
-
-        # Calculate the interest on deposits received/paid by households
         self.households.ts.interest_paid_on_deposits.append(
             self.households.compute_interest_paid_on_deposits(
                 bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
                 bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
             )
         )
-
-        # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
+    def settle_deferred_household_service(self) -> None:
+        """Apply the floor, settle consumer service, and commit household loans once."""
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return
+        self.households.prepare_post_grant_consumption_floor(
+            subsistence_floor=self.economy.ts.current("subsistence_consumption"),
+        )
+        settlement = self.credit_market.settle_deferred_consumer_service(
+            self.households.current_remaining_subsistence_shortfall(),
+        )
+        self.households.record_consumer_payment_settlement(
+            scheduled_service=settlement.scheduled_service,
+            actual_payment=settlement.actual_payment,
+            unpaid_service=settlement.unpaid_service,
+            interest_paid=settlement.interest_paid,
+            principal_paid=settlement.principal_paid,
+        )
+        principal_paid = self.credit_market._last_mortgage_principal_paid + settlement.principal_paid
+        self._commit_household_service_result(principal_paid)
 
     def reconcile_post_grant_feasible_plan(self) -> None:
         """Build settled household feasibility after consumer-credit clearing."""
@@ -1457,6 +1476,7 @@ class Country:
             granted_consumer_credit_by_bank_and_household=settled_plan.granted_consumer_credit_by_bank_and_household,
             consumer_loan_maturity=self.banks.parameters.household_consumption_loan_maturity,
         )
+        self.credit_market.prepare_household_service_snapshot()
         self.households.persist_post_grant_planned_liquidation_total()
 
     def compute_activity_tax_previews(
@@ -1597,10 +1617,6 @@ class Country:
             self.households.record_pre_support_payment_suspension_diagnostics(
                 scheduled_consumer_payments=self.credit_market.compute_scheduled_consumption_loan_payments_by_household(),
                 scheduled_mortgage_payments=self.credit_market.compute_scheduled_mortgage_payments_by_household(),
-            )
-            self.households.record_stage6_consumer_distress_state(
-                scheduled_consumer_payments=self.credit_market.compute_scheduled_consumption_loan_payments_by_household(),
-                time_unit=self.economy.time_unit,
             )
             support_by_household = compute_stage5_subsistence_support(
                 self.households.current_remaining_subsistence_shortfall()
@@ -1955,6 +1971,15 @@ class Country:
         self.firms.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_firm())
         self.firms.ts.interest_paid.append(self.firms.compute_interest_paid())
         self.banks.ts.interest_received_on_loans.append(self.credit_market.compute_interest_received_by_bank())
+        self.banks.ts.consumer_interest_arrears_collected.append(
+            self.credit_market._last_consumer_opening_interest_collection_by_bank.copy()
+        )
+        self.banks.ts.consumer_interest_accrued.append(
+            self.credit_market._last_consumer_accrued_interest_by_bank.copy()
+        )
+        self.banks.ts.recognized_interest_income_on_loans.append(
+            self.credit_market.compute_recognized_interest_received_by_bank()
+        )
         self.credit_market.remove_repaid_loans(("st_loans", "lt_loans"))
         self.credit_market.compute_aggregates()
         self.firms.ts.short_term_loan_debt.append(self.credit_market.compute_outstanding_short_term_loans_by_firm())
@@ -2033,7 +2058,7 @@ class Country:
         self.individuals.ts.income.append(
             self.individuals.compute_income(
                 firm_profits=self.firms.ts.current("profits"),
-                bank_profits=self.banks.ts.current("profits"),
+                bank_profits=self.banks.ts.current("cash_distributable_profit"),
                 cpi=self.economy.current_consumer_price_level(),
                 income_taxes=self.central_government.states["Income Tax"],
                 tau_firm=self.central_government.states["Profit Tax"],
@@ -2161,6 +2186,7 @@ class Country:
         self.banks.ts.interest_received.append(
             self.banks.ts.current("interest_received_on_loans") + self.banks.ts.current("interest_received_on_deposits")
         )
+        self.banks.ts.cash_distributable_profit.append(self.banks.compute_cash_distributable_profit())
         self.banks.ts.profits.append(self.banks.compute_profits())
         self.banks.ts.profits_histogram.append(get_histogram(self.banks.ts.current("profits"), self.scale))
 
@@ -2205,7 +2231,7 @@ class Country:
             current_income_financial_assets=self.households.ts.current("income_financial_assets"),
             current_ind_activity=self.individuals.states["Activity Status"],
             current_ind_realised_cons=self.households.ts.current("consumption"),
-            current_bank_profits=self.banks.ts.current("profits"),
+            current_bank_profits=self.banks.ts.current("cash_distributable_profit"),
             current_firm_production=self.firms.ts.current("production"),
             current_firm_price=self.firms.ts.current("price"),
             current_firm_profits=self.firms.ts.current("profits"),

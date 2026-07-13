@@ -432,6 +432,7 @@ class Simulation:
             country.prepare_post_credit_feasible_activity_plan()
             country.clear_labour_market()
             country.update_post_labour_planning_metrics()
+            country.settle_deferred_household_service()
 
             # Prepare goods market clearing
             logging.info("Prepare goods market clearing")

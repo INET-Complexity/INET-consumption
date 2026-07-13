@@ -774,10 +774,7 @@ class CreditMarket:
             consumer_principal_due=_readonly_copy(contractual_principal),
             consumer_total_due=_readonly_copy(
                 (
-                    opening_interest_arrears
-                    + opening_principal_arrears
-                    + contractual_interest
-                    + contractual_principal
+                    opening_interest_arrears + opening_principal_arrears + contractual_interest + contractual_principal
                 ).sum(axis=0)
             ),
             mortgage_interest_due=_readonly_copy(mortgage_interest),
@@ -951,13 +948,11 @@ class CreditMarket:
 
         interest_paid_by_cell = paid_opening_interest + paid_contractual_interest
         principal_paid_by_cell = paid_opening_principal + paid_contractual_principal
-        unpaid_interest_by_cell = (
-            np.maximum(opening_interest - paid_opening_interest, 0.0)
-            + np.maximum(contractual_interest - paid_contractual_interest, 0.0)
+        unpaid_interest_by_cell = np.maximum(opening_interest - paid_opening_interest, 0.0) + np.maximum(
+            contractual_interest - paid_contractual_interest, 0.0
         )
-        unpaid_principal_by_cell = (
-            np.maximum(opening_principal - paid_opening_principal, 0.0)
-            + np.maximum(contractual_principal - paid_contractual_principal, 0.0)
+        unpaid_principal_by_cell = np.maximum(opening_principal - paid_opening_principal, 0.0) + np.maximum(
+            contractual_principal - paid_contractual_principal, 0.0
         )
 
         loans = self.states["cons_loans"]
@@ -1566,10 +1561,7 @@ class CreditMarket:
             contractual_principal,
         ) = self._consumer_service_components(self.states["cons_loans"])
         return (
-            opening_interest_arrears
-            + opening_principal_arrears
-            + contractual_interest
-            + contractual_principal
+            opening_interest_arrears + opening_principal_arrears + contractual_interest + contractual_principal
         ).sum(axis=0)
 
     def compute_scheduled_mortgage_service_by_household(self) -> np.ndarray:

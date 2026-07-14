@@ -757,11 +757,18 @@ class CreditMarket:
         opening_mortgage = self._serviceable_loans_this_period["mort_loans"].copy()
         for name, values in (
             ("consumer principal", opening_consumer[0]),
+            ("consumer rate", opening_consumer[1]),
+            ("consumer scheduled payment", opening_consumer[2]),
+            ("mortgage principal", opening_mortgage[0]),
+            ("mortgage rate", opening_mortgage[1]),
+            ("mortgage scheduled payment", opening_mortgage[2]),
             ("consumer interest arrears", self._consumer_interest_arrears_by_cell),
             ("consumer principal arrears", self._consumer_principal_arrears_by_cell),
         ):
             if not np.all(np.isfinite(values)) or np.any(values < 0.0):
                 raise RuntimeError(f"Opening {name} must be finite and non-negative.")
+        if np.any(self._consumer_principal_arrears_by_cell > opening_consumer[0]):
+            raise RuntimeError("Opening consumer principal arrears cannot exceed contractual principal.")
         (
             opening_interest_arrears,
             opening_principal_arrears,
@@ -769,6 +776,14 @@ class CreditMarket:
             contractual_principal,
         ) = self._consumer_service_components(opening_consumer)
         mortgage_interest, mortgage_principal = _scheduled_service_components(opening_mortgage)
+        for name, values in (
+            ("consumer contractual interest", contractual_interest),
+            ("consumer contractual principal", contractual_principal),
+            ("mortgage interest", mortgage_interest),
+            ("mortgage principal", mortgage_principal),
+        ):
+            if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+                raise RuntimeError(f"Opening {name} must be finite and non-negative.")
         snapshot = HouseholdServiceSnapshot(
             consumer_interest_due=_readonly_copy(contractual_interest),
             consumer_principal_due=_readonly_copy(contractual_principal),
@@ -922,7 +937,9 @@ class CreditMarket:
                 "remaining_subsistence_shortfall must match household service shape; "
                 f"expected {total_due.shape}, got {residual.shape}."
             )
-        residual = np.where(np.isfinite(residual), np.maximum(residual, 0.0), 0.0)
+        if not np.all(np.isfinite(residual)) or np.any(residual < 0.0):
+            raise ValueError("remaining_subsistence_shortfall must be finite and non-negative.")
+        residual = residual.copy()
         unpaid = np.minimum(residual, total_due)
         actual = total_due - unpaid
 

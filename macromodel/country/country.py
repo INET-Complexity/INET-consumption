@@ -1444,10 +1444,9 @@ class Country:
             principal_paid=settlement.principal_paid,
         )
         committed_settlement = self.credit_market.consumer_payment_settlement()
-        closing_consumer_arrears = (
-            committed_settlement.arrears.closing_interest.sum(axis=0)
-            + committed_settlement.arrears.closing_principal.sum(axis=0)
-        )
+        closing_consumer_arrears = committed_settlement.arrears.closing_interest.sum(
+            axis=0
+        ) + committed_settlement.arrears.closing_principal.sum(axis=0)
         if not np.allclose(
             closing_consumer_arrears,
             committed_settlement.unpaid_service,

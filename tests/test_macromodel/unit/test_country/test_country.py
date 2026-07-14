@@ -62,7 +62,9 @@ class TestCountry:
 
         monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
         monkeypatch.setattr(test_country.households, "prepare_post_grant_consumption_floor", lambda **_kwargs: None)
-        monkeypatch.setattr(test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
+        )
         monkeypatch.setattr(
             test_country.credit_market,
             "settle_deferred_consumer_service",

@@ -1428,6 +1428,8 @@ class Country:
         """Apply the floor, settle consumer service, and commit household loans once."""
         if not self.configuration.households.parameters.uses_feasibility_resolver:
             return
+        if self.credit_market._last_consumer_settlement is not None:
+            raise RuntimeError("Household service has already been committed for this period.")
         self.households.prepare_post_grant_consumption_floor(
             subsistence_floor=self.economy.ts.current("subsistence_consumption"),
         )

@@ -1443,6 +1443,24 @@ class Country:
             interest_paid=settlement.interest_paid,
             principal_paid=settlement.principal_paid,
         )
+        committed_settlement = self.credit_market.consumer_payment_settlement()
+        closing_consumer_arrears = (
+            committed_settlement.arrears.closing_interest.sum(axis=0)
+            + committed_settlement.arrears.closing_principal.sum(axis=0)
+        )
+        if not np.allclose(
+            closing_consumer_arrears,
+            committed_settlement.unpaid_service,
+            rtol=1e-10,
+            atol=1e-8,
+        ):
+            raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
+        self.households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=committed_settlement.scheduled_service,
+            actual_consumer_payment=committed_settlement.actual_payment,
+            unpaid_consumer_service=committed_settlement.unpaid_service,
+            time_unit=self.economy.time_unit,
+        )
         principal_paid = self.credit_market._last_mortgage_principal_paid + settlement.principal_paid
         self._commit_household_service_result(principal_paid)
 

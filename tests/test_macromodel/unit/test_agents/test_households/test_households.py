@@ -2093,13 +2093,20 @@ class TestPopulatePostGrantFeasiblePlan:
     def test__record_stage6_consumer_distress_state_tracks_misses_and_ficp(self, test_households):
         n_households = test_households.ts.current("n_households")
         scheduled = np.resize(np.asarray([10.0, 10.0, 10.0, 10.0]), n_households)
-        test_households.ts.override_current(
-            "consumer_payment_suspension_amount",
-            np.resize(np.asarray([0.0, 5.0, 0.0, 0.0]), n_households),
+        actual = np.resize(np.asarray([10.0, 5.0, 10.0, 10.0]), n_households)
+        unpaid = scheduled - actual
+        test_households.record_consumer_payment_settlement(
+            scheduled_service=scheduled,
+            actual_payment=actual,
+            unpaid_service=unpaid,
+            interest_paid=np.zeros(n_households),
+            principal_paid=np.zeros(n_households),
         )
 
         test_households.record_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled,
+            actual_consumer_payment=actual,
+            unpaid_consumer_service=unpaid,
             time_unit=3,
         )
 
@@ -2116,12 +2123,12 @@ class TestPopulatePostGrantFeasiblePlan:
             np.resize(np.asarray([0, 1, 0, 0]), n_households),
         )
 
-        test_households.ts.override_current(
-            "consumer_payment_suspension_amount",
-            np.resize(np.asarray([0.0, 1.0, 0.0, 0.0]), n_households),
-        )
+        actual = np.resize(np.asarray([10.0, 9.0, 10.0, 10.0]), n_households)
+        unpaid = scheduled - actual
         test_households.record_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled,
+            actual_consumer_payment=actual,
+            unpaid_consumer_service=unpaid,
             time_unit=3,
         )
 
@@ -2251,7 +2258,9 @@ class TestComputeTargetCreditLiveCreditRequested:
         np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
         np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
 
-    def test__compute_target_credit_ficp_blocks_only_consumer_credit(self, test_households, monkeypatch):
+    def test__compute_target_credit_diagnostic_ficp_does_not_block_consumer_credit_before_4b(
+        self, test_households, monkeypatch
+    ):
         n_households = test_households.ts.current("n_households")
         sentinel = np.full(n_households, 12345.0)
         mortgage_sentinel = np.full(n_households, 54321.0)
@@ -2275,7 +2284,7 @@ class TestComputeTargetCreditLiveCreditRequested:
 
         np.testing.assert_allclose(
             test_households.ts.current("target_consumption_loans"),
-            np.where(ficp_state, 0.0, sentinel),
+            sentinel,
         )
         np.testing.assert_allclose(test_households.ts.current("target_mortgage"), mortgage_sentinel)
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import h5py
@@ -40,6 +41,50 @@ def _load_permanent_income_forecast_inputs_for_test():
 
 
 class TestCountry:
+    def test__settle_deferred_household_service_records_distress_from_committed_settlement(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        scheduled = np.full(n_households, 10.0)
+        actual = np.resize(np.asarray([10.0, 6.0]), n_households)
+        unpaid = scheduled - actual
+        settlement = SimpleNamespace(
+            scheduled_service=scheduled,
+            actual_payment=actual,
+            unpaid_service=unpaid,
+            interest_paid=np.zeros(n_households),
+            principal_paid=np.zeros(n_households),
+            arrears=SimpleNamespace(
+                closing_interest=np.zeros((1, n_households)),
+                closing_principal=unpaid[None, :],
+            ),
+        )
+
+        monkeypatch.setattr(test_country.configuration.households.parameters, "uses_feasibility_resolver", True)
+        monkeypatch.setattr(test_country.households, "prepare_post_grant_consumption_floor", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "settle_deferred_consumer_service",
+            lambda _shortfall: settlement,
+        )
+        monkeypatch.setattr(test_country.credit_market, "consumer_payment_settlement", lambda: settlement)
+        monkeypatch.setattr(test_country.credit_market, "_last_mortgage_principal_paid", np.zeros(n_households))
+        monkeypatch.setattr(test_country, "_commit_household_service_result", lambda _principal_paid: None)
+        test_country.households.ts.override_current("consumer_payment_suspension_amount", np.full(n_households, 10.0))
+
+        test_country.settle_deferred_household_service()
+
+        np.testing.assert_allclose(test_country.households.ts.current("actual_consumer_payment"), actual)
+        np.testing.assert_array_equal(
+            test_country.households.ts.current("consumer_payment_missed"),
+            unpaid > 0.0,
+        )
+        np.testing.assert_array_equal(
+            test_country.households.ts.current("consumer_distress_state"),
+            np.where(unpaid > 0.0, 1, 0),
+        )
+
     def test__init(self, datawrapper):
         synthetic_country = datawrapper.synthetic_countries["FRA"]
         country_configuration = CountryConfiguration()

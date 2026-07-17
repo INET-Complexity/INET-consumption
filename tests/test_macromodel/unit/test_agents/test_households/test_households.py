@@ -2101,6 +2101,9 @@ class TestPopulatePostGrantFeasiblePlan:
             actual_consumer_payments=actual,
             unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
+            consumer_contractual_principal=np.zeros(n_households),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
         )
 
         np.testing.assert_array_equal(
@@ -2118,6 +2121,9 @@ class TestPopulatePostGrantFeasiblePlan:
             actual_consumer_payments=actual,
             unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
+            consumer_contractual_principal=np.zeros(n_households),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
         )
 
         np.testing.assert_array_equal(
@@ -2160,6 +2166,8 @@ class TestPopulatePostGrantFeasiblePlan:
             time_unit=3,
             period=2,
             consumer_contractual_principal=np.full(n_households, 90.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
         )
         assert trigger_events == ()
         np.testing.assert_array_equal(test_households.ts.current("ficp_episode_id"), np.ones(n_households))
@@ -2193,6 +2201,21 @@ class TestPopulatePostGrantFeasiblePlan:
             test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
         )
 
+        # Replaying a horizon-end state cannot emit the completed episode again.
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+        test_households.ts.override_current("ficp_episode_status", np.ones(n_households))
+        replay_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=24,
+            consumer_contractual_principal=np.full(n_households, 38.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
+        )
+        assert replay_events == ()
+
         # The completed episode retains its emitted marker until a later
         # second miss starts a distinct episode.
         test_households.record_stage6_consumer_distress_state(
@@ -2200,7 +2223,7 @@ class TestPopulatePostGrantFeasiblePlan:
             actual_consumer_payments=np.full(n_households, 5.0),
             unpaid_consumer_payments=np.full(n_households, 5.0),
             time_unit=3,
-            period=23,
+            period=25,
             consumer_contractual_principal=np.full(n_households, 39.0),
         )
         np.testing.assert_array_equal(
@@ -2209,6 +2232,46 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_array_equal(
             test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
         )
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=np.full(n_households, 5.0),
+            unpaid_consumer_payments=np.full(n_households, 5.0),
+            time_unit=3,
+            period=26,
+            consumer_contractual_principal=np.full(n_households, 38.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_id"), np.full(n_households, 2))
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_end_period"), np.zeros(n_households))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.zeros(n_households, dtype=bool)
+        )
+
+    def test__record_stage6_requires_debt_components_for_active_ficp(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+
+        with pytest.raises(ValueError, match="debt components are required"):
+            test_households.record_stage6_consumer_distress_state(
+                scheduled_consumer_payments=np.full(n_households, 10.0),
+                actual_consumer_payments=np.full(n_households, 10.0),
+                unpaid_consumer_payments=np.zeros(n_households),
+                time_unit=3,
+                period=1,
+            )
+
+    def test__record_stage6_rejects_non_integer_period_before_mutation(self, test_households):
+        n_households = test_households.ts.current("n_households")
+
+        with pytest.raises(ValueError, match="non-negative integer"):
+            test_households.record_stage6_consumer_distress_state(
+                scheduled_consumer_payments=np.full(n_households, 10.0),
+                actual_consumer_payments=np.full(n_households, 10.0),
+                unpaid_consumer_payments=np.zeros(n_households),
+                time_unit=3,
+                period=1.5,
+            )
 
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),

@@ -1032,6 +1032,9 @@ class Households(Agent):
         n_households = int(self.ts.current("n_households"))
         if period is None:
             period = len(self.ts.dicts["scheduled_consumer_payment"]) - 1
+        if isinstance(period, bool) or not isinstance(period, (int, np.integer)) or period < 0:
+            raise ValueError("period must be a non-negative integer.")
+        period = int(period)
 
         def _household_vector(name: str, values: np.ndarray | None) -> np.ndarray:
             if values is None:
@@ -1043,6 +1046,14 @@ class Households(Agent):
                 raise ValueError(f"{name} must be finite and non-negative.")
             return array.copy()
 
+        debt_components_missing = any(
+            value is None
+            for value in (
+                consumer_contractual_principal,
+                consumer_principal_arrears,
+                consumer_interest_arrears,
+            )
+        )
         contractual_principal = _household_vector("consumer_contractual_principal", consumer_contractual_principal)
         principal_arrears = _household_vector("consumer_principal_arrears", consumer_principal_arrears)
         interest_arrears = _household_vector("consumer_interest_arrears", consumer_interest_arrears)
@@ -1056,17 +1067,29 @@ class Households(Agent):
             prior_ficp_episode_missed_payment_count=self.ts.current("ficp_episode_missed_payment_count"),
             prior_ficp_episode_status=self.ts.current("ficp_episode_status"),
         )
+        prior_exclusion = np.asarray(self.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
+        if debt_components_missing and (
+            np.any(np.isfinite(prior_exclusion) & (prior_exclusion > 0.0))
+            or np.any(state.ficp_episode_triggered)
+            or np.any(state.ficp_horizon_completed)
+        ):
+            raise ValueError("Consumer debt components are required for the FICP lifecycle.")
         prior_episode_id = np.asarray(self.ts.current("ficp_episode_id"), dtype=float)
         prior_start_period = np.asarray(self.ts.current("ficp_episode_start_period"), dtype=float)
+        prior_end_period = np.asarray(self.ts.current("ficp_episode_end_period"), dtype=float)
         prior_open_balance = np.asarray(self.ts.current("ficp_open_balance"), dtype=float)
         prior_processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool)
         prior_emitted = np.asarray(self.ts.current("ficp_forgiveness_emitted"), dtype=bool)
         current_balance = contractual_principal + principal_arrears + interest_arrears
         episode_id = np.where(state.ficp_episode_triggered, prior_episode_id + 1, prior_episode_id)
         episode_start_period = np.where(state.ficp_episode_triggered, period, prior_start_period)
-        episode_end_period = np.where(state.ficp_horizon_completed, period, self.ts.current("ficp_episode_end_period"))
+        episode_end_period = np.where(
+            state.ficp_episode_triggered,
+            0.0,
+            np.where(state.ficp_horizon_completed, period, prior_end_period),
+        )
         open_balance = np.where(state.ficp_episode_triggered, current_balance, prior_open_balance)
-        event_mask = state.ficp_horizon_completed & ~prior_processed
+        event_mask = state.ficp_horizon_completed & ~prior_processed & ~prior_emitted
         event_episode_id = episode_id.copy()
         event_trigger_period = episode_start_period.copy()
         event_horizon_end_period = np.where(event_mask, period, 0.0)

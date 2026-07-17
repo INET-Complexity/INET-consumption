@@ -199,6 +199,52 @@ def test_active_ficp_credit_demand_cannot_enter_market_clearing(test_banks, test
         market.clear(test_banks, test_firms, test_households, 0.0, 0.0, 0.0)
 
 
+def test_current_consumer_debt_components_separate_principal_arrears(test_credit_market):
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=np.zeros_like(test_credit_market.states["st_loans"]),
+        lt_loans=np.zeros_like(test_credit_market.states["lt_loans"]),
+        cons_loans=np.zeros_like(test_credit_market.states["cons_loans"]),
+        mort_loans=np.zeros_like(test_credit_market.states["mort_loans"]),
+    )
+    market.states["cons_loans"][0][:] = 10.0
+    market._consumer_principal_arrears_by_cell[:] = 3.0
+    market._consumer_interest_arrears_by_cell[:] = 2.0
+
+    contractual_principal, principal_arrears, interest_arrears = (
+        market.current_consumer_debt_components_by_household()
+    )
+
+    np.testing.assert_allclose(contractual_principal, 7.0 * np.ones(contractual_principal.shape))
+    np.testing.assert_allclose(principal_arrears, 3.0 * np.ones(principal_arrears.shape))
+    np.testing.assert_allclose(interest_arrears, 2.0 * np.ones(interest_arrears.shape))
+
+
+def test_ficp_schedule_remodulation_uses_remaining_horizon(test_credit_market):
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=np.zeros_like(test_credit_market.states["st_loans"]),
+        lt_loans=np.zeros_like(test_credit_market.states["lt_loans"]),
+        cons_loans=np.zeros_like(test_credit_market.states["cons_loans"]),
+        mort_loans=np.zeros_like(test_credit_market.states["mort_loans"]),
+    )
+    market.states["cons_loans"][0, 0, :] = 100.0
+    market.states["cons_loans"][1, 0, :] = 0.02
+    active_ficp = np.ones(market.states["cons_loans"].shape[2], dtype=bool)
+    remaining_periods = np.full(active_ficp.shape, 20.0)
+    rates = np.full(market.states["cons_loans"].shape[1], 0.04)
+
+    market.remodulate_ficp_consumer_loan_schedule(
+        active_ficp=active_ficp,
+        remaining_periods=remaining_periods,
+        prevailing_consumer_loan_rates_by_bank=rates,
+    )
+
+    expected_payment = 100.0 * _annuity_payment_factor(0.04, 20)
+    np.testing.assert_allclose(market.states["cons_loans"][1, 0], 0.04)
+    np.testing.assert_allclose(market.states["cons_loans"][2, 0], expected_payment)
+
+
 def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides(test_credit_market):
     test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])

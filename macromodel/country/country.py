@@ -1498,6 +1498,8 @@ class Country:
         """Apply the floor, settle consumer service, and commit household debt once."""
         if self.credit_market.consumer_payments_settled():
             raise RuntimeError("Authoritative household payments have already been settled for this period.")
+        if self.economy.time_unit not in (1, 3):
+            raise ValueError("Stage 6 FICP supports monthly (1) and quarterly (3) periods only.")
         target_consumption = self.households.ts.current("target_consumption")
         subsistence_consumption = self.economy.ts.current("subsistence_consumption")
         self.households.apply_consumption_floor_to_post_grant_plan(
@@ -1512,6 +1514,16 @@ class Country:
         settlement = self.credit_market.settle_consumer_payments(
             self.households.current_remaining_subsistence_shortfall()
         )
+        closing_consumer_arrears = settlement.arrears.closing_interest.sum(
+            axis=0
+        ) + settlement.arrears.closing_principal.sum(axis=0)
+        if not np.allclose(
+            closing_consumer_arrears,
+            settlement.unpaid_payment,
+            rtol=1e-10,
+            atol=1e-8,
+        ):
+            raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)
@@ -1546,6 +1558,13 @@ class Country:
             consumer_principal_arrears=consumer_principal_arrears,
             consumer_interest_arrears=consumer_interest_arrears,
         )
+        self.credit_market.remodulate_ficp_consumer_loan_schedule(
+            active_ficp=self.households.current_ficp_active(),
+            remaining_periods=self.households.ts.current("ficp_exclusion_remaining_periods"),
+            prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(
+                "interest_rates_on_household_consumption_loans"
+            ),
+        )
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
@@ -1561,17 +1580,6 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
-        closing_consumer_arrears = settlement.arrears.closing_interest.sum(
-            axis=0
-        ) + settlement.arrears.closing_principal.sum(axis=0)
-        if not np.allclose(
-            closing_consumer_arrears,
-            settlement.unpaid_payment,
-            rtol=1e-10,
-            atol=1e-8,
-        ):
-            raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
-
     def compute_activity_tax_previews(
         self,
         activity_production: np.ndarray,

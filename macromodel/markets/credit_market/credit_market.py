@@ -612,6 +612,11 @@ class CreditMarket:
         total_target_short_term_credit = float(np.nansum(target_short_term_credit))
         total_ordinary_target_short_term_credit = float(np.nansum(ordinary_target_short_term_credit))
         total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))
+        if households.uses_feasibility_resolver:
+            active_ficp = households.current_ficp_active()
+            requested_consumer_credit = np.asarray(households.ts.current("target_consumption_loans"), dtype=float)
+            if np.any(active_ficp & (requested_consumer_credit > 1e-12)):
+                raise RuntimeError("Active FICP households must be excluded before consumer-credit clearing.")
         _append_credit_supply_caps_to_banks_ts(
             banks=banks,
             current_npl_firm_loans=current_npl_firm_loans,
@@ -622,12 +627,6 @@ class CreditMarket:
             total_target_long_term_credit=total_target_long_term_credit,
             total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
         )
-
-        if households.uses_feasibility_resolver:
-            active_ficp = households.current_ficp_active()
-            requested_consumer_credit = np.asarray(households.ts.current("target_consumption_loans"), dtype=float)
-            if np.any(active_ficp & (requested_consumer_credit > 1e-12)):
-                raise RuntimeError("Active FICP households must be excluded before consumer-credit clearing.")
 
         # Clear the credit market
         (
@@ -777,8 +776,9 @@ class CreditMarket:
 
     def current_consumer_debt_components_by_household(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return contractual principal and committed arrears by household."""
-        contractual_principal = self.states["cons_loans"][0].sum(axis=0).copy()
         principal_arrears = self._consumer_principal_arrears_by_cell.sum(axis=0).copy()
+        total_principal = self.states["cons_loans"][0].sum(axis=0)
+        contractual_principal = np.maximum(total_principal - principal_arrears, 0.0)
         interest_arrears = self._consumer_interest_arrears_by_cell.sum(axis=0).copy()
         return contractual_principal, principal_arrears, interest_arrears
 
@@ -1001,6 +1001,63 @@ class CreditMarket:
         self._remodulate_first_missed_consumer_loan_schedule()
         self._new_loans_this_period["cons_loans"] = np.zeros_like(self.states["cons_loans"])
         self._serviceable_loans_this_period["cons_loans"] = self.states["cons_loans"].copy()
+
+    def remodulate_ficp_consumer_loan_schedule(
+        self,
+        *,
+        active_ficp: np.ndarray,
+        remaining_periods: np.ndarray,
+        prevailing_consumer_loan_rates_by_bank: np.ndarray,
+    ) -> None:
+        """Remodulate active FICP debt over the remaining exclusion horizon."""
+        active = np.asarray(active_ficp, dtype=bool)
+        remaining = np.asarray(remaining_periods, dtype=float)
+        n_banks = self.states["cons_loans"].shape[1]
+        n_households = self.states["cons_loans"].shape[2]
+        if active.ndim == 0:
+            active = np.full(n_households, bool(active))
+        if not np.any(active):
+            return
+        if remaining.ndim == 0:
+            remaining = np.full(n_households, float(remaining))
+        if active.shape != (n_households,) or remaining.shape != (n_households,):
+            raise ValueError("FICP schedule inputs must contain exactly one value per household.")
+        rates_by_bank = np.asarray(prevailing_consumer_loan_rates_by_bank, dtype=float)
+        if rates_by_bank.shape != (n_banks,):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must contain one value per bank.")
+        if not np.all(np.isfinite(rates_by_bank)) or np.any(rates_by_bank < 0.0):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must be finite and non-negative.")
+        valid_remaining = np.isfinite(remaining) & (remaining > 0.0) & (remaining == np.floor(remaining))
+        if np.any(active & ~valid_remaining):
+            raise ValueError("Active FICP remaining periods must be positive integers.")
+
+        loans = self.states["cons_loans"]
+        aggregate_principal = loans[0].sum(axis=0)
+        payment_shares = np.divide(
+            loans[0],
+            aggregate_principal[None, :],
+            out=np.zeros_like(loans[0]),
+            where=aggregate_principal[None, :] > 0.0,
+        )
+        prevailing_rate = np.divide(
+            (loans[0] * rates_by_bank[:, None]).sum(axis=0),
+            aggregate_principal,
+            out=np.zeros_like(aggregate_principal),
+            where=aggregate_principal > 0.0,
+        )
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        annuity_factor = np.zeros_like(aggregate_principal)
+        for maturity in np.unique(remaining[active]).astype(int):
+            maturity_mask = active & (remaining == maturity)
+            annuity_factor[maturity_mask] = _annuity_payment_factor(
+                prevailing_rate[maturity_mask],
+                int(maturity),
+            )
+        aggregate_payment = aggregate_principal * annuity_factor
+        remodulated = active & (aggregate_principal > 0.0)
+        loans[1][:, remodulated] = prevailing_rate[None, remodulated]
+        loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
 
     def prepare_first_miss_consumer_loan_rescheduling(
         self,

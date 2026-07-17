@@ -504,12 +504,15 @@ def test_first_missed_consumer_payment_records_one_rescheduling_event_and_extend
     np.testing.assert_allclose(market.states["cons_loans"][0], opening_consumer_principal)
     np.testing.assert_allclose(market.states["mort_loans"], opening_mortgages)
 
-    assert market.prepare_first_miss_consumer_loan_rescheduling(
-        prior_missed_payment_count_consumer=np.array([0.0]),
-        prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
-        consumer_loan_maturity=8,
-        period=7,
-    ) == events
+    assert (
+        market.prepare_first_miss_consumer_loan_rescheduling(
+            prior_missed_payment_count_consumer=np.array([0.0]),
+            prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
+            consumer_loan_maturity=8,
+            period=7,
+        )
+        == events
+    )
     market.finalize_household_consumer_schedule()
 
     expected_payment = 100.0 * _annuity_payment_factor(0.04, 9)

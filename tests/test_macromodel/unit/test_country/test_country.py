@@ -2939,15 +2939,23 @@ class TestCountry:
             "_scale_consumption_matrix_to_household_totals",
             lambda **_: target_consumption,
         )
-        monkeypatch.setattr(test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
+        )
         monkeypatch.setattr(test_country.credit_market, "settle_consumer_payments", lambda _shortfall: empty_settlement)
         monkeypatch.setattr(
             test_country.credit_market,
             "compute_mortgage_principal_paid_by_household",
             lambda: np.zeros(n_households),
         )
-        monkeypatch.setattr(test_country.credit_market, "prepare_first_miss_consumer_loan_rescheduling", lambda **_: order.append("prepare") or ())
-        monkeypatch.setattr(test_country.credit_market, "finalize_household_consumer_schedule", lambda: order.append("finalize"))
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "prepare_first_miss_consumer_loan_rescheduling",
+            lambda **_: order.append("prepare") or (),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market, "finalize_household_consumer_schedule", lambda: order.append("finalize")
+        )
         monkeypatch.setattr(
             test_country.households,
             "record_consumer_loan_rescheduling_events",
@@ -2965,7 +2973,9 @@ class TestCountry:
             lambda: np.zeros(n_households),
         )
         monkeypatch.setattr(test_country.households, "compute_debt", lambda: np.zeros(n_households))
-        monkeypatch.setattr(test_country.credit_market, "compute_interest_paid_by_household", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.credit_market, "compute_interest_paid_by_household", lambda: np.zeros(n_households)
+        )
         monkeypatch.setattr(
             test_country.households,
             "compute_interest_paid_on_deposits",

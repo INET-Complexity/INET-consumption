@@ -1044,9 +1044,7 @@ class Households(Agent):
             fields["consumer_loan_rescheduling_closing_principal_arrears"][household_id] = (
                 event.closing_principal_arrears
             )
-            fields["consumer_loan_rescheduling_closing_interest_arrears"][household_id] = (
-                event.closing_interest_arrears
-            )
+            fields["consumer_loan_rescheduling_closing_interest_arrears"][household_id] = event.closing_interest_arrears
             fields["consumer_loan_rescheduling_old_maturity"][household_id] = event.old_maturity
             fields["consumer_loan_rescheduling_new_maturity"][household_id] = event.new_maturity
             fields["consumer_loan_rescheduling_resulting_scheduled_payment"][household_id] = (

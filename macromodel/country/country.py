@@ -1537,10 +1537,9 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
-        closing_consumer_arrears = (
-            settlement.arrears.closing_interest.sum(axis=0)
-            + settlement.arrears.closing_principal.sum(axis=0)
-        )
+        closing_consumer_arrears = settlement.arrears.closing_interest.sum(
+            axis=0
+        ) + settlement.arrears.closing_principal.sum(axis=0)
         if not np.allclose(
             closing_consumer_arrears,
             settlement.unpaid_payment,

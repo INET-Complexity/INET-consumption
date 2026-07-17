@@ -2246,7 +2246,7 @@ class TestComputeTargetCreditLiveCreditRequested:
         np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
         np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
 
-    def test__compute_target_credit_ficp_blocks_only_consumer_credit(self, test_households, monkeypatch):
+    def test__compute_target_credit_ficp_state_does_not_gate_in_increment_3c(self, test_households, monkeypatch):
         n_households = test_households.ts.current("n_households")
         sentinel = np.full(n_households, 12345.0)
         mortgage_sentinel = np.full(n_households, 54321.0)
@@ -2270,7 +2270,7 @@ class TestComputeTargetCreditLiveCreditRequested:
 
         np.testing.assert_allclose(
             test_households.ts.current("target_consumption_loans"),
-            np.where(ficp_state, 0.0, sentinel),
+            sentinel,
         )
         np.testing.assert_allclose(test_households.ts.current("target_mortgage"), mortgage_sentinel)
 

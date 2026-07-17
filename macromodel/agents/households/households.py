@@ -2407,7 +2407,6 @@ class Households(Agent):
             target_consumption_loans = self.current_live_credit_requested()
         else:
             target_consumption_loans = legacy_target_consumption_loans
-        target_consumption_loans = np.where(self.ts.current("ficp_state"), 0.0, target_consumption_loans)
         self.ts.target_consumption_loans.append(target_consumption_loans)
         self.ts.live_credit_requested.append(target_consumption_loans.copy())
         self.ts.total_target_consumption_loans.append([self.ts.current("target_consumption_loans").sum()])

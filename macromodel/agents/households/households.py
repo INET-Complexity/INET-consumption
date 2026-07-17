@@ -32,6 +32,9 @@ from macromodel.agents.banks.banks import Banks
 from macromodel.agents.households.func.borrow_vs_sell import (
     compute_borrow_vs_sell_choice,
 )
+from macromodel.agents.households.func.consumer_distress import (
+    compute_stage6_consumer_distress_state,
+)
 from macromodel.agents.households.func.liquid_asset_drawdown import (
     compute_liquid_asset_drawdown,
 )
@@ -149,6 +152,23 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "mortgage_payment_suspension_amount": 0.0,
 }
 
+# Stage 6 (consumer credit): persistent, settled distress state. These fields
+# are initialised independently from Stage 5's diagnostic-only carrier because
+# FICP is a live gate on subsequent consumer-credit demand.
+_STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
+    "scheduled_consumer_payment": 0.0,
+    "actual_consumer_payment": 0.0,
+    "unpaid_consumer_payment": 0.0,
+    "consumer_interest_paid": 0.0,
+    "consumer_principal_paid": 0.0,
+    "consumer_payment_missed": False,
+    "missed_payment_count_consumer": 0.0,
+    # See func.consumer_distress: 0=current, 1=delinquent, 2=FICP.
+    "consumer_distress_state": 0.0,
+    "ficp_state": False,
+    "ficp_exclusion_remaining_periods": 0.0,
+}
+
 
 @dataclass
 class PreGrantFeasiblePlan:
@@ -174,6 +194,9 @@ class PostGrantFeasiblePlan:
     credit_rationing_gap: np.ndarray
     planned_liquidation_total: np.ndarray
     residual_shortfall_after_granted_credit: np.ndarray
+    granted_consumer_credit_by_bank_and_household: np.ndarray | None = None
+    consumer_debt_liability_booking: np.ndarray | None = None
+    bank_consumer_loan_asset_booking: np.ndarray | None = None
     consumption_before_floor: np.ndarray | None = None
     residual_shortfall_before_floor: np.ndarray | None = None
     consumption_after_floor: np.ndarray | None = None
@@ -549,6 +572,11 @@ class Households(Agent):
         for _field_name, _zero_value in _STAGE5_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
+        # Stage 6 Increment 3: keep authoritative consumer-credit distress
+        # state distinct from the Stage 5 pre-support diagnostic layer.
+        for _field_name, _zero_value in _STAGE6_DISTRESS_INITIAL_VALUES.items():
+            ts[_field_name] = np.full(n_households_at_init, _zero_value)
+
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
 
@@ -805,6 +833,7 @@ class Households(Agent):
         self,
         *,
         credit_granted: np.ndarray,
+        granted_consumer_credit_by_bank_and_household: np.ndarray | None = None,
     ) -> None:
         """Build the settled Stage 5 carrier from cleared consumer credit."""
         if self.pre_grant_feasible_plan is None:
@@ -855,6 +884,27 @@ class Households(Agent):
         cleaned_liquidation = np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
         cleaned_residual_after_lfa = np.where(np.isfinite(residual_after_lfa), np.maximum(residual_after_lfa, 0.0), 0.0)
 
+        settlement_matrix = None
+        liability_booking = None
+        bank_asset_booking = None
+        if granted_consumer_credit_by_bank_and_household is not None:
+            settlement_matrix = np.asarray(granted_consumer_credit_by_bank_and_household, dtype=float)
+            if settlement_matrix.ndim != 2 or settlement_matrix.shape[1] != n_households:
+                raise ValueError(
+                    "granted_consumer_credit_by_bank_and_household must be a two-dimensional "
+                    "bank-by-household matrix with one column per household."
+                )
+            if not np.all(np.isfinite(settlement_matrix)) or np.any(settlement_matrix < 0.0):
+                raise RuntimeError(
+                    "Stage 6 granted-credit settlement requires finite, non-negative bank-by-household values."
+                )
+            liability_booking = settlement_matrix.sum(axis=0)
+            if not np.allclose(liability_booking, cleaned_granted, rtol=1e-10, atol=1e-8):
+                raise RuntimeError(
+                    "Stage 6 granted-credit settlement does not reconcile with household credit_granted."
+                )
+            bank_asset_booking = settlement_matrix.sum(axis=1)
+
         self.post_grant_feasible_plan = PostGrantFeasiblePlan(
             credit_granted=cleaned_granted.copy(),
             credit_rationing_gap=np.maximum(cleaned_requested - cleaned_granted, 0.0).copy(),
@@ -863,6 +913,11 @@ class Households(Agent):
                 cleaned_residual_after_lfa - cleaned_granted - cleaned_liquidation,
                 0.0,
             ).copy(),
+            granted_consumer_credit_by_bank_and_household=(
+                None if settlement_matrix is None else settlement_matrix.copy()
+            ),
+            consumer_debt_liability_booking=None if liability_booking is None else liability_booking.copy(),
+            bank_consumer_loan_asset_booking=None if bank_asset_booking is None else bank_asset_booking.copy(),
         )
 
     def _current_post_grant_feasible_plan_field(self, field_name: str) -> np.ndarray:
@@ -923,6 +978,31 @@ class Households(Agent):
         self.ts.consumer_payment_suspension_amount.append(diagnostics.consumer_payment_suspension_amount)
         self.ts.mortgage_payment_suspension_needed.append(diagnostics.mortgage_payment_suspension_needed)
         self.ts.mortgage_payment_suspension_amount.append(diagnostics.mortgage_payment_suspension_amount)
+
+    def record_stage6_consumer_distress_state(
+        self,
+        *,
+        scheduled_consumer_payments: np.ndarray,
+        actual_consumer_payments: np.ndarray,
+        unpaid_consumer_payments: np.ndarray,
+        time_unit: int,
+    ) -> None:
+        """Persist Stage 6 distress from the authoritative consumer settlement."""
+        if time_unit <= 0 or 12 % time_unit != 0:
+            raise ValueError("time_unit must be a positive divisor of 12.")
+        state = compute_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled_consumer_payments,
+            actual_consumer_payments=actual_consumer_payments,
+            unpaid_consumer_payments=unpaid_consumer_payments,
+            prior_missed_payment_count_consumer=self.ts.current("missed_payment_count_consumer"),
+            prior_ficp_exclusion_remaining_periods=self.ts.current("ficp_exclusion_remaining_periods"),
+            ficp_exclusion_periods=5 * (12 // time_unit),
+        )
+        self.ts.consumer_payment_missed.append(state.consumer_payment_missed)
+        self.ts.missed_payment_count_consumer.append(state.missed_payment_count_consumer)
+        self.ts.consumer_distress_state.append(state.consumer_distress_state)
+        self.ts.ficp_state.append(state.ficp_state)
+        self.ts.ficp_exclusion_remaining_periods.append(state.ficp_exclusion_remaining_periods)
 
     def _record_consumption_floor_diagnostics(self) -> None:
         """Persist floor diagnostics from the settled runtime carrier."""
@@ -2481,15 +2561,25 @@ class Households(Agent):
                     "Stage 5 consumption-floor enforcement requires subsistence_consumption "
                     "to be populated for the current period."
                 )
-            self.apply_consumption_floor_to_post_grant_plan(
-                consumption_before_floor=target_consumption.sum(axis=1),
-                subsistence_floor=subsistence_consumption,
-            )
-            goods_consumption = self._scale_consumption_matrix_to_household_totals(
-                target_consumption=target_consumption,
-                household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
-            )
-            self.ts.override_current("target_consumption", goods_consumption)
+            if self.post_grant_feasible_plan is None:
+                raise RuntimeError(
+                    "Stage 5 consumption-floor enforcement requires post_grant_feasible_plan "
+                    "to be populated for the current period."
+                )
+            if self.post_grant_feasible_plan.consumption_after_floor is None:
+                # Compatibility for direct agent-level callers. The live Country
+                # path settles this outcome before consumer-loan settlement.
+                self.apply_consumption_floor_to_post_grant_plan(
+                    consumption_before_floor=target_consumption.sum(axis=1),
+                    subsistence_floor=subsistence_consumption,
+                )
+                goods_consumption = self._scale_consumption_matrix_to_household_totals(
+                    target_consumption=target_consumption,
+                    household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
+                )
+                self.ts.override_current("target_consumption", goods_consumption)
+            else:
+                goods_consumption = target_consumption
             shortfall = self.current_remaining_subsistence_shortfall()
 
         # Prepare goods market clearing

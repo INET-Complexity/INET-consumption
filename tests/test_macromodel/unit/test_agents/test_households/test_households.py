@@ -8,6 +8,7 @@ from macromodel.agents.households.func.borrow_vs_sell import (
     PREFERRED_MARGIN_BORROW,
     PREFERRED_MARGIN_SELL,
 )
+from macromodel.agents.households.func.consumer_distress import CURRENT, DELINQUENT, FICP
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
@@ -55,6 +56,13 @@ class TestHouseholds:
             "consumer_payment_suspension_amount",
             "mortgage_payment_suspension_needed",
             "mortgage_payment_suspension_amount",
+            "scheduled_consumer_payment",
+            "actual_consumer_payment",
+            "consumer_payment_missed",
+            "missed_payment_count_consumer",
+            "consumer_distress_state",
+            "ficp_state",
+            "ficp_exclusion_remaining_periods",
         ]:
             assert field_name in test_households.ts.get_keys()
 
@@ -1701,6 +1709,44 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
         np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 9.0))
 
+    def test__post_grant_carrier_reconciles_household_and_bank_settlement(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        credit_granted = np.arange(1.0, n_households + 1.0)
+        settlement = np.zeros((2, n_households))
+        settlement[0] = credit_granted * 0.25
+        settlement[1] = credit_granted * 0.75
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=credit_granted,
+            credit_requested=credit_granted,
+            planned_liquidation=np.zeros(n_households),
+        )
+
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=credit_granted,
+            granted_consumer_credit_by_bank_and_household=settlement,
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.granted_consumer_credit_by_bank_and_household, settlement)
+        np.testing.assert_allclose(plan.consumer_debt_liability_booking, credit_granted)
+        np.testing.assert_allclose(plan.bank_consumer_loan_asset_booking, settlement.sum(axis=1))
+
+    def test__post_grant_carrier_rejects_non_reconciling_bank_settlement(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.ones(n_households),
+            credit_requested=np.ones(n_households),
+            planned_liquidation=np.zeros(n_households),
+        )
+
+        with pytest.raises(RuntimeError, match="does not reconcile"):
+            test_households.populate_post_grant_feasible_plan_from_granted_credit(
+                credit_granted=np.ones(n_households),
+                granted_consumer_credit_by_bank_and_household=np.zeros((2, n_households)),
+            )
+
     def test__post_grant_reconciliation_leaves_pre_grant_carrier_unchanged(self, test_households):
         n_households = test_households.ts.current("n_households")
         self._populate_pre_grant_plan(
@@ -2041,6 +2087,52 @@ class TestPopulatePostGrantFeasiblePlan:
             np.resize(np.asarray([False, False, True, True]), n_households),
         )
 
+    def test__record_stage6_consumer_distress_state_tracks_misses_and_ficp(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        scheduled = np.resize(np.asarray([10.0, 10.0, 10.0, 10.0]), n_households)
+        actual = np.resize(np.asarray([10.0, 5.0, 10.0, 10.0]), n_households)
+        test_households.ts.override_current(
+            "consumer_payment_suspension_amount",
+            scheduled.copy(),
+        )
+
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=actual,
+            unpaid_consumer_payments=scheduled - actual,
+            time_unit=3,
+        )
+
+        np.testing.assert_array_equal(
+            test_households.ts.current("consumer_distress_state"),
+            np.resize(np.asarray([CURRENT, DELINQUENT, CURRENT, CURRENT]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("missed_payment_count_consumer"),
+            np.resize(np.asarray([0, 1, 0, 0]), n_households),
+        )
+
+        actual = np.resize(np.asarray([10.0, 9.0, 10.0, 10.0]), n_households)
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=actual,
+            unpaid_consumer_payments=scheduled - actual,
+            time_unit=3,
+        )
+
+        np.testing.assert_array_equal(
+            test_households.ts.current("consumer_distress_state"),
+            np.resize(np.asarray([CURRENT, FICP, CURRENT, CURRENT]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_state"),
+            np.resize(np.asarray([False, True, False, False]), n_households),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_exclusion_remaining_periods"),
+            np.resize(np.asarray([0, 20, 0, 0]), n_households),
+        )
+
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),
         [
@@ -2153,6 +2245,34 @@ class TestComputeTargetCreditLiveCreditRequested:
 
         np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
         np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
+
+    def test__compute_target_credit_ficp_state_does_not_gate_in_increment_3c(self, test_households, monkeypatch):
+        n_households = test_households.ts.current("n_households")
+        sentinel = np.full(n_households, 12345.0)
+        mortgage_sentinel = np.full(n_households, 54321.0)
+        ficp_state = np.zeros(n_households, dtype=bool)
+        ficp_state[1::2] = True
+        test_households.configure_feasibility_resolver(True)
+        test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+            liquidity_shortfall_before_repair=np.zeros(n_households),
+            funded_from_liquid_assets=np.zeros(n_households),
+            residual_shortfall_after_lfa=np.zeros(n_households),
+        )
+        test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=sentinel)
+        test_households.ts.override_current("ficp_state", ficp_state)
+        monkeypatch.setattr(
+            test_households.functions["target_credit"],
+            "compute_target_mortgage",
+            lambda **_kwargs: mortgage_sentinel,
+        )
+
+        test_households.compute_target_credit(current_sales=None)
+
+        np.testing.assert_allclose(
+            test_households.ts.current("target_consumption_loans"),
+            sentinel,
+        )
+        np.testing.assert_allclose(test_households.ts.current("target_mortgage"), mortgage_sentinel)
 
     def test__compute_target_credit_raises_when_enabled_without_populated_credit_requested(self, test_households):
         n_households = test_households.ts.current("n_households")

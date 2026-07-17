@@ -717,6 +717,21 @@ class TestCountry:
         )
         test_country.households.ts.override_current("received_consumption_loans", credit_granted)
         test_country.households.ts.override_current("liquidation_planned", np.full(n_households, 99.0))
+        n_banks = test_country.banks.ts.current("n_banks")
+        settlement = np.zeros((n_banks, n_households))
+        settlement[0] = credit_granted
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "pending_granted_consumption_loans",
+            lambda: settlement.copy(),
+        )
+        settled = {}
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "settle_granted_consumption_loans",
+            lambda **kwargs: settled.update(kwargs),
+        )
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
 
         test_country.reconcile_post_grant_feasible_plan()
 
@@ -726,6 +741,11 @@ class TestCountry:
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
         np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation)
         np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 4.0))
+        np.testing.assert_allclose(plan.granted_consumer_credit_by_bank_and_household, settlement)
+        np.testing.assert_allclose(plan.consumer_debt_liability_booking, credit_granted)
+        np.testing.assert_allclose(plan.bank_consumer_loan_asset_booking, settlement.sum(axis=1))
+        np.testing.assert_allclose(settled["credit_granted"], credit_granted)
+        np.testing.assert_allclose(settled["granted_consumer_credit_by_bank_and_household"], settlement)
         np.testing.assert_allclose(test_country.households.ts.current("liquidation_planned"), planned_liquidation)
 
     def test__reconcile_post_grant_feasible_plan_raises_when_cleared_grant_missing(self, test_country, monkeypatch):
@@ -1072,6 +1092,13 @@ class TestCountry:
             current_ifa=np.full(n_households, 100.0),
         )
         test_country.households.ts.override_current("received_consumption_loans", np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "pending_granted_consumption_loans",
+            lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
+        )
+        monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
 
         monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
@@ -1138,6 +1165,13 @@ class TestCountry:
             current_ifa=np.full(n_households, 100.0),
         )
         test_country.households.ts.override_current("received_consumption_loans", np.full(n_households, 4.0))
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "pending_granted_consumption_loans",
+            lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
+        )
+        monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
 
         monkeypatch.setattr(test_country.firms, "prepare_goods_market_orders", lambda **_kwargs: None)
@@ -1204,6 +1238,13 @@ class TestCountry:
             current_ifa=np.full(n_households, 100.0),
         )
         test_country.households.ts.override_current("received_consumption_loans", np.full(n_households, 6.0))
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "pending_granted_consumption_loans",
+            lambda: test_country.households.ts.current("received_consumption_loans")[None, :].copy(),
+        )
+        monkeypatch.setattr(test_country.credit_market, "settle_granted_consumption_loans", lambda **_kwargs: None)
+        monkeypatch.setattr(test_country.credit_market, "prepare_household_service_snapshot", lambda: None)
         test_country.reconcile_post_grant_feasible_plan()
         test_country.households.pre_grant_feasible_plan.credit_requested[:] = 99.0
 
@@ -2850,3 +2891,18 @@ class TestCountry:
 
         assert captured["consumer_loan_maturity"] == test_country.banks.parameters.household_consumption_loan_maturity
         assert captured["dsti_limit"] == 0.35
+
+    def test__authoritative_household_settlement_rejects_retry_before_mutation(self, test_country, monkeypatch):
+        monkeypatch.setattr(test_country.credit_market, "consumer_payments_settled", lambda: True)
+
+        def fail_if_called(**_kwargs):
+            pytest.fail("The floor must not be reapplied on a repeated settlement call.")
+
+        monkeypatch.setattr(
+            test_country.households,
+            "apply_consumption_floor_to_post_grant_plan",
+            fail_if_called,
+        )
+
+        with pytest.raises(RuntimeError, match="already been settled"):
+            test_country.settle_authoritative_household_payments()

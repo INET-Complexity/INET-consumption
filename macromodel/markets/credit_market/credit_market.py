@@ -1013,7 +1013,12 @@ class CreditMarket:
         )
         interest_paid_by_cell = paid_opening_interest + paid_interest + early_interest_by_cell
         principal_paid_by_cell += early_principal_by_cell
-        newly_accrued_interest = snapshot.consumer_contractual_interest_by_cell - paid_interest
+        newly_accrued_interest = np.maximum(
+            snapshot.consumer_contractual_interest_by_cell
+            - paid_interest
+            - early_interest_by_cell,
+            0.0,
+        )
         self._consumer_opening_arrears_collected_by_bank = (paid_opening_interest + early_opening_interest).sum(axis=1)
         self._consumer_interest_accrued_by_bank = newly_accrued_interest.sum(axis=1)
         self._last_interest_by_household = self._mortgage_interest_paid + interest_paid_by_cell.sum(axis=0)
@@ -1118,6 +1123,8 @@ class CreditMarket:
         self,
         *,
         prior_missed_payment_count_consumer: np.ndarray,
+        prior_ficp_episode_missed_payment_count: np.ndarray | None = None,
+        prior_ficp_episode_status: np.ndarray | None = None,
         prevailing_consumer_loan_rates_by_bank: np.ndarray,
         consumer_loan_maturity: int,
         period: int,
@@ -1142,8 +1149,21 @@ class CreditMarket:
             raise ValueError("period must be non-negative.")
 
         settlement = self._consumer_payment_settlement
-        cleaned_prior_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0)
-        first_miss = (settlement.unpaid_payment > 0.0) & (cleaned_prior_count == 0.0)
+        if prior_ficp_episode_missed_payment_count is None:
+            episode_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0)
+        else:
+            episode_count = np.asarray(prior_ficp_episode_missed_payment_count, dtype=float)
+            if episode_count.shape != (n_households,):
+                raise ValueError(
+                    "prior_ficp_episode_missed_payment_count must contain exactly one value per household."
+                )
+            episode_count = np.where(np.isfinite(episode_count), np.maximum(episode_count, 0.0), 0.0)
+            if prior_ficp_episode_status is not None:
+                episode_status = np.asarray(prior_ficp_episode_status, dtype=float)
+                if episode_status.shape != (n_households,):
+                    raise ValueError("prior_ficp_episode_status must contain exactly one value per household.")
+                episode_count = np.where(episode_status == 2.0, 0.0, episode_count)
+        first_miss = (settlement.unpaid_payment > 0.0) & (episode_count == 0.0)
         loans = self.states["cons_loans"]
         aggregate_principal = loans[0].sum(axis=0)
         closing_principal_arrears = settlement.arrears.closing_principal.sum(axis=0)

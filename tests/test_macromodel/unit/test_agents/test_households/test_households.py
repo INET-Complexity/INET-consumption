@@ -2287,12 +2287,13 @@ class TestPopulatePostGrantFeasiblePlan:
 
         test_households.populate_post_grant_early_repayment_capacity(
             mortgage_service=np.full(n_households, 30.0),
+            scheduled_consumer_service=np.full(n_households, 10.0),
             eligible_ficp=np.arange(n_households) == 0,
         )
 
         np.testing.assert_allclose(
             test_households.current_early_consumer_repayment_capacity(),
-            np.where(np.arange(n_households) == 0, 50.0, 0.0),
+            np.where(np.arange(n_households) == 0, 40.0, 0.0),
         )
         np.testing.assert_allclose(
             test_households.current_remaining_subsistence_shortfall(),
@@ -2437,7 +2438,10 @@ class TestComputeTargetCreditLiveCreditRequested:
         expected_consumer_demand = sentinel.copy()
         expected_consumer_demand[1::2] = 0.0
         np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), expected_consumer_demand)
-        np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
+        np.testing.assert_allclose(
+            test_households.ts.current("live_credit_requested"),
+            expected_consumer_demand,
+        )
         np.testing.assert_allclose(test_households.ts.current("target_mortgage"), mortgage_sentinel)
 
     def test__compute_target_credit_raises_when_enabled_without_populated_credit_requested(self, test_households):

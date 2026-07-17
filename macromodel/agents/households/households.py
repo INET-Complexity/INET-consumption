@@ -1007,6 +1007,7 @@ class Households(Agent):
         self,
         *,
         mortgage_service: np.ndarray,
+        scheduled_consumer_service: np.ndarray,
         eligible_ficp: np.ndarray,
     ) -> None:
         """Record post-consumption, post-mortgage capacity separately from deficit."""
@@ -1019,11 +1020,13 @@ class Households(Agent):
         n_households = int(self.ts.current("n_households"))
         consumption = np.asarray(consumption_after_floor, dtype=float)
         mortgage = np.asarray(mortgage_service, dtype=float)
+        scheduled = np.asarray(scheduled_consumer_service, dtype=float)
         income = np.asarray(self.ts.current("expected_income"), dtype=float)
         eligible = np.asarray(eligible_ficp, dtype=bool)
         for name, values in (
             ("consumption_after_floor", consumption),
             ("mortgage_service", mortgage),
+            ("scheduled_consumer_service", scheduled),
             ("expected_income", income),
         ):
             if values.shape != (n_households,):
@@ -1032,10 +1035,14 @@ class Households(Agent):
                 raise ValueError(f"{name} must be finite for early repayment capacity.")
         if eligible.shape != (n_households,):
             raise ValueError("eligible_ficp must contain exactly one value per household.")
-        if np.any(consumption < 0.0) or np.any(mortgage < 0.0):
-            raise ValueError("Consumption and mortgage service must be non-negative.")
+        if np.any(consumption < 0.0) or np.any(mortgage < 0.0) or np.any(scheduled < 0.0):
+            raise ValueError("Consumption and debt service must be non-negative.")
 
-        capacity = np.where(eligible, np.maximum(income - consumption - mortgage, 0.0), 0.0)
+        capacity = np.where(
+            eligible,
+            np.maximum(income - consumption - mortgage - scheduled, 0.0),
+            0.0,
+        )
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,
             early_consumer_repayment_capacity=capacity.copy(),
@@ -1124,6 +1131,7 @@ class Households(Agent):
         prior_open_balance = np.asarray(self.ts.current("ficp_open_balance"), dtype=float)
         prior_processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool)
         prior_emitted = np.asarray(self.ts.current("ficp_forgiveness_emitted"), dtype=bool)
+        prior_event_processed = np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
         current_balance = contractual_principal + principal_arrears + interest_arrears
         episode_id = np.where(state.ficp_episode_triggered, prior_episode_id + 1, prior_episode_id)
         episode_start_period = np.where(state.ficp_episode_triggered, period, prior_start_period)
@@ -1165,7 +1173,11 @@ class Households(Agent):
             "ficp_forgiveness_event_residual_principal_arrears": np.where(event_mask, principal_arrears, 0.0),
             "ficp_forgiveness_event_residual_interest_arrears": np.where(event_mask, interest_arrears, 0.0),
             "ficp_forgiveness_event_emitted": event_mask,
-            "ficp_forgiveness_event_processed": np.zeros(n_households, dtype=bool),
+            "ficp_forgiveness_event_processed": np.where(
+                state.ficp_episode_triggered,
+                False,
+                np.where(event_mask, False, prior_event_processed),
+            ),
         }
         for field_name, values in event_fields.items():
             getattr(self.ts, field_name).append(values)
@@ -1182,6 +1194,22 @@ class Households(Agent):
             )
             for household_id in np.flatnonzero(event_mask)
         )
+
+    def mark_ficp_forgiveness_processed(self, household_id: int, episode_id: int) -> None:
+        """Mark one emitted FICP forgiveness event as consumed by the next increment."""
+        n_households = int(self.ts.current("n_households"))
+        if household_id < 0 or household_id >= n_households:
+            raise ValueError("FICP forgiveness household_id is outside the household state.")
+        event_emitted = np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool)
+        event_episode_ids = np.asarray(self.ts.current("ficp_forgiveness_event_episode_id"), dtype=float)
+        if not event_emitted[household_id] or int(event_episode_ids[household_id]) != episode_id:
+            raise ValueError("FICP forgiveness event does not match the current household episode.")
+        processed_event = np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool).copy()
+        processed_event[household_id] = True
+        self.ts.override_current("ficp_forgiveness_event_processed", processed_event)
+        processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool).copy()
+        processed[household_id] = True
+        self.ts.override_current("ficp_forgiveness_processed", processed)
 
     def record_consumer_loan_rescheduling_events(self, events: tuple[Any, ...]) -> None:
         """Persist the current-period first-miss rescheduling event fields."""
@@ -2625,8 +2653,8 @@ class Households(Agent):
         else:
             target_consumption_loans = legacy_target_consumption_loans
         if self.uses_feasibility_resolver:
-            self.ts.live_credit_requested.append(target_consumption_loans.copy())
             target_consumption_loans = np.where(self.current_ficp_active(), 0.0, target_consumption_loans)
+            self.ts.live_credit_requested.append(target_consumption_loans.copy())
         self.ts.target_consumption_loans.append(target_consumption_loans)
         if not self.uses_feasibility_resolver:
             self.ts.live_credit_requested.append(target_consumption_loans.copy())

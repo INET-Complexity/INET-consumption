@@ -2950,6 +2950,11 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.credit_market,
+            "compute_opening_scheduled_consumption_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
             "current_consumer_balance_by_household",
             lambda: np.zeros(n_households),
         )

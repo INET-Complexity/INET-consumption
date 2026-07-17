@@ -1513,6 +1513,7 @@ class Country:
         self.households.ts.override_current("target_consumption", goods_consumption)
         self.households.populate_post_grant_early_repayment_capacity(
             mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
+            scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             eligible_ficp=self.households.current_ficp_active(),
         )
         early_repayment_capacity = np.minimum(
@@ -1549,6 +1550,10 @@ class Country:
         self.households.ts.early_consumer_repayment.append(settlement.early_repayment.copy())
         rescheduling_events = self.credit_market.prepare_first_miss_consumer_loan_rescheduling(
             prior_missed_payment_count_consumer=self.households.ts.current("missed_payment_count_consumer"),
+            prior_ficp_episode_missed_payment_count=self.households.ts.current(
+                "ficp_episode_missed_payment_count"
+            ),
+            prior_ficp_episode_status=self.households.ts.current("ficp_episode_status"),
             prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(
                 "interest_rates_on_household_consumption_loans"
             ),

@@ -385,7 +385,7 @@ def test_consumer_arrears_reconcile_household_and_bank_assets_without_double_cou
         mort_loans=_empty_loan_state(2, 1),
     )
     snapshot = market.prepare_household_service_snapshot()
-    market.settle_consumer_payments(snapshot.consumer_total_due)
+    settlement = market.settle_consumer_payments(snapshot.consumer_total_due)
 
     household_debt = market.compute_outstanding_consumption_loans_by_household()
     bank_assets = market.compute_outstanding_household_consumption_loans_by_bank()
@@ -395,6 +395,16 @@ def test_consumer_arrears_reconcile_household_and_bank_assets_without_double_cou
         market.states["cons_loans"][0].sum() + market._consumer_interest_arrears_by_cell.sum(),
     )
     assert np.all(market._consumer_principal_arrears_by_cell <= market.states["cons_loans"][0])
+    np.testing.assert_allclose(
+        settlement.arrears.closing_interest,
+        market._consumer_interest_arrears_by_cell,
+    )
+    np.testing.assert_allclose(
+        settlement.arrears.closing_principal,
+        market._consumer_principal_arrears_by_cell,
+    )
+    assert not settlement.arrears.closing_interest.flags.writeable
+    assert not settlement.arrears.closing_principal.flags.writeable
 
 
 def test_consumer_arrears_carry_collect_once_and_remodulate_new_credit_next_period():

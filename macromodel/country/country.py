@@ -1537,6 +1537,17 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+        closing_consumer_arrears = (
+            settlement.arrears.closing_interest.sum(axis=0)
+            + settlement.arrears.closing_principal.sum(axis=0)
+        )
+        if not np.allclose(
+            closing_consumer_arrears,
+            settlement.unpaid_payment,
+            rtol=1e-10,
+            atol=1e-8,
+        ):
+            raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
         self.households.record_stage6_consumer_distress_state(
             scheduled_consumer_payments=settlement.scheduled_payment,
             actual_consumer_payments=settlement.actual_payment,

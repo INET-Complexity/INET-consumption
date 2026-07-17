@@ -69,6 +69,14 @@ class HouseholdServiceSnapshot:
 
 
 @dataclass(frozen=True)
+class ConsumerServiceArrears:
+    """Committed closing consumer arrears by bank and household."""
+
+    closing_interest: np.ndarray
+    closing_principal: np.ndarray
+
+
+@dataclass(frozen=True)
 class ConsumerPaymentSettlement:
     """Authoritative current-period consumer-loan payment result."""
 
@@ -81,6 +89,7 @@ class ConsumerPaymentSettlement:
     principal_paid_by_cell: np.ndarray
     opening_interest_arrears_collected_by_cell: np.ndarray
     newly_accrued_interest_by_cell: np.ndarray
+    arrears: ConsumerServiceArrears
 
 
 def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -913,9 +922,16 @@ class CreditMarket:
             principal_paid_by_cell=principal_paid_by_cell.copy(),
             opening_interest_arrears_collected_by_cell=paid_opening_interest.copy(),
             newly_accrued_interest_by_cell=newly_accrued_interest.copy(),
+            arrears=ConsumerServiceArrears(
+                closing_interest=self._consumer_interest_arrears_by_cell.copy(),
+                closing_principal=self._consumer_principal_arrears_by_cell.copy(),
+            ),
         )
         for value in settlement.__dict__.values():
-            value.setflags(write=False)
+            if isinstance(value, np.ndarray):
+                value.setflags(write=False)
+        settlement.arrears.closing_interest.setflags(write=False)
+        settlement.arrears.closing_principal.setflags(write=False)
         self._consumer_payment_settlement = settlement
         return settlement
 

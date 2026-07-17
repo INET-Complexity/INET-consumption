@@ -522,13 +522,14 @@ def test_first_missed_consumer_payment_records_one_rescheduling_event_and_extend
     market._consumer_payment_settlement = None
     second_snapshot = market.prepare_household_service_snapshot()
     market.settle_consumer_payments(second_snapshot.consumer_total_due)
-    market.prepare_first_miss_consumer_loan_rescheduling(
+    second_events = market.prepare_first_miss_consumer_loan_rescheduling(
         prior_missed_payment_count_consumer=np.array([1.0]),
         prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
         consumer_loan_maturity=8,
         period=8,
     )
 
+    assert second_events == ()
     assert len(market.consumer_first_miss_rescheduling_events()) == 1
     market.finalize_household_consumer_schedule()
     np.testing.assert_allclose(market.states["mort_loans"], opening_mortgages)

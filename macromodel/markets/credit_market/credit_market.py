@@ -369,6 +369,7 @@ class CreditMarket:
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
         self._consumer_payment_settlement: ConsumerPaymentSettlement | None = None
         self._consumer_first_miss_rescheduling_events: list[ConsumerLoanReschedulingEvent] = []
+        self._current_first_miss_rescheduling_events: list[ConsumerLoanReschedulingEvent] = []
         self._first_miss_rescheduling_prepared = False
         self._first_miss_rescheduling_households = np.zeros(self.states["cons_loans"].shape[2], dtype=bool)
         self._first_miss_rescheduling_rates = np.zeros(self.states["cons_loans"].shape[2])
@@ -476,6 +477,7 @@ class CreditMarket:
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
         self._consumer_first_miss_rescheduling_events = []
+        self._current_first_miss_rescheduling_events = []
         self._first_miss_rescheduling_prepared = False
         self._first_miss_rescheduling_households = np.zeros(self.states["cons_loans"].shape[2], dtype=bool)
         self._first_miss_rescheduling_rates = np.zeros(self.states["cons_loans"].shape[2])
@@ -584,6 +586,7 @@ class CreditMarket:
         self._consumer_loan_remodulation_maturity = None
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
+        self._current_first_miss_rescheduling_events = []
         self._first_miss_rescheduling_prepared = False
         self._first_miss_rescheduling_households.fill(False)
         self._first_miss_rescheduling_rates.fill(0.0)
@@ -874,6 +877,7 @@ class CreditMarket:
             value.setflags(write=False)
         self._household_service_snapshot = snapshot
         self._consumer_payment_settlement = None
+        self._current_first_miss_rescheduling_events = []
         self._first_miss_rescheduling_prepared = False
         self._first_miss_rescheduling_households.fill(False)
         self._first_miss_rescheduling_rates.fill(0.0)
@@ -997,7 +1001,7 @@ class CreditMarket:
         if self._consumer_payment_settlement is None:
             raise RuntimeError("Consumer service must be settled before first-miss rescheduling.")
         if self._first_miss_rescheduling_prepared:
-            return tuple(self._consumer_first_miss_rescheduling_events)
+            return tuple(self._current_first_miss_rescheduling_events)
         prior_count = np.asarray(prior_missed_payment_count_consumer, dtype=float)
         n_households = self.states["cons_loans"].shape[2]
         if prior_count.shape != (n_households,):
@@ -1034,23 +1038,23 @@ class CreditMarket:
         self._first_miss_rescheduling_rates = prevailing_rate
         self._first_miss_rescheduling_maturity = np.where(first_miss, new_maturity, 0)
         for household_id in np.flatnonzero(first_miss):
-            self._consumer_first_miss_rescheduling_events.append(
-                ConsumerLoanReschedulingEvent(
-                    household_id=int(household_id),
-                    period=period,
-                    scheduled_payment=float(settlement.scheduled_payment[household_id]),
-                    actual_payment=float(settlement.actual_payment[household_id]),
-                    unpaid_payment=float(settlement.unpaid_payment[household_id]),
-                    contractual_principal=float(contractual_principal[household_id]),
-                    closing_principal_arrears=float(closing_principal_arrears[household_id]),
-                    closing_interest_arrears=float(settlement.arrears.closing_interest[:, household_id].sum()),
-                    old_maturity=int(consumer_loan_maturity),
-                    new_maturity=new_maturity,
-                    resulting_scheduled_payment=float(resulting_payment[household_id]),
-                )
+            event = ConsumerLoanReschedulingEvent(
+                household_id=int(household_id),
+                period=period,
+                scheduled_payment=float(settlement.scheduled_payment[household_id]),
+                actual_payment=float(settlement.actual_payment[household_id]),
+                unpaid_payment=float(settlement.unpaid_payment[household_id]),
+                contractual_principal=float(contractual_principal[household_id]),
+                closing_principal_arrears=float(closing_principal_arrears[household_id]),
+                closing_interest_arrears=float(settlement.arrears.closing_interest[:, household_id].sum()),
+                old_maturity=int(consumer_loan_maturity),
+                new_maturity=new_maturity,
+                resulting_scheduled_payment=float(resulting_payment[household_id]),
             )
+            self._consumer_first_miss_rescheduling_events.append(event)
+            self._current_first_miss_rescheduling_events.append(event)
         self._first_miss_rescheduling_prepared = True
-        return tuple(self._consumer_first_miss_rescheduling_events)
+        return tuple(self._current_first_miss_rescheduling_events)
 
     def consumer_first_miss_rescheduling_events(self) -> tuple[ConsumerLoanReschedulingEvent, ...]:
         """Return the persistent first-miss consumer-loan rescheduling history."""

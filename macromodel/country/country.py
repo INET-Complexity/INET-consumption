@@ -1594,6 +1594,7 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
     def compute_activity_tax_previews(
         self,
         activity_production: np.ndarray,

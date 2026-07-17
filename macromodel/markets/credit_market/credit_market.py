@@ -1014,9 +1014,7 @@ class CreditMarket:
         interest_paid_by_cell = paid_opening_interest + paid_interest + early_interest_by_cell
         principal_paid_by_cell += early_principal_by_cell
         newly_accrued_interest = snapshot.consumer_contractual_interest_by_cell - paid_interest
-        self._consumer_opening_arrears_collected_by_bank = (
-            paid_opening_interest + early_opening_interest
-        ).sum(axis=1)
+        self._consumer_opening_arrears_collected_by_bank = (paid_opening_interest + early_opening_interest).sum(axis=1)
         self._consumer_interest_accrued_by_bank = newly_accrued_interest.sum(axis=1)
         self._last_interest_by_household = self._mortgage_interest_paid + interest_paid_by_cell.sum(axis=0)
         self._last_interest_by_bank += interest_paid_by_cell.sum(axis=1)
@@ -1029,9 +1027,7 @@ class CreditMarket:
             principal_paid=principal_paid_by_cell.sum(axis=0),
             interest_paid_by_cell=interest_paid_by_cell.copy(),
             principal_paid_by_cell=principal_paid_by_cell.copy(),
-            opening_interest_arrears_collected_by_cell=(
-                paid_opening_interest + early_opening_interest
-            ).copy(),
+            opening_interest_arrears_collected_by_cell=(paid_opening_interest + early_opening_interest).copy(),
             newly_accrued_interest_by_cell=newly_accrued_interest.copy(),
             arrears=ConsumerServiceArrears(
                 closing_interest=self._consumer_interest_arrears_by_cell.copy(),

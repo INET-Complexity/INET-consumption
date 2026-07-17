@@ -211,9 +211,7 @@ def test_current_consumer_debt_components_separate_principal_arrears(test_credit
     market._consumer_principal_arrears_by_cell[:] = 3.0
     market._consumer_interest_arrears_by_cell[:] = 2.0
 
-    contractual_principal, principal_arrears, interest_arrears = (
-        market.current_consumer_debt_components_by_household()
-    )
+    contractual_principal, principal_arrears, interest_arrears = market.current_consumer_debt_components_by_household()
 
     np.testing.assert_allclose(contractual_principal, 7.0 * np.ones(contractual_principal.shape))
     np.testing.assert_allclose(principal_arrears, 3.0 * np.ones(principal_arrears.shape))

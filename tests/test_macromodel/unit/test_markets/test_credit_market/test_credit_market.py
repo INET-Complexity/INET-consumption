@@ -165,6 +165,40 @@ def test_resolver_enabled_clear_defers_consumer_loan_booking_to_settlement(test_
     np.testing.assert_allclose(market.states["cons_loans"][0], settlement)
 
 
+def test_active_ficp_credit_demand_cannot_enter_market_clearing(test_banks, test_firms, test_households):
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    n_households = test_households.ts.current("n_households")
+    test_households.configure_feasibility_resolver(True)
+    test_banks.ts.override_current("equity", np.full(n_banks, 1.0e9))
+    test_banks.ts.override_current("total_outstanding_loans", np.zeros(n_banks))
+    test_firms.ts.override_current("target_short_term_credit", np.zeros(n_firms))
+    test_firms.ts.override_current("target_long_term_credit", np.zeros(n_firms))
+    test_households.ts.override_current("target_consumption_loans", np.full(n_households, 100.0))
+    test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+    test_households.ts.override_current("target_mortgage", np.zeros(n_households))
+    market = _credit_market_with_clearer(
+        DefaultCreditMarketClearer(
+            allow_short_term_firm_loans=False,
+            allow_household_loans=True,
+            firms_max_number_of_banks_visiting=3,
+            households_max_number_of_banks_visiting=3,
+            consider_loan_type_fractions=False,
+            credit_supply_temperature=1.0,
+            interest_rates_selection_temperature=1.0,
+            creditor_selection_is_deterministic=True,
+            creditor_minimum_fill=False,
+            debtor_minimum_fill=False,
+        ),
+        test_banks,
+        test_firms,
+        test_households,
+    )
+
+    with pytest.raises(RuntimeError, match="excluded before consumer-credit clearing"):
+        market.clear(test_banks, test_firms, test_households, 0.0, 0.0, 0.0)
+
+
 def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides(test_credit_market):
     test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])

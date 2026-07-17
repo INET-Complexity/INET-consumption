@@ -623,6 +623,12 @@ class CreditMarket:
             total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
         )
 
+        if households.uses_feasibility_resolver:
+            active_ficp = households.current_ficp_active()
+            requested_consumer_credit = np.asarray(households.ts.current("target_consumption_loans"), dtype=float)
+            if np.any(active_ficp & (requested_consumer_credit > 1e-12)):
+                raise RuntimeError("Active FICP households must be excluded before consumer-credit clearing.")
+
         # Clear the credit market
         (
             new_st_loans,
@@ -768,6 +774,13 @@ class CreditMarket:
         if self._pending_consumer_loans_this_period is None:
             raise RuntimeError("No unbooked consumer-credit settlement is available for this period.")
         return self._pending_consumer_loans_this_period[0].copy()
+
+    def current_consumer_debt_components_by_household(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return contractual principal and committed arrears by household."""
+        contractual_principal = self.states["cons_loans"][0].sum(axis=0).copy()
+        principal_arrears = self._consumer_principal_arrears_by_cell.sum(axis=0).copy()
+        interest_arrears = self._consumer_interest_arrears_by_cell.sum(axis=0).copy()
+        return contractual_principal, principal_arrears, interest_arrears
 
     def settle_granted_consumption_loans(
         self,

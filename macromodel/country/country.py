@@ -1531,6 +1531,21 @@ class Country:
         )
         self.credit_market.finalize_household_consumer_schedule()
         self.households.record_consumer_loan_rescheduling_events(rescheduling_events)
+        (
+            consumer_contractual_principal,
+            consumer_principal_arrears,
+            consumer_interest_arrears,
+        ) = self.credit_market.current_consumer_debt_components_by_household()
+        self.households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=settlement.scheduled_payment,
+            actual_consumer_payments=settlement.actual_payment,
+            unpaid_consumer_payments=settlement.unpaid_payment,
+            time_unit=self.economy.time_unit,
+            period=len(self.households.ts.dicts["scheduled_consumer_payment"]) - 1,
+            consumer_contractual_principal=consumer_contractual_principal,
+            consumer_principal_arrears=consumer_principal_arrears,
+            consumer_interest_arrears=consumer_interest_arrears,
+        )
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
@@ -1556,12 +1571,6 @@ class Country:
             atol=1e-8,
         ):
             raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
-        self.households.record_stage6_consumer_distress_state(
-            scheduled_consumer_payments=settlement.scheduled_payment,
-            actual_consumer_payments=settlement.actual_payment,
-            unpaid_consumer_payments=settlement.unpaid_payment,
-            time_unit=self.economy.time_unit,
-        )
 
     def compute_activity_tax_previews(
         self,

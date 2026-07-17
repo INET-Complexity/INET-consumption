@@ -167,6 +167,17 @@ _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
     "consumer_distress_state": 0.0,
     "ficp_state": False,
     "ficp_exclusion_remaining_periods": 0.0,
+    "consumer_loan_rescheduling_event": False,
+    "consumer_loan_rescheduling_period": 0.0,
+    "consumer_loan_rescheduling_scheduled_payment": 0.0,
+    "consumer_loan_rescheduling_actual_payment": 0.0,
+    "consumer_loan_rescheduling_unpaid_payment": 0.0,
+    "consumer_loan_rescheduling_contractual_principal": 0.0,
+    "consumer_loan_rescheduling_closing_principal_arrears": 0.0,
+    "consumer_loan_rescheduling_closing_interest_arrears": 0.0,
+    "consumer_loan_rescheduling_old_maturity": 0.0,
+    "consumer_loan_rescheduling_new_maturity": 0.0,
+    "consumer_loan_rescheduling_resulting_scheduled_payment": 0.0,
 }
 
 
@@ -1003,6 +1014,46 @@ class Households(Agent):
         self.ts.consumer_distress_state.append(state.consumer_distress_state)
         self.ts.ficp_state.append(state.ficp_state)
         self.ts.ficp_exclusion_remaining_periods.append(state.ficp_exclusion_remaining_periods)
+
+    def record_consumer_loan_rescheduling_events(self, events: tuple[Any, ...]) -> None:
+        """Persist the current-period first-miss rescheduling event fields."""
+        n_households = self.ts.current("n_households")
+        fields: dict[str, np.ndarray] = {
+            "consumer_loan_rescheduling_event": np.zeros(n_households, dtype=bool),
+            "consumer_loan_rescheduling_period": np.zeros(n_households),
+            "consumer_loan_rescheduling_scheduled_payment": np.zeros(n_households),
+            "consumer_loan_rescheduling_actual_payment": np.zeros(n_households),
+            "consumer_loan_rescheduling_unpaid_payment": np.zeros(n_households),
+            "consumer_loan_rescheduling_contractual_principal": np.zeros(n_households),
+            "consumer_loan_rescheduling_closing_principal_arrears": np.zeros(n_households),
+            "consumer_loan_rescheduling_closing_interest_arrears": np.zeros(n_households),
+            "consumer_loan_rescheduling_old_maturity": np.zeros(n_households),
+            "consumer_loan_rescheduling_new_maturity": np.zeros(n_households),
+            "consumer_loan_rescheduling_resulting_scheduled_payment": np.zeros(n_households),
+        }
+        for event in events:
+            household_id = int(event.household_id)
+            if household_id < 0 or household_id >= n_households:
+                raise ValueError("Consumer rescheduling event household_id is outside the household state.")
+            fields["consumer_loan_rescheduling_event"][household_id] = True
+            fields["consumer_loan_rescheduling_period"][household_id] = event.period
+            fields["consumer_loan_rescheduling_scheduled_payment"][household_id] = event.scheduled_payment
+            fields["consumer_loan_rescheduling_actual_payment"][household_id] = event.actual_payment
+            fields["consumer_loan_rescheduling_unpaid_payment"][household_id] = event.unpaid_payment
+            fields["consumer_loan_rescheduling_contractual_principal"][household_id] = event.contractual_principal
+            fields["consumer_loan_rescheduling_closing_principal_arrears"][household_id] = (
+                event.closing_principal_arrears
+            )
+            fields["consumer_loan_rescheduling_closing_interest_arrears"][household_id] = (
+                event.closing_interest_arrears
+            )
+            fields["consumer_loan_rescheduling_old_maturity"][household_id] = event.old_maturity
+            fields["consumer_loan_rescheduling_new_maturity"][household_id] = event.new_maturity
+            fields["consumer_loan_rescheduling_resulting_scheduled_payment"][household_id] = (
+                event.resulting_scheduled_payment
+            )
+        for field_name, values in fields.items():
+            getattr(self.ts, field_name).append(values)
 
     def _record_consumption_floor_diagnostics(self) -> None:
         """Persist floor diagnostics from the settled runtime carrier."""

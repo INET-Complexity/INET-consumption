@@ -1521,13 +1521,14 @@ class Country:
         self.households.ts.unpaid_consumer_payment.append(settlement.unpaid_payment.copy())
         self.households.ts.consumer_interest_paid.append(settlement.interest_paid.copy())
         self.households.ts.consumer_principal_paid.append(settlement.principal_paid.copy())
-        self.credit_market.prepare_first_miss_consumer_loan_rescheduling(
+        rescheduling_events = self.credit_market.prepare_first_miss_consumer_loan_rescheduling(
             prior_missed_payment_count_consumer=self.households.ts.current("missed_payment_count_consumer"),
             prevailing_consumer_loan_rates_by_bank=self.banks.ts.current("interest_rates_on_household_consumption_loans"),
             consumer_loan_maturity=self.banks.parameters.household_consumption_loan_maturity,
             period=len(self.households.ts.dicts["scheduled_consumer_payment"]) - 1,
         )
         self.credit_market.finalize_household_consumer_schedule()
+        self.households.record_consumer_loan_rescheduling_events(rescheduling_events)
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()

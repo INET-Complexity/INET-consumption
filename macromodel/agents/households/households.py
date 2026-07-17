@@ -162,6 +162,7 @@ _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
     "unpaid_consumer_payment": 0.0,
     "consumer_interest_paid": 0.0,
     "consumer_principal_paid": 0.0,
+    "early_consumer_repayment": 0.0,
     "consumer_payment_missed": False,
     "missed_payment_count_consumer": 0.0,
     # See func.consumer_distress: 0=current, 1=delinquent, 2=FICP.
@@ -232,6 +233,7 @@ class PostGrantFeasiblePlan:
     consumption_after_floor: np.ndarray | None = None
     consumption_cut_amount: np.ndarray | None = None
     remaining_subsistence_shortfall: np.ndarray | None = None
+    early_consumer_repayment_capacity: np.ndarray | None = None
     floor_binding: np.ndarray | None = None
 
 
@@ -996,6 +998,48 @@ class Households(Agent):
     def current_remaining_subsistence_shortfall(self) -> np.ndarray:
         """Return the post-floor shortfall handoff for government support."""
         return self._current_post_grant_feasible_plan_field("remaining_subsistence_shortfall")
+
+    def current_early_consumer_repayment_capacity(self) -> np.ndarray:
+        """Return surplus capacity reserved for optional consumer repayment."""
+        return self._current_post_grant_feasible_plan_field("early_consumer_repayment_capacity")
+
+    def populate_post_grant_early_repayment_capacity(
+        self,
+        *,
+        mortgage_service: np.ndarray,
+        eligible_ficp: np.ndarray,
+    ) -> None:
+        """Record post-consumption, post-mortgage capacity separately from deficit."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError("Early repayment capacity requires a settled post-grant feasibility plan.")
+        consumption_after_floor = self.post_grant_feasible_plan.consumption_after_floor
+        if consumption_after_floor is None:
+            raise RuntimeError("Early repayment capacity requires consumption-floor settlement first.")
+
+        n_households = int(self.ts.current("n_households"))
+        consumption = np.asarray(consumption_after_floor, dtype=float)
+        mortgage = np.asarray(mortgage_service, dtype=float)
+        income = np.asarray(self.ts.current("expected_income"), dtype=float)
+        eligible = np.asarray(eligible_ficp, dtype=bool)
+        for name, values in (
+            ("consumption_after_floor", consumption),
+            ("mortgage_service", mortgage),
+            ("expected_income", income),
+        ):
+            if values.shape != (n_households,):
+                raise ValueError(f"{name} must contain exactly one value per household.")
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"{name} must be finite for early repayment capacity.")
+        if eligible.shape != (n_households,):
+            raise ValueError("eligible_ficp must contain exactly one value per household.")
+        if np.any(consumption < 0.0) or np.any(mortgage < 0.0):
+            raise ValueError("Consumption and mortgage service must be non-negative.")
+
+        capacity = np.where(eligible, np.maximum(income - consumption - mortgage, 0.0), 0.0)
+        self.post_grant_feasible_plan = replace(
+            self.post_grant_feasible_plan,
+            early_consumer_repayment_capacity=capacity.copy(),
+        )
 
     def record_pre_support_payment_suspension_diagnostics(
         self,

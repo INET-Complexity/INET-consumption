@@ -1511,15 +1511,28 @@ class Country:
             household_consumption_total=self.households.post_grant_feasible_plan.consumption_after_floor,
         )
         self.households.ts.override_current("target_consumption", goods_consumption)
+        self.households.populate_post_grant_early_repayment_capacity(
+            mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
+            eligible_ficp=self.households.current_ficp_active(),
+        )
+        early_repayment_capacity = np.minimum(
+            self.households.current_early_consumer_repayment_capacity(),
+            self.credit_market.current_consumer_balance_by_household(),
+        )
         settlement = self.credit_market.settle_consumer_payments(
-            self.households.current_remaining_subsistence_shortfall()
+            remaining_shortfall=self.households.current_remaining_subsistence_shortfall(),
+            early_repayment_capacity=early_repayment_capacity,
         )
         closing_consumer_arrears = settlement.arrears.closing_interest.sum(
             axis=0
         ) + settlement.arrears.closing_principal.sum(axis=0)
+        expected_closing_arrears = np.maximum(
+            settlement.unpaid_payment - settlement.early_repayment,
+            0.0,
+        )
         if not np.allclose(
             closing_consumer_arrears,
-            settlement.unpaid_payment,
+            expected_closing_arrears,
             rtol=1e-10,
             atol=1e-8,
         ):
@@ -1533,6 +1546,7 @@ class Country:
         self.households.ts.unpaid_consumer_payment.append(settlement.unpaid_payment.copy())
         self.households.ts.consumer_interest_paid.append(settlement.interest_paid.copy())
         self.households.ts.consumer_principal_paid.append(settlement.principal_paid.copy())
+        self.households.ts.early_consumer_repayment.append(settlement.early_repayment.copy())
         rescheduling_events = self.credit_market.prepare_first_miss_consumer_loan_rescheduling(
             prior_missed_payment_count_consumer=self.households.ts.current("missed_payment_count_consumer"),
             prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(

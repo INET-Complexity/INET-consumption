@@ -218,6 +218,10 @@ def test_current_consumer_debt_components_separate_principal_arrears(test_credit
     np.testing.assert_allclose(contractual_principal, 7.0 * np.ones(contractual_principal.shape))
     np.testing.assert_allclose(principal_arrears, 3.0 * np.ones(principal_arrears.shape))
     np.testing.assert_allclose(interest_arrears, 2.0 * np.ones(interest_arrears.shape))
+    np.testing.assert_allclose(
+        market.current_consumer_balance_by_household(),
+        12.0 * np.ones(contractual_principal.shape),
+    )
 
 
 def test_ficp_schedule_remodulation_uses_remaining_horizon(test_credit_market):
@@ -429,6 +433,32 @@ def test_partial_consumer_payment_respects_interest_before_principal():
     np.testing.assert_allclose(market.compute_consumer_interest_accrued_by_bank(), np.array([7.5, 7.5]))
     with pytest.raises(ValueError):
         settlement.actual_payment[0] = 0.0
+
+
+def test_early_consumer_repayment_is_capped_and_kept_separate_from_scheduled_miss():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[:, 0, 0] = np.array([100.0, 0.1, 60.0])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    snapshot = market.prepare_household_service_snapshot()
+
+    settlement = market.settle_consumer_payments(
+        remaining_shortfall=np.array([20.0]),
+        early_repayment_capacity=np.array([1_000.0]),
+    )
+
+    np.testing.assert_allclose(settlement.actual_payment, snapshot.consumer_total_due - 20.0)
+    np.testing.assert_allclose(settlement.unpaid_payment, np.array([20.0]))
+    np.testing.assert_allclose(settlement.early_repayment, np.array([70.0]))
+    np.testing.assert_allclose(settlement.actual_payment + settlement.unpaid_payment, snapshot.consumer_total_due)
+    np.testing.assert_allclose(market.states["cons_loans"][0], 0.0)
+    np.testing.assert_allclose(settlement.arrears.closing_interest, 0.0)
+    np.testing.assert_allclose(settlement.arrears.closing_principal, 0.0)
 
 
 def test_opening_principal_arrears_do_not_accrue_consumer_interest():

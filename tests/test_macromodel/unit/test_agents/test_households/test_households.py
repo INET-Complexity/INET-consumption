@@ -2273,6 +2273,32 @@ class TestPopulatePostGrantFeasiblePlan:
                 period=1.5,
             )
 
+    def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+            consumption_after_floor=np.full(n_households, 20.0),
+            remaining_subsistence_shortfall=np.full(n_households, 7.0),
+        )
+
+        test_households.populate_post_grant_early_repayment_capacity(
+            mortgage_service=np.full(n_households, 30.0),
+            eligible_ficp=np.arange(n_households) == 0,
+        )
+
+        np.testing.assert_allclose(
+            test_households.current_early_consumer_repayment_capacity(),
+            np.where(np.arange(n_households) == 0, 50.0, 0.0),
+        )
+        np.testing.assert_allclose(
+            test_households.current_remaining_subsistence_shortfall(),
+            np.full(n_households, 7.0),
+        )
+
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),
         [

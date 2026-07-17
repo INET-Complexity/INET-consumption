@@ -2928,6 +2928,7 @@ class TestCountry:
             scheduled_payment=np.zeros(n_households),
             actual_payment=np.zeros(n_households),
             unpaid_payment=np.zeros(n_households),
+            early_repayment=np.zeros(n_households),
             interest_paid=np.zeros(n_households),
             principal_paid=np.zeros(n_households),
             arrears=empty_arrears,
@@ -2942,7 +2943,22 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
         )
-        monkeypatch.setattr(test_country.credit_market, "settle_consumer_payments", lambda _shortfall: empty_settlement)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_opening_scheduled_mortgage_payments_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "current_consumer_balance_by_household",
+            lambda: np.zeros(n_households),
+        )
+        settlement_inputs = {}
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "settle_consumer_payments",
+            lambda **kwargs: settlement_inputs.update(kwargs) or empty_settlement,
+        )
         monkeypatch.setattr(
             test_country.credit_market,
             "compute_mortgage_principal_paid_by_household",
@@ -2990,4 +3006,9 @@ class TestCountry:
 
         test_country.settle_authoritative_household_payments()
 
+        np.testing.assert_array_equal(settlement_inputs["remaining_shortfall"], np.zeros(n_households))
+        np.testing.assert_array_equal(
+            settlement_inputs["early_repayment_capacity"],
+            np.zeros(n_households),
+        )
         assert order.index("prepare") < order.index("finalize") < order.index("distress")

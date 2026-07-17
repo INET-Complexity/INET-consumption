@@ -83,6 +83,7 @@ class ConsumerPaymentSettlement:
     scheduled_payment: np.ndarray
     actual_payment: np.ndarray
     unpaid_payment: np.ndarray
+    early_repayment: np.ndarray
     interest_paid: np.ndarray
     principal_paid: np.ndarray
     interest_paid_by_cell: np.ndarray
@@ -782,6 +783,13 @@ class CreditMarket:
         interest_arrears = self._consumer_interest_arrears_by_cell.sum(axis=0).copy()
         return contractual_principal, principal_arrears, interest_arrears
 
+    def current_consumer_balance_by_household(self) -> np.ndarray:
+        """Return the outstanding consumer balance, excluding mortgage debt."""
+        contractual_principal, principal_arrears, interest_arrears = (
+            self.current_consumer_debt_components_by_household()
+        )
+        return contractual_principal + principal_arrears + interest_arrears
+
     def settle_granted_consumption_loans(
         self,
         *,
@@ -914,8 +922,12 @@ class CreditMarket:
         self._last_interest_by_bank += interest_by_bank
         return principal.copy()
 
-    def settle_consumer_payments(self, remaining_shortfall: np.ndarray) -> ConsumerPaymentSettlement:
-        """Settle opening consumer service through the fixed arrears waterfall."""
+    def settle_consumer_payments(
+        self,
+        remaining_shortfall: np.ndarray,
+        early_repayment_capacity: np.ndarray | None = None,
+    ) -> ConsumerPaymentSettlement:
+        """Settle scheduled service and optional early repayment separately."""
         snapshot = self.current_household_service_snapshot()
         if self._consumer_payment_settlement is not None:
             raise RuntimeError("Consumer service has already been settled for this period.")
@@ -924,6 +936,14 @@ class CreditMarket:
             raise ValueError("remaining_shortfall must contain exactly one value per household.")
         if not np.all(np.isfinite(shortfall)) or np.any(shortfall < 0.0):
             raise RuntimeError("remaining_shortfall must be finite and non-negative.")
+        if early_repayment_capacity is None:
+            early_capacity = np.zeros_like(shortfall)
+        else:
+            early_capacity = np.asarray(early_repayment_capacity, dtype=float)
+            if early_capacity.shape != snapshot.consumer_total_due.shape:
+                raise ValueError("early_repayment_capacity must contain exactly one value per household.")
+            if not np.all(np.isfinite(early_capacity)) or np.any(early_capacity < 0.0):
+                raise RuntimeError("early_repayment_capacity must be finite and non-negative.")
         unpaid = np.minimum(shortfall, snapshot.consumer_total_due)
         actual = snapshot.consumer_total_due - unpaid
         available = actual.copy()
@@ -958,9 +978,45 @@ class CreditMarket:
                 0.0,
             ),
         )
-        interest_paid_by_cell = paid_opening_interest + paid_interest
+        remaining_balance = loans[0].sum(axis=0) + self._consumer_interest_arrears_by_cell.sum(axis=0)
+        early_repayment = np.minimum(early_capacity, np.maximum(remaining_balance, 0.0))
+        early_available = early_repayment.copy()
+        early_components: list[np.ndarray] = []
+        remaining_current_interest = np.maximum(
+            snapshot.consumer_contractual_interest_by_cell - paid_interest,
+            0.0,
+        )
+        remaining_contractual_principal = np.maximum(
+            loans[0] - self._consumer_principal_arrears_by_cell,
+            0.0,
+        )
+        for component in (
+            np.maximum(snapshot.consumer_opening_interest_arrears_by_cell - paid_opening_interest, 0.0),
+            remaining_current_interest,
+            self._consumer_principal_arrears_by_cell.copy(),
+            remaining_contractual_principal,
+        ):
+            paid = _allocate_household_amount_pro_rata(early_available, component)
+            early_components.append(paid)
+            early_available -= paid.sum(axis=0)
+        early_opening_interest, early_interest, early_principal_arrears, early_principal = early_components
+        early_interest_by_cell = early_opening_interest + early_interest
+        early_principal_by_cell = early_principal_arrears + early_principal
+        loans[0] = np.maximum(loans[0] - early_principal_by_cell, 0.0)
+        self._consumer_interest_arrears_by_cell = np.maximum(
+            self._consumer_interest_arrears_by_cell - early_interest_by_cell,
+            0.0,
+        )
+        self._consumer_principal_arrears_by_cell = np.minimum(
+            loans[0],
+            np.maximum(self._consumer_principal_arrears_by_cell - early_principal_arrears, 0.0),
+        )
+        interest_paid_by_cell = paid_opening_interest + paid_interest + early_interest_by_cell
+        principal_paid_by_cell += early_principal_by_cell
         newly_accrued_interest = snapshot.consumer_contractual_interest_by_cell - paid_interest
-        self._consumer_opening_arrears_collected_by_bank = paid_opening_interest.sum(axis=1)
+        self._consumer_opening_arrears_collected_by_bank = (
+            paid_opening_interest + early_opening_interest
+        ).sum(axis=1)
         self._consumer_interest_accrued_by_bank = newly_accrued_interest.sum(axis=1)
         self._last_interest_by_household = self._mortgage_interest_paid + interest_paid_by_cell.sum(axis=0)
         self._last_interest_by_bank += interest_paid_by_cell.sum(axis=1)
@@ -968,11 +1024,14 @@ class CreditMarket:
             scheduled_payment=snapshot.consumer_total_due.copy(),
             actual_payment=actual.copy(),
             unpaid_payment=unpaid.copy(),
+            early_repayment=early_repayment.copy(),
             interest_paid=interest_paid_by_cell.sum(axis=0),
             principal_paid=principal_paid_by_cell.sum(axis=0),
             interest_paid_by_cell=interest_paid_by_cell.copy(),
             principal_paid_by_cell=principal_paid_by_cell.copy(),
-            opening_interest_arrears_collected_by_cell=paid_opening_interest.copy(),
+            opening_interest_arrears_collected_by_cell=(
+                paid_opening_interest + early_opening_interest
+            ).copy(),
             newly_accrued_interest_by_cell=newly_accrued_interest.copy(),
             arrears=ConsumerServiceArrears(
                 closing_interest=self._consumer_interest_arrears_by_cell.copy(),

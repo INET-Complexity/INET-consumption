@@ -92,6 +92,23 @@ class ConsumerPaymentSettlement:
     arrears: ConsumerServiceArrears
 
 
+@dataclass(frozen=True)
+class ConsumerLoanReschedulingEvent:
+    """One deterministic first-miss consumer-loan rescheduling event."""
+
+    household_id: int
+    period: int
+    scheduled_payment: float
+    actual_payment: float
+    unpaid_payment: float
+    contractual_principal: float
+    closing_principal_arrears: float
+    closing_interest_arrears: float
+    old_maturity: int
+    new_maturity: int
+    resulting_scheduled_payment: float
+
+
 def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {key: np.zeros_like(states[key]) for key in _LOAN_KEYS}
 
@@ -351,6 +368,11 @@ class CreditMarket:
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
         self._consumer_payment_settlement: ConsumerPaymentSettlement | None = None
+        self._consumer_first_miss_rescheduling_events: list[ConsumerLoanReschedulingEvent] = []
+        self._first_miss_rescheduling_prepared = False
+        self._first_miss_rescheduling_households = np.zeros(self.states["cons_loans"].shape[2], dtype=bool)
+        self._first_miss_rescheduling_rates = np.zeros(self.states["cons_loans"].shape[2])
+        self._first_miss_rescheduling_maturity = np.zeros(self.states["cons_loans"].shape[2], dtype=int)
         self._mortgage_principal_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._mortgage_interest_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._consumer_opening_arrears_collected_by_bank = np.zeros(self.states["cons_loans"].shape[1])
@@ -453,6 +475,11 @@ class CreditMarket:
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
+        self._consumer_first_miss_rescheduling_events = []
+        self._first_miss_rescheduling_prepared = False
+        self._first_miss_rescheduling_households = np.zeros(self.states["cons_loans"].shape[2], dtype=bool)
+        self._first_miss_rescheduling_rates = np.zeros(self.states["cons_loans"].shape[2])
+        self._first_miss_rescheduling_maturity = np.zeros(self.states["cons_loans"].shape[2], dtype=int)
         self._mortgage_principal_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._mortgage_interest_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._consumer_opening_arrears_collected_by_bank = np.zeros(self.states["cons_loans"].shape[1])
@@ -557,6 +584,10 @@ class CreditMarket:
         self._consumer_loan_remodulation_maturity = None
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
+        self._first_miss_rescheduling_prepared = False
+        self._first_miss_rescheduling_households.fill(False)
+        self._first_miss_rescheduling_rates.fill(0.0)
+        self._first_miss_rescheduling_maturity.fill(0)
         self._mortgage_principal_paid.fill(0.0)
         self._mortgage_interest_paid.fill(0.0)
         self._consumer_opening_arrears_collected_by_bank.fill(0.0)
@@ -843,6 +874,10 @@ class CreditMarket:
             value.setflags(write=False)
         self._household_service_snapshot = snapshot
         self._consumer_payment_settlement = None
+        self._first_miss_rescheduling_prepared = False
+        self._first_miss_rescheduling_households.fill(False)
+        self._first_miss_rescheduling_rates.fill(0.0)
+        self._first_miss_rescheduling_maturity.fill(0)
         self._consumer_opening_arrears_collected_by_bank.fill(0.0)
         self._consumer_interest_accrued_by_bank.fill(0.0)
         return snapshot
@@ -946,8 +981,107 @@ class CreditMarket:
                 consumer_loan_maturity=self._consumer_loan_remodulation_maturity,
             )
             self._consumer_loan_remodulation_maturity = None
+        self._remodulate_first_missed_consumer_loan_schedule()
         self._new_loans_this_period["cons_loans"] = np.zeros_like(self.states["cons_loans"])
         self._serviceable_loans_this_period["cons_loans"] = self.states["cons_loans"].copy()
+
+    def prepare_first_miss_consumer_loan_rescheduling(
+        self,
+        *,
+        prior_missed_payment_count_consumer: np.ndarray,
+        prevailing_consumer_loan_rates_by_bank: np.ndarray,
+        consumer_loan_maturity: int,
+        period: int,
+    ) -> tuple[ConsumerLoanReschedulingEvent, ...]:
+        """Record and stage one-period consumer maturity extensions after first misses."""
+        if self._consumer_payment_settlement is None:
+            raise RuntimeError("Consumer service must be settled before first-miss rescheduling.")
+        if self._first_miss_rescheduling_prepared:
+            return tuple(self._consumer_first_miss_rescheduling_events)
+        prior_count = np.asarray(prior_missed_payment_count_consumer, dtype=float)
+        n_households = self.states["cons_loans"].shape[2]
+        if prior_count.shape != (n_households,):
+            raise ValueError("prior_missed_payment_count_consumer must contain exactly one value per household.")
+        rates_by_bank = np.asarray(prevailing_consumer_loan_rates_by_bank, dtype=float)
+        if rates_by_bank.shape != (self.states["cons_loans"].shape[1],):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must contain exactly one value per bank.")
+        if not np.all(np.isfinite(rates_by_bank)) or np.any(rates_by_bank < 0.0):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must be finite and non-negative.")
+        if not isinstance(consumer_loan_maturity, (int, np.integer)) or consumer_loan_maturity <= 0:
+            raise ValueError("consumer_loan_maturity must be a positive integer.")
+        if period < 0:
+            raise ValueError("period must be non-negative.")
+
+        settlement = self._consumer_payment_settlement
+        cleaned_prior_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0)
+        first_miss = (settlement.unpaid_payment > 0.0) & (cleaned_prior_count == 0.0)
+        loans = self.states["cons_loans"]
+        aggregate_principal = loans[0].sum(axis=0)
+        closing_principal_arrears = settlement.arrears.closing_principal.sum(axis=0)
+        contractual_principal = np.maximum(aggregate_principal - closing_principal_arrears, 0.0)
+        principal_base = contractual_principal + closing_principal_arrears
+        prevailing_rate = np.divide(
+            (loans[0] * rates_by_bank[:, None]).sum(axis=0),
+            aggregate_principal,
+            out=np.zeros_like(aggregate_principal),
+            where=aggregate_principal > 0.0,
+        )
+        new_maturity = int(consumer_loan_maturity) + 1
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        resulting_payment = principal_base * _annuity_payment_factor(prevailing_rate, new_maturity)
+        self._first_miss_rescheduling_households = first_miss
+        self._first_miss_rescheduling_rates = prevailing_rate
+        self._first_miss_rescheduling_maturity = np.where(first_miss, new_maturity, 0)
+        for household_id in np.flatnonzero(first_miss):
+            self._consumer_first_miss_rescheduling_events.append(
+                ConsumerLoanReschedulingEvent(
+                    household_id=int(household_id),
+                    period=period,
+                    scheduled_payment=float(settlement.scheduled_payment[household_id]),
+                    actual_payment=float(settlement.actual_payment[household_id]),
+                    unpaid_payment=float(settlement.unpaid_payment[household_id]),
+                    contractual_principal=float(contractual_principal[household_id]),
+                    closing_principal_arrears=float(closing_principal_arrears[household_id]),
+                    closing_interest_arrears=float(settlement.arrears.closing_interest[:, household_id].sum()),
+                    old_maturity=int(consumer_loan_maturity),
+                    new_maturity=new_maturity,
+                    resulting_scheduled_payment=float(resulting_payment[household_id]),
+                )
+            )
+        self._first_miss_rescheduling_prepared = True
+        return tuple(self._consumer_first_miss_rescheduling_events)
+
+    def consumer_first_miss_rescheduling_events(self) -> tuple[ConsumerLoanReschedulingEvent, ...]:
+        """Return the persistent first-miss consumer-loan rescheduling history."""
+        return tuple(self._consumer_first_miss_rescheduling_events)
+
+    def _remodulate_first_missed_consumer_loan_schedule(self) -> None:
+        """Write the staged first-miss schedule without changing consumer debt stocks."""
+        remodulated = self._first_miss_rescheduling_households
+        if not np.any(remodulated):
+            return
+        loans = self.states["cons_loans"]
+        aggregate_principal = loans[0].sum(axis=0)
+        payment_shares = np.divide(
+            loans[0],
+            aggregate_principal[None, :],
+            out=np.zeros_like(loans[0]),
+            where=aggregate_principal[None, :] > 0.0,
+        )
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        aggregate_payment = np.zeros_like(aggregate_principal)
+        aggregate_payment[remodulated] = aggregate_principal[remodulated] * _annuity_payment_factor(
+            self._first_miss_rescheduling_rates[remodulated],
+            int(self._first_miss_rescheduling_maturity[remodulated][0]),
+        )
+        loans[1][:, remodulated] = np.where(
+            loans[0][:, remodulated] > 0.0,
+            self._first_miss_rescheduling_rates[None, remodulated],
+            0.0,
+        )
+        loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
 
     def _remodulate_settled_consumer_loan_schedule(
         self,

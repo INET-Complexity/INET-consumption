@@ -1043,9 +1043,7 @@ class Households(Agent):
                 raise ValueError(f"{name} must be finite and non-negative.")
             return array.copy()
 
-        contractual_principal = _household_vector(
-            "consumer_contractual_principal", consumer_contractual_principal
-        )
+        contractual_principal = _household_vector("consumer_contractual_principal", consumer_contractual_principal)
         principal_arrears = _household_vector("consumer_principal_arrears", consumer_principal_arrears)
         interest_arrears = _household_vector("consumer_interest_arrears", consumer_interest_arrears)
         state = compute_stage6_consumer_distress_state(
@@ -1096,9 +1094,7 @@ class Households(Agent):
             "ficp_forgiveness_event_episode_id": np.where(event_mask, event_episode_id, 0.0),
             "ficp_forgiveness_event_trigger_period": np.where(event_mask, event_trigger_period, 0.0),
             "ficp_forgiveness_event_horizon_end_period": event_horizon_end_period,
-            "ficp_forgiveness_event_residual_contractual_principal": np.where(
-                event_mask, contractual_principal, 0.0
-            ),
+            "ficp_forgiveness_event_residual_contractual_principal": np.where(event_mask, contractual_principal, 0.0),
             "ficp_forgiveness_event_residual_principal_arrears": np.where(event_mask, principal_arrears, 0.0),
             "ficp_forgiveness_event_residual_interest_arrears": np.where(event_mask, interest_arrears, 0.0),
             "ficp_forgiveness_event_emitted": event_mask,

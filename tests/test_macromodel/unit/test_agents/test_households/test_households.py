@@ -2163,7 +2163,9 @@ class TestPopulatePostGrantFeasiblePlan:
         )
         assert trigger_events == ()
         np.testing.assert_array_equal(test_households.ts.current("ficp_episode_id"), np.ones(n_households))
-        np.testing.assert_array_equal(test_households.ts.current("ficp_exclusion_remaining_periods"), np.full(n_households, 20))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_exclusion_remaining_periods"), np.full(n_households, 20)
+        )
 
         test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
         test_households.ts.override_current("ficp_episode_status", np.ones(n_households))
@@ -2180,10 +2182,16 @@ class TestPopulatePostGrantFeasiblePlan:
         assert len(events) == n_households
         assert {event.ficp_episode_id for event in events} == {1}
         assert {event.horizon_end_period for event in events} == {22}
-        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool))
-        np.testing.assert_allclose(test_households.ts.current("ficp_residual_consumer_balance"), np.full(n_households, 43.0))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("ficp_residual_consumer_balance"), np.full(n_households, 43.0)
+        )
         np.testing.assert_array_equal(test_households.ts.current("ficp_episode_status"), np.full(n_households, 2))
-        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
+        )
 
         # The completed episode retains its emitted marker until a later
         # second miss starts a distinct episode.
@@ -2195,8 +2203,12 @@ class TestPopulatePostGrantFeasiblePlan:
             period=23,
             consumer_contractual_principal=np.full(n_households, 39.0),
         )
-        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event"), np.zeros(n_households, dtype=bool))
-        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.zeros(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
+        )
 
     @pytest.mark.parametrize(
         ("consumption_before_floor", "subsistence_floor"),

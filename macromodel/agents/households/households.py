@@ -187,6 +187,8 @@ _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
     "ficp_forgiveness_event_residual_interest_arrears": 0.0,
     "ficp_forgiveness_event_emitted": False,
     "ficp_forgiveness_event_processed": False,
+    # 0=pending, 1=removal applied, 2=accounting applied, 3=completed.
+    "ficp_forgiveness_event_stage": 0.0,
     "consumer_loan_rescheduling_event": False,
     "consumer_loan_rescheduling_period": 0.0,
     "consumer_loan_rescheduling_scheduled_payment": 0.0,
@@ -1132,6 +1134,7 @@ class Households(Agent):
         prior_processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool)
         prior_emitted = np.asarray(self.ts.current("ficp_forgiveness_emitted"), dtype=bool)
         prior_event_processed = np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
+        prior_event_stage = np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float)
         current_balance = contractual_principal + principal_arrears + interest_arrears
         episode_id = np.where(state.ficp_episode_triggered, prior_episode_id + 1, prior_episode_id)
         episode_start_period = np.where(state.ficp_episode_triggered, period, prior_start_period)
@@ -1178,6 +1181,7 @@ class Households(Agent):
                 False,
                 np.where(event_mask, False, prior_event_processed),
             ),
+            "ficp_forgiveness_event_stage": np.where(event_mask, 0.0, prior_event_stage),
         }
         for field_name, values in event_fields.items():
             getattr(self.ts, field_name).append(values)
@@ -1210,6 +1214,9 @@ class Households(Agent):
         processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool).copy()
         processed[household_id] = True
         self.ts.override_current("ficp_forgiveness_processed", processed)
+        stages = np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float).copy()
+        stages[household_id] = 3.0
+        self.ts.override_current("ficp_forgiveness_event_stage", stages)
 
     def record_consumer_loan_rescheduling_events(self, events: tuple[Any, ...]) -> None:
         """Persist the current-period first-miss rescheduling event fields."""

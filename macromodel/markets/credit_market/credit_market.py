@@ -387,6 +387,7 @@ class CreditMarket:
         self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
             self.states["cons_loans"][0], dtype=bool
         )
+        self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
         self._consumer_payment_settlement: ConsumerPaymentSettlement | None = None
@@ -502,6 +503,7 @@ class CreditMarket:
         self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
             self.states["cons_loans"][0], dtype=bool
         )
+        self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
@@ -1949,6 +1951,10 @@ class CreditMarket:
     def current_consumer_terminal_removal_exclusion(self) -> np.ndarray:
         """Return the current-period consumer-removal exclusion mask."""
         return self._consumer_terminal_removal_exclusion.copy()
+
+    def current_consumer_terminal_removal_episode_ids(self) -> np.ndarray:
+        """Return durable FICP episode IDs for the current removal carrier."""
+        return self.ts.current("consumer_terminal_removal_episode_id_by_cell").copy()
 
     def remove_loans_to_firm(self, firm_id: int | np.ndarray) -> float:
         """Remove all loans associated with specified firm(s).

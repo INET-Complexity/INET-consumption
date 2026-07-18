@@ -103,6 +103,7 @@ class TestCountry:
             n_households=2,
             ficp_forgiveness_event=np.array([True, False]),
             ficp_forgiveness_event_processed=np.array([False, False]),
+            ficp_forgiveness_event_stage=np.array([0.0, 0.0]),
             ficp_forgiveness_event_episode_id=np.array([3.0, 0.0]),
             ficp_forgiveness_event_residual_contractual_principal=np.array([85.0, 0.0]),
             ficp_forgiveness_event_residual_principal_arrears=np.array([15.0, 0.0]),
@@ -134,11 +135,34 @@ class TestCountry:
         np.testing.assert_allclose(credit_market.states["cons_loans"][0][:, 0], np.zeros(2))
         np.testing.assert_allclose(credit_market.states["mort_loans"][0], mort_loans[0])
         np.testing.assert_allclose(banks_ts.current("consumer_default_credit_loss"), np.array([60.0, 40.0]))
+        np.testing.assert_allclose(banks_ts.current("total_consumer_default_credit_loss"), np.array([100.0]))
         np.testing.assert_allclose(banks_ts.current("consumer_default_interest_income_loss"), np.array([7.0, 2.0]))
         np.testing.assert_allclose(banks_ts.current("consumer_default_npl"), np.array([0.75, 4.0 / 7.0]))
         np.testing.assert_array_equal(
             credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"),
             np.array([[True, False], [True, False]]),
+        )
+        np.testing.assert_allclose(
+            credit_market.current_consumer_terminal_removal_episode_ids(),
+            np.array([[3.0, 0.0], [3.0, 0.0]]),
+        )
+
+        history_lengths = {
+            "consumer_default_credit_loss": len(banks_ts.dicts["consumer_default_credit_loss"]),
+            "consumer_default_principal_by_cell": len(
+                credit_market.ts.dicts["consumer_default_principal_by_cell"]
+            ),
+        }
+        replay_exclusion, replay_events = Country._process_ficp_forgiveness_events(country)
+
+        np.testing.assert_array_equal(replay_exclusion, exclusion)
+        assert replay_events == pending_events
+        np.testing.assert_allclose(banks_ts.current("consumer_default_credit_loss"), np.array([60.0, 40.0]))
+        np.testing.assert_allclose(banks_ts.current("total_consumer_default_credit_loss"), np.array([100.0]))
+        assert len(banks_ts.dicts["consumer_default_credit_loss"]) == history_lengths["consumer_default_credit_loss"]
+        assert (
+            len(credit_market.ts.dicts["consumer_default_principal_by_cell"])
+            == history_lengths["consumer_default_principal_by_cell"]
         )
 
     def test__stage5_subsistence_support_defaults_to_empty_current_period_vector(self, test_country):

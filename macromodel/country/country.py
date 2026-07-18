@@ -1869,7 +1869,16 @@ class Country:
             exclusion = np.asarray(
                 self.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"), dtype=bool
             )
-            if exclusion.shape != zero_by_cell.shape or not np.any(exclusion):
+            residuals = np.asarray(
+                self.households.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
+            ) + np.asarray(
+                self.households.ts.current("ficp_forgiveness_event_residual_principal_arrears"), dtype=float
+            ) + np.asarray(
+                self.households.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
+            )
+            if exclusion.shape != zero_by_cell.shape or (
+                not np.any(exclusion) and not np.allclose(residuals[pending_mask], 0.0)
+            ):
                 raise RuntimeError("Applied FICP accounting is missing its durable removal exclusion carrier.")
             self.credit_market._consumer_terminal_removal_exclusion = exclusion.copy()
             episode_ids = np.asarray(
@@ -1963,6 +1972,11 @@ class Country:
             out=np.zeros(n_banks),
             where=writeoff.npl_denominator_by_bank > 0.0,
         )
+        exclusion_mask = writeoff.removal_mask & (
+            (writeoff.principal_by_cell > 0.0)
+            | (writeoff.principal_arrears_by_cell > 0.0)
+            | (writeoff.interest_arrears_by_cell > 0.0)
+        )
         credit_market_snapshot = self.credit_market.states["cons_loans"].copy()
         principal_arrears_snapshot = self.credit_market._consumer_principal_arrears_by_cell.copy()
         interest_arrears_snapshot = self.credit_market._consumer_interest_arrears_by_cell.copy()
@@ -2000,7 +2014,7 @@ class Country:
                 raise RuntimeError("Consumer principal changed between the 4c snapshot and removal.")
 
             episode_by_cell = np.where(
-                writeoff.removal_mask,
+                exclusion_mask,
                 episode_ids[None, :],
                 0.0,
             )
@@ -2012,9 +2026,10 @@ class Country:
                 "consumer_default_interest_arrears_by_cell", writeoff.interest_arrears_by_cell
             )
             self.credit_market.ts.override_current(
-                "consumer_terminal_removal_exclusion_by_cell", writeoff.removal_mask
+                "consumer_terminal_removal_exclusion_by_cell", exclusion_mask
             )
             self.credit_market.ts.override_current("consumer_terminal_removal_episode_id_by_cell", episode_by_cell)
+            self.credit_market._consumer_terminal_removal_exclusion = exclusion_mask.copy()
             event_stage[pending_mask] = 1.0
             self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage)
 
@@ -2058,7 +2073,7 @@ class Country:
         pending_events = tuple(
             (int(household_id), int(episode_ids[household_id])) for household_id in np.flatnonzero(pending_mask)
         )
-        return writeoff.removal_mask, pending_events
+        return exclusion_mask, pending_events
 
     def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.

@@ -1550,9 +1550,7 @@ class Country:
         self.households.ts.early_consumer_repayment.append(settlement.early_repayment.copy())
         rescheduling_events = self.credit_market.prepare_first_miss_consumer_loan_rescheduling(
             prior_missed_payment_count_consumer=self.households.ts.current("missed_payment_count_consumer"),
-            prior_ficp_episode_missed_payment_count=self.households.ts.current(
-                "ficp_episode_missed_payment_count"
-            ),
+            prior_ficp_episode_missed_payment_count=self.households.ts.current("ficp_episode_missed_payment_count"),
             prior_ficp_episode_status=self.households.ts.current("ficp_episode_status"),
             prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(
                 "interest_rates_on_household_consumption_loans"

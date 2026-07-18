@@ -1014,9 +1014,7 @@ class CreditMarket:
         interest_paid_by_cell = paid_opening_interest + paid_interest + early_interest_by_cell
         principal_paid_by_cell += early_principal_by_cell
         newly_accrued_interest = np.maximum(
-            snapshot.consumer_contractual_interest_by_cell
-            - paid_interest
-            - early_interest_by_cell,
+            snapshot.consumer_contractual_interest_by_cell - paid_interest - early_interest_by_cell,
             0.0,
         )
         self._consumer_opening_arrears_collected_by_bank = (paid_opening_interest + early_opening_interest).sum(axis=1)

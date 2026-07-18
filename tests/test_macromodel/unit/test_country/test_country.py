@@ -25,6 +25,7 @@ from macromodel.agents.households.households import PostGrantFeasiblePlan
 from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
 from macromodel.country import Country
 from macromodel.exchange_rates import ExchangeRates
+from macromodel.timeseries import TimeSeries
 
 PERMANENT_INCOME_DATA_PATH = (
     Path(__file__).resolve().parents[4] / "run_model" / "data" / "raw_data" / "permanent_income"
@@ -83,6 +84,62 @@ class TestCountry:
 
     def test__country(self, test_country):
         assert test_country is not None
+
+    def test__process_ficp_forgiveness_events_writes_off_consumer_assets_only(self):
+        cons_loans = np.zeros((3, 2, 2))
+        mort_loans = np.zeros((3, 2, 2))
+        cons_loans[0] = np.array([[60.0, 20.0], [40.0, 30.0]])
+        mort_loans[0] = np.array([[200.0, 20.0], [300.0, 30.0]])
+        credit_market = country_module.CreditMarket.from_data(
+            country_name="TST",
+            st_loans=np.zeros((3, 2, 1)),
+            lt_loans=np.zeros((3, 2, 1)),
+            cons_loans=cons_loans,
+            mort_loans=mort_loans,
+        )
+        credit_market._consumer_principal_arrears_by_cell[:] = np.array([[10.0, 1.0], [5.0, 2.0]])
+        credit_market._consumer_interest_arrears_by_cell[:] = np.array([[7.0, 3.0], [2.0, 4.0]])
+        households_ts = TimeSeries(
+            n_households=2,
+            ficp_forgiveness_event=np.array([True, False]),
+            ficp_forgiveness_event_processed=np.array([False, False]),
+            ficp_forgiveness_event_episode_id=np.array([3.0, 0.0]),
+            ficp_forgiveness_event_residual_contractual_principal=np.array([85.0, 0.0]),
+            ficp_forgiveness_event_residual_principal_arrears=np.array([15.0, 0.0]),
+            ficp_forgiveness_event_residual_interest_arrears=np.array([9.0, 0.0]),
+        )
+        banks_ts = TimeSeries(
+            n_banks=2,
+            consumer_default_loan_writeoff=np.zeros(2),
+            total_consumer_default_loan_writeoff=[0.0],
+            consumer_default_principal_arrears=np.zeros(2),
+            total_consumer_default_principal_arrears=[0.0],
+            consumer_default_credit_loss=np.zeros(2),
+            total_consumer_default_credit_loss=[0.0],
+            consumer_default_interest_income_loss=np.zeros(2),
+            total_consumer_default_interest_income_loss=[0.0],
+            consumer_default_npl=np.zeros(2),
+            consumer_default_npl_denominator=np.zeros(2),
+        )
+        country = SimpleNamespace(
+            households=SimpleNamespace(ts=households_ts),
+            banks=SimpleNamespace(ts=banks_ts),
+            credit_market=credit_market,
+        )
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country)
+
+        np.testing.assert_array_equal(exclusion, np.array([[True, False], [True, False]]))
+        assert pending_events == ((0, 3),)
+        np.testing.assert_allclose(credit_market.states["cons_loans"][0][:, 0], np.zeros(2))
+        np.testing.assert_allclose(credit_market.states["mort_loans"][0], mort_loans[0])
+        np.testing.assert_allclose(banks_ts.current("consumer_default_credit_loss"), np.array([60.0, 40.0]))
+        np.testing.assert_allclose(banks_ts.current("consumer_default_interest_income_loss"), np.array([7.0, 2.0]))
+        np.testing.assert_allclose(banks_ts.current("consumer_default_npl"), np.array([0.75, 4.0 / 7.0]))
+        np.testing.assert_array_equal(
+            credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"),
+            np.array([[True, False], [True, False]]),
+        )
 
     def test__stage5_subsistence_support_defaults_to_empty_current_period_vector(self, test_country):
         n_households = test_country.households.ts.current("n_households")

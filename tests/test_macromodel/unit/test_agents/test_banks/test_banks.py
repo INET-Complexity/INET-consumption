@@ -59,6 +59,17 @@ class TestBanks:
 
         assert np.allclose(test_banks.compute_profits(), np.full(n_banks, 5.0))
 
+    def test__compute_profits_subtracts_consumer_principal_and_interest_losses(self, test_banks):
+        n_banks = test_banks.ts.current("n_banks")
+        test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))
+        test_banks.ts.override_current("interest_received_on_deposits", np.full(n_banks, 2.0))
+        test_banks.ts.override_current("firm_default_credit_loss", np.zeros(n_banks))
+        test_banks.ts.override_current("consumer_default_credit_loss", np.full(n_banks, 4.0))
+        test_banks.ts.override_current("consumer_default_interest_income_loss", np.full(n_banks, 3.0))
+
+        np.testing.assert_allclose(test_banks.compute_profits(), np.full(n_banks, 5.0))
+        np.testing.assert_allclose(test_banks.compute_cash_distributable_profits(), np.full(n_banks, 5.0))
+
     def test__compute_equity_follows_profit_after_credit_loss(self, test_banks):
         n_banks = test_banks.ts.current("n_banks")
         test_banks.ts.override_current("equity", np.full(n_banks, 100.0))

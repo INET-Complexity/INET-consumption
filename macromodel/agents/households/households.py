@@ -3403,7 +3403,12 @@ class Households(Agent):
         """
         return self.ts.current("wealth") - self.ts.current("debt")
 
-    def handle_insolvency(self, banks: Banks, credit_market: CreditMarket) -> Tuple[float, float, float]:
+    def handle_insolvency(
+        self,
+        banks: Banks,
+        credit_market: CreditMarket,
+        consumer_terminal_removal_exclusion: np.ndarray | None = None,
+    ) -> Tuple[float, float, float]:
         """Handle household insolvency cases.
 
         Processes defaults through:
@@ -3422,6 +3427,7 @@ class Households(Agent):
             households=self,
             banks=banks,
             credit_market=credit_market,
+            consumer_terminal_removal_exclusion=consumer_terminal_removal_exclusion,
         )
 
     def save_to_h5(self, group: h5py.Group):

@@ -110,6 +110,20 @@ class ConsumerLoanReschedulingEvent:
     resulting_scheduled_payment: float
 
 
+@dataclass(frozen=True)
+class ConsumerDefaultWriteoff:
+    """Pre-write-off consumer balances for one terminal-removal transition."""
+
+    principal_by_cell: np.ndarray
+    principal_arrears_by_cell: np.ndarray
+    interest_arrears_by_cell: np.ndarray
+    principal_by_bank: np.ndarray
+    principal_arrears_by_bank: np.ndarray
+    interest_arrears_by_bank: np.ndarray
+    npl_denominator_by_bank: np.ndarray
+    removal_mask: np.ndarray
+
+
 def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     return {key: np.zeros_like(states[key]) for key in _LOAN_KEYS}
 
@@ -367,6 +381,13 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
+            self.states["cons_loans"][0], dtype=bool
+        )
+        self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
         self._consumer_payment_settlement: ConsumerPaymentSettlement | None = None
         self._consumer_first_miss_rescheduling_events: list[ConsumerLoanReschedulingEvent] = []
@@ -475,6 +496,13 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
+            self.states["cons_loans"][0], dtype=bool
+        )
+        self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
         self._consumer_first_miss_rescheduling_events = []
@@ -1882,6 +1910,46 @@ class CreditMarket:
             :, default_flag
         ].sum(axis=1)
 
+    def snapshot_consumer_default_writeoff(self, household_mask: np.ndarray) -> ConsumerDefaultWriteoff:
+        """Snapshot consumer balances before a 4c terminal removal."""
+        household_mask = np.asarray(household_mask, dtype=bool)
+        expected_shape = self.states["cons_loans"][0].shape[1]
+        if household_mask.shape != (expected_shape,):
+            raise ValueError("household_mask must contain exactly one value per household.")
+        removal_mask = np.broadcast_to(household_mask, self.states["cons_loans"][0].shape).copy()
+        principal_by_cell = np.where(removal_mask, self.states["cons_loans"][0], 0.0)
+        principal_arrears_by_cell = np.where(removal_mask, self._consumer_principal_arrears_by_cell, 0.0)
+        interest_arrears_by_cell = np.where(removal_mask, self._consumer_interest_arrears_by_cell, 0.0)
+        return ConsumerDefaultWriteoff(
+            principal_by_cell=principal_by_cell,
+            principal_arrears_by_cell=principal_arrears_by_cell,
+            interest_arrears_by_cell=interest_arrears_by_cell,
+            principal_by_bank=principal_by_cell.sum(axis=1),
+            principal_arrears_by_bank=principal_arrears_by_cell.sum(axis=1),
+            interest_arrears_by_bank=interest_arrears_by_cell.sum(axis=1),
+            npl_denominator_by_bank=self.states["cons_loans"][0].sum(axis=1).copy(),
+            removal_mask=removal_mask,
+        )
+
+    def remove_consumer_loans_by_cell(self, removal_mask: np.ndarray) -> ConsumerDefaultWriteoff:
+        """Remove only selected consumer principal and arrears cells."""
+        removal_mask = np.asarray(removal_mask, dtype=bool)
+        expected_shape = self.states["cons_loans"][0].shape
+        if removal_mask.shape != expected_shape:
+            raise ValueError("removal_mask must match the bank-by-household consumer-loan shape.")
+        writeoff = self.snapshot_consumer_default_writeoff(removal_mask.any(axis=0))
+        if not np.array_equal(writeoff.removal_mask, removal_mask):
+            raise ValueError("removal_mask must select complete household consumer cells.")
+        self.states["cons_loans"][:, removal_mask] = 0.0
+        self._consumer_principal_arrears_by_cell[removal_mask] = 0.0
+        self._consumer_interest_arrears_by_cell[removal_mask] = 0.0
+        self._consumer_terminal_removal_exclusion = removal_mask.copy()
+        return writeoff
+
+    def current_consumer_terminal_removal_exclusion(self) -> np.ndarray:
+        """Return the current-period consumer-removal exclusion mask."""
+        return self._consumer_terminal_removal_exclusion.copy()
+
     def remove_loans_to_firm(self, firm_id: int | np.ndarray) -> float:
         """Remove all loans associated with specified firm(s).
 
@@ -1902,22 +1970,36 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell["lt_loans"][:, firm_id] = 0.0
         return total_amount
 
-    def remove_loans_to_households(self, household_id: int | np.ndarray) -> Tuple[float, float]:
+    def remove_loans_to_households(
+        self,
+        household_id: int | np.ndarray,
+        consumer_exclusion: np.ndarray | None = None,
+    ) -> Tuple[float, float]:
         """Remove all loans associated with specified household(s).
 
         Used when households default. Returns the total amounts written off by loan type.
 
         Args:
             household_id (int | np.ndarray): ID(s) of household(s) to remove loans for
+            consumer_exclusion: Optional bank-by-household mask for consumer cells
+                already removed by the 4c terminal-removal path.
 
         Returns:
             Tuple[float, float]: Total consumer loans and mortgages written off
         """
-        cons_amount = self.states["cons_loans"][0][:, household_id].sum()
+        household_ids = np.atleast_1d(household_id).astype(int)
+        consumer_selection = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
+        consumer_selection[:, household_ids] = True
+        if consumer_exclusion is not None:
+            consumer_exclusion = np.asarray(consumer_exclusion, dtype=bool)
+            if consumer_exclusion.shape != consumer_selection.shape:
+                raise ValueError("consumer_exclusion must match the bank-by-household consumer-loan shape.")
+            consumer_selection &= ~consumer_exclusion
+        cons_amount = self.states["cons_loans"][0][consumer_selection].sum()
         mort_amount = self.states["mort_loans"][0][:, household_id].sum()
-        self.states["cons_loans"][:, :, household_id] = 0.0
+        self.states["cons_loans"][:, consumer_selection] = 0.0
         self.states["mort_loans"][:, :, household_id] = 0.0
-        self._consumer_principal_arrears_by_cell[:, household_id] = 0.0
+        self._consumer_principal_arrears_by_cell[consumer_selection] = 0.0
         return cons_amount, mort_amount
 
     def remove_loans_by_bank(self, bank_id: int | np.ndarray) -> None:

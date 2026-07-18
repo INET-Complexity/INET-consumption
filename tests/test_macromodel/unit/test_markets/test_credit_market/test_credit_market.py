@@ -693,6 +693,62 @@ def test_loan_removal_preserves_interest_arrears_and_clears_principal_status():
     np.testing.assert_allclose(market._consumer_principal_arrears_by_cell[0], np.zeros(2))
 
 
+def test_consumer_terminal_removal_uses_principal_asset_once_and_preserves_mortgages():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
+    mort_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
+    cons_loans[0] = np.array([[100.0, 20.0], [50.0, 30.0]])
+    mort_loans[0] = np.array([[200.0, 40.0], [300.0, 60.0]])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=mort_loans,
+    )
+    market._consumer_principal_arrears_by_cell[:] = np.array([[10.0, 1.0], [5.0, 2.0]])
+    market._consumer_interest_arrears_by_cell[:] = np.array([[7.0, 3.0], [2.0, 4.0]])
+
+    writeoff = market.snapshot_consumer_default_writeoff(np.array([True, False]))
+
+    np.testing.assert_allclose(writeoff.principal_by_bank, np.array([100.0, 50.0]))
+    np.testing.assert_allclose(writeoff.principal_arrears_by_bank, np.array([10.0, 5.0]))
+    np.testing.assert_allclose(writeoff.interest_arrears_by_bank, np.array([7.0, 2.0]))
+    np.testing.assert_allclose(writeoff.npl_denominator_by_bank, np.array([120.0, 80.0]))
+
+    market.remove_consumer_loans_by_cell(writeoff.removal_mask)
+
+    np.testing.assert_allclose(market.states["cons_loans"][0], np.array([[0.0, 20.0], [0.0, 30.0]]))
+    np.testing.assert_allclose(market.states["mort_loans"][0], mort_loans[0])
+    np.testing.assert_allclose(market._consumer_principal_arrears_by_cell[:, 0], np.zeros(2))
+    np.testing.assert_allclose(market._consumer_interest_arrears_by_cell[:, 0], np.zeros(2))
+    np.testing.assert_allclose(market._consumer_principal_arrears_by_cell[:, 1], np.array([1.0, 2.0]))
+
+
+def test_generic_household_removal_excludes_4c_consumer_cells_but_removes_mortgages():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    mort_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[0, :, 0] = np.array([100.0, 50.0])
+    mort_loans[0, :, 0] = np.array([200.0, 300.0])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=mort_loans,
+    )
+    exclusion = np.ones((2, 1), dtype=bool)
+
+    consumer_writeoff, mortgage_writeoff = market.remove_loans_to_households(
+        0,
+        consumer_exclusion=exclusion,
+    )
+
+    assert consumer_writeoff == 0.0
+    assert mortgage_writeoff == 500.0
+    np.testing.assert_allclose(market.states["cons_loans"][0, :, 0], np.array([100.0, 50.0]))
+    np.testing.assert_allclose(market.states["mort_loans"][0, :, 0], np.zeros(2))
+
+
 def test_remove_repaid_consumer_loans_clears_rounding_residual_arrears():
     cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
     cons_loans[0, 0, 0] = 0.005

@@ -39,6 +39,7 @@ class HouseholdInsolvencyHandler(ABC):
         households: Households,
         banks: Banks,
         credit_market: CreditMarket,
+        consumer_terminal_removal_exclusion: np.ndarray | None = None,
     ) -> Tuple[float, float, float]:
         """Process household insolvency cases.
 
@@ -68,6 +69,7 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
         households: Households,
         banks: Banks,
         credit_market: CreditMarket,
+        consumer_terminal_removal_exclusion: np.ndarray | None = None,
     ) -> Tuple[float, float, float]:
         """Process household defaults using default behavior.
 
@@ -91,7 +93,10 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
                 households.ts.current("wealth_deposits") < 0,
             )
         )[0]
-        bad_hh_cons_loans, bad_mortgages = credit_market.remove_loans_to_households(insolvent_households)
+        bad_hh_cons_loans, bad_mortgages = credit_market.remove_loans_to_households(
+            insolvent_households,
+            consumer_exclusion=consumer_terminal_removal_exclusion,
+        )
 
         # Calculate NPL ratios
         total_cons_loans = credit_market.ts.current("total_outstanding_loans_granted_households_consumption")[0]

@@ -149,9 +149,7 @@ class TestCountry:
 
         history_lengths = {
             "consumer_default_credit_loss": len(banks_ts.dicts["consumer_default_credit_loss"]),
-            "consumer_default_principal_by_cell": len(
-                credit_market.ts.dicts["consumer_default_principal_by_cell"]
-            ),
+            "consumer_default_principal_by_cell": len(credit_market.ts.dicts["consumer_default_principal_by_cell"]),
         }
         replay_exclusion, replay_events = Country._process_ficp_forgiveness_events(country)
 

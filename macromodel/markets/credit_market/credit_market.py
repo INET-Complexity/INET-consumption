@@ -384,9 +384,7 @@ class CreditMarket:
         self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
-        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
-            self.states["cons_loans"][0], dtype=bool
-        )
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
@@ -500,9 +498,7 @@ class CreditMarket:
         self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
-        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(
-            self.states["cons_loans"][0], dtype=bool
-        )
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot = None

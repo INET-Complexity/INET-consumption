@@ -1869,24 +1869,25 @@ class Country:
             exclusion = np.asarray(
                 self.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"), dtype=bool
             )
-            residuals = np.asarray(
-                self.households.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
-            ) + np.asarray(
-                self.households.ts.current("ficp_forgiveness_event_residual_principal_arrears"), dtype=float
-            ) + np.asarray(
-                self.households.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
+            residuals = (
+                np.asarray(
+                    self.households.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
+                )
+                + np.asarray(
+                    self.households.ts.current("ficp_forgiveness_event_residual_principal_arrears"), dtype=float
+                )
+                + np.asarray(
+                    self.households.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
+                )
             )
             if exclusion.shape != zero_by_cell.shape or (
                 not np.any(exclusion) and not np.allclose(residuals[pending_mask], 0.0)
             ):
                 raise RuntimeError("Applied FICP accounting is missing its durable removal exclusion carrier.")
             self.credit_market._consumer_terminal_removal_exclusion = exclusion.copy()
-            episode_ids = np.asarray(
-                self.households.ts.current("ficp_forgiveness_event_episode_id"), dtype=float
-            )
+            episode_ids = np.asarray(self.households.ts.current("ficp_forgiveness_event_episode_id"), dtype=float)
             pending_events = tuple(
-                (int(household_id), int(episode_ids[household_id]))
-                for household_id in np.flatnonzero(pending_mask)
+                (int(household_id), int(episode_ids[household_id])) for household_id in np.flatnonzero(pending_mask)
             )
             return exclusion, pending_events
 
@@ -1912,9 +1913,11 @@ class Country:
             episode_ids[pending_mask] != np.floor(episode_ids[pending_mask])
         ):
             raise RuntimeError("FICP forgiveness episode IDs must be positive integers.")
-        if np.any(contractual_events[pending_mask] < 0.0) or np.any(
-            principal_arrears_events[pending_mask] < 0.0
-        ) or np.any(interest_arrears_events[pending_mask] < 0.0):
+        if (
+            np.any(contractual_events[pending_mask] < 0.0)
+            or np.any(principal_arrears_events[pending_mask] < 0.0)
+            or np.any(interest_arrears_events[pending_mask] < 0.0)
+        ):
             raise RuntimeError("FICP forgiveness event balances must be non-negative.")
 
         if not np.any(pending_mask):
@@ -1948,12 +1951,16 @@ class Country:
             self.credit_market.current_consumer_debt_components_by_household()
         )
         for household_id in np.flatnonzero(pending_mask):
-            if not np.allclose(
-                contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=1e-8
-            ) or not np.allclose(
-                principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=1e-8
-            ) or not np.allclose(
-                interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=1e-8
+            if (
+                not np.allclose(
+                    contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=1e-8
+                )
+                or not np.allclose(
+                    principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                )
+                or not np.allclose(
+                    interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                )
             ):
                 raise RuntimeError("FICP forgiveness event does not reconcile with the live consumer-loan state.")
 
@@ -2025,9 +2032,7 @@ class Country:
             self.credit_market.ts.override_current(
                 "consumer_default_interest_arrears_by_cell", writeoff.interest_arrears_by_cell
             )
-            self.credit_market.ts.override_current(
-                "consumer_terminal_removal_exclusion_by_cell", exclusion_mask
-            )
+            self.credit_market.ts.override_current("consumer_terminal_removal_exclusion_by_cell", exclusion_mask)
             self.credit_market.ts.override_current("consumer_terminal_removal_episode_id_by_cell", episode_by_cell)
             self.credit_market._consumer_terminal_removal_exclusion = exclusion_mask.copy()
             event_stage[pending_mask] = 1.0
@@ -2035,7 +2040,10 @@ class Country:
 
             self.banks.ts.consumer_default_loan_writeoff.append(writeoff.principal_by_bank)
             self.banks.ts.total_consumer_default_loan_writeoff.append(
-                [float(self.banks.ts.current("total_consumer_default_loan_writeoff")[0]) + writeoff.principal_by_bank.sum()]
+                [
+                    float(self.banks.ts.current("total_consumer_default_loan_writeoff")[0])
+                    + writeoff.principal_by_bank.sum()
+                ]
             )
             self.banks.ts.consumer_default_principal_arrears.append(writeoff.principal_arrears_by_bank)
             self.banks.ts.total_consumer_default_principal_arrears.append(
@@ -2046,7 +2054,10 @@ class Country:
             )
             self.banks.ts.consumer_default_credit_loss.append(writeoff.principal_by_bank)
             self.banks.ts.total_consumer_default_credit_loss.append(
-                [float(self.banks.ts.current("total_consumer_default_credit_loss")[0]) + writeoff.principal_by_bank.sum()]
+                [
+                    float(self.banks.ts.current("total_consumer_default_credit_loss")[0])
+                    + writeoff.principal_by_bank.sum()
+                ]
             )
             self.banks.ts.consumer_default_interest_income_loss.append(writeoff.interest_arrears_by_bank)
             self.banks.ts.total_consumer_default_interest_income_loss.append(
@@ -2522,9 +2533,7 @@ class Country:
         self.households.ts.net_wealth.append(self.households.compute_net_wealth())
 
         # F2. HOUSEHOLD INSOLVENCY
-        consumer_terminal_removal_exclusion, pending_ficp_forgiveness_events = (
-            self._process_ficp_forgiveness_events()
-        )
+        consumer_terminal_removal_exclusion, pending_ficp_forgiveness_events = self._process_ficp_forgiveness_events()
         # The 4c consumer write-off removes both sides of the household loan
         # relationship. Refresh household liabilities before insolvency so the
         # generic handler observes the reduced balance and wealth.

@@ -17,6 +17,7 @@ The implementation handles:
 - Debt management
 """
 
+import inspect
 import warnings
 from dataclasses import dataclass, replace
 from typing import Any, Optional, Tuple
@@ -1133,8 +1134,18 @@ class Households(Agent):
         prior_open_balance = np.asarray(self.ts.current("ficp_open_balance"), dtype=float)
         prior_processed = np.asarray(self.ts.current("ficp_forgiveness_processed"), dtype=bool)
         prior_emitted = np.asarray(self.ts.current("ficp_forgiveness_emitted"), dtype=bool)
-        prior_event_processed = np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
+        prior_event_emitted = np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool)
         prior_event_stage = np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float)
+        if np.any(
+            prior_event_emitted
+            & (
+                ~np.isfinite(prior_event_stage)
+                | (prior_event_stage != np.floor(prior_event_stage))
+                | (prior_event_stage < 0.0)
+                | (prior_event_stage > 3.0)
+            )
+        ):
+            raise ValueError("Persisted FICP event stages must be integers from zero through three.")
         current_balance = contractual_principal + principal_arrears + interest_arrears
         episode_id = np.where(state.ficp_episode_triggered, prior_episode_id + 1, prior_episode_id)
         episode_start_period = np.where(state.ficp_episode_triggered, period, prior_start_period)
@@ -1144,10 +1155,31 @@ class Households(Agent):
             np.where(state.ficp_horizon_completed, period, prior_end_period),
         )
         open_balance = np.where(state.ficp_episode_triggered, current_balance, prior_open_balance)
-        event_mask = state.ficp_horizon_completed & ~prior_processed & ~prior_emitted
-        event_episode_id = episode_id.copy()
-        event_trigger_period = episode_start_period.copy()
-        event_horizon_end_period = np.where(event_mask, period, 0.0)
+        new_event_mask = state.ficp_horizon_completed & ~prior_processed & ~prior_emitted
+        incomplete_event_mask = prior_event_emitted & (prior_event_stage < 3.0)
+        if np.any(state.ficp_episode_triggered & incomplete_event_mask):
+            raise ValueError("A new FICP episode cannot overwrite an incomplete forgiveness event.")
+        if np.any(new_event_mask & incomplete_event_mask):
+            raise ValueError("A new FICP event cannot overwrite an incomplete forgiveness event.")
+        event_mask = new_event_mask | incomplete_event_mask
+        event_episode_id = np.where(
+            new_event_mask,
+            episode_id,
+            np.asarray(self.ts.current("ficp_forgiveness_event_episode_id"), dtype=float),
+        )
+        event_trigger_period = np.where(
+            new_event_mask,
+            episode_start_period,
+            np.asarray(self.ts.current("ficp_forgiveness_event_trigger_period"), dtype=float),
+        )
+        prior_event_horizon_end_period = np.asarray(
+            self.ts.current("ficp_forgiveness_event_horizon_end_period"), dtype=float
+        )
+        event_horizon_end_period = np.where(
+            new_event_mask,
+            period,
+            np.where(incomplete_event_mask, prior_event_horizon_end_period, 0.0),
+        )
         self.ts.consumer_payment_missed.append(state.consumer_payment_missed)
         self.ts.missed_payment_count_consumer.append(state.missed_payment_count_consumer)
         self.ts.consumer_distress_state.append(state.consumer_distress_state)
@@ -1167,21 +1199,40 @@ class Households(Agent):
         self.ts.ficp_open_balance.append(open_balance)
         self.ts.ficp_residual_consumer_balance.append(current_balance)
 
+        prior_event_contractual_principal = np.asarray(
+            self.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
+        )
+        prior_event_principal_arrears = np.asarray(
+            self.ts.current("ficp_forgiveness_event_residual_principal_arrears"), dtype=float
+        )
+        prior_event_interest_arrears = np.asarray(
+            self.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
+        )
         event_fields: dict[str, np.ndarray] = {
             "ficp_forgiveness_event": event_mask,
             "ficp_forgiveness_event_episode_id": np.where(event_mask, event_episode_id, 0.0),
             "ficp_forgiveness_event_trigger_period": np.where(event_mask, event_trigger_period, 0.0),
             "ficp_forgiveness_event_horizon_end_period": event_horizon_end_period,
-            "ficp_forgiveness_event_residual_contractual_principal": np.where(event_mask, contractual_principal, 0.0),
-            "ficp_forgiveness_event_residual_principal_arrears": np.where(event_mask, principal_arrears, 0.0),
-            "ficp_forgiveness_event_residual_interest_arrears": np.where(event_mask, interest_arrears, 0.0),
+            "ficp_forgiveness_event_residual_contractual_principal": np.where(
+                new_event_mask,
+                contractual_principal,
+                np.where(incomplete_event_mask, prior_event_contractual_principal, 0.0),
+            ),
+            "ficp_forgiveness_event_residual_principal_arrears": np.where(
+                new_event_mask, principal_arrears, np.where(incomplete_event_mask, prior_event_principal_arrears, 0.0)
+            ),
+            "ficp_forgiveness_event_residual_interest_arrears": np.where(
+                new_event_mask, interest_arrears, np.where(incomplete_event_mask, prior_event_interest_arrears, 0.0)
+            ),
             "ficp_forgiveness_event_emitted": event_mask,
             "ficp_forgiveness_event_processed": np.where(
-                state.ficp_episode_triggered,
+                event_mask,
                 False,
-                np.where(event_mask, False, prior_event_processed),
+                np.zeros(n_households, dtype=bool),
             ),
-            "ficp_forgiveness_event_stage": np.where(event_mask, 0.0, prior_event_stage),
+            "ficp_forgiveness_event_stage": np.where(
+                new_event_mask, 0.0, np.where(incomplete_event_mask, prior_event_stage, 0.0)
+            ),
         }
         for field_name, values in event_fields.items():
             getattr(self.ts, field_name).append(values)
@@ -1196,7 +1247,7 @@ class Households(Agent):
                 residual_principal_arrears=float(principal_arrears[household_id]),
                 residual_interest_arrears=float(interest_arrears[household_id]),
             )
-            for household_id in np.flatnonzero(event_mask)
+            for household_id in np.flatnonzero(new_event_mask)
         )
 
     def mark_ficp_forgiveness_processed(self, household_id: int, episode_id: int) -> None:
@@ -3430,12 +3481,16 @@ class Households(Agent):
         Returns:
             Tuple[float, float, float]: Default outcomes
         """
-        return self.functions["insolvency"].handle_insolvency(
-            households=self,
-            banks=banks,
-            credit_market=credit_market,
-            consumer_terminal_removal_exclusion=consumer_terminal_removal_exclusion,
-        )
+        handler = self.functions["insolvency"].handle_insolvency
+        parameters = inspect.signature(handler).parameters
+        kwargs = {
+            "households": self,
+            "banks": banks,
+            "credit_market": credit_market,
+        }
+        if "consumer_terminal_removal_exclusion" in parameters:
+            kwargs["consumer_terminal_removal_exclusion"] = consumer_terminal_removal_exclusion
+        return handler(**kwargs)
 
     def save_to_h5(self, group: h5py.Group):
         """Save household data to HDF5.

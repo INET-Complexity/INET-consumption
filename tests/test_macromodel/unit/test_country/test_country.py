@@ -41,6 +41,52 @@ def _load_permanent_income_forecast_inputs_for_test():
     )
 
 
+def _make_ficp_test_country():
+    cons_loans = np.zeros((3, 2, 2))
+    mort_loans = np.zeros((3, 2, 2))
+    cons_loans[0] = np.array([[60.0, 20.0], [40.0, 30.0]])
+    mort_loans[0] = np.array([[200.0, 20.0], [300.0, 30.0]])
+    credit_market = country_module.CreditMarket.from_data(
+        country_name="TST",
+        st_loans=np.zeros((3, 2, 1)),
+        lt_loans=np.zeros((3, 2, 1)),
+        cons_loans=cons_loans,
+        mort_loans=mort_loans,
+    )
+    credit_market._consumer_principal_arrears_by_cell[:] = np.array([[10.0, 1.0], [5.0, 2.0]])
+    credit_market._consumer_interest_arrears_by_cell[:] = np.array([[7.0, 3.0], [2.0, 4.0]])
+    households_ts = TimeSeries(
+        n_households=2,
+        ficp_forgiveness_event=np.array([True, False]),
+        ficp_forgiveness_event_emitted=np.array([True, False]),
+        ficp_forgiveness_event_processed=np.array([False, False]),
+        ficp_forgiveness_event_stage=np.array([0.0, 0.0]),
+        ficp_forgiveness_event_episode_id=np.array([3.0, 0.0]),
+        ficp_forgiveness_event_horizon_end_period=np.array([22.0, 0.0]),
+        ficp_forgiveness_event_residual_contractual_principal=np.array([85.0, 0.0]),
+        ficp_forgiveness_event_residual_principal_arrears=np.array([15.0, 0.0]),
+        ficp_forgiveness_event_residual_interest_arrears=np.array([9.0, 0.0]),
+    )
+    banks_ts = TimeSeries(
+        n_banks=2,
+        consumer_default_loan_writeoff=np.zeros(2),
+        total_consumer_default_loan_writeoff=[0.0],
+        consumer_default_principal_arrears=np.zeros(2),
+        total_consumer_default_principal_arrears=[0.0],
+        consumer_default_credit_loss=np.zeros(2),
+        total_consumer_default_credit_loss=[0.0],
+        consumer_default_interest_income_loss=np.zeros(2),
+        total_consumer_default_interest_income_loss=[0.0],
+        consumer_default_npl=np.zeros(2),
+        consumer_default_npl_denominator=np.zeros(2),
+    )
+    return SimpleNamespace(
+        households=SimpleNamespace(ts=households_ts),
+        banks=SimpleNamespace(ts=banks_ts),
+        credit_market=credit_market,
+    )
+
+
 class TestCountry:
     def test__init(self, datawrapper):
         synthetic_country = datawrapper.synthetic_countries["FRA"]
@@ -102,9 +148,11 @@ class TestCountry:
         households_ts = TimeSeries(
             n_households=2,
             ficp_forgiveness_event=np.array([True, False]),
+            ficp_forgiveness_event_emitted=np.array([True, False]),
             ficp_forgiveness_event_processed=np.array([False, False]),
             ficp_forgiveness_event_stage=np.array([0.0, 0.0]),
             ficp_forgiveness_event_episode_id=np.array([3.0, 0.0]),
+            ficp_forgiveness_event_horizon_end_period=np.array([22.0, 0.0]),
             ficp_forgiveness_event_residual_contractual_principal=np.array([85.0, 0.0]),
             ficp_forgiveness_event_residual_principal_arrears=np.array([15.0, 0.0]),
             ficp_forgiveness_event_residual_interest_arrears=np.array([9.0, 0.0]),
@@ -162,6 +210,125 @@ class TestCountry:
             len(credit_market.ts.dicts["consumer_default_principal_by_cell"])
             == history_lengths["consumer_default_principal_by_cell"]
         )
+
+    def test__process_ficp_forgiveness_events_resumes_stage_one_from_carriers(self):
+        country = _make_ficp_test_country()
+        credit_market = country.credit_market
+        credit_market.states["cons_loans"][:, :, 0] = 0.0
+        credit_market._consumer_principal_arrears_by_cell[:, 0] = 0.0
+        credit_market._consumer_interest_arrears_by_cell[:, 0] = 0.0
+        credit_market.ts.override_current("consumer_default_principal_by_cell", np.array([[60.0, 0.0], [40.0, 0.0]]))
+        credit_market.ts.override_current(
+            "consumer_default_principal_arrears_by_cell", np.array([[10.0, 0.0], [5.0, 0.0]])
+        )
+        credit_market.ts.override_current(
+            "consumer_default_interest_arrears_by_cell", np.array([[7.0, 0.0], [2.0, 0.0]])
+        )
+        credit_market.ts.override_current(
+            "consumer_terminal_removal_exclusion_by_cell", np.array([[True, False], [True, False]])
+        )
+        credit_market.ts.override_current(
+            "consumer_terminal_removal_episode_id_by_cell", np.array([[3.0, 0.0], [3.0, 0.0]])
+        )
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([1.0, 0.0]))
+        country.banks.ts.override_current("consumer_default_npl_denominator", np.array([100.0, 70.0]))
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country)
+
+        np.testing.assert_array_equal(exclusion, np.array([[True, False], [True, False]]))
+        assert pending_events == ((0, 3),)
+        np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.array([60.0, 40.0]))
+        np.testing.assert_allclose(
+            country.banks.ts.current("consumer_default_interest_income_loss"), np.array([7.0, 2.0])
+        )
+        np.testing.assert_array_equal(
+            country.households.ts.current("ficp_forgiveness_event_stage"), np.array([2.0, 0.0])
+        )
+
+    def test__process_ficp_forgiveness_events_does_not_skip_mixed_stage_zero(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country, period_index=22)
+        country.households.ts.override_current("ficp_forgiveness_event", np.array([True, True]))
+        country.households.ts.override_current("ficp_forgiveness_event_emitted", np.array([True, True]))
+        country.households.ts.override_current("ficp_forgiveness_event_processed", np.array([False, False]))
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([2.0, 0.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_episode_id", np.array([3.0, 4.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_horizon_end_period", np.array([22.0, 23.0]))
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_contractual_principal", np.array([85.0, 47.0])
+        )
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_principal_arrears", np.array([15.0, 3.0])
+        )
+        country.households.ts.override_current("ficp_forgiveness_event_residual_interest_arrears", np.array([9.0, 7.0]))
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country, period_index=23)
+
+        np.testing.assert_array_equal(exclusion, np.ones((2, 2), dtype=bool))
+        assert pending_events == ((0, 3), (1, 4))
+        np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.array([20.0, 30.0]))
+        np.testing.assert_allclose(country.banks.ts.current("total_consumer_default_credit_loss"), np.array([150.0]))
+
+    def test__process_ficp_forgiveness_events_does_not_double_count_same_period_replay(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country, period_index=22)
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([2.0, 0.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_horizon_end_period", np.array([23.0, 23.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_episode_id", np.array([3.0, 4.0]))
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_contractual_principal", np.array([85.0, 47.0])
+        )
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_principal_arrears", np.array([15.0, 3.0])
+        )
+        country.households.ts.override_current("ficp_forgiveness_event_residual_interest_arrears", np.array([9.0, 7.0]))
+        country.households.ts.override_current("ficp_forgiveness_event", np.array([True, True]))
+        country.households.ts.override_current("ficp_forgiveness_event_emitted", np.array([True, True]))
+
+        Country._process_ficp_forgiveness_events(country, period_index=23)
+
+        np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.array([80.0, 70.0]))
+        np.testing.assert_allclose(country.banks.ts.current("total_consumer_default_credit_loss"), np.array([150.0]))
+
+    def test__process_ficp_forgiveness_events_rejects_stale_carrier(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country)
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([2.0, 0.0]))
+        country.credit_market.ts.override_current(
+            "consumer_terminal_removal_episode_id_by_cell", np.array([[99.0, 0.0], [99.0, 0.0]])
+        )
+
+        with pytest.raises(RuntimeError, match="episode IDs"):
+            Country._process_ficp_forgiveness_events(country)
+
+    def test__process_ficp_forgiveness_events_stage_two_restart_does_not_reaccount(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country, period_index=22)
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country, period_index=23)
+
+        np.testing.assert_array_equal(exclusion, np.array([[True, False], [True, False]]))
+        assert pending_events == ((0, 3),)
+        np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.zeros(2))
+        np.testing.assert_allclose(country.banks.ts.current("total_consumer_default_credit_loss"), np.array([100.0]))
+
+    def test__process_ficp_forgiveness_events_clears_completed_carrier_next_period(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country, period_index=22)
+        country.households.ts.override_current("ficp_forgiveness_event_processed", np.array([True, False]))
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([3.0, 0.0]))
+        country.households.ts.override_current("ficp_forgiveness_event", np.array([False, False]))
+        country.households.ts.override_current("ficp_forgiveness_event_emitted", np.array([False, False]))
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country, period_index=23)
+
+        np.testing.assert_array_equal(exclusion, np.zeros((2, 2), dtype=bool))
+        assert pending_events == ()
+        np.testing.assert_array_equal(
+            country.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"),
+            np.zeros((2, 2), dtype=bool),
+        )
+        np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.zeros(2))
 
     def test__stage5_subsistence_support_defaults_to_empty_current_period_vector(self, test_country):
         n_households = test_country.households.ts.current("n_households")

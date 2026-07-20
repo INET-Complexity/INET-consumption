@@ -66,6 +66,19 @@ class TestHouseholds:
         ]:
             assert field_name in test_households.ts.get_keys()
 
+    def test__handle_insolvency_supports_legacy_handler_signature(self, test_households, monkeypatch):
+        class LegacyHandler:
+            def handle_insolvency(self, households, banks, credit_market):
+                return 1.0, 2.0, 3.0
+
+        monkeypatch.setitem(test_households.functions, "insolvency", LegacyHandler())
+
+        assert test_households.handle_insolvency(None, None, consumer_terminal_removal_exclusion=np.zeros((1, 1))) == (
+            1.0,
+            2.0,
+            3.0,
+        )
+
     def test__received_consumption_loans_starts_unsettled(self, test_households):
         received_consumption_loans = np.asarray(test_households.ts.current("received_consumption_loans"), dtype=float)
 
@@ -2201,6 +2214,47 @@ class TestPopulatePostGrantFeasiblePlan:
             test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
         )
 
+        test_households.ts.override_current("ficp_forgiveness_event_stage", np.ones(n_households))
+        preserved_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=23,
+            consumer_contractual_principal=np.full(n_households, 39.0),
+            consumer_principal_arrears=np.full(n_households, 2.0),
+            consumer_interest_arrears=np.full(n_households, 1.0),
+        )
+        assert preserved_events == ()
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event_stage"), np.ones(n_households))
+        np.testing.assert_allclose(
+            test_households.ts.current("ficp_forgiveness_event_residual_contractual_principal"),
+            np.full(n_households, 40.0),
+        )
+
+        # A partially written processed marker must not clear the event before
+        # the explicit completed stage is durable.
+        test_households.ts.override_current("ficp_forgiveness_event_processed", np.ones(n_households, dtype=bool))
+        test_households.ts.override_current("ficp_forgiveness_processed", np.ones(n_households, dtype=bool))
+        partial_marker_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=24,
+            consumer_contractual_principal=np.full(n_households, 39.0),
+            consumer_principal_arrears=np.full(n_households, 2.0),
+            consumer_interest_arrears=np.full(n_households, 1.0),
+        )
+        assert partial_marker_events == ()
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event_stage"), np.ones(n_households))
+
         # Replaying a horizon-end state cannot emit the completed episode again.
         test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
         test_households.ts.override_current("ficp_episode_status", np.ones(n_households))
@@ -2215,6 +2269,9 @@ class TestPopulatePostGrantFeasiblePlan:
             consumer_interest_arrears=np.zeros(n_households),
         )
         assert replay_events == ()
+
+        for household_id in range(n_households):
+            test_households.mark_ficp_forgiveness_processed(household_id, 1)
 
         # The completed episode retains its emitted marker until a later
         # second miss starts a distinct episode.

@@ -101,6 +101,51 @@ def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarr
     return np.where(np.isfinite(shortfall) & (shortfall > 0.0), shortfall, 0.0)
 
 
+def _append_ficp_bank_effects(
+    banks,
+    *,
+    loan_writeoff: np.ndarray,
+    principal_arrears: np.ndarray,
+    interest_income_loss: np.ndarray,
+    npl: np.ndarray,
+    npl_denominator: np.ndarray,
+    cumulative_loan_writeoff: np.ndarray | None = None,
+    cumulative_principal_arrears: np.ndarray | None = None,
+    cumulative_interest_income_loss: np.ndarray | None = None,
+    append_npl_denominator: bool = True,
+) -> None:
+    """Append one aggregated current-period 4c bank accounting effect."""
+    cumulative_loan_writeoff = loan_writeoff if cumulative_loan_writeoff is None else cumulative_loan_writeoff
+    cumulative_principal_arrears = (
+        principal_arrears if cumulative_principal_arrears is None else cumulative_principal_arrears
+    )
+    cumulative_interest_income_loss = (
+        interest_income_loss if cumulative_interest_income_loss is None else cumulative_interest_income_loss
+    )
+    banks.ts.consumer_default_loan_writeoff.append(loan_writeoff)
+    banks.ts.total_consumer_default_loan_writeoff.append(
+        [float(banks.ts.current("total_consumer_default_loan_writeoff")[0]) + cumulative_loan_writeoff.sum()]
+    )
+    banks.ts.consumer_default_principal_arrears.append(principal_arrears)
+    banks.ts.total_consumer_default_principal_arrears.append(
+        [float(banks.ts.current("total_consumer_default_principal_arrears")[0]) + cumulative_principal_arrears.sum()]
+    )
+    banks.ts.consumer_default_credit_loss.append(loan_writeoff)
+    banks.ts.total_consumer_default_credit_loss.append(
+        [float(banks.ts.current("total_consumer_default_credit_loss")[0]) + cumulative_loan_writeoff.sum()]
+    )
+    banks.ts.consumer_default_interest_income_loss.append(interest_income_loss)
+    banks.ts.total_consumer_default_interest_income_loss.append(
+        [
+            float(banks.ts.current("total_consumer_default_interest_income_loss")[0])
+            + cumulative_interest_income_loss.sum()
+        ]
+    )
+    banks.ts.consumer_default_npl.append(npl)
+    if append_npl_denominator:
+        banks.ts.consumer_default_npl_denominator.append(npl_denominator)
+
+
 class Country:
     """A complete national economy with interacting agents and markets.
 
@@ -1842,7 +1887,9 @@ class Country:
         """Return supply-adjusted firm-level excess-demand capacity for this country."""
         return self.firms.get_supply_adjusted_excess_demand_capacity()
 
-    def _process_ficp_forgiveness_events(self) -> tuple[np.ndarray, tuple[tuple[int, int], ...]]:
+    def _process_ficp_forgiveness_events(
+        self, period_index: int | None = None
+    ) -> tuple[np.ndarray, tuple[tuple[int, int], ...]]:
         """Recognise 4c losses and remove only forgiven consumer-loan cells."""
         n_banks = int(self.banks.ts.current("n_banks"))
         n_households = int(self.households.ts.current("n_households"))
@@ -1850,48 +1897,13 @@ class Country:
         zero_by_cell = np.zeros((n_banks, n_households))
         zero_exclusion = np.zeros_like(zero_by_cell, dtype=bool)
         event_mask = np.asarray(self.households.ts.current("ficp_forgiveness_event"), dtype=bool)
+        event_emitted = np.asarray(self.households.ts.current("ficp_forgiveness_event_emitted"), dtype=bool)
         event_processed = np.asarray(self.households.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
         event_stage = np.asarray(self.households.ts.current("ficp_forgiveness_event_stage"), dtype=float)
-        if event_mask.shape != (n_households,) or event_processed.shape != (n_households,):
-            raise RuntimeError("FICP forgiveness event state must contain exactly one value per household.")
-        if event_stage.shape != (n_households,) or not np.all(np.isfinite(event_stage)):
-            raise RuntimeError("FICP forgiveness event stages must contain finite household values.")
-        if np.any(event_stage != np.floor(event_stage)) or np.any(event_stage < 0.0):
-            raise RuntimeError("FICP forgiveness event stages must be non-negative integers.")
-        event_stage_before = event_stage.copy()
-        pending_mask = event_mask & ~event_processed
-
-        # A completed accounting sub-operation can be retried after a later
-        # realised-metrics failure. Reuse its durable carrier without applying
-        # the loss or destructive removal a second time.
-        accounting_applied = pending_mask & (event_stage >= 2.0)
-        if np.any(accounting_applied):
-            exclusion = np.asarray(
-                self.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"), dtype=bool
-            )
-            residuals = (
-                np.asarray(
-                    self.households.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
-                )
-                + np.asarray(
-                    self.households.ts.current("ficp_forgiveness_event_residual_principal_arrears"), dtype=float
-                )
-                + np.asarray(
-                    self.households.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
-                )
-            )
-            if exclusion.shape != zero_by_cell.shape or (
-                not np.any(exclusion) and not np.allclose(residuals[pending_mask], 0.0)
-            ):
-                raise RuntimeError("Applied FICP accounting is missing its durable removal exclusion carrier.")
-            self.credit_market._consumer_terminal_removal_exclusion = exclusion.copy()
-            episode_ids = np.asarray(self.households.ts.current("ficp_forgiveness_event_episode_id"), dtype=float)
-            pending_events = tuple(
-                (int(household_id), int(episode_ids[household_id])) for household_id in np.flatnonzero(pending_mask)
-            )
-            return exclusion, pending_events
-
         episode_ids = np.asarray(self.households.ts.current("ficp_forgiveness_event_episode_id"), dtype=float)
+        horizon_end_periods = np.asarray(
+            self.households.ts.current("ficp_forgiveness_event_horizon_end_period"), dtype=float
+        )
         contractual_events = np.asarray(
             self.households.ts.current("ficp_forgiveness_event_residual_contractual_principal"), dtype=float
         )
@@ -1901,88 +1913,228 @@ class Country:
         interest_arrears_events = np.asarray(
             self.households.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float
         )
-        for name, values in (
+        household_vectors = (
+            ("ficp event mask", event_mask),
+            ("ficp emitted flags", event_emitted),
+            ("ficp processed flags", event_processed),
+            ("ficp event stages", event_stage),
             ("ficp episode IDs", episode_ids),
+            ("ficp horizon end periods", horizon_end_periods),
             ("contractual principal", contractual_events),
             ("principal arrears", principal_arrears_events),
             ("interest arrears", interest_arrears_events),
+        )
+        for name, values in household_vectors:
+            if values.shape != (n_households,):
+                raise RuntimeError(f"{name} must contain exactly one value per household.")
+        event_stage_before = event_stage.copy()
+        if (
+            not np.all(np.isfinite(event_stage))
+            or np.any(event_stage != np.floor(event_stage))
+            or np.any((event_stage < 0.0) | (event_stage > 3.0))
         ):
-            if values.shape != (n_households,) or not np.all(np.isfinite(values)):
-                raise RuntimeError(f"FICP forgiveness {name} are not finite household vectors.")
+            raise RuntimeError("FICP forgiveness event stages must be integers from zero through three.")
+        completed_mask = (
+            event_processed
+            & ~event_mask
+            & ~event_emitted
+            & (event_stage == 3.0)
+        )
+        if np.any(event_mask & ~event_emitted) or np.any(event_processed & ~event_emitted & ~completed_mask):
+            raise RuntimeError("FICP event flags must be consistent with the emitted event record.")
+        pending_mask = event_mask & ~event_processed
+        if np.any((event_stage == 3.0) & pending_mask):
+            raise RuntimeError("A completed FICP forgiveness event cannot remain unprocessed.")
         if np.any(episode_ids[pending_mask] <= 0.0) or np.any(
             episode_ids[pending_mask] != np.floor(episode_ids[pending_mask])
         ):
             raise RuntimeError("FICP forgiveness episode IDs must be positive integers.")
+        if np.any(horizon_end_periods[pending_mask] < 0.0) or np.any(
+            horizon_end_periods[pending_mask] != np.floor(horizon_end_periods[pending_mask])
+        ):
+            raise RuntimeError("FICP forgiveness horizon periods must be non-negative integers.")
         if (
             np.any(contractual_events[pending_mask] < 0.0)
             or np.any(principal_arrears_events[pending_mask] < 0.0)
             or np.any(interest_arrears_events[pending_mask] < 0.0)
+            or not np.all(np.isfinite(contractual_events))
+            or not np.all(np.isfinite(principal_arrears_events))
+            or not np.all(np.isfinite(interest_arrears_events))
         ):
-            raise RuntimeError("FICP forgiveness event balances must be non-negative.")
+            raise RuntimeError("FICP forgiveness event balances must be finite and non-negative.")
 
+        stage_zero = pending_mask & (event_stage == 0.0)
+        stage_one = pending_mask & (event_stage == 1.0)
+        stage_two = pending_mask & (event_stage >= 2.0)
+        durable_event_mask = stage_one | stage_two
+
+        durable_principal = np.asarray(self.credit_market.ts.current("consumer_default_principal_by_cell"), dtype=float)
+        durable_principal_arrears = np.asarray(
+            self.credit_market.ts.current("consumer_default_principal_arrears_by_cell"), dtype=float
+        )
+        durable_interest_arrears = np.asarray(
+            self.credit_market.ts.current("consumer_default_interest_arrears_by_cell"), dtype=float
+        )
+        durable_exclusion = np.asarray(
+            self.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"), dtype=bool
+        )
+        durable_episode_ids = np.asarray(
+            self.credit_market.ts.current("consumer_terminal_removal_episode_id_by_cell"), dtype=float
+        )
+        durable_fields = (
+            ("consumer principal", durable_principal),
+            ("consumer principal arrears", durable_principal_arrears),
+            ("consumer interest arrears", durable_interest_arrears),
+            ("consumer removal exclusion", durable_exclusion),
+            ("consumer removal episode IDs", durable_episode_ids),
+        )
+        for name, values in durable_fields:
+            if values.shape != zero_by_cell.shape:
+                raise RuntimeError(f"Durable {name} carrier has an invalid bank-household shape.")
+        for values in (durable_principal, durable_principal_arrears, durable_interest_arrears, durable_episode_ids):
+            if not np.all(np.isfinite(values)):
+                raise RuntimeError("Durable FICP carriers must contain finite values.")
+            if np.any(values < 0.0):
+                raise RuntimeError("Durable FICP carriers must contain non-negative values.")
+        durable_component_mask = (
+            (durable_principal > 0.0) | (durable_principal_arrears > 0.0) | (durable_interest_arrears > 0.0)
+        )
+        if not np.array_equal(durable_exclusion, durable_component_mask):
+            raise RuntimeError("Durable FICP exclusion does not match its positive component carriers.")
+        if np.any(pending_mask):
+            expected_durable_episode_ids = np.where(durable_exclusion, episode_ids[None, :], 0.0)
+            if not np.array_equal(durable_episode_ids, expected_durable_episode_ids):
+                raise RuntimeError("Durable FICP episode IDs do not match the pending event identities.")
+            if np.any(durable_component_mask & ~durable_event_mask[None, :]):
+                raise RuntimeError("Durable FICP carriers contain cells outside the pending staged events.")
+            for household_id in np.flatnonzero(durable_event_mask):
+                if (
+                    not np.allclose(
+                        durable_principal[:, household_id].sum(),
+                        contractual_events[household_id] + principal_arrears_events[household_id],
+                        rtol=1e-10,
+                        atol=1e-8,
+                    )
+                    or not np.allclose(
+                        durable_principal_arrears[:, household_id].sum(),
+                        principal_arrears_events[household_id],
+                        rtol=1e-10,
+                        atol=1e-8,
+                    )
+                    or not np.allclose(
+                        durable_interest_arrears[:, household_id].sum(),
+                        interest_arrears_events[household_id],
+                        rtol=1e-10,
+                        atol=1e-8,
+                    )
+                ):
+                    raise RuntimeError("Durable FICP carriers do not reconcile with the event payload.")
+
+        pending_events = tuple(
+            (int(household_id), int(episode_ids[household_id])) for household_id in np.flatnonzero(pending_mask)
+        )
         if not np.any(pending_mask):
             self.credit_market.ts.consumer_default_principal_by_cell.append(zero_by_cell.copy())
             self.credit_market.ts.consumer_default_principal_arrears_by_cell.append(zero_by_cell.copy())
             self.credit_market.ts.consumer_default_interest_arrears_by_cell.append(zero_by_cell.copy())
             self.credit_market.ts.consumer_terminal_removal_exclusion_by_cell.append(zero_exclusion.copy())
             self.credit_market.ts.consumer_terminal_removal_episode_id_by_cell.append(zero_by_cell.copy())
-            self.credit_market._consumer_terminal_removal_exclusion = np.zeros_like(zero_by_cell, dtype=bool)
-            self.banks.ts.consumer_default_loan_writeoff.append(zero_by_bank)
-            self.banks.ts.total_consumer_default_loan_writeoff.append(
-                [float(self.banks.ts.current("total_consumer_default_loan_writeoff")[0])]
+            self.credit_market._consumer_terminal_removal_exclusion = zero_exclusion.copy()
+            _append_ficp_bank_effects(
+                self.banks,
+                loan_writeoff=zero_by_bank,
+                principal_arrears=zero_by_bank,
+                interest_income_loss=zero_by_bank,
+                npl=zero_by_bank,
+                npl_denominator=zero_by_bank,
             )
-            self.banks.ts.consumer_default_principal_arrears.append(zero_by_bank)
-            self.banks.ts.total_consumer_default_principal_arrears.append(
-                [float(self.banks.ts.current("total_consumer_default_principal_arrears")[0])]
-            )
-            self.banks.ts.consumer_default_credit_loss.append(zero_by_bank)
-            self.banks.ts.total_consumer_default_credit_loss.append(
-                [float(self.banks.ts.current("total_consumer_default_credit_loss")[0])]
-            )
-            self.banks.ts.consumer_default_interest_income_loss.append(zero_by_bank)
-            self.banks.ts.total_consumer_default_interest_income_loss.append(
-                [float(self.banks.ts.current("total_consumer_default_interest_income_loss")[0])]
-            )
-            self.banks.ts.consumer_default_npl.append(zero_by_bank)
-            self.banks.ts.consumer_default_npl_denominator.append(zero_by_bank)
-            return np.zeros_like(zero_by_cell, dtype=bool), ()
+            return zero_exclusion, ()
 
-        contractual_principal, principal_arrears, interest_arrears = (
-            self.credit_market.current_consumer_debt_components_by_household()
-        )
-        for household_id in np.flatnonzero(pending_mask):
-            if (
-                not np.allclose(
-                    contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=1e-8
-                )
-                or not np.allclose(
-                    principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=1e-8
-                )
-                or not np.allclose(
-                    interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=1e-8
-                )
+        stage_two_same_period = stage_two & (period_index is None or horizon_end_periods == float(period_index))
+        stage_two_prior_period = stage_two & ~stage_two_same_period
+        if np.any(stage_two_prior_period) and period_index is None:
+            stage_two_prior_period = np.zeros_like(stage_two, dtype=bool)
+            stage_two_same_period = stage_two.copy()
+
+        live_writeoff = self.credit_market.snapshot_consumer_default_writeoff(stage_zero)
+        stage_one_principal = np.where(stage_one[None, :], durable_principal, 0.0)
+        stage_one_principal_arrears = np.where(stage_one[None, :], durable_principal_arrears, 0.0)
+        stage_one_interest_arrears = np.where(stage_one[None, :], durable_interest_arrears, 0.0)
+        stage_one_exclusion = np.where(stage_one[None, :], durable_exclusion, False)
+        newly_written_principal = live_writeoff.principal_by_cell + stage_one_principal
+        newly_written_principal_arrears = live_writeoff.principal_arrears_by_cell + stage_one_principal_arrears
+        newly_written_interest_arrears = live_writeoff.interest_arrears_by_cell + stage_one_interest_arrears
+        newly_written_principal_by_bank = newly_written_principal.sum(axis=1)
+        newly_written_principal_arrears_by_bank = newly_written_principal_arrears.sum(axis=1)
+        newly_written_interest_arrears_by_bank = newly_written_interest_arrears.sum(axis=1)
+
+        if np.any(stage_zero):
+            contractual_principal, principal_arrears, interest_arrears = (
+                self.credit_market.current_consumer_debt_components_by_household()
+            )
+            for household_id in np.flatnonzero(stage_zero):
+                if (
+                    not np.allclose(
+                        contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=1e-8
+                    )
+                    or not np.allclose(
+                        principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                    )
+                    or not np.allclose(
+                        interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                    )
+                ):
+                    raise RuntimeError("FICP forgiveness event does not reconcile with the live consumer-loan state.")
+            if not np.allclose(
+                live_writeoff.principal_by_bank.sum(),
+                contractual_events[stage_zero].sum() + principal_arrears_events[stage_zero].sum(),
+                rtol=1e-10,
+                atol=1e-8,
             ):
-                raise RuntimeError("FICP forgiveness event does not reconcile with the live consumer-loan state.")
+                raise RuntimeError("Consumer principal write-off does not reconcile with the accepted 4b event.")
 
-        writeoff = self.credit_market.snapshot_consumer_default_writeoff(pending_mask)
-        if not np.allclose(
-            writeoff.principal_by_bank.sum(),
-            contractual_events[pending_mask].sum() + principal_arrears_events[pending_mask].sum(),
-            rtol=1e-10,
-            atol=1e-8,
-        ):
-            raise RuntimeError("Consumer principal write-off does not reconcile with the accepted 4b event.")
+        stored_denominator = np.asarray(self.banks.ts.current("consumer_default_npl_denominator"), dtype=float)
+        if stored_denominator.shape != (n_banks,) or not np.all(np.isfinite(stored_denominator)):
+            raise RuntimeError("Stored FICP NPL denominators must contain finite bank values.")
+        stage_one_banks = np.any(stage_one_exclusion, axis=1)
+        npl_denominator = live_writeoff.npl_denominator_by_bank.copy()
+        if np.any(stage_one_banks):
+            npl_denominator[stage_one_banks] = stored_denominator[stage_one_banks]
+        if np.any(stage_two_same_period):
+            npl_denominator = stored_denominator.copy()
+        if np.any(stage_two_prior_period) and not np.any(stage_one_banks):
+            npl_denominator = live_writeoff.npl_denominator_by_bank.copy()
+        if np.any(stage_one_banks) and np.any(stage_zero):
+            npl_denominator[stage_one_banks] = stored_denominator[stage_one_banks]
 
+        current_numerator = zero_by_bank
+        current_loss_base = zero_by_bank
+        current_principal_arrears_base = zero_by_bank
+        current_interest_income_loss_base = zero_by_bank
+        if np.any(stage_two_same_period):
+            current_numerator = (
+                np.asarray(self.banks.ts.current("consumer_default_npl"), dtype=float) * stored_denominator
+            )
+            current_loss_base = np.asarray(self.banks.ts.current("consumer_default_loan_writeoff"), dtype=float)
+            current_principal_arrears_base = np.asarray(
+                self.banks.ts.current("consumer_default_principal_arrears"), dtype=float
+            )
+            current_interest_income_loss_base = np.asarray(
+                self.banks.ts.current("consumer_default_interest_income_loss"), dtype=float
+            )
         npl = np.divide(
-            writeoff.principal_by_bank,
-            writeoff.npl_denominator_by_bank,
+            current_numerator + newly_written_principal_by_bank,
+            npl_denominator,
             out=np.zeros(n_banks),
-            where=writeoff.npl_denominator_by_bank > 0.0,
+            where=npl_denominator > 0.0,
         )
-        exclusion_mask = writeoff.removal_mask & (
-            (writeoff.principal_by_cell > 0.0)
-            | (writeoff.principal_arrears_by_cell > 0.0)
-            | (writeoff.interest_arrears_by_cell > 0.0)
+        exclusion_mask = durable_exclusion | (
+            live_writeoff.removal_mask
+            & (
+                (live_writeoff.principal_by_cell > 0.0)
+                | (live_writeoff.principal_arrears_by_cell > 0.0)
+                | (live_writeoff.interest_arrears_by_cell > 0.0)
+            )
         )
         credit_market_snapshot = self.credit_market.states["cons_loans"].copy()
         principal_arrears_snapshot = self.credit_market._consumer_principal_arrears_by_cell.copy()
@@ -2010,66 +2162,60 @@ class Country:
         carrier_lengths = {field: len(self.credit_market.ts.dicts[field]) for field in carrier_fields}
         bank_lengths = {field: len(self.banks.ts.dicts[field]) for field in bank_fields}
         try:
-            self.credit_market.ts.consumer_default_principal_by_cell.append(zero_by_cell.copy())
-            self.credit_market.ts.consumer_default_principal_arrears_by_cell.append(zero_by_cell.copy())
-            self.credit_market.ts.consumer_default_interest_arrears_by_cell.append(zero_by_cell.copy())
-            self.credit_market.ts.consumer_terminal_removal_exclusion_by_cell.append(zero_exclusion.copy())
-            self.credit_market.ts.consumer_terminal_removal_episode_id_by_cell.append(zero_by_cell.copy())
+            if np.any(stage_zero):
+                self.credit_market.ts.consumer_default_principal_by_cell.append(newly_written_principal.copy())
+                self.credit_market.ts.consumer_default_principal_arrears_by_cell.append(
+                    newly_written_principal_arrears.copy()
+                )
+                self.credit_market.ts.consumer_default_interest_arrears_by_cell.append(
+                    newly_written_interest_arrears.copy()
+                )
+                self.credit_market.ts.consumer_terminal_removal_exclusion_by_cell.append(exclusion_mask.copy())
+                self.credit_market.ts.consumer_terminal_removal_episode_id_by_cell.append(
+                    np.where(exclusion_mask, episode_ids[None, :], 0.0)
+                )
 
-            removed = self.credit_market.remove_consumer_loans_by_cell(writeoff.removal_mask)
-            if not np.allclose(removed.principal_by_cell, writeoff.principal_by_cell, rtol=1e-10, atol=1e-8):
-                raise RuntimeError("Consumer principal changed between the 4c snapshot and removal.")
-
-            episode_by_cell = np.where(
-                exclusion_mask,
-                episode_ids[None, :],
-                0.0,
-            )
-            self.credit_market.ts.override_current("consumer_default_principal_by_cell", writeoff.principal_by_cell)
-            self.credit_market.ts.override_current(
-                "consumer_default_principal_arrears_by_cell", writeoff.principal_arrears_by_cell
-            )
-            self.credit_market.ts.override_current(
-                "consumer_default_interest_arrears_by_cell", writeoff.interest_arrears_by_cell
-            )
-            self.credit_market.ts.override_current("consumer_terminal_removal_exclusion_by_cell", exclusion_mask)
-            self.credit_market.ts.override_current("consumer_terminal_removal_episode_id_by_cell", episode_by_cell)
+                removed = self.credit_market.remove_consumer_loans_by_cell(live_writeoff.removal_mask)
+                if not np.allclose(
+                    removed.principal_by_cell,
+                    live_writeoff.principal_by_cell,
+                    rtol=1e-10,
+                    atol=1e-8,
+                ):
+                    raise RuntimeError("Consumer principal changed between the 4c snapshot and removal.")
             self.credit_market._consumer_terminal_removal_exclusion = exclusion_mask.copy()
-            event_stage[pending_mask] = 1.0
-            self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage)
+            if np.any(stage_zero):
+                event_stage[stage_zero] = 1.0
+                self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage)
 
-            self.banks.ts.consumer_default_loan_writeoff.append(writeoff.principal_by_bank)
-            self.banks.ts.total_consumer_default_loan_writeoff.append(
-                [
-                    float(self.banks.ts.current("total_consumer_default_loan_writeoff")[0])
-                    + writeoff.principal_by_bank.sum()
-                ]
-            )
-            self.banks.ts.consumer_default_principal_arrears.append(writeoff.principal_arrears_by_bank)
-            self.banks.ts.total_consumer_default_principal_arrears.append(
-                [
-                    float(self.banks.ts.current("total_consumer_default_principal_arrears")[0])
-                    + writeoff.principal_arrears_by_bank.sum()
-                ]
-            )
-            self.banks.ts.consumer_default_credit_loss.append(writeoff.principal_by_bank)
-            self.banks.ts.total_consumer_default_credit_loss.append(
-                [
-                    float(self.banks.ts.current("total_consumer_default_credit_loss")[0])
-                    + writeoff.principal_by_bank.sum()
-                ]
-            )
-            self.banks.ts.consumer_default_interest_income_loss.append(writeoff.interest_arrears_by_bank)
-            self.banks.ts.total_consumer_default_interest_income_loss.append(
-                [
-                    float(self.banks.ts.current("total_consumer_default_interest_income_loss")[0])
-                    + writeoff.interest_arrears_by_bank.sum()
-                ]
-            )
-            self.banks.ts.consumer_default_npl.append(npl)
-            self.banks.ts.consumer_default_npl_denominator.append(writeoff.npl_denominator_by_bank)
-            event_stage[pending_mask] = 2.0
-            self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage)
+            has_new_accounting = np.any(stage_zero | stage_one)
+            if has_new_accounting:
+                staged_denominator = np.any(stage_one) or np.any(stage_two_same_period)
+                if not staged_denominator:
+                    self.banks.ts.consumer_default_npl_denominator.append(npl_denominator.copy())
+                _append_ficp_bank_effects(
+                    self.banks,
+                    loan_writeoff=current_loss_base + newly_written_principal_by_bank,
+                    principal_arrears=current_principal_arrears_base + newly_written_principal_arrears_by_bank,
+                    interest_income_loss=current_interest_income_loss_base + newly_written_interest_arrears_by_bank,
+                    npl=npl,
+                    npl_denominator=npl_denominator,
+                    cumulative_loan_writeoff=newly_written_principal_by_bank,
+                    cumulative_principal_arrears=newly_written_principal_arrears_by_bank,
+                    cumulative_interest_income_loss=newly_written_interest_arrears_by_bank,
+                    append_npl_denominator=False,
+                )
+                event_stage[stage_zero | stage_one] = 2.0
+                self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage)
+            elif np.any(stage_two_prior_period):
+                _append_ficp_bank_effects(
+                    self.banks,
+                    loan_writeoff=zero_by_bank,
+                    principal_arrears=zero_by_bank,
+                    interest_income_loss=zero_by_bank,
+                    npl=zero_by_bank,
+                    npl_denominator=zero_by_bank,
+                )
         except Exception:
             self.credit_market.states["cons_loans"][:] = credit_market_snapshot
             self.credit_market._consumer_principal_arrears_by_cell[:] = principal_arrears_snapshot
@@ -2081,9 +2227,6 @@ class Country:
                 del self.banks.ts.dicts[field][length:]
             self.households.ts.override_current("ficp_forgiveness_event_stage", event_stage_before)
             raise
-        pending_events = tuple(
-            (int(household_id), int(episode_ids[household_id])) for household_id in np.flatnonzero(pending_mask)
-        )
         return exclusion_mask, pending_events
 
     def update_realised_metrics(self, period_index: int | None = None) -> None:
@@ -2533,10 +2676,9 @@ class Country:
         self.households.ts.net_wealth.append(self.households.compute_net_wealth())
 
         # F2. HOUSEHOLD INSOLVENCY
-        consumer_terminal_removal_exclusion, pending_ficp_forgiveness_events = self._process_ficp_forgiveness_events()
-        # The 4c consumer write-off removes both sides of the household loan
-        # relationship. Refresh household liabilities before insolvency so the
-        # generic handler observes the reduced balance and wealth.
+        consumer_terminal_removal_exclusion, pending_ficp_forgiveness_events = self._process_ficp_forgiveness_events(
+            period_index=period_index
+        )
         if pending_ficp_forgiveness_events:
             current_consumption_debt = self.credit_market.compute_outstanding_consumption_loans_by_household()
             current_mortgage_debt = self.credit_market.compute_outstanding_mortgages_by_household()
@@ -2552,6 +2694,18 @@ class Country:
             credit_market=self.credit_market,
             consumer_terminal_removal_exclusion=consumer_terminal_removal_exclusion,
         )
+        # Reconcile household liabilities after generic insolvency completes any
+        # overlapping mortgage cleanup.
+        if pending_ficp_forgiveness_events:
+            current_consumption_debt = self.credit_market.compute_outstanding_consumption_loans_by_household()
+            current_mortgage_debt = self.credit_market.compute_outstanding_mortgages_by_household()
+            current_debt = current_consumption_debt + current_mortgage_debt
+            self.households.ts.override_current("consumption_loan_debt", current_consumption_debt)
+            self.households.ts.override_current("mortgage_debt", current_mortgage_debt)
+            self.households.ts.override_current("debt", current_debt)
+            self.households.ts.override_current("total_consumption_loan_debt", [current_consumption_debt.sum()])
+            self.households.ts.override_current("total_mortgage_debt", [current_mortgage_debt.sum()])
+            self.households.ts.override_current("net_wealth", self.households.compute_net_wealth())
         self.economy.ts.household_insolvency_rate.append([household_insolvency_rate])
         self.economy.ts.npl_hh_cons_loans.append([npl_hh_cons_loans])
         self.economy.ts.npl_mortgages.append([npl_mortgages])

@@ -63,3 +63,45 @@ def test_consumer_distress_rejects_non_reconciling_settlement():
             prior_ficp_exclusion_remaining_periods=np.asarray([0]),
             ficp_exclusion_periods=20,
         )
+
+
+def test_ficp_episode_requires_two_misses_and_completes_at_pre_decrement_boundary():
+    first_miss = compute_stage6_consumer_distress_state(
+        scheduled_consumer_payments=np.asarray([10.0]),
+        actual_consumer_payments=np.asarray([5.0]),
+        unpaid_consumer_payments=np.asarray([5.0]),
+        prior_missed_payment_count_consumer=np.asarray([0]),
+        prior_ficp_exclusion_remaining_periods=np.asarray([0]),
+        ficp_exclusion_periods=20,
+        prior_ficp_episode_missed_payment_count=np.asarray([0]),
+        prior_ficp_episode_status=np.asarray([0]),
+    )
+    assert not first_miss.ficp_episode_triggered[0]
+    np.testing.assert_array_equal(first_miss.ficp_episode_missed_payment_count, [1])
+
+    second_miss = compute_stage6_consumer_distress_state(
+        scheduled_consumer_payments=np.asarray([10.0]),
+        actual_consumer_payments=np.asarray([5.0]),
+        unpaid_consumer_payments=np.asarray([5.0]),
+        prior_missed_payment_count_consumer=np.asarray([1]),
+        prior_ficp_exclusion_remaining_periods=np.asarray([0]),
+        ficp_exclusion_periods=20,
+        prior_ficp_episode_missed_payment_count=first_miss.ficp_episode_missed_payment_count,
+        prior_ficp_episode_status=first_miss.ficp_episode_status,
+    )
+    assert second_miss.ficp_episode_triggered[0]
+    np.testing.assert_array_equal(second_miss.ficp_exclusion_remaining_periods, [20])
+
+    completed = compute_stage6_consumer_distress_state(
+        scheduled_consumer_payments=np.asarray([10.0]),
+        actual_consumer_payments=np.asarray([10.0]),
+        unpaid_consumer_payments=np.asarray([0.0]),
+        prior_missed_payment_count_consumer=np.asarray([2]),
+        prior_ficp_exclusion_remaining_periods=np.asarray([1]),
+        ficp_exclusion_periods=20,
+        prior_ficp_episode_missed_payment_count=second_miss.ficp_episode_missed_payment_count,
+        prior_ficp_episode_status=second_miss.ficp_episode_status,
+    )
+    assert completed.ficp_horizon_completed[0]
+    np.testing.assert_array_equal(completed.ficp_exclusion_remaining_periods, [0])
+    np.testing.assert_array_equal(completed.ficp_episode_status, [2])

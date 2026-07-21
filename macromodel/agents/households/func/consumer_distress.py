@@ -19,6 +19,25 @@ class Stage6ConsumerDistressState:
     consumer_distress_state: np.ndarray
     ficp_state: np.ndarray
     ficp_exclusion_remaining_periods: np.ndarray
+    ficp_episode_missed_payment_count: np.ndarray
+    ficp_episode_status: np.ndarray
+    ficp_episode_triggered: np.ndarray
+    ficp_horizon_completed: np.ndarray
+
+
+@dataclass(frozen=True)
+class FICPForgivenessEvent:
+    """Typed 4b handoff for one completed FICP episode."""
+
+    household_id: int
+    ficp_episode_id: int
+    trigger_period: int
+    horizon_end_period: int
+    residual_contractual_principal: float
+    residual_principal_arrears: float
+    residual_interest_arrears: float
+    emitted: bool = True
+    processed: bool = False
 
 
 def compute_stage6_consumer_distress_state(
@@ -29,6 +48,8 @@ def compute_stage6_consumer_distress_state(
     prior_missed_payment_count_consumer: np.ndarray,
     prior_ficp_exclusion_remaining_periods: np.ndarray,
     ficp_exclusion_periods: int,
+    prior_ficp_episode_missed_payment_count: np.ndarray | None = None,
+    prior_ficp_episode_status: np.ndarray | None = None,
 ) -> Stage6ConsumerDistressState:
     """Classify authoritative consumer-payment settlement without mutating it.
 
@@ -73,7 +94,33 @@ def compute_stage6_consumer_distress_state(
     cleaned_prior_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0).astype(int)
     cleaned_prior_exclusion = np.where(np.isfinite(prior_exclusion), np.maximum(prior_exclusion, 0.0), 0.0).astype(int)
     missed_payment_count = cleaned_prior_count + payment_missed.astype(int)
-    new_ficp_trigger = payment_missed & (missed_payment_count >= 2) & (cleaned_prior_exclusion == 0)
+    episode_state_enabled = prior_ficp_episode_missed_payment_count is not None
+    if episode_state_enabled:
+        episode_count = np.asarray(prior_ficp_episode_missed_payment_count, dtype=float)
+        if episode_count.shape != expected_shape:
+            raise ValueError(
+                "prior_ficp_episode_missed_payment_count must match "
+                f"scheduled_consumer_payments shape {expected_shape}; got {episode_count.shape}."
+            )
+        episode_count = np.where(np.isfinite(episode_count), np.maximum(episode_count, 0.0), 0.0).astype(int)
+        if prior_ficp_episode_status is None:
+            episode_status = np.zeros(expected_shape, dtype=int)
+        else:
+            episode_status = np.asarray(prior_ficp_episode_status, dtype=float)
+            if episode_status.shape != expected_shape:
+                raise ValueError(
+                    "prior_ficp_episode_status must match "
+                    f"scheduled_consumer_payments shape {expected_shape}; got {episode_status.shape}."
+                )
+            episode_status = np.where(np.isfinite(episode_status), np.maximum(episode_status, 0.0), 0.0).astype(int)
+        # A completed episode starts a fresh local miss count. Lifetime misses
+        # remain available through missed_payment_count_consumer.
+        episode_count_before_payment = np.where(episode_status == 2, 0, episode_count)
+        episode_missed_payment_count = episode_count_before_payment + payment_missed.astype(int)
+        new_ficp_trigger = payment_missed & (episode_missed_payment_count >= 2) & (cleaned_prior_exclusion == 0)
+    else:
+        episode_missed_payment_count = missed_payment_count.copy()
+        new_ficp_trigger = payment_missed & (missed_payment_count >= 2) & (cleaned_prior_exclusion == 0)
     exclusion_remaining = np.where(
         new_ficp_trigger,
         ficp_exclusion_periods,
@@ -81,6 +128,12 @@ def compute_stage6_consumer_distress_state(
     )
     ficp_state = exclusion_remaining > 0
     consumer_distress_state = np.where(ficp_state, FICP, np.where(payment_missed, DELINQUENT, CURRENT))
+    horizon_completed = (cleaned_prior_exclusion == 1) & ~new_ficp_trigger
+    episode_status = np.where(
+        new_ficp_trigger | ficp_state,
+        1,
+        np.where(horizon_completed, 2, 0),
+    ).astype(int)
 
     return Stage6ConsumerDistressState(
         actual_consumer_payment=actual_payment,
@@ -89,4 +142,8 @@ def compute_stage6_consumer_distress_state(
         consumer_distress_state=consumer_distress_state,
         ficp_state=ficp_state,
         ficp_exclusion_remaining_periods=exclusion_remaining,
+        ficp_episode_missed_payment_count=episode_missed_payment_count,
+        ficp_episode_status=episode_status,
+        ficp_episode_triggered=new_ficp_trigger,
+        ficp_horizon_completed=horizon_completed,
     )

@@ -83,6 +83,7 @@ class ConsumerPaymentSettlement:
     scheduled_payment: np.ndarray
     actual_payment: np.ndarray
     unpaid_payment: np.ndarray
+    early_repayment: np.ndarray
     interest_paid: np.ndarray
     principal_paid: np.ndarray
     interest_paid_by_cell: np.ndarray
@@ -107,6 +108,20 @@ class ConsumerLoanReschedulingEvent:
     old_maturity: int
     new_maturity: int
     resulting_scheduled_payment: float
+
+
+@dataclass(frozen=True)
+class ConsumerDefaultWriteoff:
+    """Pre-write-off consumer balances for one terminal-removal transition."""
+
+    principal_by_cell: np.ndarray
+    principal_arrears_by_cell: np.ndarray
+    interest_arrears_by_cell: np.ndarray
+    principal_by_bank: np.ndarray
+    principal_arrears_by_bank: np.ndarray
+    interest_arrears_by_bank: np.ndarray
+    npl_denominator_by_bank: np.ndarray
+    removal_mask: np.ndarray
 
 
 def _zero_like_loan_states(states: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -366,6 +381,12 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
+        self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot: HouseholdServiceSnapshot | None = None
         self._consumer_payment_settlement: ConsumerPaymentSettlement | None = None
         self._consumer_first_miss_rescheduling_events: list[ConsumerLoanReschedulingEvent] = []
@@ -474,6 +495,12 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
         self._consumer_principal_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_principal_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_default_interest_arrears_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self.ts["consumer_terminal_removal_exclusion_by_cell"] = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
+        self.ts["consumer_terminal_removal_episode_id_by_cell"] = np.zeros_like(self.states["cons_loans"][0])
+        self._consumer_terminal_removal_exclusion = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
         self._consumer_first_miss_rescheduling_events = []
@@ -612,6 +639,11 @@ class CreditMarket:
         total_target_short_term_credit = float(np.nansum(target_short_term_credit))
         total_ordinary_target_short_term_credit = float(np.nansum(ordinary_target_short_term_credit))
         total_target_long_term_credit = float(np.nansum(firms.ts.current("target_long_term_credit")))
+        if households.uses_feasibility_resolver:
+            active_ficp = households.current_ficp_active()
+            requested_consumer_credit = np.asarray(households.ts.current("target_consumption_loans"), dtype=float)
+            if np.any(active_ficp & (requested_consumer_credit > 1e-12)):
+                raise RuntimeError("Active FICP households must be excluded before consumer-credit clearing.")
         _append_credit_supply_caps_to_banks_ts(
             banks=banks,
             current_npl_firm_loans=current_npl_firm_loans,
@@ -769,6 +801,21 @@ class CreditMarket:
             raise RuntimeError("No unbooked consumer-credit settlement is available for this period.")
         return self._pending_consumer_loans_this_period[0].copy()
 
+    def current_consumer_debt_components_by_household(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return contractual principal and committed arrears by household."""
+        principal_arrears = self._consumer_principal_arrears_by_cell.sum(axis=0).copy()
+        total_principal = self.states["cons_loans"][0].sum(axis=0)
+        contractual_principal = np.maximum(total_principal - principal_arrears, 0.0)
+        interest_arrears = self._consumer_interest_arrears_by_cell.sum(axis=0).copy()
+        return contractual_principal, principal_arrears, interest_arrears
+
+    def current_consumer_balance_by_household(self) -> np.ndarray:
+        """Return the outstanding consumer balance, excluding mortgage debt."""
+        contractual_principal, principal_arrears, interest_arrears = (
+            self.current_consumer_debt_components_by_household()
+        )
+        return contractual_principal + principal_arrears + interest_arrears
+
     def settle_granted_consumption_loans(
         self,
         *,
@@ -901,8 +948,12 @@ class CreditMarket:
         self._last_interest_by_bank += interest_by_bank
         return principal.copy()
 
-    def settle_consumer_payments(self, remaining_shortfall: np.ndarray) -> ConsumerPaymentSettlement:
-        """Settle opening consumer service through the fixed arrears waterfall."""
+    def settle_consumer_payments(
+        self,
+        remaining_shortfall: np.ndarray,
+        early_repayment_capacity: np.ndarray | None = None,
+    ) -> ConsumerPaymentSettlement:
+        """Settle scheduled service and optional early repayment separately."""
         snapshot = self.current_household_service_snapshot()
         if self._consumer_payment_settlement is not None:
             raise RuntimeError("Consumer service has already been settled for this period.")
@@ -911,6 +962,14 @@ class CreditMarket:
             raise ValueError("remaining_shortfall must contain exactly one value per household.")
         if not np.all(np.isfinite(shortfall)) or np.any(shortfall < 0.0):
             raise RuntimeError("remaining_shortfall must be finite and non-negative.")
+        if early_repayment_capacity is None:
+            early_capacity = np.zeros_like(shortfall)
+        else:
+            early_capacity = np.asarray(early_repayment_capacity, dtype=float)
+            if early_capacity.shape != snapshot.consumer_total_due.shape:
+                raise ValueError("early_repayment_capacity must contain exactly one value per household.")
+            if not np.all(np.isfinite(early_capacity)) or np.any(early_capacity < 0.0):
+                raise RuntimeError("early_repayment_capacity must be finite and non-negative.")
         unpaid = np.minimum(shortfall, snapshot.consumer_total_due)
         actual = snapshot.consumer_total_due - unpaid
         available = actual.copy()
@@ -945,9 +1004,46 @@ class CreditMarket:
                 0.0,
             ),
         )
-        interest_paid_by_cell = paid_opening_interest + paid_interest
-        newly_accrued_interest = snapshot.consumer_contractual_interest_by_cell - paid_interest
-        self._consumer_opening_arrears_collected_by_bank = paid_opening_interest.sum(axis=1)
+        remaining_balance = loans[0].sum(axis=0) + self._consumer_interest_arrears_by_cell.sum(axis=0)
+        early_repayment = np.minimum(early_capacity, np.maximum(remaining_balance, 0.0))
+        early_available = early_repayment.copy()
+        early_components: list[np.ndarray] = []
+        remaining_current_interest = np.maximum(
+            snapshot.consumer_contractual_interest_by_cell - paid_interest,
+            0.0,
+        )
+        remaining_contractual_principal = np.maximum(
+            loans[0] - self._consumer_principal_arrears_by_cell,
+            0.0,
+        )
+        for component in (
+            np.maximum(snapshot.consumer_opening_interest_arrears_by_cell - paid_opening_interest, 0.0),
+            remaining_current_interest,
+            self._consumer_principal_arrears_by_cell.copy(),
+            remaining_contractual_principal,
+        ):
+            paid = _allocate_household_amount_pro_rata(early_available, component)
+            early_components.append(paid)
+            early_available -= paid.sum(axis=0)
+        early_opening_interest, early_interest, early_principal_arrears, early_principal = early_components
+        early_interest_by_cell = early_opening_interest + early_interest
+        early_principal_by_cell = early_principal_arrears + early_principal
+        loans[0] = np.maximum(loans[0] - early_principal_by_cell, 0.0)
+        self._consumer_interest_arrears_by_cell = np.maximum(
+            self._consumer_interest_arrears_by_cell - early_interest_by_cell,
+            0.0,
+        )
+        self._consumer_principal_arrears_by_cell = np.minimum(
+            loans[0],
+            np.maximum(self._consumer_principal_arrears_by_cell - early_principal_arrears, 0.0),
+        )
+        interest_paid_by_cell = paid_opening_interest + paid_interest + early_interest_by_cell
+        principal_paid_by_cell += early_principal_by_cell
+        newly_accrued_interest = np.maximum(
+            snapshot.consumer_contractual_interest_by_cell - paid_interest - early_interest_by_cell,
+            0.0,
+        )
+        self._consumer_opening_arrears_collected_by_bank = (paid_opening_interest + early_opening_interest).sum(axis=1)
         self._consumer_interest_accrued_by_bank = newly_accrued_interest.sum(axis=1)
         self._last_interest_by_household = self._mortgage_interest_paid + interest_paid_by_cell.sum(axis=0)
         self._last_interest_by_bank += interest_paid_by_cell.sum(axis=1)
@@ -955,11 +1051,12 @@ class CreditMarket:
             scheduled_payment=snapshot.consumer_total_due.copy(),
             actual_payment=actual.copy(),
             unpaid_payment=unpaid.copy(),
+            early_repayment=early_repayment.copy(),
             interest_paid=interest_paid_by_cell.sum(axis=0),
             principal_paid=principal_paid_by_cell.sum(axis=0),
             interest_paid_by_cell=interest_paid_by_cell.copy(),
             principal_paid_by_cell=principal_paid_by_cell.copy(),
-            opening_interest_arrears_collected_by_cell=paid_opening_interest.copy(),
+            opening_interest_arrears_collected_by_cell=(paid_opening_interest + early_opening_interest).copy(),
             newly_accrued_interest_by_cell=newly_accrued_interest.copy(),
             arrears=ConsumerServiceArrears(
                 closing_interest=self._consumer_interest_arrears_by_cell.copy(),
@@ -989,10 +1086,69 @@ class CreditMarket:
         self._new_loans_this_period["cons_loans"] = np.zeros_like(self.states["cons_loans"])
         self._serviceable_loans_this_period["cons_loans"] = self.states["cons_loans"].copy()
 
+    def remodulate_ficp_consumer_loan_schedule(
+        self,
+        *,
+        active_ficp: np.ndarray,
+        remaining_periods: np.ndarray,
+        prevailing_consumer_loan_rates_by_bank: np.ndarray,
+    ) -> None:
+        """Remodulate active FICP debt over the remaining exclusion horizon."""
+        active = np.asarray(active_ficp, dtype=bool)
+        remaining = np.asarray(remaining_periods, dtype=float)
+        n_banks = self.states["cons_loans"].shape[1]
+        n_households = self.states["cons_loans"].shape[2]
+        if active.ndim == 0:
+            active = np.full(n_households, bool(active))
+        if not np.any(active):
+            return
+        if remaining.ndim == 0:
+            remaining = np.full(n_households, float(remaining))
+        if active.shape != (n_households,) or remaining.shape != (n_households,):
+            raise ValueError("FICP schedule inputs must contain exactly one value per household.")
+        rates_by_bank = np.asarray(prevailing_consumer_loan_rates_by_bank, dtype=float)
+        if rates_by_bank.shape != (n_banks,):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must contain one value per bank.")
+        if not np.all(np.isfinite(rates_by_bank)) or np.any(rates_by_bank < 0.0):
+            raise ValueError("prevailing_consumer_loan_rates_by_bank must be finite and non-negative.")
+        valid_remaining = np.isfinite(remaining) & (remaining > 0.0) & (remaining == np.floor(remaining))
+        if np.any(active & ~valid_remaining):
+            raise ValueError("Active FICP remaining periods must be positive integers.")
+
+        loans = self.states["cons_loans"]
+        aggregate_principal = loans[0].sum(axis=0)
+        payment_shares = np.divide(
+            loans[0],
+            aggregate_principal[None, :],
+            out=np.zeros_like(loans[0]),
+            where=aggregate_principal[None, :] > 0.0,
+        )
+        prevailing_rate = np.divide(
+            (loans[0] * rates_by_bank[:, None]).sum(axis=0),
+            aggregate_principal,
+            out=np.zeros_like(aggregate_principal),
+            where=aggregate_principal > 0.0,
+        )
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        annuity_factor = np.zeros_like(aggregate_principal)
+        for maturity in np.unique(remaining[active]).astype(int):
+            maturity_mask = active & (remaining == maturity)
+            annuity_factor[maturity_mask] = _annuity_payment_factor(
+                prevailing_rate[maturity_mask],
+                int(maturity),
+            )
+        aggregate_payment = aggregate_principal * annuity_factor
+        remodulated = active & (aggregate_principal > 0.0)
+        loans[1][:, remodulated] = prevailing_rate[None, remodulated]
+        loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
+
     def prepare_first_miss_consumer_loan_rescheduling(
         self,
         *,
         prior_missed_payment_count_consumer: np.ndarray,
+        prior_ficp_episode_missed_payment_count: np.ndarray | None = None,
+        prior_ficp_episode_status: np.ndarray | None = None,
         prevailing_consumer_loan_rates_by_bank: np.ndarray,
         consumer_loan_maturity: int,
         period: int,
@@ -1017,8 +1173,21 @@ class CreditMarket:
             raise ValueError("period must be non-negative.")
 
         settlement = self._consumer_payment_settlement
-        cleaned_prior_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0)
-        first_miss = (settlement.unpaid_payment > 0.0) & (cleaned_prior_count == 0.0)
+        if prior_ficp_episode_missed_payment_count is None:
+            episode_count = np.where(np.isfinite(prior_count), np.maximum(prior_count, 0.0), 0.0)
+        else:
+            episode_count = np.asarray(prior_ficp_episode_missed_payment_count, dtype=float)
+            if episode_count.shape != (n_households,):
+                raise ValueError(
+                    "prior_ficp_episode_missed_payment_count must contain exactly one value per household."
+                )
+            episode_count = np.where(np.isfinite(episode_count), np.maximum(episode_count, 0.0), 0.0)
+            if prior_ficp_episode_status is not None:
+                episode_status = np.asarray(prior_ficp_episode_status, dtype=float)
+                if episode_status.shape != (n_households,):
+                    raise ValueError("prior_ficp_episode_status must contain exactly one value per household.")
+                episode_count = np.where(episode_status == 2.0, 0.0, episode_count)
+        first_miss = (settlement.unpaid_payment > 0.0) & (episode_count == 0.0)
         loans = self.states["cons_loans"]
         aggregate_principal = loans[0].sum(axis=0)
         closing_principal_arrears = settlement.arrears.closing_principal.sum(axis=0)
@@ -1739,6 +1908,50 @@ class CreditMarket:
             :, default_flag
         ].sum(axis=1)
 
+    def snapshot_consumer_default_writeoff(self, household_mask: np.ndarray) -> ConsumerDefaultWriteoff:
+        """Snapshot consumer balances before a 4c terminal removal."""
+        household_mask = np.asarray(household_mask, dtype=bool)
+        expected_shape = self.states["cons_loans"][0].shape[1]
+        if household_mask.shape != (expected_shape,):
+            raise ValueError("household_mask must contain exactly one value per household.")
+        removal_mask = np.broadcast_to(household_mask, self.states["cons_loans"][0].shape).copy()
+        principal_by_cell = np.where(removal_mask, self.states["cons_loans"][0], 0.0)
+        principal_arrears_by_cell = np.where(removal_mask, self._consumer_principal_arrears_by_cell, 0.0)
+        interest_arrears_by_cell = np.where(removal_mask, self._consumer_interest_arrears_by_cell, 0.0)
+        return ConsumerDefaultWriteoff(
+            principal_by_cell=principal_by_cell,
+            principal_arrears_by_cell=principal_arrears_by_cell,
+            interest_arrears_by_cell=interest_arrears_by_cell,
+            principal_by_bank=principal_by_cell.sum(axis=1),
+            principal_arrears_by_bank=principal_arrears_by_cell.sum(axis=1),
+            interest_arrears_by_bank=interest_arrears_by_cell.sum(axis=1),
+            npl_denominator_by_bank=self.states["cons_loans"][0].sum(axis=1).copy(),
+            removal_mask=removal_mask,
+        )
+
+    def remove_consumer_loans_by_cell(self, removal_mask: np.ndarray) -> ConsumerDefaultWriteoff:
+        """Remove only selected consumer principal and arrears cells."""
+        removal_mask = np.asarray(removal_mask, dtype=bool)
+        expected_shape = self.states["cons_loans"][0].shape
+        if removal_mask.shape != expected_shape:
+            raise ValueError("removal_mask must match the bank-by-household consumer-loan shape.")
+        writeoff = self.snapshot_consumer_default_writeoff(removal_mask.any(axis=0))
+        if not np.array_equal(writeoff.removal_mask, removal_mask):
+            raise ValueError("removal_mask must select complete household consumer cells.")
+        self.states["cons_loans"][:, removal_mask] = 0.0
+        self._consumer_principal_arrears_by_cell[removal_mask] = 0.0
+        self._consumer_interest_arrears_by_cell[removal_mask] = 0.0
+        self._consumer_terminal_removal_exclusion = removal_mask.copy()
+        return writeoff
+
+    def current_consumer_terminal_removal_exclusion(self) -> np.ndarray:
+        """Return the current-period consumer-removal exclusion mask."""
+        return self._consumer_terminal_removal_exclusion.copy()
+
+    def current_consumer_terminal_removal_episode_ids(self) -> np.ndarray:
+        """Return durable FICP episode IDs for the current removal carrier."""
+        return self.ts.current("consumer_terminal_removal_episode_id_by_cell").copy()
+
     def remove_loans_to_firm(self, firm_id: int | np.ndarray) -> float:
         """Remove all loans associated with specified firm(s).
 
@@ -1759,22 +1972,36 @@ class CreditMarket:
         self._firm_principal_arrears_by_cell["lt_loans"][:, firm_id] = 0.0
         return total_amount
 
-    def remove_loans_to_households(self, household_id: int | np.ndarray) -> Tuple[float, float]:
+    def remove_loans_to_households(
+        self,
+        household_id: int | np.ndarray,
+        consumer_exclusion: np.ndarray | None = None,
+    ) -> Tuple[float, float]:
         """Remove all loans associated with specified household(s).
 
         Used when households default. Returns the total amounts written off by loan type.
 
         Args:
             household_id (int | np.ndarray): ID(s) of household(s) to remove loans for
+            consumer_exclusion: Optional bank-by-household mask for consumer cells
+                already removed by the 4c terminal-removal path.
 
         Returns:
             Tuple[float, float]: Total consumer loans and mortgages written off
         """
-        cons_amount = self.states["cons_loans"][0][:, household_id].sum()
+        household_ids = np.atleast_1d(household_id).astype(int)
+        consumer_selection = np.zeros_like(self.states["cons_loans"][0], dtype=bool)
+        consumer_selection[:, household_ids] = True
+        if consumer_exclusion is not None:
+            consumer_exclusion = np.asarray(consumer_exclusion, dtype=bool)
+            if consumer_exclusion.shape != consumer_selection.shape:
+                raise ValueError("consumer_exclusion must match the bank-by-household consumer-loan shape.")
+            consumer_selection &= ~consumer_exclusion
+        cons_amount = self.states["cons_loans"][0][consumer_selection].sum()
         mort_amount = self.states["mort_loans"][0][:, household_id].sum()
-        self.states["cons_loans"][:, :, household_id] = 0.0
+        self.states["cons_loans"][:, consumer_selection] = 0.0
         self.states["mort_loans"][:, :, household_id] = 0.0
-        self._consumer_principal_arrears_by_cell[:, household_id] = 0.0
+        self._consumer_principal_arrears_by_cell[consumer_selection] = 0.0
         return cons_amount, mort_amount
 
     def remove_loans_by_bank(self, bank_id: int | np.ndarray) -> None:

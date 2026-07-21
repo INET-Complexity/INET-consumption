@@ -119,6 +119,16 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         total_firm_default_overdraft_writeoff=[0.0],
         firm_default_credit_loss=np.zeros(len(bank_data)),
         total_firm_default_credit_loss=[0.0],
+        consumer_default_loan_writeoff=np.zeros(len(bank_data)),
+        total_consumer_default_loan_writeoff=[0.0],
+        consumer_default_principal_arrears=np.zeros(len(bank_data)),
+        total_consumer_default_principal_arrears=[0.0],
+        consumer_default_credit_loss=np.zeros(len(bank_data)),
+        total_consumer_default_credit_loss=[0.0],
+        consumer_default_interest_income_loss=np.zeros(len(bank_data)),
+        total_consumer_default_interest_income_loss=[0.0],
+        consumer_default_npl=np.zeros(len(bank_data)),
+        consumer_default_npl_denominator=np.zeros(len(bank_data)),
         #
         interest_rates_on_short_term_firm_loans=bank_data["Short-Term Interest Rates on Firm Loans"].values,
         average_interest_rates_on_short_term_firm_loans=[

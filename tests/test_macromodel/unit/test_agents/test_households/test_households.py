@@ -66,6 +66,19 @@ class TestHouseholds:
         ]:
             assert field_name in test_households.ts.get_keys()
 
+    def test__handle_insolvency_supports_legacy_handler_signature(self, test_households, monkeypatch):
+        class LegacyHandler:
+            def handle_insolvency(self, households, banks, credit_market):
+                return 1.0, 2.0, 3.0
+
+        monkeypatch.setitem(test_households.functions, "insolvency", LegacyHandler())
+
+        assert test_households.handle_insolvency(None, None, consumer_terminal_removal_exclusion=np.zeros((1, 1))) == (
+            1.0,
+            2.0,
+            3.0,
+        )
+
     def test__received_consumption_loans_starts_unsettled(self, test_households):
         received_consumption_loans = np.asarray(test_households.ts.current("received_consumption_loans"), dtype=float)
 
@@ -2101,6 +2114,9 @@ class TestPopulatePostGrantFeasiblePlan:
             actual_consumer_payments=actual,
             unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
+            consumer_contractual_principal=np.zeros(n_households),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
         )
 
         np.testing.assert_array_equal(
@@ -2118,6 +2134,9 @@ class TestPopulatePostGrantFeasiblePlan:
             actual_consumer_payments=actual,
             unpaid_consumer_payments=scheduled - actual,
             time_unit=3,
+            consumer_contractual_principal=np.zeros(n_households),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
         )
 
         np.testing.assert_array_equal(
@@ -2131,6 +2150,211 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_array_equal(
             test_households.ts.current("ficp_exclusion_remaining_periods"),
             np.resize(np.asarray([0, 20, 0, 0]), n_households),
+        )
+
+    def test__record_stage6_ficp_episode_emits_one_horizon_event(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        scheduled = np.full(n_households, 10.0)
+
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=np.full(n_households, 5.0),
+            unpaid_consumer_payments=np.full(n_households, 5.0),
+            time_unit=3,
+            period=0,
+            consumer_contractual_principal=np.full(n_households, 100.0),
+        )
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=1,
+            consumer_contractual_principal=np.full(n_households, 95.0),
+        )
+        trigger_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=np.full(n_households, 5.0),
+            unpaid_consumer_payments=np.full(n_households, 5.0),
+            time_unit=3,
+            period=2,
+            consumer_contractual_principal=np.full(n_households, 90.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
+        )
+        assert trigger_events == ()
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_id"), np.ones(n_households))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_exclusion_remaining_periods"), np.full(n_households, 20)
+        )
+
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+        test_households.ts.override_current("ficp_episode_status", np.ones(n_households))
+        events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=22,
+            consumer_contractual_principal=np.full(n_households, 40.0),
+            consumer_principal_arrears=np.full(n_households, 2.0),
+            consumer_interest_arrears=np.full(n_households, 1.0),
+        )
+        assert len(events) == n_households
+        assert {event.ficp_episode_id for event in events} == {1}
+        assert {event.horizon_end_period for event in events} == {22}
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("ficp_residual_consumer_balance"), np.full(n_households, 43.0)
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_status"), np.full(n_households, 2))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
+        )
+
+        test_households.ts.override_current("ficp_forgiveness_event_stage", np.ones(n_households))
+        preserved_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=23,
+            consumer_contractual_principal=np.full(n_households, 39.0),
+            consumer_principal_arrears=np.full(n_households, 2.0),
+            consumer_interest_arrears=np.full(n_households, 1.0),
+        )
+        assert preserved_events == ()
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event_stage"), np.ones(n_households))
+        np.testing.assert_allclose(
+            test_households.ts.current("ficp_forgiveness_event_residual_contractual_principal"),
+            np.full(n_households, 40.0),
+        )
+
+        # A partially written processed marker must not clear the event before
+        # the explicit completed stage is durable.
+        test_households.ts.override_current("ficp_forgiveness_event_processed", np.ones(n_households, dtype=bool))
+        test_households.ts.override_current("ficp_forgiveness_processed", np.ones(n_households, dtype=bool))
+        partial_marker_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=24,
+            consumer_contractual_principal=np.full(n_households, 39.0),
+            consumer_principal_arrears=np.full(n_households, 2.0),
+            consumer_interest_arrears=np.full(n_households, 1.0),
+        )
+        assert partial_marker_events == ()
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.ones(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_forgiveness_event_stage"), np.ones(n_households))
+
+        # Replaying a horizon-end state cannot emit the completed episode again.
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+        test_households.ts.override_current("ficp_episode_status", np.ones(n_households))
+        replay_events = test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=scheduled,
+            unpaid_consumer_payments=np.zeros(n_households),
+            time_unit=3,
+            period=24,
+            consumer_contractual_principal=np.full(n_households, 38.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
+        )
+        assert replay_events == ()
+
+        for household_id in range(n_households):
+            test_households.mark_ficp_forgiveness_processed(household_id, 1)
+
+        # The completed episode retains its emitted marker until a later
+        # second miss starts a distinct episode.
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=np.full(n_households, 5.0),
+            unpaid_consumer_payments=np.full(n_households, 5.0),
+            time_unit=3,
+            period=25,
+            consumer_contractual_principal=np.full(n_households, 39.0),
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_event"), np.zeros(n_households, dtype=bool)
+        )
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.ones(n_households, dtype=bool)
+        )
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=scheduled,
+            actual_consumer_payments=np.full(n_households, 5.0),
+            unpaid_consumer_payments=np.full(n_households, 5.0),
+            time_unit=3,
+            period=26,
+            consumer_contractual_principal=np.full(n_households, 38.0),
+            consumer_principal_arrears=np.zeros(n_households),
+            consumer_interest_arrears=np.zeros(n_households),
+        )
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_id"), np.full(n_households, 2))
+        np.testing.assert_array_equal(test_households.ts.current("ficp_episode_end_period"), np.zeros(n_households))
+        np.testing.assert_array_equal(
+            test_households.ts.current("ficp_forgiveness_emitted"), np.zeros(n_households, dtype=bool)
+        )
+
+    def test__record_stage6_requires_debt_components_for_active_ficp(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", np.ones(n_households))
+
+        with pytest.raises(ValueError, match="debt components are required"):
+            test_households.record_stage6_consumer_distress_state(
+                scheduled_consumer_payments=np.full(n_households, 10.0),
+                actual_consumer_payments=np.full(n_households, 10.0),
+                unpaid_consumer_payments=np.zeros(n_households),
+                time_unit=3,
+                period=1,
+            )
+
+    def test__record_stage6_rejects_non_integer_period_before_mutation(self, test_households):
+        n_households = test_households.ts.current("n_households")
+
+        with pytest.raises(ValueError, match="non-negative integer"):
+            test_households.record_stage6_consumer_distress_state(
+                scheduled_consumer_payments=np.full(n_households, 10.0),
+                actual_consumer_payments=np.full(n_households, 10.0),
+                unpaid_consumer_payments=np.zeros(n_households),
+                time_unit=3,
+                period=1.5,
+            )
+
+    def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+            consumption_after_floor=np.full(n_households, 20.0),
+            remaining_subsistence_shortfall=np.full(n_households, 7.0),
+        )
+
+        test_households.populate_post_grant_early_repayment_capacity(
+            mortgage_service=np.full(n_households, 30.0),
+            scheduled_consumer_service=np.full(n_households, 10.0),
+            eligible_ficp=np.arange(n_households) == 0,
+        )
+
+        np.testing.assert_allclose(
+            test_households.current_early_consumer_repayment_capacity(),
+            np.where(np.arange(n_households) == 0, 40.0, 0.0),
+        )
+        np.testing.assert_allclose(
+            test_households.current_remaining_subsistence_shortfall(),
+            np.full(n_households, 7.0),
         )
 
     @pytest.mark.parametrize(
@@ -2246,12 +2470,12 @@ class TestComputeTargetCreditLiveCreditRequested:
         np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), sentinel)
         np.testing.assert_allclose(test_households.ts.current("live_credit_requested"), sentinel)
 
-    def test__compute_target_credit_ficp_state_does_not_gate_in_increment_3c(self, test_households, monkeypatch):
+    def test__compute_target_credit_active_ficp_gate_preserves_mortgage_demand(self, test_households, monkeypatch):
         n_households = test_households.ts.current("n_households")
         sentinel = np.full(n_households, 12345.0)
         mortgage_sentinel = np.full(n_households, 54321.0)
-        ficp_state = np.zeros(n_households, dtype=bool)
-        ficp_state[1::2] = True
+        ficp_remaining = np.zeros(n_households)
+        ficp_remaining[1::2] = 20
         test_households.configure_feasibility_resolver(True)
         test_households.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
             liquidity_shortfall_before_repair=np.zeros(n_households),
@@ -2259,7 +2483,7 @@ class TestComputeTargetCreditLiveCreditRequested:
             residual_shortfall_after_lfa=np.zeros(n_households),
         )
         test_households.populate_pre_grant_feasible_plan_credit_requested(credit_requested=sentinel)
-        test_households.ts.override_current("ficp_state", ficp_state)
+        test_households.ts.override_current("ficp_exclusion_remaining_periods", ficp_remaining)
         monkeypatch.setattr(
             test_households.functions["target_credit"],
             "compute_target_mortgage",
@@ -2268,9 +2492,12 @@ class TestComputeTargetCreditLiveCreditRequested:
 
         test_households.compute_target_credit(current_sales=None)
 
+        expected_consumer_demand = sentinel.copy()
+        expected_consumer_demand[1::2] = 0.0
+        np.testing.assert_allclose(test_households.ts.current("target_consumption_loans"), expected_consumer_demand)
         np.testing.assert_allclose(
-            test_households.ts.current("target_consumption_loans"),
-            sentinel,
+            test_households.ts.current("live_credit_requested"),
+            expected_consumer_demand,
         )
         np.testing.assert_allclose(test_households.ts.current("target_mortgage"), mortgage_sentinel)
 

@@ -368,7 +368,7 @@ class Banks(Agent):
         Combines:
         - Interest received on loans
         - Net interest received on deposits
-        - Credit losses from firm defaults
+        - Credit losses from firm and consumer defaults
 
         Returns:
             np.ndarray: Total profits by bank
@@ -379,6 +379,8 @@ class Banks(Agent):
             + self.ts.current("consumer_interest_accrued")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
+            - self.ts.current("consumer_default_credit_loss")
+            - self.ts.current("consumer_default_interest_income_loss")
         )
 
     def compute_cash_distributable_profits(self) -> np.ndarray:
@@ -388,6 +390,8 @@ class Banks(Agent):
             - self.ts.current("consumer_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
+            - self.ts.current("consumer_default_credit_loss")
+            - self.ts.current("consumer_default_interest_income_loss")
         )
 
     def update_deposits(

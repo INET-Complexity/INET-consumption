@@ -467,6 +467,100 @@ def test_consumer_arrears_carry_collect_once_and_remodulate_new_credit_next_peri
     np.testing.assert_allclose(market._consumer_principal_arrears_by_cell, np.zeros((2, 1)))
 
 
+def test_first_missed_consumer_payment_records_one_rescheduling_event_and_extends_schedule():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[:, 0, 0] = np.array([100.0, 0.10, 30.0])
+    mort_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    mort_loans[:, 0, 0] = np.array([250.0, 0.03, 20.0])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=mort_loans,
+    )
+    opening_mortgages = market.states["mort_loans"].copy()
+    opening_consumer_principal = market.states["cons_loans"][0].copy()
+
+    first_snapshot = market.prepare_household_service_snapshot()
+    first_settlement = market.settle_consumer_payments(first_snapshot.consumer_total_due)
+    events = market.prepare_first_miss_consumer_loan_rescheduling(
+        prior_missed_payment_count_consumer=np.array([0.0]),
+        prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
+        consumer_loan_maturity=8,
+        period=7,
+    )
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.household_id == 0
+    assert event.period == 7
+    assert event.old_maturity == 8
+    assert event.new_maturity == 9
+    np.testing.assert_allclose(event.scheduled_payment, first_settlement.scheduled_payment[0])
+    np.testing.assert_allclose(event.actual_payment + event.unpaid_payment, event.scheduled_payment)
+    np.testing.assert_allclose(event.contractual_principal + event.closing_principal_arrears, 100.0)
+    np.testing.assert_allclose(event.closing_interest_arrears, 10.0)
+    np.testing.assert_allclose(market.states["cons_loans"][0], opening_consumer_principal)
+    np.testing.assert_allclose(market.states["mort_loans"], opening_mortgages)
+
+    assert (
+        market.prepare_first_miss_consumer_loan_rescheduling(
+            prior_missed_payment_count_consumer=np.array([0.0]),
+            prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
+            consumer_loan_maturity=8,
+            period=7,
+        )
+        == events
+    )
+    market.finalize_household_consumer_schedule()
+
+    expected_payment = 100.0 * _annuity_payment_factor(0.04, 9)
+    np.testing.assert_allclose(event.resulting_scheduled_payment, expected_payment)
+    np.testing.assert_allclose(market.states["cons_loans"][1, 0, 0], 0.04)
+    np.testing.assert_allclose(market.states["cons_loans"][2, 0, 0], expected_payment)
+    np.testing.assert_allclose(market.states["mort_loans"], opening_mortgages)
+
+    market._household_service_snapshot = None
+    market._consumer_payment_settlement = None
+    second_snapshot = market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(second_snapshot.consumer_total_due)
+    second_events = market.prepare_first_miss_consumer_loan_rescheduling(
+        prior_missed_payment_count_consumer=np.array([1.0]),
+        prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
+        consumer_loan_maturity=8,
+        period=8,
+    )
+
+    assert second_events == ()
+    assert len(market.consumer_first_miss_rescheduling_events()) == 1
+    market.finalize_household_consumer_schedule()
+    np.testing.assert_allclose(market.states["mort_loans"], opening_mortgages)
+
+
+def test_first_miss_rescheduling_leaves_current_household_schedule_unchanged():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=2)
+    cons_loans[:, 0] = np.array([[100.0, 100.0], [0.10, 0.10], [30.0, 30.0]])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 2),
+    )
+    snapshot = market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(np.array([snapshot.consumer_total_due[0], 0.0]))
+    market.prepare_first_miss_consumer_loan_rescheduling(
+        prior_missed_payment_count_consumer=np.zeros(2),
+        prevailing_consumer_loan_rates_by_bank=np.array([0.04]),
+        consumer_loan_maturity=8,
+        period=0,
+    )
+    market.finalize_household_consumer_schedule()
+
+    np.testing.assert_allclose(market.states["cons_loans"][2, 0], [100.0 * _annuity_payment_factor(0.04, 9), 30.0])
+
+
 def test_loan_removal_preserves_interest_arrears_and_clears_principal_status():
     cons_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
     cons_loans[0] = np.array([[100.0, 20.0], [50.0, 30.0]])

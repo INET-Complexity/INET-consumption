@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import h5py
@@ -2906,3 +2907,87 @@ class TestCountry:
 
         with pytest.raises(RuntimeError, match="already been settled"):
             test_country.settle_authoritative_household_payments()
+
+        n_households = test_country.households.ts.current("n_households")
+        n_banks = test_country.credit_market.states["cons_loans"].shape[1]
+        target_consumption = test_country.households.ts.current("target_consumption")
+        test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+            consumption_after_floor=np.zeros(n_households),
+            remaining_subsistence_shortfall=np.zeros(n_households),
+        )
+        order = []
+        empty_arrears = SimpleNamespace(
+            closing_interest=np.zeros((n_banks, n_households)),
+            closing_principal=np.zeros((n_banks, n_households)),
+        )
+        empty_settlement = SimpleNamespace(
+            scheduled_payment=np.zeros(n_households),
+            actual_payment=np.zeros(n_households),
+            unpaid_payment=np.zeros(n_households),
+            interest_paid=np.zeros(n_households),
+            principal_paid=np.zeros(n_households),
+            arrears=empty_arrears,
+        )
+        monkeypatch.setattr(test_country.credit_market, "consumer_payments_settled", lambda: False)
+        monkeypatch.setattr(test_country.households, "apply_consumption_floor_to_post_grant_plan", lambda **_: None)
+        monkeypatch.setattr(
+            test_country.households,
+            "_scale_consumption_matrix_to_household_totals",
+            lambda **_: target_consumption,
+        )
+        monkeypatch.setattr(
+            test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
+        )
+        monkeypatch.setattr(test_country.credit_market, "settle_consumer_payments", lambda _shortfall: empty_settlement)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_mortgage_principal_paid_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "prepare_first_miss_consumer_loan_rescheduling",
+            lambda **_: order.append("prepare") or (),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market, "finalize_household_consumer_schedule", lambda: order.append("finalize")
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "record_consumer_loan_rescheduling_events",
+            lambda _events: order.append("record_rescheduling"),
+        )
+        monkeypatch.setattr(test_country.credit_market, "remove_repaid_loans", lambda _keys: None)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_outstanding_consumption_loans_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "compute_outstanding_mortgages_by_household",
+            lambda: np.zeros(n_households),
+        )
+        monkeypatch.setattr(test_country.households, "compute_debt", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.credit_market, "compute_interest_paid_by_household", lambda: np.zeros(n_households)
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_interest_paid_on_deposits",
+            lambda **_: np.zeros(n_households),
+        )
+        monkeypatch.setattr(test_country.households, "compute_interest_paid", lambda: np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households,
+            "record_stage6_consumer_distress_state",
+            lambda **_: order.append("distress"),
+        )
+
+        test_country.settle_authoritative_household_payments()
+
+        assert order.index("prepare") < order.index("finalize") < order.index("distress")

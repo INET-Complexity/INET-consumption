@@ -1934,12 +1934,7 @@ class Country:
             or np.any((event_stage < 0.0) | (event_stage > 3.0))
         ):
             raise RuntimeError("FICP forgiveness event stages must be integers from zero through three.")
-        completed_mask = (
-            event_processed
-            & ~event_mask
-            & ~event_emitted
-            & (event_stage == 3.0)
-        )
+        completed_mask = event_processed & ~event_mask & ~event_emitted & (event_stage == 3.0)
         if np.any(event_mask & ~event_emitted) or np.any(event_processed & ~event_emitted & ~completed_mask):
             raise RuntimeError("FICP event flags must be consistent with the emitted event record.")
         pending_mask = event_mask & ~event_processed

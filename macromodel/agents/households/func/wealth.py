@@ -468,15 +468,16 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"fixed_cost_share must be non-negative, got {fixed_cost_share}.")
         if uses_portfolio_choice:
             validate_target_share_source(target_share_source)
+        if settles_portfolio_choice and not uses_portfolio_choice:
+            raise ValueError("settles_portfolio_choice=True requires uses_portfolio_choice=True.")
         if settles_portfolio_choice:
-            raise ValueError(
-                "settles_portfolio_choice=True requires the later portfolio-settlement increment; "
-                "Stage 5 only supplies post-liquidation bases."
-            )
+            # Country validates that the feasibility resolver is active because
+            # the wealth setter does not own the country-level carrier.
+            pass
         if dynamic_shifters_enabled:
             raise ValueError("dynamic_shifters_enabled=True is out of scope for PaperAssetReturnWealthSetter.")
         if liquid_asset_policy_rate_markup is not None:
-            raise ValueError("liquid_asset_policy_rate_markup is out of scope until settled portfolio wiring lands.")
+            raise ValueError("liquid_asset_policy_rate_markup is out of scope until its policy-rate source is wired.")
         if participation_source != "initial_ifa_positive":
             raise ValueError(f"Unsupported participation_source: {participation_source}.")
         if liquid_return_source != "policy_rate_markup":
@@ -493,9 +494,9 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self._current_illiquid_return_period: int | None = None
         self._last_consumed_illiquid_return_period: int | None = None
         self._current_illiquid_return_consumed = True
-        # Stage 4 (portfolio choice) shadow-mode parameters. uses_portfolio_choice
-        # gates the diagnostics-only call site in Households.update_wealth(); it
-        # does not affect any of the asset-return behaviour above. See
+        # Stage 4 (portfolio choice) parameters. uses_portfolio_choice gates the
+        # diagnostics and optional settlement call site in Households.update_wealth();
+        # it does not affect any of the asset-return behaviour above. See
         # knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md.
         self.uses_portfolio_choice = uses_portfolio_choice
         self.target_share_source = target_share_source
@@ -504,6 +505,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self.lambda_kappa = lambda_kappa
         self.fixed_cost_share = fixed_cost_share
         self.frm_coefficients_path = frm_coefficients_path
+        self.settles_portfolio_choice = settles_portfolio_choice
 
     @property
     def expected_illiquid_log_return(self) -> float:

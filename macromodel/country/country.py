@@ -101,6 +101,16 @@ def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarr
     return np.where(np.isfinite(shortfall) & (shortfall > 0.0), shortfall, 0.0)
 
 
+def validate_portfolio_settlement_configuration(wealth_function, uses_feasibility_resolver: bool) -> None:
+    """Validate the cross-component prerequisites for settled portfolio choice."""
+    settles = getattr(wealth_function, "settles_portfolio_choice", False)
+    uses_choice = getattr(wealth_function, "uses_portfolio_choice", False)
+    if settles and not uses_choice:
+        raise ValueError("settles_portfolio_choice=True requires uses_portfolio_choice=True.")
+    if settles and not uses_feasibility_resolver:
+        raise ValueError("settles_portfolio_choice=True requires uses_feasibility_resolver=True.")
+
+
 def _append_ficp_bank_effects(
     banks,
     *,
@@ -296,6 +306,11 @@ class Country:
 
         self.configuration = configuration
         self.economy.configure_consumer_price_sources(configuration.economy)
+
+        validate_portfolio_settlement_configuration(
+            households.functions["wealth"],
+            configuration.households.parameters.uses_feasibility_resolver,
+        )
 
         self.add_emissions = add_emissions
         self.emission_factors_lcu = emission_factors_lcu

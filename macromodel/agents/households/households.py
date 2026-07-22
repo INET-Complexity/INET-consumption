@@ -47,7 +47,11 @@ from macromodel.agents.households.func.payment_suspension import (
     compute_stage5_payment_suspension_diagnostics,
 )
 from macromodel.agents.households.func.portfolio_diagnostics import (
+    Stage4HouseholdDiagnostics,
     compute_stage4_household_diagnostics,
+)
+from macromodel.agents.households.func.portfolio_settlement import (
+    settle_portfolio_reallocation,
 )
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_household_head_covariates,
@@ -115,6 +119,11 @@ _STAGE4_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "portfolio_no_financial_assets_flag": False,
     "portfolio_target_share_clipped_flag": False,
     "portfolio_settlement_enabled": False,
+    "portfolio_settlement_valid_flag": False,
+    "portfolio_settlement_status": 0.0,
+    "portfolio_settlement_committed_lfa_flow": 0.0,
+    "portfolio_settlement_committed_ifa_flow": 0.0,
+    "portfolio_settlement_committed_adjustment_cost": 0.0,
 }
 
 # Stage 5 (feasibility resolver) diagnostic time series, registered at
@@ -3197,33 +3206,63 @@ class Households(Agent):
             used_up_wealth_in_deposits=used_up_wealth_in_deposits,
             tau_cf=tau_cf,
         )
-
         if self.uses_feasibility_resolver:
-            settled_lfa, settled_ifa = self.settle_post_grant_liquidation(
+            wealth_base_lfa, wealth_base_ifa = self.settle_post_grant_liquidation(
                 base_lfa=base_lfa,
                 base_ifa=base_ifa,
             )
         else:
-            settled_lfa, settled_ifa = base_lfa, base_ifa
+            wealth_base_lfa, wealth_base_ifa = base_lfa, base_ifa
 
-        self.ts.wealth_other_financial_assets.append(settled_ifa)
-        self.ts.total_wealth_other_financial_assets.append([settled_ifa.sum()])
-
-        # Update deposits
-        self.ts.wealth_deposits.append(settled_lfa)
-        self.ts.total_wealth_deposits.append([settled_lfa.sum()])
-
-        # Stage 4 (portfolio choice): diagnostics-only shadow call site. Must run
-        # here — after wealth_other_financial_assets and wealth_deposits are both
-        # appended above (so post_return_ifa/post_surplus_lfa are this period's
-        # final values) and before wealth_financial_assets/wealth below (so this
-        # never reads a stale total). Appends new diagnostic series only; does not
-        # touch wealth_deposits, wealth_other_financial_assets, wealth_financial_assets,
-        # wealth, debt, or any bank-side state. See
-        # knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md
-        # (Increment 3) for the full design and data-sourcing rationale.
+        settlement = None
         if getattr(self.functions["wealth"], "uses_portfolio_choice", False):
-            self.compute_stage4_portfolio_diagnostics()
+            diagnostics = self.compute_stage4_portfolio_diagnostics(
+                post_surplus_lfa=wealth_base_lfa,
+                post_return_ifa=wealth_base_ifa,
+                append_diagnostics=False,
+                append_settlement_diagnostics=False,
+            )
+            settles = getattr(self.functions["wealth"], "settles_portfolio_choice", False)
+            portfolio_base_lfa = wealth_base_lfa
+            portfolio_base_ifa = wealth_base_ifa
+            forced_liquidation_active = np.zeros(wealth_base_lfa.shape, dtype=bool)
+            if settles:
+                if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
+                    raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
+                post_liquidation_lfa = self.post_grant_feasible_plan.post_liquidation_lfa
+                post_liquidation_ifa = self.post_grant_feasible_plan.post_liquidation_ifa
+                settled_liquidation = self.post_grant_feasible_plan.settled_liquidation_total
+                if post_liquidation_lfa is None or post_liquidation_ifa is None or settled_liquidation is None:
+                    raise RuntimeError(
+                        "Settled portfolio choice requires post-liquidation bases from the final feasibility carrier."
+                    )
+                portfolio_base_lfa = np.asarray(post_liquidation_lfa, dtype=float)
+                portfolio_base_ifa = np.asarray(post_liquidation_ifa, dtype=float)
+                forced_liquidation_active = np.asarray(settled_liquidation, dtype=float) > 0.0
+            settlement = settle_portfolio_reallocation(
+                base_lfa=portfolio_base_lfa,
+                base_ifa=portfolio_base_ifa,
+                investable_surplus=diagnostics.portfolio_investable_surplus,
+                rebalancing=diagnostics.rebalancing,
+                settlement_enabled=settles,
+                forced_liquidation_active=forced_liquidation_active,
+            )
+            wealth_base_lfa = settlement.closing_lfa
+            wealth_base_ifa = settlement.closing_ifa
+
+        self.ts.wealth_other_financial_assets.append(wealth_base_ifa)
+        self.ts.total_wealth_other_financial_assets.append([wealth_base_ifa.sum()])
+        self.ts.wealth_deposits.append(wealth_base_lfa)
+        self.ts.total_wealth_deposits.append([wealth_base_lfa.sum()])
+
+        if settlement is not None:
+            self._append_stage4_portfolio_diagnostics(diagnostics)
+            self.ts.portfolio_settlement_enabled.append(settlement.settlement_enabled)
+            self.ts.portfolio_settlement_valid_flag.append(settlement.settlement_valid_flag)
+            self.ts.portfolio_settlement_status.append(settlement.settlement_status)
+            self.ts.portfolio_settlement_committed_lfa_flow.append(settlement.committed_lfa_flow)
+            self.ts.portfolio_settlement_committed_ifa_flow.append(settlement.committed_ifa_flow)
+            self.ts.portfolio_settlement_committed_adjustment_cost.append(settlement.committed_adjustment_cost)
 
         # Compute total financial assets
         self.ts.wealth_financial_assets.append(
@@ -3234,15 +3273,19 @@ class Households(Agent):
         self.ts.wealth.append(self.ts.current("wealth_real_assets") + self.ts.current("wealth_financial_assets"))
         return self.current_illiquid_financial_asset_return_rate()
 
-    def compute_stage4_portfolio_diagnostics(self) -> None:
+    def compute_stage4_portfolio_diagnostics(
+        self,
+        *,
+        post_surplus_lfa: np.ndarray | None = None,
+        post_return_ifa: np.ndarray | None = None,
+        append_diagnostics: bool = True,
+        append_settlement_diagnostics: bool = True,
+    ):
         """Compute and persist Stage 4 (portfolio choice) shadow diagnostics for this period.
 
-        Diagnostics-only: appends new ``portfolio_*`` time series and does not
-        mutate ``wealth_deposits``, ``wealth_other_financial_assets``,
-        ``wealth_financial_assets``, ``wealth``, debt, or any bank-side state.
-        Must be called from ``update_wealth()`` after ``wealth_other_financial_assets``
-        and ``wealth_deposits`` are both appended for the current period (see the
-        call site for the exact ordering rationale).
+        Computes the ``portfolio_*`` diagnostics without mutating financial
+        stocks. The caller may defer their persistence until after final stock
+        persistence so the time-series order remains atomic with settlement.
 
         See ``knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md``
         (Increment 3) for the full design, including the investable-surplus
@@ -3252,7 +3295,10 @@ class Households(Agent):
         wealth_function = self.functions["wealth"]
 
         opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
-        post_return_ifa = self.ts.current("wealth_other_financial_assets")
+        if post_return_ifa is None:
+            post_return_ifa = self.ts.current("wealth_other_financial_assets")
+        else:
+            post_return_ifa = np.asarray(post_return_ifa, dtype=float)
         # post_surplus_lfa ("LFA at the entry point plus s-tilde") is the
         # household's actual, already-updated current liquid balance sheet —
         # self.ts.current("wealth_deposits") — not a parallel shadow quantity
@@ -3260,7 +3306,10 @@ class Households(Agent):
         # period's full deposit update (new savings, withdrawals, interest,
         # debt installments, new loans, tau_cf), so any positive-surplus
         # acquisition is already embedded in it.
-        post_surplus_lfa = self.ts.current("wealth_deposits")
+        if post_surplus_lfa is None:
+            post_surplus_lfa = self.ts.current("wealth_deposits")
+        else:
+            post_surplus_lfa = np.asarray(post_surplus_lfa, dtype=float)
         # investable_surplus is computed independently per the Data Inputs
         # table's canonical definition (T_it=0 since income is already net of
         # tax) and passed through purely as a diagnostic — it does not feed
@@ -3308,9 +3357,23 @@ class Households(Agent):
             lambda_kappa=wealth_function.lambda_kappa,
             fixed_cost_share=wealth_function.fixed_cost_share,
         )
-        rebalancing = diagnostics.rebalancing
         n_households = post_return_ifa.shape[0]
 
+        if append_diagnostics:
+            self._append_stage4_portfolio_diagnostics(diagnostics)
+        if append_settlement_diagnostics:
+            self.ts.portfolio_settlement_enabled.append(np.zeros(n_households, dtype=bool))
+            self.ts.portfolio_settlement_valid_flag.append(np.zeros(n_households, dtype=bool))
+            self.ts.portfolio_settlement_status.append(np.full(n_households, 0.0))
+            self.ts.portfolio_settlement_committed_lfa_flow.append(np.zeros(n_households))
+            self.ts.portfolio_settlement_committed_ifa_flow.append(np.zeros(n_households))
+            self.ts.portfolio_settlement_committed_adjustment_cost.append(np.zeros(n_households))
+        return diagnostics
+
+    def _append_stage4_portfolio_diagnostics(self, diagnostics: Stage4HouseholdDiagnostics) -> None:
+        """Persist the computed Stage 4 shadow diagnostics in one block."""
+        rebalancing = diagnostics.rebalancing
+        n_households = diagnostics.portfolio_post_return_ifa.shape[0]
         self.ts.portfolio_actual_illiquid_share.append(rebalancing.actual_illiquid_share)
         self.ts.portfolio_opening_tfa_scale.append(diagnostics.portfolio_opening_tfa_scale)
         self.ts.portfolio_target_tfa_base.append(diagnostics.portfolio_target_tfa_base)
@@ -3347,9 +3410,6 @@ class Households(Agent):
         self.ts.portfolio_infeasible_interval_flag.append(rebalancing.infeasible_interval_flag)
         self.ts.portfolio_no_financial_assets_flag.append(rebalancing.no_financial_assets_flag)
         self.ts.portfolio_target_share_clipped_flag.append(diagnostics.portfolio_target_share_clipped_flag)
-        # Portfolio settlement remains a later increment; this Stage 5 branch
-        # only exposes the post-liquidation bases consumed by that layer.
-        self.ts.portfolio_settlement_enabled.append(np.zeros(n_households, dtype=bool))
 
     def compute_wealth_of_the_main_residence(self, housing_data: pd.DataFrame) -> np.ndarray:
         """Calculate main residence wealth.

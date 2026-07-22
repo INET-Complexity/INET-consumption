@@ -88,6 +88,27 @@ def _make_ficp_test_country():
 
 
 class TestCountry:
+    def test__portfolio_settlement_configuration_matrix(self):
+        class Wealth:
+            uses_portfolio_choice = False
+            settles_portfolio_choice = False
+
+        validator = country_module.validate_portfolio_settlement_configuration
+        validator(Wealth(), uses_feasibility_resolver=False)
+
+        Wealth.uses_portfolio_choice = True
+        validator(Wealth(), uses_feasibility_resolver=False)
+
+        Wealth.uses_portfolio_choice = False
+        Wealth.settles_portfolio_choice = True
+        with pytest.raises(ValueError, match="uses_portfolio_choice"):
+            validator(Wealth(), uses_feasibility_resolver=True)
+
+        Wealth.uses_portfolio_choice = True
+        with pytest.raises(ValueError, match="uses_feasibility_resolver"):
+            validator(Wealth(), uses_feasibility_resolver=False)
+        validator(Wealth(), uses_feasibility_resolver=True)
+
     def test__init(self, datawrapper):
         synthetic_country = datawrapper.synthetic_countries["FRA"]
         country_configuration = CountryConfiguration()

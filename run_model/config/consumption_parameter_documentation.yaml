@@ -3,7 +3,7 @@
 #   stage_0  — source-audit annotations, account-mapping notes, and architectural decisions
 #   stage_2  — paper-symbol cross-reference and input wiring notes
 #   stage_3  — architectural records: classification schemas, signal choices, validation flags
-#   stage_4  — forward contract for portfolio-choice settings (not yet implemented)
+#   stage_4  — portfolio-choice settings, shadow diagnostics, and settlement gates
 #
 # Rule: update consumption_paper_parameters.yaml first when recalibrating.
 # Numeric values repeated here are copies for human reference; this file is not authoritative.
@@ -185,8 +185,9 @@ stage_3:
       validate_kalman_gain_bounds: true
       validate_posterior_variance_lte_predicted_variance: true
 
-# Forward contract — not yet implemented; settings below define the intended
-# portfolio-choice interface once Stage 4 is built.
+# Portfolio-choice interface. Stage 4 diagnostics are available when
+# uses_portfolio_choice is true; settled reallocation additionally requires the
+# Stage 5 feasibility resolver and its post-liquidation carrier.
 stage_4:
   portfolio_choice:
     uses_portfolio_choice: false
@@ -208,6 +209,7 @@ stage_4:
     dynamic_adjustment_speed_enabled: false
     no_borrowing_for_financial_asset_acquisition: true
     shadow_mode_preserves_balance_sheet: true
+    settled_mode_requires_feasibility_resolver: true
     target_share_bounds:
       min: 0.0
       max: 1.0

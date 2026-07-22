@@ -188,8 +188,13 @@ def test__paper_asset_return_wealth_setter_does_not_validate_target_share_source
     assert setter.uses_portfolio_choice is False
 
 
-def test__paper_asset_return_wealth_setter_rejects_settled_portfolio_choice():
-    with pytest.raises(ValueError, match="settles_portfolio_choice"):
+def test__paper_asset_return_wealth_setter_accepts_settled_portfolio_choice_with_choice_enabled():
+    setter = _paper_setter(uses_portfolio_choice=True, settles_portfolio_choice=True)
+    assert setter.settles_portfolio_choice is True
+
+
+def test__paper_asset_return_wealth_setter_rejects_settlement_without_choice():
+    with pytest.raises(ValueError, match="uses_portfolio_choice"):
         _paper_setter(settles_portfolio_choice=True)
 
 

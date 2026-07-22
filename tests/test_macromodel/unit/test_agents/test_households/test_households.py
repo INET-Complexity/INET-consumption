@@ -1346,6 +1346,23 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_enabled"), np.zeros(n_households))
         np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_status"), np.zeros(n_households))
 
+    def test__settled_update_rejects_invalid_stage5_authority_before_persistence(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+        )
+        test_households.post_grant_feasible_plan.post_liquidation_ifa = np.full(n_households, np.nan)
+        initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
+        initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+
+        with pytest.raises(RuntimeError, match="valid post-liquidation authority"):
+            test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length
+        assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length
+
 
 class TestComputeAndRecordLiquidityShortfall:
     """Stage 5 (feasibility resolver) Increment 0: liquidity-shortfall diagnostic."""

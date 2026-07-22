@@ -3238,7 +3238,18 @@ class Households(Agent):
                     )
                 portfolio_base_lfa = np.asarray(post_liquidation_lfa, dtype=float)
                 portfolio_base_ifa = np.asarray(post_liquidation_ifa, dtype=float)
-                forced_liquidation_active = np.asarray(settled_liquidation, dtype=float) > 0.0
+                settled_liquidation = np.asarray(settled_liquidation, dtype=float)
+                expected_shape = base_lfa.shape
+                authority_values = (portfolio_base_lfa, portfolio_base_ifa, settled_liquidation)
+                if any(values.shape != expected_shape for values in authority_values):
+                    raise RuntimeError("Settled portfolio choice requires one post-liquidation value per household.")
+                if (
+                    not all(np.all(np.isfinite(values)) for values in authority_values)
+                    or np.any(portfolio_base_ifa < 0.0)
+                    or np.any(settled_liquidation < 0.0)
+                ):
+                    raise RuntimeError("Settled portfolio choice requires valid post-liquidation authority.")
+                forced_liquidation_active = settled_liquidation > 0.0
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,

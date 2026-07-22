@@ -3128,26 +3128,17 @@ class Households(Agent):
             housing_data (pd.DataFrame): Property market data
             tau_cf (float): Capital formation tax rate
         """
-        # Update real wealth
-        self.ts.wealth_main_residence.append(
-            self.compute_wealth_of_the_main_residence(
-                housing_data=housing_data,
-            )
+        # Stage the real-wealth values until the final feasibility authority has
+        # been validated. A failed settled run must not leave a partial period
+        # in the time series.
+        wealth_main_residence = self.compute_wealth_of_the_main_residence(
+            housing_data=housing_data,
         )
-        self.ts.total_wealth_main_residence.append([self.ts.current("wealth_main_residence").sum()])
-        self.ts.wealth_other_properties.append(
-            self.compute_wealth_of_other_properties(
-                housing_data=housing_data,
-            )
+        wealth_other_properties = self.compute_wealth_of_other_properties(
+            housing_data=housing_data,
         )
-        self.ts.total_wealth_other_properties.append([self.ts.current("wealth_other_properties").sum()])
-        self.ts.wealth_other_real_assets.append(self.compute_wealth_of_other_real_assets())
-        self.ts.total_wealth_other_real_assets.append([self.ts.current("wealth_other_real_assets").sum()])
-        self.ts.wealth_real_assets.append(
-            self.ts.current("wealth_main_residence")
-            + self.ts.current("wealth_other_properties")
-            + self.ts.current("wealth_other_real_assets")
-        )
+        wealth_other_real_assets = self.compute_wealth_of_other_real_assets()
+        wealth_real_assets = wealth_main_residence + wealth_other_properties + wealth_other_real_assets
 
         # New financial wealth
         income_for_residual_saving = self.ts.current("income")
@@ -3261,9 +3252,21 @@ class Households(Agent):
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa
 
+        # Commit the staged real-wealth block only after settlement preflight has
+        # completed, preserving the existing series order on successful runs.
+        self.ts.wealth_main_residence.append(wealth_main_residence)
+        self.ts.total_wealth_main_residence.append([wealth_main_residence.sum()])
+        self.ts.wealth_other_properties.append(wealth_other_properties)
+        self.ts.total_wealth_other_properties.append([wealth_other_properties.sum()])
+        self.ts.wealth_other_real_assets.append(wealth_other_real_assets)
+        self.ts.total_wealth_other_real_assets.append([wealth_other_real_assets.sum()])
+        self.ts.wealth_real_assets.append(wealth_real_assets)
+
+        # Append both closing stocks before either total so the financial-stock
+        # persistence order matches the settlement contract.
         self.ts.wealth_other_financial_assets.append(wealth_base_ifa)
-        self.ts.total_wealth_other_financial_assets.append([wealth_base_ifa.sum()])
         self.ts.wealth_deposits.append(wealth_base_lfa)
+        self.ts.total_wealth_other_financial_assets.append([wealth_base_ifa.sum()])
         self.ts.total_wealth_deposits.append([wealth_base_lfa.sum()])
 
         if settlement is not None:

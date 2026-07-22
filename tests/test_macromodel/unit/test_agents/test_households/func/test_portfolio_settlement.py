@@ -1,4 +1,7 @@
+from dataclasses import replace
+
 import numpy as np
+import pytest
 
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 from macromodel.agents.households.func.portfolio_settlement import (
@@ -149,3 +152,20 @@ def test_disabled_settlement_preserves_base_even_with_invalid_inputs():
     np.testing.assert_allclose(result.closing_lfa, [120.0])
     np.testing.assert_allclose(result.closing_ifa, [50.0])
     assert result.settlement_valid_flag[0]
+
+
+def test_shape_validation_covers_inaction_flag():
+    rebalancing = replace(
+        _rebalancing(lfa_flow=[-8.0], ifa_flow=[8.0], cost=[0.0]),
+        inaction_flag=np.array([False, False]),
+    )
+
+    with pytest.raises(ValueError, match="one value per household"):
+        settle_portfolio_reallocation(
+            base_lfa=np.array([120.0]),
+            base_ifa=np.array([50.0]),
+            investable_surplus=np.array([20.0]),
+            rebalancing=rebalancing,
+            settlement_enabled=True,
+            forced_liquidation_active=np.array([False]),
+        )

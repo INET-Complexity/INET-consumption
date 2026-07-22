@@ -1356,12 +1356,14 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         test_households.post_grant_feasible_plan.post_liquidation_ifa = np.full(n_households, np.nan)
         initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
         initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+        initial_real_length = len(test_households.ts.dicts["wealth_real_assets"])
 
         with pytest.raises(RuntimeError, match="valid post-liquidation authority"):
             test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
         assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length
         assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length
+        assert len(test_households.ts.dicts["wealth_real_assets"]) == initial_real_length
 
 
 class TestComputeAndRecordLiquidityShortfall:

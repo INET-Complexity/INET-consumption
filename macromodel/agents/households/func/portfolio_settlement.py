@@ -52,15 +52,21 @@ def settle_portfolio_reallocation(
     base_ifa = np.asarray(base_ifa, dtype=float)
     investable_surplus = np.asarray(investable_surplus, dtype=float)
     forced_liquidation_active = np.asarray(forced_liquidation_active, dtype=bool)
+    portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
+    counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
+    counterfactual_ifa_flow = np.asarray(rebalancing.counterfactual_ifa_flow, dtype=float)
+    adjustment_cost = np.asarray(rebalancing.adjustment_cost, dtype=float)
+    inaction_flag = np.asarray(rebalancing.inaction_flag, dtype=bool)
     arrays = (
         base_lfa,
         base_ifa,
         investable_surplus,
         forced_liquidation_active,
-        rebalancing.portfolio_valid_flag,
-        rebalancing.counterfactual_lfa_flow,
-        rebalancing.counterfactual_ifa_flow,
-        rebalancing.adjustment_cost,
+        portfolio_valid_flag,
+        counterfactual_lfa_flow,
+        counterfactual_ifa_flow,
+        adjustment_cost,
+        inaction_flag,
     )
     shape = base_lfa.shape
     if any(values.shape != shape for values in arrays):
@@ -77,18 +83,18 @@ def settle_portfolio_reallocation(
             np.isfinite(base_lfa)
             & np.isfinite(base_ifa)
             & np.isfinite(investable_surplus)
-            & np.isfinite(rebalancing.counterfactual_lfa_flow)
-            & np.isfinite(rebalancing.counterfactual_ifa_flow)
-            & np.isfinite(rebalancing.adjustment_cost)
+            & np.isfinite(counterfactual_lfa_flow)
+            & np.isfinite(counterfactual_ifa_flow)
+            & np.isfinite(adjustment_cost)
         )
         conservation_valid = np.isclose(
-            rebalancing.counterfactual_lfa_flow + rebalancing.counterfactual_ifa_flow + rebalancing.adjustment_cost,
+            counterfactual_lfa_flow + counterfactual_ifa_flow + adjustment_cost,
             0.0,
             rtol=1e-10,
             atol=1e-8,
         )
-        invalid = ~finite_inputs | ~rebalancing.portfolio_valid_flag | ~conservation_valid
-        conservation_failure = finite_inputs & rebalancing.portfolio_valid_flag & ~conservation_valid
+        invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
+        conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid
 
         # Fixed precedence: invalid, forced liquidation, no surplus, negative
         # LFA, then ordinary valid settlement.
@@ -109,10 +115,10 @@ def settle_portfolio_reallocation(
         # Stage 4's counterfactual LFA flow already includes the fixed cost;
         # expose the transfer separately so the settled stock update charges it
         # exactly once on the liquid side.
-        committed_lfa[eligible] = rebalancing.counterfactual_lfa_flow[eligible] + rebalancing.adjustment_cost[eligible]
-        committed_ifa[eligible] = rebalancing.counterfactual_ifa_flow[eligible]
-        committed_cost[eligible] = rebalancing.adjustment_cost[eligible]
-        status[eligible & rebalancing.inaction_flag] = SETTLEMENT_INACTION
+        committed_lfa[eligible] = counterfactual_lfa_flow[eligible] + adjustment_cost[eligible]
+        committed_ifa[eligible] = counterfactual_ifa_flow[eligible]
+        committed_cost[eligible] = adjustment_cost[eligible]
+        status[eligible & inaction_flag] = SETTLEMENT_INACTION
 
     closing_lfa = base_lfa + committed_lfa - committed_cost
     closing_ifa = base_ifa + committed_ifa

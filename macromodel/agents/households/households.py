@@ -52,6 +52,9 @@ from macromodel.agents.households.func.portfolio_diagnostics import (
 from macromodel.agents.households.func.portfolio_target_share import (
     compute_household_head_covariates,
 )
+from macromodel.agents.households.func.post_liquidation_settlement import (
+    settle_post_liquidation,
+)
 from macromodel.agents.households.func.residual_capacity_fallback import (
     ResidualCapacityFallbackResult,
     compute_residual_capacity_fallback,
@@ -238,6 +241,9 @@ class PostGrantFeasiblePlan:
     remaining_subsistence_shortfall: np.ndarray | None = None
     early_consumer_repayment_capacity: np.ndarray | None = None
     floor_binding: np.ndarray | None = None
+    post_liquidation_lfa: np.ndarray | None = None
+    post_liquidation_ifa: np.ndarray | None = None
+    settled_liquidation_total: np.ndarray | None = None
 
 
 class Households(Agent):
@@ -986,6 +992,34 @@ class Households(Agent):
     def current_post_grant_planned_liquidation_total(self) -> np.ndarray:
         """Return planned liquidation carried into the settled feasibility plan."""
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
+
+    def settle_post_grant_liquidation(
+        self,
+        *,
+        base_lfa: np.ndarray,
+        base_ifa: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Expose settled post-liquidation bases before wealth persistence."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError("Stage 5 post-liquidation settlement requires a settled post-grant plan.")
+        plan = self.post_grant_feasible_plan
+        if plan.post_liquidation_lfa is not None or plan.post_liquidation_ifa is not None:
+            raise RuntimeError("Stage 5 post-liquidation settlement has already been applied for this period.")
+
+        settlement = settle_post_liquidation(
+            base_lfa=base_lfa,
+            base_ifa=base_ifa,
+            planned_liquidation_total=plan.planned_liquidation_total,
+            residual_shortfall_after_granted_credit=plan.residual_shortfall_after_granted_credit,
+        )
+        self.post_grant_feasible_plan = replace(
+            plan,
+            post_liquidation_lfa=settlement.post_liquidation_lfa.copy(),
+            post_liquidation_ifa=settlement.post_liquidation_ifa.copy(),
+            settled_liquidation_total=settlement.settled_liquidation_total.copy(),
+            residual_shortfall_after_granted_credit=settlement.residual_shortfall_after_settlement.copy(),
+        )
+        return settlement.post_liquidation_lfa, settlement.post_liquidation_ifa
 
     def persist_post_grant_planned_liquidation_total(self) -> None:
         """Pin the household-panel liquidation series to the settled post-grant source."""
@@ -3149,25 +3183,35 @@ class Households(Agent):
             used_up_wealth_in_other_financial_assets,
         ) = self.functions["wealth"].use_up_wealth(**use_up_wealth_kwargs)
 
-        # Update other financial assets
-        self.ts.wealth_other_financial_assets.append(
-            self.compute_wealth_of_other_financial_assets(
-                new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
-                used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
-                period_index=period_index,
-            )
+        # Compute final post-return/post-surplus financial bases before any
+        # financial-stock persistence. Stage 5 may settle forced liquidation
+        # against these bases, but remains the carrier authority rather than a
+        # second time-series writer.
+        base_ifa = self.compute_wealth_of_other_financial_assets(
+            new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
+            used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
+            period_index=period_index,
         )
-        self.ts.total_wealth_other_financial_assets.append([self.ts.current("wealth_other_financial_assets").sum()])
+        base_lfa = self.compute_wealth_in_deposits(
+            new_wealth_in_deposits=new_wealth_in_deposits,
+            used_up_wealth_in_deposits=used_up_wealth_in_deposits,
+            tau_cf=tau_cf,
+        )
+
+        if self.uses_feasibility_resolver:
+            settled_lfa, settled_ifa = self.settle_post_grant_liquidation(
+                base_lfa=base_lfa,
+                base_ifa=base_ifa,
+            )
+        else:
+            settled_lfa, settled_ifa = base_lfa, base_ifa
+
+        self.ts.wealth_other_financial_assets.append(settled_ifa)
+        self.ts.total_wealth_other_financial_assets.append([settled_ifa.sum()])
 
         # Update deposits
-        self.ts.wealth_deposits.append(
-            self.compute_wealth_in_deposits(
-                new_wealth_in_deposits=new_wealth_in_deposits,
-                used_up_wealth_in_deposits=used_up_wealth_in_deposits,
-                tau_cf=tau_cf,
-            )
-        )
-        self.ts.total_wealth_deposits.append([self.ts.current("wealth_deposits").sum()])
+        self.ts.wealth_deposits.append(settled_lfa)
+        self.ts.total_wealth_deposits.append([settled_lfa.sum()])
 
         # Stage 4 (portfolio choice): diagnostics-only shadow call site. Must run
         # here — after wealth_other_financial_assets and wealth_deposits are both
@@ -3303,8 +3347,8 @@ class Households(Agent):
         self.ts.portfolio_infeasible_interval_flag.append(rebalancing.infeasible_interval_flag)
         self.ts.portfolio_no_financial_assets_flag.append(rebalancing.no_financial_assets_flag)
         self.ts.portfolio_target_share_clipped_flag.append(diagnostics.portfolio_target_share_clipped_flag)
-        # settles_portfolio_choice is not wired in this increment (diagnostics-only,
-        # Stage 5 does not exist yet); always False.
+        # Portfolio settlement remains a later increment; this Stage 5 branch
+        # only exposes the post-liquidation bases consumed by that layer.
         self.ts.portfolio_settlement_enabled.append(np.zeros(n_households, dtype=bool))
 
     def compute_wealth_of_the_main_residence(self, housing_data: pd.DataFrame) -> np.ndarray:

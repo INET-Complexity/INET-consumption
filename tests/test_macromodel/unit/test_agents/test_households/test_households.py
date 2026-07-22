@@ -1818,6 +1818,35 @@ class TestPopulatePostGrantFeasiblePlan:
             np.full(n_households, 2.0),
         )
 
+    def test__post_grant_liquidation_exposes_authoritative_bases_once(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 4.0),
+        )
+
+        post_lfa, post_ifa = test_households.settle_post_grant_liquidation(
+            base_lfa=np.full(n_households, 100.0),
+            base_ifa=np.full(n_households, 50.0),
+        )
+
+        np.testing.assert_allclose(post_lfa, np.full(n_households, 102.0))
+        np.testing.assert_allclose(post_ifa, np.full(n_households, 48.0))
+        np.testing.assert_allclose(
+            test_households.post_grant_feasible_plan.residual_shortfall_after_granted_credit,
+            np.full(n_households, 4.0),
+        )
+        with pytest.raises(RuntimeError, match="already been applied"):
+            test_households.settle_post_grant_liquidation(
+                base_lfa=np.full(n_households, 100.0),
+                base_ifa=np.full(n_households, 50.0),
+            )
+
     def test__post_grant_reconciliation_raises_without_pre_grant_carrier(self, test_households):
         n_households = test_households.ts.current("n_households")
         test_households.configure_feasibility_resolver(True)

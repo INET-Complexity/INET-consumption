@@ -469,7 +469,10 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         if uses_portfolio_choice:
             validate_target_share_source(target_share_source)
         if settles_portfolio_choice:
-            raise ValueError("settles_portfolio_choice=True is out of scope for PaperAssetReturnWealthSetter.")
+            raise ValueError(
+                "settles_portfolio_choice=True requires the later portfolio-settlement increment; "
+                "Stage 5 only supplies post-liquidation bases."
+            )
         if dynamic_shifters_enabled:
             raise ValueError("dynamic_shifters_enabled=True is out of scope for PaperAssetReturnWealthSetter.")
         if liquid_asset_policy_rate_markup is not None:

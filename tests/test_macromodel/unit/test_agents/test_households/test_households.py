@@ -1365,6 +1365,18 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length
         assert len(test_households.ts.dicts["wealth_real_assets"]) == initial_real_length
 
+    def test__settled_update_rejects_inconsistent_stage5_authority(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+        )
+        test_households.post_grant_feasible_plan.post_liquidation_lfa = np.full(n_households, 100.0)
+
+        with pytest.raises(RuntimeError, match="inconsistent with its settled bases"):
+            test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
 
 class TestComputeAndRecordLiquidityShortfall:
     """Stage 5 (feasibility resolver) Increment 0: liquidity-shortfall diagnostic."""

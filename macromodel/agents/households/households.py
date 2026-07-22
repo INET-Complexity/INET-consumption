@@ -3240,6 +3240,11 @@ class Households(Agent):
                     or np.any(settled_liquidation < 0.0)
                 ):
                     raise RuntimeError("Settled portfolio choice requires valid post-liquidation authority.")
+                if not (
+                    np.allclose(portfolio_base_lfa, wealth_base_lfa, rtol=1e-10, atol=1e-8)
+                    and np.allclose(portfolio_base_ifa, wealth_base_ifa, rtol=1e-10, atol=1e-8)
+                ):
+                    raise RuntimeError("Stage 5 post-liquidation authority is inconsistent with its settled bases.")
                 forced_liquidation_active = settled_liquidation > 0.0
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,

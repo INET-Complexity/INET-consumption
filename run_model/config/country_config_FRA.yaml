@@ -106,9 +106,9 @@ FRA:
           # permanent_income_propensity: 0.05
           # uncertainty_propensity: 0.05
           # # delta (quarterly discount) and S (horizon, quarters) feeding zeta.
-          # income_belief_learning_horizon:
-          #   paper_parameter_file: consumption_paper_parameters.yaml
-          #   paper_parameter_ref: income_belief_learning.permanent_income_log_ratio
+          income_belief_learning_horizon:
+            paper_parameter_file: consumption_paper_parameters.yaml
+            paper_parameter_ref: income_belief_learning.permanent_income_log_ratio
           consumption_smoothing_fraction: 0.0
           consumption_smoothing_window: 12
           elasticity_of_substitution: 1.0

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -1168,6 +1170,260 @@ class TestComputeStage4PortfolioDiagnostics:
 
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_liquid_return_rate"][-1]))
         assert np.all(np.isnan(test_households.ts.dicts["portfolio_participation_probability"][-1]))
+
+
+class TestHouseholdsUpdateWealthPortfolioSettlement:
+    @staticmethod
+    def _zero_rebalancing(n_households):
+        zeros = np.zeros(n_households)
+        return PortfolioRebalancingResult(
+            portfolio_participates=np.ones(n_households, dtype=bool),
+            actual_illiquid_share=zeros.copy(),
+            target_illiquid_assets=zeros.copy(),
+            delta_tilde=zeros.copy(),
+            kappa_star_tilde=zeros.copy(),
+            kappa_tilde=zeros.copy(),
+            desired_illiquid_adjustment=zeros.copy(),
+            adjustment_cost=zeros.copy(),
+            counterfactual_lfa_flow=zeros.copy(),
+            counterfactual_ifa_flow=zeros.copy(),
+            inaction_flag=np.ones(n_households, dtype=bool),
+            upper_bound_flag=np.zeros(n_households, dtype=bool),
+            lower_bound_flag=np.zeros(n_households, dtype=bool),
+            infeasible_interval_flag=np.zeros(n_households, dtype=bool),
+            no_financial_assets_flag=np.zeros(n_households, dtype=bool),
+            portfolio_valid_flag=np.ones(n_households, dtype=bool),
+        )
+
+    def _configure_update_wealth(
+        self,
+        test_households,
+        monkeypatch,
+        *,
+        resolver,
+        settles,
+        use_actual_diagnostics=False,
+    ):
+        n_households = len(test_households.states["Type"])
+        zeros = np.zeros(n_households)
+        settlement_calls = []
+
+        class WealthStub:
+            exclude_financial_asset_income_from_saving = False
+            uses_periodic_illiquid_returns = False
+            uses_portfolio_choice = True
+            settles_portfolio_choice = settles
+            target_share_source = "scalar"
+            default_target_illiquid_share = 0.5
+            phi_1 = 5.0
+            lambda_kappa = 0.1
+            fixed_cost_share = 0.0
+
+            @staticmethod
+            def distribute_new_wealth(**_kwargs):
+                return zeros.copy(), zeros.copy()
+
+            @staticmethod
+            def use_up_wealth(**_kwargs):
+                return zeros.copy(), zeros.copy()
+
+        monkeypatch.setitem(test_households.functions, "wealth", WealthStub())
+        test_households.uses_feasibility_resolver = resolver
+        test_households.ts.override_current("income", np.full(n_households, 100.0))
+        test_households.ts.override_current("income_financial_assets", zeros.copy())
+        test_households.ts.override_current("rent", zeros.copy())
+        test_households.ts.override_current(
+            "nominal_amount_spent_in_lcu",
+            np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu")),
+        )
+
+        monkeypatch.setattr(
+            test_households,
+            "compute_wealth_of_the_main_residence",
+            lambda *, housing_data: zeros.copy(),
+        )
+        monkeypatch.setattr(
+            test_households,
+            "compute_wealth_of_other_properties",
+            lambda *, housing_data: zeros.copy(),
+        )
+        monkeypatch.setattr(test_households, "compute_wealth_of_other_real_assets", lambda: zeros.copy())
+        monkeypatch.setattr(
+            test_households,
+            "compute_wealth_of_other_financial_assets",
+            lambda **_kwargs: np.full(n_households, 50.0),
+        )
+        monkeypatch.setattr(
+            test_households,
+            "compute_wealth_in_deposits",
+            lambda **_kwargs: np.full(n_households, 100.0),
+        )
+        monkeypatch.setattr(test_households, "current_illiquid_financial_asset_return_rate", lambda: 0.0)
+
+        if not use_actual_diagnostics:
+            rebalancing = self._zero_rebalancing(n_households)
+            diagnostics = Stage4HouseholdDiagnostics(
+                portfolio_opening_tfa_scale=np.full(n_households, 150.0),
+                portfolio_target_tfa_base=np.full(n_households, 150.0),
+                portfolio_post_return_lfa=np.full(n_households, 108.0),
+                portfolio_post_return_ifa=np.full(n_households, 42.0),
+                portfolio_investable_surplus=np.full(n_households, 10.0),
+                portfolio_target_illiquid_share=np.full(n_households, 0.5),
+                portfolio_target_share_clipped_flag=np.zeros(n_households, dtype=bool),
+                rebalancing=rebalancing,
+            )
+            monkeypatch.setattr(
+                test_households,
+                "compute_stage4_portfolio_diagnostics",
+                lambda **_kwargs: diagnostics,
+            )
+
+        if resolver:
+            test_households.post_grant_feasible_plan = SimpleNamespace(
+                post_liquidation_lfa=np.full(n_households, 108.0),
+                post_liquidation_ifa=np.full(n_households, 42.0),
+                settled_liquidation_total=np.full(n_households, 8.0),
+            )
+
+            def expose_post_liquidation_bases(*, base_lfa, base_ifa):
+                settlement_calls.append((base_lfa.copy(), base_ifa.copy()))
+                return np.full(n_households, 108.0), np.full(n_households, 42.0)
+
+            monkeypatch.setattr(test_households, "settle_post_grant_liquidation", expose_post_liquidation_bases)
+        else:
+            test_households.post_grant_feasible_plan = None
+
+        return n_households, settlement_calls
+
+    def test__settled_update_consumes_stage5_bases_and_persists_once(self, test_households, monkeypatch):
+        n_households, settlement_calls = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+        )
+        initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
+        initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+        shadow_append_observations = []
+        append_shadow_diagnostics = test_households._append_stage4_portfolio_diagnostics
+
+        def observe_shadow_append(diagnostics):
+            shadow_append_observations.append(
+                (
+                    len(test_households.ts.dicts["wealth_deposits"]),
+                    len(test_households.ts.dicts["wealth_other_financial_assets"]),
+                )
+            )
+            append_shadow_diagnostics(diagnostics)
+
+        monkeypatch.setattr(test_households, "_append_stage4_portfolio_diagnostics", observe_shadow_append)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        assert len(settlement_calls) == 1
+        assert shadow_append_observations == [(initial_lfa_length + 1, initial_ifa_length + 1)]
+        np.testing.assert_allclose(settlement_calls[0][0], np.full(n_households, 100.0))
+        np.testing.assert_allclose(settlement_calls[0][1], np.full(n_households, 50.0))
+        assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length + 1
+        assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length + 1
+        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), np.full(n_households, 108.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("wealth_other_financial_assets"),
+            np.full(n_households, 42.0),
+        )
+        zero_flows = np.zeros(n_households)
+        np.testing.assert_allclose(
+            test_households.ts.current("portfolio_settlement_committed_lfa_flow"),
+            zero_flows,
+        )
+        np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_committed_ifa_flow"), zero_flows)
+        np.testing.assert_allclose(
+            test_households.ts.current("portfolio_settlement_status"), np.full(n_households, 4.0)
+        )
+
+    def test__settled_update_runs_actual_stage4_and_settlement_blocks(
+        self,
+        test_households,
+        monkeypatch,
+    ):
+        n_households, settlement_calls = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+            use_actual_diagnostics=True,
+        )
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        assert len(settlement_calls) == 1
+        np.testing.assert_array_equal(
+            test_households.ts.current("portfolio_settlement_enabled"),
+            np.ones(n_households, dtype=bool),
+        )
+        expected_valid = ~test_households.ts.current("portfolio_no_financial_assets_flag")
+        np.testing.assert_array_equal(test_households.ts.current("portfolio_settlement_valid_flag"), expected_valid)
+        assert expected_valid.any()
+        np.testing.assert_allclose(
+            test_households.ts.current("wealth_financial_assets"),
+            test_households.ts.current("wealth_deposits") + test_households.ts.current("wealth_other_financial_assets"),
+        )
+        np.testing.assert_allclose(
+            test_households.ts.current("portfolio_counterfactual_lfa_flow")
+            + test_households.ts.current("portfolio_counterfactual_ifa_flow")
+            + test_households.ts.current("portfolio_adjustment_cost"),
+            np.zeros(n_households),
+        )
+
+    def test__disabled_settlement_preserves_shadow_stock_update(self, test_households, monkeypatch):
+        n_households, settlement_calls = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=False,
+            settles=False,
+        )
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        assert settlement_calls == []
+        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), np.full(n_households, 100.0))
+        np.testing.assert_allclose(
+            test_households.ts.current("wealth_other_financial_assets"),
+            np.full(n_households, 50.0),
+        )
+        np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_enabled"), np.zeros(n_households))
+        np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_status"), np.zeros(n_households))
+
+    def test__settled_update_rejects_invalid_stage5_authority_before_persistence(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+        )
+        test_households.post_grant_feasible_plan.post_liquidation_ifa = np.full(n_households, np.nan)
+        initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
+        initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+        initial_real_length = len(test_households.ts.dicts["wealth_real_assets"])
+
+        with pytest.raises(RuntimeError, match="valid post-liquidation authority"):
+            test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length
+        assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length
+        assert len(test_households.ts.dicts["wealth_real_assets"]) == initial_real_length
+
+    def test__settled_update_rejects_inconsistent_stage5_authority(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+        )
+        test_households.post_grant_feasible_plan.post_liquidation_lfa = np.full(n_households, 100.0)
+
+        with pytest.raises(RuntimeError, match="inconsistent with its settled bases"):
+            test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
 
 class TestComputeAndRecordLiquidityShortfall:

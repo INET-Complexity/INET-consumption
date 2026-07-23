@@ -167,13 +167,13 @@ portfolio_composition:
   # NOTE: country_config_FRA.yaml composes this section with asset_returns.paper_stochastic_v1
   # via paper_parameter_refs because PaperAssetReturnWealthSetter hosts both
   # asset-return and Stage 4 diagnostics.
-  uses_portfolio_choice: false      # gates the Stage 4 diagnostics-only call site; true only for FRA shadow runs
-  settles_portfolio_choice: false   # true only once Stage 5 provides a post-feasibility household transaction account
+  uses_portfolio_choice: false      # gates Stage 4 diagnostics and optional settlement; false keeps the portfolio block inactive
+  settles_portfolio_choice: false   # requires uses_portfolio_choice and an active Stage 5 post-grant feasibility carrier
   target_share_source: scalar       # scalar (default, fixed share below) | frm_magnitude (opt-in, Increment 5: household-covariate FRM target share). Switching to frm_magnitude does not change this default for countries that leave it unset.
   participation_source: initial_ifa_positive   # extensive margin fixed at init from initial_IFA > 0; nonparticipants never buy IFA
   default_target_illiquid_share: 0.65   # first-pass intensive-margin target for all participating households
   liquid_return_source: policy_rate_markup   # r_ell = liquid_asset_policy_rate_markup * policy_rate
-  liquid_asset_policy_rate_markup: null   # not yet calibrated in paper; must be set before settled mode
+  liquid_asset_policy_rate_markup: null   # remains uncalibrated; settled mode uses the existing post-surplus LFA base
   phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
   lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
   fixed_cost_share: 0.0   # neutral while uses_portfolio_choice is false; paper example 0.001 remains unactivated

@@ -10,28 +10,43 @@ account_diagnostics:
         - ["Wealth in Deposits", "DA2101"]
     ifa:
       components:
-        - ["Mutual Funds", "DA2102"]
-        - ["Bonds", "DA2103"]
-        - ["Shares", "DA2105"]
-        - ["Managed Accounts", "DA2106"]
-        - ["Money owed to Households", "DA2107"]
-        - ["Other Assets", "DA2108"]
-        - ["Voluntary Pension", "DA2109"]
+        - aliases: ["Mutual Funds", "DA2102"]
+          apply_population_scale: true
+        - aliases: ["Bonds", "DA2103"]
+          apply_population_scale: true
+        - aliases: ["Shares", "DA2105"]
+          apply_population_scale: true
+        - aliases: ["Managed Accounts", "DA2106"]
+          apply_population_scale: true
+        - aliases: ["Money owed to Households", "DA2107"]
+          apply_population_scale: true
+        - aliases: ["Other Assets", "DA2108"]
+          apply_population_scale: true
+        - aliases: ["Voluntary Pension", "DA2109"]
+          apply_population_scale: true
     ha:
       components:
         - ["Value of the Main Residence", "DA1110"]
-        - ["Value of Other Non-Business Real Estate", "Value of other Non-Business Real Estate", "DA1122"]
+        - aliases: ["Value of Other Non-Business Real Estate", "Value of other Non-Business Real Estate", "DA1122"]
+          apply_population_scale: true
     mr:
       preferred: ["Outstanding Balance of Mortgage Debt", "DL1100"]
+      apply_population_scale: true
       fallback_components:
-        - ["Outstanding Balance of HMR Mortgages", "DL1110"]
-        - ["Outstanding Balance of Mortgages on other Properties", "DL1120"]
+        - aliases: ["Outstanding Balance of HMR Mortgages", "DL1110"]
+          apply_population_scale: true
+        - aliases: ["Outstanding Balance of Mortgages on other Properties", "DL1120"]
+          apply_population_scale: true
     db:
       preferred: ["Outstanding Balance of Non-Mortgage Debt", "DL1200"]
+      apply_population_scale: true
       fallback_components:
-        - ["Outstanding Balance of Credit Line", "DL1210"]
-        - ["Outstanding Balance of Credit Card Debt", "DL1220"]
-        - ["Outstanding Balance of other Non-Mortgage Loans", "DL1230"]
+        - aliases: ["Outstanding Balance of Credit Line", "DL1210"]
+          apply_population_scale: true
+        - aliases: ["Outstanding Balance of Credit Card Debt", "DL1220"]
+          apply_population_scale: true
+        - aliases: ["Outstanding Balance of other Non-Mortgage Loans", "DL1230"]
+          apply_population_scale: true
     nw:
       formula: LFA + IFA + HA - MR - DB
   runtime_income:
@@ -167,8 +182,8 @@ portfolio_composition:
   # NOTE: country_config_FRA.yaml composes this section with asset_returns.paper_stochastic_v1
   # via paper_parameter_refs because PaperAssetReturnWealthSetter hosts both
   # asset-return and Stage 4 diagnostics.
-  uses_portfolio_choice: false      # gates Stage 4 diagnostics and optional settlement; false keeps the portfolio block inactive
-  settles_portfolio_choice: false   # requires uses_portfolio_choice and an active Stage 5 post-grant feasibility carrier
+  uses_portfolio_choice: true      # gates Stage 4 diagnostics and optional settlement; false keeps the portfolio block inactive
+  settles_portfolio_choice: true   # requires uses_portfolio_choice and an active Stage 5 post-grant feasibility carrier
   target_share_source: scalar       # scalar (default, fixed share below) | frm_magnitude (opt-in, Increment 5: household-covariate FRM target share). Switching to frm_magnitude does not change this default for countries that leave it unset.
   participation_source: initial_ifa_positive   # extensive margin fixed at init from initial_IFA > 0; nonparticipants never buy IFA
   default_target_illiquid_share: 0.65   # first-pass intensive-margin target for all participating households
@@ -176,15 +191,15 @@ portfolio_composition:
   liquid_asset_policy_rate_markup: null   # remains uncalibrated; settled mode uses the existing post-surplus LFA base
   phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
   lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
-  fixed_cost_share: 0.0   # neutral while uses_portfolio_choice is false; paper example 0.001 remains unactivated
-  frm_coefficients_path: portfolio/FR_portfolio_frm_coefficients.json
+  fixed_cost_share: 0.001   # paper example: Upsilon = 0.001 * total financial assets
+  frm_coefficients_path: run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
   dynamic_shifters_enabled: false   # gates whether dynamic_shifters below move target shares; false until Stage 3 validation lands
   dynamic_shifters:
     income_expectations: 0.0   # ϑ_μ
     uncertainty: 0.0           # ϑ_θ
     return_differential: 0.0   # ϑ_r
   data_paths:
-    frm_coefficients: portfolio/FR_portfolio_frm_coefficients.json
+    frm_coefficients: run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
   # Open HFCS-sourcing decisions (Increment 1, not yet resolved):
   #   investment_attitudes (HD1800): requires the HFCS reader to thread HD1800 into household init
   #     state for the designated household head, frozen thereafter (no dynamic recompute).

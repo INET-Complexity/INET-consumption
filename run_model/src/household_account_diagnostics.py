@@ -57,14 +57,22 @@ def _country_entry(mapping: dict, country_code: str):
 
 
 def _population_frame(datawrapper, country_code: str) -> pd.DataFrame:
-    country = _country_entry(datawrapper.synthetic_countries, country_code)
-    population = getattr(country, "population", None)
+    population = _population(datawrapper, country_code)
     household_data = getattr(population, "household_data", None)
     if household_data is None:
         raise ValueError(f"Country {country_code} population does not expose household_data.")
     if not isinstance(household_data, pd.DataFrame):
         raise TypeError("population.household_data must be a pandas DataFrame.")
     return household_data
+
+
+def _population(datawrapper, country_code: str):
+    country = _country_entry(datawrapper.synthetic_countries, country_code)
+    population = getattr(country, "population", None)
+    household_data = getattr(population, "household_data", None)
+    if population is None or household_data is None:
+        raise ValueError(f"Country {country_code} population does not expose household_data.")
+    return population
 
 
 def _numeric_series(data: pd.DataFrame, aliases: list[str], *, required: bool = True) -> pd.Series:
@@ -80,36 +88,67 @@ def _has_any_column(data: pd.DataFrame, aliases: list[str]) -> bool:
     return any(column in data.columns for column in aliases)
 
 
-def _sum_rule_components(data: pd.DataFrame, aliases_by_component: list[list[str]]) -> pd.Series:
+def _rule_component(
+    data: pd.DataFrame,
+    component: list[str] | dict,
+    population_scale: float,
+) -> pd.Series:
+    if isinstance(component, dict):
+        aliases = component.get("aliases", component.get("columns"))
+        apply_population_scale = bool(component.get("apply_population_scale", False))
+    else:
+        aliases = component
+        apply_population_scale = False
+    if not aliases:
+        raise ValueError("Account-rule component must define aliases or columns.")
+    values = _numeric_series(data, aliases)
+    if apply_population_scale:
+        values = values * population_scale
+    return values
+
+
+def _sum_rule_components(
+    data: pd.DataFrame,
+    aliases_by_component: list[list[str] | dict],
+    population_scale: float,
+) -> pd.Series:
     total = pd.Series(0.0, index=data.index, dtype="float64")
-    for aliases in aliases_by_component:
-        total = total + _numeric_series(data, aliases)
+    for component in aliases_by_component:
+        total = total + _rule_component(data, component, population_scale)
     return total
 
 
-def _account_from_rule(data: pd.DataFrame, rule: dict) -> pd.Series:
+def _account_from_rule(data: pd.DataFrame, rule: dict, population_scale: float) -> pd.Series:
     if "components" in rule:
-        return _sum_rule_components(data, rule["components"])
+        return _sum_rule_components(data, rule["components"], population_scale)
     preferred = rule.get("preferred")
     if preferred is not None and _has_any_column(data, preferred):
-        return _numeric_series(data, preferred)
+        values = _numeric_series(data, preferred)
+        if rule.get("apply_population_scale", False):
+            values = values * population_scale
+        return values
     fallback_components = rule.get("fallback_components")
     if fallback_components is not None:
-        return _sum_rule_components(data, fallback_components)
+        return _sum_rule_components(data, fallback_components, population_scale)
     raise ValueError("Account rule must define components or preferred/fallback_components.")
 
 
-def compute_household_accounts_from_rules(data: pd.DataFrame, stage_0_parameters: dict) -> pd.DataFrame:
+def compute_household_accounts_from_rules(
+    data: pd.DataFrame,
+    stage_0_parameters: dict,
+    *,
+    population_scale: float = 1.0,
+) -> pd.DataFrame:
     """Compute Stage 0 household accounts from active YAML rules."""
     rules = stage_0_parameters.get("account_rules", {})
     missing = [column for column in ("lfa", "ifa", "ha", "mr", "db") if column not in rules]
     if missing:
         raise ValueError(f"Missing Stage 0 account rules: {', '.join(missing)}")
-    lfa = _account_from_rule(data, rules["lfa"])
-    ifa = _account_from_rule(data, rules["ifa"])
-    ha = _account_from_rule(data, rules["ha"])
-    mr = _account_from_rule(data, rules["mr"])
-    db = _account_from_rule(data, rules["db"])
+    lfa = _account_from_rule(data, rules["lfa"], population_scale)
+    ifa = _account_from_rule(data, rules["ifa"], population_scale)
+    ha = _account_from_rule(data, rules["ha"], population_scale)
+    mr = _account_from_rule(data, rules["mr"], population_scale)
+    db = _account_from_rule(data, rules["db"], population_scale)
     return pd.DataFrame(
         {
             "lfa": lfa,
@@ -130,10 +169,15 @@ def make_paper_account_panel(
     stage_0_parameters: dict | None = None,
 ) -> pd.DataFrame:
     """Compute YAML-configured accounts and expose the helper index as household_id."""
-    household_data = _population_frame(datawrapper, country_code)
+    population = _population(datawrapper, country_code)
+    household_data = population.household_data
     stage_0_parameters = load_stage_0_parameters() if stage_0_parameters is None else stage_0_parameters
     try:
-        accounts = compute_household_accounts_from_rules(household_data, stage_0_parameters)
+        accounts = compute_household_accounts_from_rules(
+            household_data,
+            stage_0_parameters,
+            population_scale=float(getattr(population, "scale", 1.0)),
+        )
     except KeyError as exc:
         raise ValueError(
             "Cannot compute paper household accounts from the data pickle. "
@@ -364,8 +408,6 @@ def summarize_quantiles(panel: pd.DataFrame, quantiles: tuple[float, ...] = DEFA
 
 def build_reconciliation(panel: pd.DataFrame, metadata: dict[str, object]) -> pd.DataFrame:
     paper_identity = panel["lfa"] + panel["ifa"] + panel["ha"] - panel["mr"] - panel["db"]
-    runtime_paper_assets_gap = panel["runtime_gross_assets"] - (panel["lfa"] + panel["ifa"] + panel["ha"])
-    runtime_paper_debt_gap = panel["runtime_debt"] - (panel["mr"] + panel["db"])
     rows = [
         ("period", metadata["period"]),
         ("households", len(panel)),
@@ -378,9 +420,6 @@ def build_reconciliation(panel: pd.DataFrame, metadata: dict[str, object]) -> pd
         ("transaction_cpi", metadata["transaction_cpi"]),
         ("cpi_valid", bool(metadata.get("cpi_valid", False))),
         ("max_abs_nw_identity_error", float((panel["nw"] - paper_identity).abs().max())),
-        ("mean_runtime_minus_paper_assets", float(runtime_paper_assets_gap.mean())),
-        ("mean_runtime_minus_paper_debt", float(runtime_paper_debt_gap.mean())),
-        ("mean_runtime_minus_paper_net_wealth", float((panel["runtime_net_wealth"] - panel["nw"]).mean())),
         (
             "mean_consumption_loan_debt_minus_paper_db",
             float((panel["runtime_consumption_loan_debt"] - panel["db"]).mean()),
@@ -394,6 +433,135 @@ def build_reconciliation(panel: pd.DataFrame, metadata: dict[str, object]) -> pd
             float((panel["runtime_net_wealth"] - panel["runtime_net_wealth_identity"]).abs().max()),
         ),
     ]
+    return pd.DataFrame(rows, columns=["check", "value"])
+
+
+def build_like_for_like_reconciliation(
+    datawrapper,
+    h5_path: str | Path,
+    country_code: str,
+    *,
+    final_period: int | None = None,
+    parameter_file: str | Path = DEFAULT_PARAMETER_FILE,
+    stage_0_parameters: dict | None = None,
+) -> pd.DataFrame:
+    """Separate source-to-runtime mapping gaps from runtime stock evolution.
+
+    Paper accounts are a period-0 source snapshot. Comparing them directly to
+    final-period stocks mixes two different questions: whether the mapping is
+    correct, and how the model changed the stocks. This report compares the
+    paper mapping with runtime period 0, then compares runtime period 0 with
+    the requested final period. ``runtime_gross_assets`` deliberately excludes
+    the optional unmapped ``wealth_other_real_assets`` field. The aggregate
+    asset/debt rows therefore remain available for continuity, while the
+    non-housing rows below are the relevant mapping checks: housing ownership
+    and property definitions are intentionally outside this consumption-module
+    verification.
+    """
+    stage_0_parameters = load_stage_0_parameters(parameter_file) if stage_0_parameters is None else stage_0_parameters
+    initial_panel, initial_metadata = build_household_account_panel(
+        datawrapper,
+        h5_path,
+        country_code,
+        period=0,
+        parameter_file=parameter_file,
+        stage_0_parameters=stage_0_parameters,
+    )
+    final_panel, final_metadata = build_household_account_panel(
+        datawrapper,
+        h5_path,
+        country_code,
+        period=final_period,
+        parameter_file=parameter_file,
+        stage_0_parameters=stage_0_parameters,
+    )
+
+    initial_assets = initial_panel["runtime_gross_assets"]
+    final_assets = final_panel["runtime_gross_assets"]
+    initial_debt = initial_panel["runtime_total_debt_components"]
+    final_debt = final_panel["runtime_total_debt_components"]
+    initial_net_wealth = initial_assets - initial_debt
+    final_net_wealth = final_assets - final_debt
+    paper_assets = initial_panel["lfa"] + initial_panel["ifa"] + initial_panel["ha"]
+    paper_debt = initial_panel["mr"] + initial_panel["db"]
+    paper_net_wealth = initial_panel["nw"]
+
+    def _row(check: str, values) -> tuple[str, object]:
+        values = pd.to_numeric(values, errors="coerce")
+        return check, float(values.mean())
+
+    rows = [
+        ("comparison_basis", "period0_runtime_vs_paper_mapping_then_final_runtime_vs_period0_runtime"),
+        ("initial_runtime_period", initial_metadata["period"]),
+        ("final_runtime_period", final_metadata["period"]),
+        _row("initial_runtime_minus_paper_mapped_assets_mean", initial_assets - paper_assets),
+        ("initial_runtime_minus_paper_mapped_assets_max_abs", float((initial_assets - paper_assets).abs().max())),
+        _row("initial_runtime_minus_paper_mapped_debt_mean", initial_debt - paper_debt),
+        ("initial_runtime_minus_paper_mapped_debt_max_abs", float((initial_debt - paper_debt).abs().max())),
+        _row("initial_runtime_minus_paper_mapped_net_wealth_mean", initial_net_wealth - paper_net_wealth),
+        (
+            "initial_runtime_minus_paper_mapped_net_wealth_max_abs",
+            float((initial_net_wealth - paper_net_wealth).abs().max()),
+        ),
+        _row("final_minus_initial_runtime_mapped_assets_mean", final_assets - initial_assets),
+        _row("final_minus_initial_runtime_mapped_debt_mean", final_debt - initial_debt),
+        _row("final_minus_initial_runtime_mapped_net_wealth_mean", final_net_wealth - initial_net_wealth),
+        _row(
+            "final_minus_initial_runtime_unmapped_other_real_assets_mean",
+            final_panel["runtime_other_real_assets"] - initial_panel["runtime_other_real_assets"],
+        ),
+        _row(
+            "initial_runtime_minus_paper_non_housing_financial_assets_mean",
+            initial_panel["runtime_wealth_deposits"]
+            + initial_panel["runtime_wealth_other_financial_assets"]
+            - initial_panel["lfa"]
+            - initial_panel["ifa"],
+        ),
+        _row(
+            "initial_runtime_minus_paper_non_housing_debt_mean",
+            initial_panel["runtime_mortgage_debt"]
+            + initial_panel["runtime_consumption_loan_debt"]
+            - initial_panel["mr"]
+            - initial_panel["db"],
+        ),
+    ]
+    component_mapping = {
+        "lfa": "runtime_wealth_deposits",
+        "ifa": "runtime_wealth_other_financial_assets",
+        "mr": "runtime_mortgage_debt",
+        "db": "runtime_consumption_loan_debt",
+    }
+    for paper_component, runtime_component in component_mapping.items():
+        gap = initial_panel[runtime_component] - initial_panel[paper_component]
+        rows.extend(
+            [
+                _row(f"initial_runtime_minus_paper_{paper_component}_mean", gap),
+                (f"initial_runtime_minus_paper_{paper_component}_max_abs", float(gap.abs().max())),
+                _row(
+                    f"final_minus_initial_runtime_{runtime_component}_mean",
+                    final_panel[runtime_component] - initial_panel[runtime_component],
+                ),
+            ]
+        )
+    paper_housing = initial_panel["ha"]
+    initial_runtime_housing = initial_panel["runtime_wealth_main_residence"] + initial_panel[
+        "runtime_wealth_other_properties"
+    ]
+    final_runtime_housing = final_panel["runtime_wealth_main_residence"] + final_panel[
+        "runtime_wealth_other_properties"
+    ]
+    housing_mapping_gap = initial_runtime_housing - paper_housing
+    rows.extend(
+        [
+            _row("initial_runtime_minus_paper_ha_mean", housing_mapping_gap),
+            ("initial_runtime_minus_paper_ha_max_abs", float(housing_mapping_gap.abs().max())),
+            _row("final_minus_initial_runtime_housing_mean", final_runtime_housing - initial_runtime_housing),
+            (
+                "housing_mapping_scope_status",
+                "excluded_from_non_housing_consumption_verification",
+            ),
+        ]
+    )
     return pd.DataFrame(rows, columns=["check", "value"])
 
 
@@ -414,7 +582,19 @@ def run_household_account_diagnostics(
     )
     moments = summarize_moments(panel)
     quantiles = summarize_quantiles(panel)
-    reconciliation = build_reconciliation(panel, metadata)
+    reconciliation = pd.concat(
+        [
+            build_reconciliation(panel, metadata),
+            build_like_for_like_reconciliation(
+                datawrapper,
+                model_h5,
+                country_code,
+                final_period=period,
+                parameter_file=parameter_file,
+            ),
+        ],
+        ignore_index=True,
+    )
     return HouseholdAccountDiagnostics(
         panel=panel,
         moments=moments,
@@ -431,7 +611,8 @@ def _summary_markdown(diagnostics: HouseholdAccountDiagnostics, country_code: st
         f"- Period: {reconciliation.get('period')}",
         f"- Households: {reconciliation.get('households')}",
         f"- Max paper net-wealth identity error: {reconciliation.get('max_abs_nw_identity_error')}",
-        f"- Mean runtime minus paper debt: {reconciliation.get('mean_runtime_minus_paper_debt')}",
+        f"- Initial runtime minus paper-mapped net wealth (mean): {reconciliation.get('initial_runtime_minus_paper_mapped_net_wealth_mean')}",
+        f"- Final minus initial runtime-mapped net wealth (mean): {reconciliation.get('final_minus_initial_runtime_mapped_net_wealth_mean')}",
         "- Runtime consumption_loan_debt is reported separately from paper db.",
         f"- Fixed CPI source: {reconciliation.get('fixed_cpi_source')} = {reconciliation.get('fixed_cpi')}",
         f"- Transaction CPI source: {reconciliation.get('transaction_cpi_source')} = {reconciliation.get('transaction_cpi')}",

@@ -1419,8 +1419,14 @@ class Households(Agent):
         )
         maximum_floor_cut = np.maximum(cleaned_consumption_before - cleaned_floor, 0.0)
         consumption_cut_amount = np.minimum(residual_before_floor, maximum_floor_cut)
-        consumption_after_floor = cleaned_consumption_before - consumption_cut_amount
-        remaining_subsistence_shortfall = residual_before_floor - consumption_cut_amount
+        consumption_before_support = cleaned_consumption_before - consumption_cut_amount
+        residual_after_floor_cut = residual_before_floor - consumption_cut_amount
+        floor_top_up = np.maximum(cleaned_floor - consumption_before_support, 0.0)
+        # The target is topped up to the floor, while the top-up and any
+        # remaining post-credit financing gap are handed to government through
+        # the existing Stage-5 other-benefits settlement path.
+        consumption_after_floor = consumption_before_support + floor_top_up
+        remaining_subsistence_shortfall = floor_top_up + residual_after_floor_cut
 
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,
@@ -1429,7 +1435,7 @@ class Households(Agent):
             consumption_after_floor=consumption_after_floor.copy(),
             consumption_cut_amount=consumption_cut_amount.copy(),
             remaining_subsistence_shortfall=remaining_subsistence_shortfall.copy(),
-            floor_binding=(consumption_cut_amount > 0.0).copy(),
+            floor_binding=((consumption_cut_amount + floor_top_up) > 0.0).copy(),
         )
         self._record_consumption_floor_diagnostics()
 

@@ -2331,6 +2331,25 @@ class TestPopulatePostGrantFeasiblePlan:
             plan.remaining_subsistence_shortfall,
         )
 
+    def test__consumption_floor_tops_up_below_floor_target_via_subsistence_support(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+
+        test_households.apply_consumption_floor_to_post_grant_plan(
+            consumption_before_floor=np.full(n_households, 50.0),
+            subsistence_floor=np.full(n_households, 80.0),
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 80.0))
+        np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.full(n_households, 30.0))
+        np.testing.assert_array_equal(plan.floor_binding, np.ones(n_households, dtype=bool))
+
     def test__consumption_floor_raises_without_settled_carrier(self, test_households):
         n_households = test_households.ts.current("n_households")
 

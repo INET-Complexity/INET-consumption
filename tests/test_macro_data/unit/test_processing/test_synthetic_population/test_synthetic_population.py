@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     CONVERT_HH_COLS,
@@ -224,6 +225,29 @@ def test__proxy_conversion_includes_notebook_account_source_columns():
     assert "Value of Other Non-Business Real Estate" in CONVERT_HH_COLS
     assert "Outstanding Balance of Mortgage Debt" in CONVERT_HH_COLS
     assert "Outstanding Balance of Non-Mortgage Debt" in CONVERT_HH_COLS
+
+
+def test__normalise_household_consumption_caps_saving_rates_at_one(monkeypatch):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.household_data = pd.DataFrame(
+        {
+            "Income": [100.0, 200.0, 300.0],
+            "Saving Rate": [0.2, 0.4, 1.2],
+        }
+    )
+    population.consumption_weights = np.array([1.0])
+    population.saving_rates_model = None
+    monkeypatch.setattr(hfcs_population_module, "fit_linear", lambda **_kwargs: None)
+
+    population.normalise_household_consumption(
+        iot_hh_consumption=np.array([140.0]),
+        vat=0.0,
+        positive_saving_rates_only=False,
+    )
+
+    assert np.all(population.household_data["Saving Rate"] <= 1.0)
+    assert np.all(population.household_data["Consumption"] >= 0.0)
+    assert population.household_data.loc[2, "Consumption"] > 0.0
 
 
 class TestSyntheticPopulation:

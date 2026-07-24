@@ -14,6 +14,7 @@ if str(RUN_MODEL_PATH) not in sys.path:
 
 from src.household_account_diagnostics import (  # noqa: E402
     build_household_account_panel,
+    build_like_for_like_reconciliation,
     compute_household_accounts_from_rules,
     make_paper_account_panel,
     run_household_account_diagnostics,
@@ -132,6 +133,19 @@ def test_make_paper_account_panel_preserves_helper_index_as_household_id():
     assert panel["household_id"].tolist() == [10, 11, 12]
 
 
+def test_make_paper_account_panel_applies_population_scale_to_hfcs_components():
+    population = SimpleNamespace(household_data=_household_data(), scale=10)
+    datawrapper = SimpleNamespace(synthetic_countries={"FRA": SimpleNamespace(population=population)})
+
+    panel = make_paper_account_panel(datawrapper, "FRA")
+
+    assert panel.loc[0, "lfa"] == 10.0
+    assert panel.loc[0, "ifa"] == 70.0
+    assert panel.loc[0, "ha"] == 200.0
+    assert panel.loc[0, "mr"] == 400.0
+    assert panel.loc[0, "db"] == 50.0
+
+
 def test_stage_0_yaml_rules_drive_account_construction():
     stage_0_parameters = {
         "account_rules": {
@@ -168,7 +182,21 @@ def test_diagnostics_build_moments_quantiles_reconciliation_and_outputs(tmp_path
     reconciliation = diagnostics.reconciliation.set_index("check")["value"]
     assert float(reconciliation["max_abs_nw_identity_error"]) == pytest.approx(0.0)
     assert float(reconciliation["max_abs_runtime_net_wealth_identity_gap"]) == pytest.approx(0.0)
+    assert "initial_runtime_minus_paper_mapped_assets_max_abs" in reconciliation
+    assert float(reconciliation["final_minus_initial_runtime_mapped_assets_mean"]) == pytest.approx(14.0)
     assert "consumption_loan_debt" in paths["summary"].read_text()
+
+
+def test_like_for_like_reconciliation_separates_mapping_from_evolution(tmp_path):
+    h5_path = tmp_path / "model.h5"
+    _write_h5(h5_path)
+
+    reconciliation = build_like_for_like_reconciliation(_datawrapper(), h5_path, "FRA")
+    values = reconciliation.set_index("check")["value"]
+
+    assert float(values["initial_runtime_minus_paper_mapped_assets_mean"]) == pytest.approx(-14.0)
+    assert float(values["initial_runtime_minus_paper_mapped_debt_mean"]) == pytest.approx(-9.0)
+    assert float(values["final_minus_initial_runtime_mapped_net_wealth_mean"]) == pytest.approx(8.0)
 
 
 def test_runner_loads_datawrapper_pickle_and_writes_outputs(tmp_path):

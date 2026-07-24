@@ -175,7 +175,6 @@ class DataPaths:
             permanent_income_design_matrix_path=raw_data_path / "permanent_income" / "FR_design_matrix.csv",
             frm_coefficients_path=raw_data_path / "portfolio" / "FR_portfolio_frm_coefficients.json",
         )
-
     # @classmethod
     # def all_industries(cls, raw_data_path: Path, icio_years: Iterable[int]):
     #     paths = cls.default_paths(raw_data_path, icio_years)

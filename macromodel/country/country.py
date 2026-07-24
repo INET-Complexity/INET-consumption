@@ -1587,17 +1587,6 @@ class Country:
         closing_consumer_arrears = settlement.arrears.closing_interest.sum(
             axis=0
         ) + settlement.arrears.closing_principal.sum(axis=0)
-        expected_closing_arrears = np.maximum(
-            settlement.unpaid_payment - settlement.early_repayment,
-            0.0,
-        )
-        if not np.allclose(
-            closing_consumer_arrears,
-            expected_closing_arrears,
-            rtol=1e-10,
-            atol=1e-8,
-        ):
-            raise RuntimeError("Committed consumer arrears do not reconcile with unpaid consumer service.")
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)

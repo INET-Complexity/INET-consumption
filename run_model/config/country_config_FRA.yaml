@@ -194,6 +194,7 @@ FRA:
               paper_parameter_ref: portfolio_composition
     parameters:
       take_consumption_weights_by_income_quantile: false
+      uses_feasibility_resolver: true
     substitution_bundles:
       - 0
       - 1

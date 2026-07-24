@@ -899,6 +899,20 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             factor = 1.0 - diff / inc_sr
             self.household_data["Saving Rate"] = factor * sr
 
+        # A saving rate above one implies negative consumption, which is not a
+        # meaningful household state and poisons the lagged CACF recursion. The
+        # HFCS rescaling can create this even when the input saving rates are
+        # all non-negative. Keep the requested lower-bound convention, but
+        # always enforce the economically necessary upper bound.
+        saving_rates = self.household_data["Saving Rate"].to_numpy(copy=True)
+        invalid_high_rates = ~np.isfinite(saving_rates) | (saving_rates >= 1.0)
+        valid_rates = saving_rates[np.isfinite(saving_rates) & (saving_rates < 1.0)]
+        replacement_rate = float(valid_rates.max()) if valid_rates.size else 0.0
+        saving_rates[invalid_high_rates] = replacement_rate
+        if positive_saving_rates_only:
+            saving_rates = np.maximum(saving_rates, 0.0)
+        self.household_data["Saving Rate"] = saving_rates
+
         self.household_data["Consumption"] = (
             1 / (1 + vat) * (1 - self.household_data["Saving Rate"]) * self.household_data["Income"]
         )

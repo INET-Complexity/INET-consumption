@@ -192,14 +192,14 @@ portfolio_composition:
   phi_1: 5.0          # from frm_coefficients.adjustment_parameters (frm_estimation.ipynb), not re-derived here
   lambda_kappa: 0.1   # from frm_coefficients.adjustment_parameters; phi_2 = phi_1*(1-lambda_kappa)/lambda_kappa = 45.0 (derived, not configured)
   fixed_cost_share: 0.001   # paper example: Upsilon = 0.001 * total financial assets
-  frm_coefficients_path: run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
+  frm_coefficients_path: data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
   dynamic_shifters_enabled: false   # gates whether dynamic_shifters below move target shares; false until Stage 3 validation lands
   dynamic_shifters:
     income_expectations: 0.0   # ϑ_μ
     uncertainty: 0.0           # ϑ_θ
     return_differential: 0.0   # ϑ_r
   data_paths:
-    frm_coefficients: run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
+    frm_coefficients: data/raw_data/portfolio/FR_portfolio_frm_coefficients.json
   # Open HFCS-sourcing decisions (Increment 1, not yet resolved):
   #   investment_attitudes (HD1800): requires the HFCS reader to thread HD1800 into household init
   #     state for the designated household head, frozen thereafter (no dynamic recompute).

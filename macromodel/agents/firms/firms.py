@@ -2609,18 +2609,31 @@ class Firms(Agent):
     def assert_goods_orders_are_realised_labour_feasible(self) -> None:
         """Reject goods orders reopened above the post-labour feasible plan."""
         plan_ready = self.ts.current("activity_finance_realised_feasible_plan_ready")
-        if not np.isscalar(plan_ready) or not bool(plan_ready):
+        if not isinstance(plan_ready, (bool, np.bool_)) or not plan_ready:
             raise RuntimeError(
                 "Goods-order sequencing invariant unavailable: the current post-labour plan is not ready."
             )
 
-        feasible_intermediate = self.ts.current("activity_finance_realised_feasible_intermediate_inputs")
-        feasible_capital = self.ts.current("activity_finance_realised_feasible_capital_inputs")
-        feasible_technical = self.ts.current("activity_finance_realised_feasible_technical_investment")
+        try:
+            feasible_intermediate = np.asarray(
+                self.ts.current("activity_finance_realised_feasible_intermediate_inputs"), dtype=float
+            )
+            feasible_capital = np.asarray(
+                self.ts.current("activity_finance_realised_feasible_capital_inputs"), dtype=float
+            )
+            feasible_technical = np.asarray(
+                self.ts.current("activity_finance_realised_feasible_technical_investment"), dtype=float
+            )
+            target_intermediate = np.maximum(
+                0.0, np.asarray(self.ts.current("target_intermediate_inputs"), dtype=float)
+            )
+            target_capital = np.maximum(0.0, np.asarray(self.ts.current("target_capital_inputs"), dtype=float))
+            target_technical = np.asarray(self.ts.current("planned_technical_investment"), dtype=float)
+        except (TypeError, ValueError):
+            raise RuntimeError(
+                "Goods-order sequencing invariant unavailable: post-labour plan is missing or malformed."
+            ) from None
 
-        target_intermediate = np.maximum(0.0, self.ts.current("target_intermediate_inputs"))
-        target_capital = np.maximum(0.0, self.ts.current("target_capital_inputs"))
-        target_technical = self.ts.current("planned_technical_investment")
         tracked_plans = (
             feasible_intermediate,
             feasible_capital,
@@ -2630,7 +2643,11 @@ class Firms(Agent):
             target_technical,
         )
         expected_shape = target_intermediate.shape
-        if any(plan.size == 0 for plan in tracked_plans) or any(plan.shape != expected_shape for plan in tracked_plans):
+        if (
+            target_intermediate.ndim != 2
+            or any(plan.size == 0 for plan in tracked_plans)
+            or any(plan.ndim != 2 or plan.shape != expected_shape for plan in tracked_plans)
+        ):
             raise RuntimeError(
                 "Goods-order sequencing invariant unavailable: post-labour plan is missing or malformed."
             )

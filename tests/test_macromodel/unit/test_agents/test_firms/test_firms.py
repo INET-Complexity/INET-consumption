@@ -1665,6 +1665,25 @@ class TestFirms:
                 expected_inflation=0.0,
             )
 
+    def test__prepare_goods_market_orders_rejects_invalid_post_labour_ready_flag(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", np.nan)
+        test_firms.ts.override_current("target_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("planned_technical_investment", feasible.copy())
+
+        with pytest.raises(RuntimeError, match="invariant unavailable"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
+
     def test__prepare_goods_market_orders_rejects_reopened_technical_investment(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries

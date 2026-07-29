@@ -2402,6 +2402,11 @@ class TestCountry:
         expected_income = np.full(n_households, 222.0)
         test_country.households.ts.override_current("income", realized_income)
         test_country.households.ts.override_current("expected_income", expected_income)
+        # Isolate the income basis under test. Cash rent is a separate use of
+        # the period's resources since GH #120 (target_consumption carries
+        # market expenditure only), and has its own coverage in
+        # TestComputeAndRecordLiquidityShortfall.
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
 
         monkeypatch.setattr(
             test_country.households,
@@ -2457,6 +2462,10 @@ class TestCountry:
 
         test_country.households.ts.override_current("expected_income", expected_income)
         test_country.households.ts.override_current("wealth_deposits", deposits)
+        # Hold cash rent at zero so the expected shortfall stays exactly
+        # target_consumption - expected_income; rent as a separate cash use is
+        # covered in TestComputeAndRecordLiquidityShortfall (GH #120).
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
         pre_call_series = {
             key: test_country.households.ts.current(key).copy()
             for key in [
@@ -2746,6 +2755,9 @@ class TestCountry:
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
         test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
         test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        # Hold cash rent at zero so the shadow residual caps under test depend
+        # only on the stubbed target consumption and debt service (GH #120).
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
         target_consumption = np.zeros((n_households, n_industries))
         target_consumption[:, 0] = 300.0
 

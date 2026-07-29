@@ -2599,6 +2599,32 @@ class Firms(Agent):
 
         self.ts.activity_finance_realised_feasible_target_production.append(realised_feasible_y)
         self.ts.activity_finance_realised_labour_scale.append(labour_scale)
+        self.ts.activity_finance_realised_feasible_intermediate_inputs.append(candidate_intermediate.copy())
+        self.ts.activity_finance_realised_feasible_capital_inputs.append(candidate_capital.copy())
+
+    def assert_goods_orders_are_realised_labour_feasible(self) -> None:
+        """Reject goods orders reopened above the post-labour feasible plan."""
+        feasible_intermediate = self.ts.current("activity_finance_realised_feasible_intermediate_inputs")
+        feasible_capital = self.ts.current("activity_finance_realised_feasible_capital_inputs")
+        if not np.isfinite(feasible_intermediate).all() or not np.isfinite(feasible_capital).all():
+            return
+
+        target_intermediate = np.maximum(0.0, self.ts.current("target_intermediate_inputs"))
+        target_capital = np.maximum(0.0, self.ts.current("target_capital_inputs"))
+        scale = max(
+            1.0,
+            float(np.max(np.abs(feasible_intermediate))),
+            float(np.max(np.abs(feasible_capital))),
+        )
+        tolerance = 1e-10 * scale
+        intermediate_excess = float(np.max(target_intermediate - feasible_intermediate))
+        capital_excess = float(np.max(target_capital - feasible_capital))
+        if intermediate_excess > tolerance or capital_excess > tolerance:
+            raise RuntimeError(
+                "Goods-order sequencing invariant violated: final firm input targets exceed "
+                "the post-labour finance-feasible plan "
+                f"(intermediate excess={intermediate_excess:.6g}, capital excess={capital_excess:.6g})."
+            )
 
     def prepare_feasible_activity_plan(
         self,
@@ -2935,6 +2961,7 @@ class Firms(Agent):
                 where=expected_lcu_prices[None, :] > 0.0,
             )
             total_goods = total_goods + technical_goods
+        self.ts.goods_order.append(total_goods.copy())
         self.set_goods_to_buy(total_goods)
 
     def prepare_buying_goods(
@@ -3036,6 +3063,7 @@ class Firms(Agent):
     ) -> None:
         """Prepare goods-market orders from the already revised activity plan."""
         self.set_exchange_rate(exchange_rate_usd_to_lcu)
+        self.assert_goods_orders_are_realised_labour_feasible()
         self.set_goods_to_buy_from_current_targets(
             previous_good_prices=previous_good_prices,
             expected_inflation=expected_inflation,

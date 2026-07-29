@@ -1748,6 +1748,12 @@ class Country:
                 self.firms.ts.current("target_production").copy()
             )
             self.firms.ts.activity_finance_realised_labour_scale.append(np.ones(self.firms.ts.current("n_firms")))
+            self.firms.ts.activity_finance_realised_feasible_intermediate_inputs.append(
+                self.firms.ts.current("target_intermediate_inputs").copy()
+            )
+            self.firms.ts.activity_finance_realised_feasible_capital_inputs.append(
+                self.firms.ts.current("target_capital_inputs").copy()
+            )
             return
 
         reference_target_production = self.firms.ts.current("target_production").copy()

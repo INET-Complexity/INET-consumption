@@ -169,6 +169,9 @@ class TestFirms:
             "activity_finance_feasibility_residual",
             "activity_finance_realised_feasible_target_production",
             "activity_finance_realised_labour_scale",
+            "activity_finance_realised_feasible_intermediate_inputs",
+            "activity_finance_realised_feasible_capital_inputs",
+            "goods_order",
             "intermediate_purchase_finance_scale",
             "capital_purchase_finance_scale",
             "technical_investment_finance_scale",
@@ -1618,6 +1621,26 @@ class TestFirms:
             expected_inflation=0.0,
         )
         assert np.allclose(test_firms.ts.current("target_production"), original_net_target)
+        assert np.allclose(
+            test_firms.ts.current("goods_order"),
+            test_firms.ts.current("target_intermediate_inputs") + test_firms.ts.current("target_capital_inputs"),
+        )
+
+    def test__prepare_goods_market_orders_rejects_reopened_post_labour_input_targets(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("target_intermediate_inputs", (2.0 * feasible).copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+
+        with pytest.raises(RuntimeError, match="Goods-order sequencing invariant"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
 
     def test__realised_labour_revision_no_rationing_uses_post_credit_feasible_activity(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
@@ -1648,6 +1671,12 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("target_production"), target_production)
         assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), feasible_y[:, None])
         assert np.allclose(test_firms.ts.current("target_capital_inputs"), feasible_y[:, None])
+        assert np.allclose(
+            test_firms.ts.current("activity_finance_realised_feasible_intermediate_inputs"), feasible_y[:, None]
+        )
+        assert np.allclose(
+            test_firms.ts.current("activity_finance_realised_feasible_capital_inputs"), feasible_y[:, None]
+        )
         assert np.allclose(test_firms.ts.current("planned_technical_investment"), planned_technical)
         assert np.allclose(test_firms.ts.current("planned_tfp_investment"), planned_tfp)
         assert np.allclose(
@@ -1689,6 +1718,8 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("target_production")[0], 20.0)
         assert np.isclose(test_firms.ts.current("target_intermediate_inputs")[0, 0], 10.0)
         assert np.isclose(test_firms.ts.current("target_capital_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_feasible_intermediate_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_feasible_capital_inputs")[0, 0], 10.0)
         assert np.isclose(test_firms.ts.current("planned_technical_investment")[0, 0], 5.0)
         assert np.isclose(test_firms.ts.current("planned_tfp_investment")[0], 5.0)
         assert np.isclose(test_firms.ts.current("planned_productivity_investment")[0], 10.0)

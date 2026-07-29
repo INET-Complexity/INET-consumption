@@ -158,6 +158,9 @@ class FirmTimeSeries(TimeSeries):
     - activity_finance_feasibility_residual: Finance left after feasible planned labour and activity costs
     - activity_finance_realised_feasible_target_production: Activity scale after labour rationing
     - activity_finance_realised_labour_scale: Realised labour relative to post-credit feasible labour demand
+    - activity_finance_realised_feasible_intermediate_inputs: Input plan after labour rationing
+    - activity_finance_realised_feasible_capital_inputs: Capital plan after labour rationing
+    - goods_order: Final goods order created from the current activity plan
     - executed_productivity_investment: Executed planned/forced productivity investment (total)
     - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
     - planned_tfp_investment: TFP portion of planned productivity investment (n_firms)
@@ -338,6 +341,9 @@ class FirmTimeSeries(TimeSeries):
             activity_finance_feasibility_residual=np.zeros(data.shape[0]),
             activity_finance_realised_feasible_target_production=np.zeros(data.shape[0]),
             activity_finance_realised_labour_scale=np.ones(data.shape[0]),
+            activity_finance_realised_feasible_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
+            activity_finance_realised_feasible_capital_inputs=np.full((data.shape[0], n_industries), np.nan),
+            goods_order=used_intermediate_inputs + used_capital_inputs,
             intermediate_purchase_finance_scale=np.ones(data.shape[0]),
             capital_purchase_finance_scale=np.ones(data.shape[0]),
             technical_investment_finance_scale=np.ones(data.shape[0]),
@@ -718,6 +724,9 @@ def create_firms_timeseries(
         activity_finance_feasibility_residual=np.zeros(data.shape[0]),
         activity_finance_realised_feasible_target_production=np.zeros(data.shape[0]),
         activity_finance_realised_labour_scale=np.ones(data.shape[0]),
+        activity_finance_realised_feasible_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
+        activity_finance_realised_feasible_capital_inputs=np.full((data.shape[0], n_industries), np.nan),
+        goods_order=used_intermediate_inputs + used_capital_inputs,
         intermediate_purchase_finance_scale=np.ones(data.shape[0]),
         capital_purchase_finance_scale=np.ones(data.shape[0]),
         technical_investment_finance_scale=np.ones(data.shape[0]),

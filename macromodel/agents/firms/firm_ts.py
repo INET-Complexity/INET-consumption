@@ -160,6 +160,7 @@ class FirmTimeSeries(TimeSeries):
     - activity_finance_realised_labour_scale: Realised labour relative to post-credit feasible labour demand
     - activity_finance_realised_feasible_intermediate_inputs: Input plan after labour rationing
     - activity_finance_realised_feasible_capital_inputs: Capital plan after labour rationing
+    - activity_finance_realised_feasible_technical_investment: Technical investment plan after labour rationing
     - goods_order: Final goods order created from the current activity plan
     - executed_productivity_investment: Executed planned/forced productivity investment (total)
     - net_capital_investment_above_replacement: Ordinary capital purchases above depreciation replacement
@@ -343,6 +344,7 @@ class FirmTimeSeries(TimeSeries):
             activity_finance_realised_labour_scale=np.ones(data.shape[0]),
             activity_finance_realised_feasible_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
             activity_finance_realised_feasible_capital_inputs=np.full((data.shape[0], n_industries), np.nan),
+            activity_finance_realised_feasible_technical_investment=np.full((data.shape[0], n_industries), np.nan),
             goods_order=used_intermediate_inputs + used_capital_inputs,
             intermediate_purchase_finance_scale=np.ones(data.shape[0]),
             capital_purchase_finance_scale=np.ones(data.shape[0]),
@@ -726,6 +728,7 @@ def create_firms_timeseries(
         activity_finance_realised_labour_scale=np.ones(data.shape[0]),
         activity_finance_realised_feasible_intermediate_inputs=np.full((data.shape[0], n_industries), np.nan),
         activity_finance_realised_feasible_capital_inputs=np.full((data.shape[0], n_industries), np.nan),
+        activity_finance_realised_feasible_technical_investment=np.full((data.shape[0], n_industries), np.nan),
         goods_order=used_intermediate_inputs + used_capital_inputs,
         intermediate_purchase_finance_scale=np.ones(data.shape[0]),
         capital_purchase_finance_scale=np.ones(data.shape[0]),

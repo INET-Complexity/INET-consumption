@@ -826,6 +826,87 @@ class TestCreditAugmentedHouseholdConsumption:
             with_housing.last_formula_implied_mpc,
         )
 
+    def test_persisted_budget_lag_keeps_multi_period_path_stable_while_goods_lag_drifts(self):
+        """Dynamic guard for GH #120: the ECM lag must be the persisted budget.
+
+        Every other test in this class evaluates a single call, so none of them
+        can see the defect this one targets: it lives purely in the
+        period-to-period recursion. Feeding realised goods spending back as the
+        lag compares a rent-inclusive target against a rent-exclusive lag, which
+        drags the target down every period and compounds. A seed-15 t=10 run
+        showed GDP -17.6% and still widening, while the whole unit suite stayed
+        green.
+
+        The two loops below are identical except for which quantity is fed back.
+        The assertion is comparative on purpose: it fails on the pre-fix wiring
+        rather than merely passing on the fixed one.
+        """
+        n_periods = 12
+
+        def _rule():
+            return CreditAugmentedConsumption(
+                consumption_smoothing_fraction=0.0,
+                consumption_smoothing_window=1,
+                minimum_consumption_fraction=0.0,
+                partial_adjustment_speed=0.4,
+                house_price_propensity=0.0,
+            )
+
+        def _base_args():
+            # Deflators and VAT are held at unity so nominal == real and the two
+            # feedback paths differ only in concept, not in units.
+            args = self._housing_carve_out_args(n_households=1)
+            args.update(current_cpi=1.0, initial_cpi=1.0, lagged_cpi=1.0, expected_inflation=0.0, tau_vat=0.0)
+            return args
+
+        def _budget_lag_path(housing):
+            """Correct wiring: feed back the persisted real consumption budget."""
+            rule, budget, path = _rule(), None, []
+            for _ in range(n_periods):
+                rule.compute_target_consumption(
+                    **_base_args(),
+                    rent=np.full(1, housing),
+                    rent_imputed=np.zeros(1),
+                    lagged_real_consumption_budget=budget,
+                )
+                budget = rule.last_real_consumption_budget
+                path.append(float(budget[0]))
+            long_run = float(np.asarray(rule.last_target_consumption_components["target_consumption_long_run"])[0])
+            return path, long_run
+
+        def _goods_lag_path(housing):
+            """Pre-fix wiring: feed back realised (carved-out) goods spending."""
+            rule, path = _rule(), []
+            lagged_goods = np.asarray(_base_args()["lagged_consumption"], dtype=float)
+            for _ in range(n_periods):
+                args = _base_args()
+                args["lagged_consumption"] = lagged_goods
+                result = rule.compute_target_consumption(**args, rent=np.full(1, housing), rent_imputed=np.zeros(1))
+                lagged_goods = result.sum(axis=1)
+                path.append(float(lagged_goods[0]))
+            return path
+
+        small_housing, large_housing = 5.0, 12.0
+        budget_small, long_run = _budget_lag_path(small_housing)
+        budget_large, long_run_large = _budget_lag_path(large_housing)
+        goods_small = _goods_lag_path(small_housing)
+        goods_large = _goods_lag_path(large_housing)
+
+        # The defining property: the budget lag makes the ECM state independent
+        # of the housing flow, so the path converges on the same long-run target
+        # whatever rent the household pays, and settles rather than ratcheting.
+        assert budget_small[-1] == pytest.approx(long_run, rel=0.02), (budget_small[-1], long_run)
+        assert budget_large[-1] == pytest.approx(long_run_large, rel=0.02)
+        assert budget_small[-1] == pytest.approx(budget_large[-1], rel=1e-9), (budget_small[-1], budget_large[-1])
+        tail = budget_small[-3:]
+        assert max(tail) / min(tail) < 1.01, budget_small
+
+        # The pre-fix wiring instead converges on a depressed level, and the
+        # shortfall scales with the housing flow that is leaking into the state.
+        # This is the assertion that fails before the fix.
+        assert goods_small[-1] < 0.95 * budget_small[-1], (goods_small[-1], budget_small[-1])
+        assert goods_large[-1] < goods_small[-1], (goods_large[-1], goods_small[-1])
+
     def test_housing_carve_out_floors_goods_demand_at_zero_without_going_negative(self):
         # When the housing flow exceeds the calibrated target, market demand
         # floors at zero rather than turning negative and creating phantom

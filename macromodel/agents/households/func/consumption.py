@@ -105,6 +105,7 @@ class HouseholdConsumption(ABC):
         uncertainty_delta: float | np.ndarray = None,
         population_scale_factor: float | None = None,
         time_unit: int = 12,
+        lagged_real_consumption_budget: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -212,6 +213,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         uncertainty_delta: float | np.ndarray = None,  # Ignored in default consumption
         population_scale_factor: float | None = None,  # Ignored in default consumption
         time_unit: int = 12,  # Ignored in default consumption
+        lagged_real_consumption_budget: np.ndarray = None,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
 
@@ -399,6 +401,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         uncertainty_delta: float | np.ndarray = None,  # Ignored in CES consumption
         population_scale_factor: float | None = None,  # Ignored in CES consumption
         time_unit: int = 12,  # Ignored in CES consumption
+        lagged_real_consumption_budget: np.ndarray = None,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
 
@@ -758,6 +761,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.income_belief_learning_S = horizon.get("S")
         self.last_target_consumption_components: dict[str, np.ndarray] | None = None
         self.last_formula_implied_mpc: np.ndarray | None = None
+        self.last_real_consumption_budget: np.ndarray | None = None
 
     @staticmethod
     def _as_array(reference: np.ndarray, value: np.ndarray | float | None, default: float = 0.0) -> np.ndarray:
@@ -864,6 +868,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         expected_inflation: float,
         population_scale_factor: float | None,
         time_unit: int,
+        lagged_real_consumption_budget: np.ndarray | None = None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
         lagged_income = np.asarray(lagged_income, dtype=float)
@@ -909,7 +914,25 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
         real_spendable_income = np.maximum(income / current_deflator, self.income_floor)
         real_lagged_income = np.maximum(lagged_income / lagged_deflator, self.income_floor)
-        real_lagged_consumption = np.maximum(lagged_consumption / lagged_deflator, self.consumption_floor)
+        # The ECM's state variable is the previous period's *real consumption
+        # budget* produced by this rule -- the same concept the current period
+        # solves for. When the caller persists that budget it is supplied
+        # directly and must not be deflated again (it is already real).
+        #
+        # The fallback deflates a nominal realised-consumption series instead.
+        # That is a proxy, not the concept: it is net of VAT while the target is
+        # gross of it, it reflects goods-market rationing and the zero floor,
+        # and -- since GH #120 carved housing out of goods demand -- it excludes
+        # rent entirely. Using it makes the gap term compare a rent-inclusive
+        # target against a rent-exclusive lag, which drags the target down every
+        # period and compounds. Kept only to bootstrap the first period and for
+        # callers that do not persist a budget.
+        if lagged_real_consumption_budget is not None:
+            real_lagged_consumption = np.maximum(
+                np.asarray(lagged_real_consumption_budget, dtype=float), self.consumption_floor
+            )
+        else:
+            real_lagged_consumption = np.maximum(lagged_consumption / lagged_deflator, self.consumption_floor)
         real_net_liquid_assets = (
             lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt
         ) / lagged_deflator
@@ -1069,6 +1092,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         target_total = target_total_real * nominalizer
 
         components = {
+            "target_consumption_real_budget": target_total_real,
             "target_consumption_lagged_consumption": lagged_consumption,
             "target_consumption_real_income": real_spendable_income,
             "target_consumption_lagged_real_income": real_lagged_income,
@@ -1159,6 +1183,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         uncertainty_delta: float | np.ndarray = None,
         population_scale_factor: float | None = None,
         time_unit: int = 12,
+        lagged_real_consumption_budget: np.ndarray = None,
     ) -> np.ndarray:
         if lagged_consumption is None:
             lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
@@ -1221,6 +1246,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             expected_inflation=expected_inflation,
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
+            lagged_real_consumption_budget=lagged_real_consumption_budget,
         )
 
         current_deflator = max(
@@ -1257,6 +1283,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             expected_inflation=expected_inflation,
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
+            lagged_real_consumption_budget=lagged_real_consumption_budget,
         )
 
         # ``target_total`` is the calibrated consumption concept, which includes
@@ -1310,6 +1337,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             ).T,
         )
 
+        # The real consumption budget is this rule's ECM state variable. The
+        # caller persists it so the next period's gap term is measured against
+        # the same concept the target is expressed in.
+        self.last_real_consumption_budget = components["target_consumption_real_budget"]
         components["target_consumption_cash_rent"] = cash_rent
         components["target_consumption_imputed_rent"] = imputed_rent
         components["target_consumption_non_goods_housing"] = non_goods_housing_component
@@ -1375,6 +1406,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         uncertainty_delta: float | np.ndarray = None,  # Ignored in exogenous consumption
         population_scale_factor: float | None = None,  # Ignored in exogenous consumption
         time_unit: int = 12,  # Ignored in exogenous consumption
+        lagged_real_consumption_budget: np.ndarray = None,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.
 

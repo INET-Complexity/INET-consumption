@@ -544,12 +544,12 @@ def build_like_for_like_reconciliation(
             ]
         )
     paper_housing = initial_panel["ha"]
-    initial_runtime_housing = initial_panel["runtime_wealth_main_residence"] + initial_panel[
-        "runtime_wealth_other_properties"
-    ]
-    final_runtime_housing = final_panel["runtime_wealth_main_residence"] + final_panel[
-        "runtime_wealth_other_properties"
-    ]
+    initial_runtime_housing = (
+        initial_panel["runtime_wealth_main_residence"] + initial_panel["runtime_wealth_other_properties"]
+    )
+    final_runtime_housing = (
+        final_panel["runtime_wealth_main_residence"] + final_panel["runtime_wealth_other_properties"]
+    )
     housing_mapping_gap = initial_runtime_housing - paper_housing
     rows.extend(
         [

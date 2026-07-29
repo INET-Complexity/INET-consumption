@@ -399,7 +399,7 @@ def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
     assert params["phi_1"] == 5.0
     assert params["lambda_kappa"] == 0.1
     assert params["fixed_cost_share"] == 0.001
-    assert params["frm_coefficients_path"] == "run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
+    assert params["frm_coefficients_path"] == "data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
 
 
 def test__load_country_configuration_rejects_missing_paper_parameter_ref(tmp_path):

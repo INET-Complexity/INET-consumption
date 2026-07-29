@@ -169,6 +169,11 @@ class TestFirms:
             "activity_finance_feasibility_residual",
             "activity_finance_realised_feasible_target_production",
             "activity_finance_realised_labour_scale",
+            "activity_finance_realised_feasible_intermediate_inputs",
+            "activity_finance_realised_feasible_capital_inputs",
+            "activity_finance_realised_feasible_technical_investment",
+            "activity_finance_realised_feasible_plan_ready",
+            "goods_order",
             "intermediate_purchase_finance_scale",
             "capital_purchase_finance_scale",
             "technical_investment_finance_scale",
@@ -1618,6 +1623,109 @@ class TestFirms:
             expected_inflation=0.0,
         )
         assert np.allclose(test_firms.ts.current("target_production"), original_net_target)
+        assert np.allclose(
+            test_firms.ts.current("goods_order"),
+            test_firms.ts.current("target_intermediate_inputs") + test_firms.ts.current("target_capital_inputs"),
+        )
+
+    def test__prepare_goods_market_orders_rejects_reopened_post_labour_input_targets(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current(
+            "activity_finance_realised_feasible_technical_investment", np.zeros_like(feasible)
+        )
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
+        test_firms.ts.override_current("target_intermediate_inputs", (2.0 * feasible).copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+
+        with pytest.raises(RuntimeError, match="Goods-order sequencing invariant"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
+
+    def test__prepare_goods_market_orders_rejects_missing_post_labour_plan(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("target_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("planned_technical_investment", np.zeros_like(feasible))
+
+        with pytest.raises(RuntimeError, match="invariant unavailable"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
+
+    def test__prepare_goods_market_orders_rejects_invalid_post_labour_ready_flag(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", np.nan)
+        test_firms.ts.override_current("target_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("planned_technical_investment", feasible.copy())
+
+        with pytest.raises(RuntimeError, match="invariant unavailable"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
+
+    def test__prepare_goods_market_orders_rejects_reopened_technical_investment(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
+        test_firms.ts.override_current("target_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("planned_technical_investment", (2.0 * feasible).copy())
+
+        with pytest.raises(RuntimeError, match="technical excess"):
+            test_firms.prepare_goods_market_orders(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
+
+    def test__prepare_goods_market_clearing_enforces_post_labour_invariant(self, test_firms, monkeypatch):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        feasible = np.ones((n_firms, n_industries))
+        test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
+        test_firms.ts.override_current("target_intermediate_inputs", (2.0 * feasible).copy())
+        test_firms.ts.override_current("target_capital_inputs", feasible.copy())
+        test_firms.ts.override_current("planned_technical_investment", np.zeros_like(feasible))
+        monkeypatch.setattr(
+            test_firms,
+            "prepare_feasible_activity_plan",
+            lambda **kwargs: pytest.fail("goods-market clearing must not rerun activity feasibility"),
+        )
+
+        with pytest.raises(RuntimeError, match="Goods-order sequencing invariant"):
+            test_firms.prepare_goods_market_clearing(
+                exchange_rate_usd_to_lcu=1.0,
+                previous_good_prices=np.ones(n_industries),
+                expected_inflation=0.0,
+            )
 
     def test__realised_labour_revision_no_rationing_uses_post_credit_feasible_activity(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
@@ -1648,6 +1756,13 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("target_production"), target_production)
         assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), feasible_y[:, None])
         assert np.allclose(test_firms.ts.current("target_capital_inputs"), feasible_y[:, None])
+        assert test_firms.ts.current("activity_finance_realised_feasible_plan_ready")
+        assert np.allclose(
+            test_firms.ts.current("activity_finance_realised_feasible_intermediate_inputs"), feasible_y[:, None]
+        )
+        assert np.allclose(
+            test_firms.ts.current("activity_finance_realised_feasible_capital_inputs"), feasible_y[:, None]
+        )
         assert np.allclose(test_firms.ts.current("planned_technical_investment"), planned_technical)
         assert np.allclose(test_firms.ts.current("planned_tfp_investment"), planned_tfp)
         assert np.allclose(
@@ -1689,6 +1804,8 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("target_production")[0], 20.0)
         assert np.isclose(test_firms.ts.current("target_intermediate_inputs")[0, 0], 10.0)
         assert np.isclose(test_firms.ts.current("target_capital_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_feasible_intermediate_inputs")[0, 0], 10.0)
+        assert np.isclose(test_firms.ts.current("activity_finance_realised_feasible_capital_inputs")[0, 0], 10.0)
         assert np.isclose(test_firms.ts.current("planned_technical_investment")[0, 0], 5.0)
         assert np.isclose(test_firms.ts.current("planned_tfp_investment")[0], 5.0)
         assert np.isclose(test_firms.ts.current("planned_productivity_investment")[0], 10.0)
@@ -2527,6 +2644,7 @@ class TestFirms:
             production_tax_obligation_preview=np.zeros(n_firms),
         )
 
+        assert not test_firms.ts.current("activity_finance_realised_feasible_plan_ready")
         assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), unconstrained_intermediate)
         assert np.allclose(test_firms.ts.current("target_capital_inputs"), unconstrained_capital)
 
@@ -2605,6 +2723,7 @@ class TestFirms:
         test_firms.set_goods_to_buy_from_current_targets(
             previous_good_prices=previous_prices,
             expected_inflation=0.5,
+            enforce_realised_labour_feasibility=False,
         )
 
         assert len(test_firms.ts.target_intermediate_inputs) == intermediate_len

@@ -1584,9 +1584,7 @@ class Country:
             remaining_shortfall=self.households.current_remaining_subsistence_shortfall(),
             early_repayment_capacity=early_repayment_capacity,
         )
-        closing_consumer_arrears = settlement.arrears.closing_interest.sum(
-            axis=0
-        ) + settlement.arrears.closing_principal.sum(axis=0)
+        # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)
@@ -1748,6 +1746,16 @@ class Country:
                 self.firms.ts.current("target_production").copy()
             )
             self.firms.ts.activity_finance_realised_labour_scale.append(np.ones(self.firms.ts.current("n_firms")))
+            self.firms.ts.activity_finance_realised_feasible_intermediate_inputs.append(
+                self.firms.ts.current("target_intermediate_inputs").copy()
+            )
+            self.firms.ts.activity_finance_realised_feasible_capital_inputs.append(
+                self.firms.ts.current("target_capital_inputs").copy()
+            )
+            self.firms.ts.activity_finance_realised_feasible_technical_investment.append(
+                self.firms.ts.current("planned_technical_investment").copy()
+            )
+            self.firms.ts.activity_finance_realised_feasible_plan_ready.append(True)
             return
 
         reference_target_production = self.firms.ts.current("target_production").copy()

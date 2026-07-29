@@ -1584,9 +1584,7 @@ class Country:
             remaining_shortfall=self.households.current_remaining_subsistence_shortfall(),
             early_repayment_capacity=early_repayment_capacity,
         )
-        closing_consumer_arrears = settlement.arrears.closing_interest.sum(
-            axis=0
-        ) + settlement.arrears.closing_principal.sum(axis=0)
+        # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)

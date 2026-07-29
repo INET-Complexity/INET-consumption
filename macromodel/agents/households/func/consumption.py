@@ -84,6 +84,7 @@ class HouseholdConsumption(ABC):
         housing_wealth: np.ndarray = None,
         lagged_housing_wealth: np.ndarray = None,
         rent: np.ndarray = None,
+        rent_imputed: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
         owner_occupied: np.ndarray = None,
@@ -129,7 +130,12 @@ class HouseholdConsumption(ABC):
             liquid_wealth (np.ndarray | None): Liquid wealth per household
             illiquid_wealth (np.ndarray | None): Illiquid financial wealth per household
             housing_wealth (np.ndarray | None): Housing wealth per household
-            rent (np.ndarray | None): Rent per household
+            rent (np.ndarray | None): Actual cash rent paid per household.
+                Non-zero for renters and social-housing tenants only; zero for
+                owner-occupiers by construction in ``Households.compute_rent``.
+            rent_imputed (np.ndarray | None): Imputed rent per household.
+                Non-zero for owner-occupiers only; zero for renters by the
+                same construction. Mutually exclusive with ``rent``.
             mortgage_debt (np.ndarray | None): Mortgage debt per household
             mortgage_payment (np.ndarray | None): Mortgage payment per household
             owner_occupied (np.ndarray | None): Owner-occupied main-residence flag
@@ -185,6 +191,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         housing_wealth: np.ndarray = None,  # Ignored in default consumption
         lagged_housing_wealth: np.ndarray = None,  # Ignored in default consumption
         rent: np.ndarray = None,  # Ignored in default consumption
+        rent_imputed: np.ndarray = None,  # Ignored in default consumption
         mortgage_debt: np.ndarray = None,  # Ignored in default consumption
         mortgage_payment: np.ndarray = None,  # Ignored in default consumption
         owner_occupied: np.ndarray = None,  # Ignored in default consumption
@@ -371,6 +378,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         housing_wealth: np.ndarray = None,  # Ignored in CES consumption
         lagged_housing_wealth: np.ndarray = None,  # Ignored in CES consumption
         rent: np.ndarray = None,  # Ignored in CES consumption
+        rent_imputed: np.ndarray = None,  # Ignored in CES consumption
         mortgage_debt: np.ndarray = None,  # Ignored in CES consumption
         mortgage_payment: np.ndarray = None,  # Ignored in CES consumption
         owner_occupied: np.ndarray = None,  # Ignored in CES consumption
@@ -585,11 +593,26 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
     Feasible Stage 2 proxy for the paper log-linear consumption equation.
 
-    Rent and scheduled mortgage service are intentionally diagnostics only. The
-    behavioural target uses current real spendable income, lagged real income,
-    lagged real consumption, paper-style lagged NLA, lagged IFA, lagged housing
-    wealth, and lagged HPI. Stage 3 permanent-income, consumer-debt-rate, and
-    uncertainty terms remain explicit zero placeholders unless supplied.
+    Rent and scheduled mortgage service are not behavioural regressors: the
+    target uses current real spendable income, lagged real income, lagged real
+    consumption, paper-style lagged NLA, lagged IFA, lagged housing wealth, and
+    lagged HPI. Stage 3 permanent-income, consumer-debt-rate, and uncertainty
+    terms remain explicit zero placeholders unless supplied.
+
+    The resulting ``target_total`` is the calibrated consumption concept, which
+    (matching the empirical calibration) covers market expenditure, actual cash
+    rent, and imputed rent. Before demand is routed to firms, the housing-flow
+    components are carved out so that only market expenditure generates goods
+    demand (GH #120):
+
+    ``goods_target = max(0, target_total - cash_rent - imputed_rent)``
+
+    Cash rent remains a real cash outflow settled once in
+    ``Households.update_wealth``; imputed rent is an accounting component only
+    and generates neither cash flow nor firm demand. The carve-out reclassifies
+    an already-calibrated total and introduces no new accounting. Scheduled
+    mortgage service is unaffected: it is debt service, never part of the
+    calibrated consumption aggregate, and stays a diagnostic here.
     """
 
     def __init__(
@@ -1115,6 +1138,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         housing_wealth: np.ndarray = None,
         lagged_housing_wealth: np.ndarray = None,
         rent: np.ndarray = None,
+        rent_imputed: np.ndarray = None,
         mortgage_debt: np.ndarray = None,
         mortgage_payment: np.ndarray = None,
         owner_occupied: np.ndarray = None,
@@ -1150,6 +1174,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             income, lagged_housing_wealth if lagged_housing_wealth is not None else housing_wealth
         )
         rent = self._as_array(income, rent)
+        rent_imputed = self._as_array(income, rent_imputed)
         mortgage_debt = self._as_array(income, mortgage_debt)
         mortgage_payment = self._as_array(income, mortgage_payment)
         lagged_liquid_wealth = self._as_array(
@@ -1234,7 +1259,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             time_unit=time_unit,
         )
 
-        target_consumption = np.maximum(
+        # ``target_total`` is the calibrated consumption concept, which includes
+        # market expenditure, actual (cash) rent, and imputed rent — the same
+        # aggregate the empirical CACF calibration was estimated against. The
+        # formula-implied MPC diagnostic is therefore computed on the *full*
+        # rent-inclusive target, so it stays comparable to the rent-inclusive
+        # empirical MPC benchmarks, independent of the housing carve-out below.
+        full_target_consumption = np.maximum(
             0.0,
             1.0
             / (1 + tau_vat)
@@ -1247,10 +1278,44 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             0.0,
             1.0 / (1 + tau_vat) * np.outer(consumption_weights, perturbed_target).T,
         )
-        self.last_target_consumption_components = components
         self.last_formula_implied_mpc = (
-            perturbed_target_consumption.sum(axis=1) - target_consumption.sum(axis=1)
+            perturbed_target_consumption.sum(axis=1) - full_target_consumption.sum(axis=1)
         ) / nominal_income_perturbation
+
+        # Classify the calibrated target into market expenditure and non-market
+        # housing services (GH #120). This introduces no new accounting: it only
+        # decides which part of an already-calibrated total reaches firms.
+        #   - cash_rent is a real cash outflow, paid exactly once through the
+        #     existing ``Households.update_wealth`` deduction. It must not also
+        #     generate goods demand.
+        #   - imputed_rent is an accounting component of measured consumption
+        #     only. It is neither a cash flow nor a liability, so it generates
+        #     no goods demand and never triggers feasibility support.
+        # The two are mutually exclusive per household by construction in
+        # ``Households.compute_rent`` (disjoint tenure-status masks), and are
+        # authoritative from here on: downstream code must not reconstruct
+        # either from ``target_total`` or from the returned goods target.
+        cash_rent = np.maximum(0.0, rent)
+        imputed_rent = np.maximum(0.0, rent_imputed)
+        non_goods_housing_component = cash_rent + imputed_rent
+        goods_target_total = np.maximum(0.0, target_total - non_goods_housing_component)
+
+        target_consumption = np.maximum(
+            0.0,
+            1.0
+            / (1 + tau_vat)
+            * np.outer(
+                consumption_weights,
+                goods_target_total,
+            ).T,
+        )
+
+        components["target_consumption_cash_rent"] = cash_rent
+        components["target_consumption_imputed_rent"] = imputed_rent
+        components["target_consumption_non_goods_housing"] = non_goods_housing_component
+        components["target_consumption_calibrated_total"] = target_total
+        components["target_consumption_goods_total"] = goods_target_total
+        self.last_target_consumption_components = components
         return target_consumption
 
 
@@ -1289,6 +1354,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         housing_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         lagged_housing_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         rent: np.ndarray = None,  # Ignored in exogenous consumption
+        rent_imputed: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_debt: np.ndarray = None,  # Ignored in exogenous consumption
         mortgage_payment: np.ndarray = None,  # Ignored in exogenous consumption
         owner_occupied: np.ndarray = None,  # Ignored in exogenous consumption

@@ -1865,6 +1865,7 @@ class Households(Agent):
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
                 lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
+                rent_imputed=self.ts.current("rent_imputed"),
                 mortgage_debt=self.ts.current("mortgage_debt"),
                 mortgage_payment=mortgage_payment,
                 owner_occupied=owner_occupied,
@@ -1949,10 +1950,19 @@ class Households(Agent):
         (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
         definition and the exit criterion.
 
+        Since GH #120 the array returned by ``compute_target_consumption()``
+        carries market expenditure only (the housing-flow components of the
+        calibrated target are carved out before demand reaches firms), so this
+        method supplies the period's actual cash rent to the shortfall
+        computation as its own use. Imputed rent is deliberately never passed:
+        it is measured consumption, not a liability, and must not create a
+        feasibility shortfall.
+
         Args:
             target_consumption (np.ndarray): This period's per-household
                 target consumption, summed across goods (i.e. the same total
-                already returned by ``compute_target_consumption()``).
+                already returned by ``compute_target_consumption()``, which is
+                the market-expenditure part of the calibrated target).
             scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
                 consumer-loan instalments for the period, per household.
             income_override (Optional[np.ndarray]): Explicit income basis,
@@ -1972,6 +1982,7 @@ class Households(Agent):
             income=income,
             target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
+            cash_rent=self.ts.current("rent"),
         )
         if replace_current:
             self.ts.override_current("liquidity_shortfall", result.liquidity_shortfall)
@@ -2373,6 +2384,11 @@ class Households(Agent):
             "target_consumption_alpha_2",
             "target_consumption_gamma_1",
             "target_consumption_wealth_drag_clipped",
+            "target_consumption_cash_rent",
+            "target_consumption_imputed_rent",
+            "target_consumption_non_goods_housing",
+            "target_consumption_calibrated_total",
+            "target_consumption_goods_total",
         ]
 
     def _append_target_consumption_diagnostics(

@@ -172,6 +172,7 @@ class TestFirms:
             "activity_finance_realised_feasible_intermediate_inputs",
             "activity_finance_realised_feasible_capital_inputs",
             "activity_finance_realised_feasible_technical_investment",
+            "activity_finance_realised_feasible_plan_ready",
             "goods_order",
             "intermediate_purchase_finance_scale",
             "capital_purchase_finance_scale",
@@ -1636,6 +1637,7 @@ class TestFirms:
         test_firms.ts.override_current(
             "activity_finance_realised_feasible_technical_investment", np.zeros_like(feasible)
         )
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
         test_firms.ts.override_current("target_intermediate_inputs", (2.0 * feasible).copy())
         test_firms.ts.override_current("target_capital_inputs", feasible.copy())
 
@@ -1670,6 +1672,7 @@ class TestFirms:
         test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
         test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
         test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
         test_firms.ts.override_current("target_intermediate_inputs", feasible.copy())
         test_firms.ts.override_current("target_capital_inputs", feasible.copy())
         test_firms.ts.override_current("planned_technical_investment", (2.0 * feasible).copy())
@@ -1688,10 +1691,15 @@ class TestFirms:
         test_firms.ts.override_current("activity_finance_realised_feasible_intermediate_inputs", feasible.copy())
         test_firms.ts.override_current("activity_finance_realised_feasible_capital_inputs", feasible.copy())
         test_firms.ts.override_current("activity_finance_realised_feasible_technical_investment", feasible.copy())
+        test_firms.ts.override_current("activity_finance_realised_feasible_plan_ready", True)
         test_firms.ts.override_current("target_intermediate_inputs", (2.0 * feasible).copy())
         test_firms.ts.override_current("target_capital_inputs", feasible.copy())
         test_firms.ts.override_current("planned_technical_investment", np.zeros_like(feasible))
-        monkeypatch.setattr(test_firms, "prepare_feasible_activity_plan", lambda **kwargs: None)
+        monkeypatch.setattr(
+            test_firms,
+            "prepare_feasible_activity_plan",
+            lambda **kwargs: pytest.fail("goods-market clearing must not rerun activity feasibility"),
+        )
 
         with pytest.raises(RuntimeError, match="Goods-order sequencing invariant"):
             test_firms.prepare_goods_market_clearing(
@@ -1729,6 +1737,7 @@ class TestFirms:
         assert np.allclose(test_firms.ts.current("target_production"), target_production)
         assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), feasible_y[:, None])
         assert np.allclose(test_firms.ts.current("target_capital_inputs"), feasible_y[:, None])
+        assert test_firms.ts.current("activity_finance_realised_feasible_plan_ready")
         assert np.allclose(
             test_firms.ts.current("activity_finance_realised_feasible_intermediate_inputs"), feasible_y[:, None]
         )
@@ -2616,6 +2625,7 @@ class TestFirms:
             production_tax_obligation_preview=np.zeros(n_firms),
         )
 
+        assert not test_firms.ts.current("activity_finance_realised_feasible_plan_ready")
         assert np.allclose(test_firms.ts.current("target_intermediate_inputs"), unconstrained_intermediate)
         assert np.allclose(test_firms.ts.current("target_capital_inputs"), unconstrained_capital)
 

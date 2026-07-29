@@ -2604,9 +2604,16 @@ class Firms(Agent):
         self.ts.activity_finance_realised_feasible_technical_investment.append(
             self.ts.current("planned_technical_investment").copy()
         )
+        self.ts.activity_finance_realised_feasible_plan_ready.append(True)
 
     def assert_goods_orders_are_realised_labour_feasible(self) -> None:
         """Reject goods orders reopened above the post-labour feasible plan."""
+        plan_ready = self.ts.current("activity_finance_realised_feasible_plan_ready")
+        if not np.isscalar(plan_ready) or not bool(plan_ready):
+            raise RuntimeError(
+                "Goods-order sequencing invariant unavailable: the current post-labour plan is not ready."
+            )
+
         feasible_intermediate = self.ts.current("activity_finance_realised_feasible_intermediate_inputs")
         feasible_capital = self.ts.current("activity_finance_realised_feasible_capital_inputs")
         feasible_technical = self.ts.current("activity_finance_realised_feasible_technical_investment")
@@ -2679,6 +2686,8 @@ class Firms(Agent):
             loan_interest_obligation_preview (np.ndarray | None): Current-period loan interest eligible for rollover.
             debt_installment_preview (np.ndarray | None): Current-period scheduled firm principal due preview.
         """
+        self.ts.override_current("activity_finance_realised_feasible_plan_ready", False)
+
         # Target intermediate inputs
         if assume_zero_growth:
             self.ts.target_intermediate_inputs.append(self.ts.initial("target_intermediate_inputs"))
@@ -3003,9 +3012,11 @@ class Firms(Agent):
         interest_obligation_preview: np.ndarray | None = None,
         loan_interest_obligation_preview: np.ndarray | None = None,
         debt_installment_preview: np.ndarray | None = None,
-        enforce_realised_labour_feasibility: bool = False,
     ) -> None:
-        """Prepare firms' buying plans for goods market."""
+        """Prepare pre-labour firm buying plans.
+
+        Final post-labour orders must use ``prepare_goods_market_orders``.
+        """
         self.prepare_feasible_activity_plan(
             previous_good_prices=previous_good_prices,
             expected_inflation=expected_inflation,
@@ -3020,7 +3031,7 @@ class Firms(Agent):
         self.set_goods_to_buy_from_current_targets(
             previous_good_prices=previous_good_prices,
             expected_inflation=expected_inflation,
-            enforce_realised_labour_feasibility=enforce_realised_labour_feasibility,
+            enforce_realised_labour_feasibility=False,
         )
 
     def prepare_selling_goods(self) -> None:
@@ -3052,12 +3063,12 @@ class Firms(Agent):
         debt_installment_preview: np.ndarray | None = None,
         assume_zero_growth: bool = False,
     ) -> None:
-        """Prepare all aspects of goods market participation.
+        """Prepare goods-market participation from the post-labour plan.
 
-        Coordinates:
-        - Exchange rate setting
-        - Buying plans
-        - Selling plans
+        This compatibility entry point retains its historical preview
+        arguments, but deliberately does not rerun activity feasibility after
+        labour clearing. Final orders must use the plan prepared by the
+        post-labour stage.
 
         Args:
             exchange_rate_usd_to_lcu (float): Exchange rate USD to local currency
@@ -3071,20 +3082,11 @@ class Firms(Agent):
             debt_installment_preview (np.ndarray | None): Current-period scheduled firm principal due preview.
             assume_zero_growth (bool): Whether to use initial buying targets.
         """
-        self.set_exchange_rate(exchange_rate_usd_to_lcu)
-        self.prepare_buying_goods(
+        self.prepare_goods_market_orders(
+            exchange_rate_usd_to_lcu=exchange_rate_usd_to_lcu,
             previous_good_prices=previous_good_prices,
             expected_inflation=expected_inflation,
-            wage_obligation_preview=wage_obligation_preview,
-            production_tax_obligation_preview=production_tax_obligation_preview,
-            corporate_tax_obligation_preview=corporate_tax_obligation_preview,
-            interest_obligation_preview=interest_obligation_preview,
-            loan_interest_obligation_preview=loan_interest_obligation_preview,
-            debt_installment_preview=debt_installment_preview,
-            assume_zero_growth=assume_zero_growth,
-            enforce_realised_labour_feasibility=True,
         )
-        self.prepare_selling_goods()
 
     def prepare_goods_market_orders(
         self,

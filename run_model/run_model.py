@@ -74,6 +74,8 @@ def main(
     assume_zero_noise: bool | None = None,
     government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
     government_consumption_consistency: float | None = None,
+    inventory_adjustment_speed: float | None = None,
+    use_realised_sales_for_target: bool = False,
 ) -> dict[str, object]:
     # Optional overrides (None means use Config/default env values)
     country_override = None
@@ -156,6 +158,12 @@ def main(
         )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
+    if inventory_adjustment_speed is not None:
+        country_cfg.firms.functions.target_production.parameters["inventory_adjustment_speed"] = (
+            inventory_adjustment_speed
+        )
+    if use_realised_sales_for_target:
+        country_cfg.firms.functions.target_production.parameters["use_realised_sales_for_target"] = True
 
     print("Configuration summary")
     pprint(
@@ -254,6 +262,17 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         help="Override AR government-consumption consistency. Default: use country configuration.",
     )
+    parser.add_argument(
+        "--inventory-adjustment-speed",
+        type=float,
+        default=None,
+        help="Override firm target-production inventory adjustment speed.",
+    )
+    parser.add_argument(
+        "--use-realised-sales-for-target",
+        action="store_true",
+        help="Use current realised firm sales as the target-production sales forecast.",
+    )
     return parser.parse_args()
 
 
@@ -267,4 +286,6 @@ if __name__ == "__main__":
         assume_zero_noise=args.assume_zero_noise,
         government_sectoral_weights=args.government_sectoral_weights,
         government_consumption_consistency=args.government_consumption_consistency,
+        inventory_adjustment_speed=args.inventory_adjustment_speed,
+        use_realised_sales_for_target=args.use_realised_sales_for_target,
     )

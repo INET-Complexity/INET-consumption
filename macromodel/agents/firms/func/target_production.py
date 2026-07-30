@@ -54,6 +54,7 @@ class TargetProductionSetter(ABC):
         capital_inputs_target_considers_intermediate_inputs: float,
         capital_inputs_target_considers_capital_inputs: float,
         inventory_adjustment_speed: float = 1.0,
+        use_realised_sales_for_target: bool = False,
     ):
         """Initialize the target production setter with configuration parameters.
 
@@ -71,6 +72,7 @@ class TargetProductionSetter(ABC):
         """
         self.target_inventory_to_demand_fraction = target_inventory_to_demand_fraction
         self.inventory_adjustment_speed = clip(inventory_adjustment_speed)
+        self.use_realised_sales_for_target = use_realised_sales_for_target
         self.financial_constrains_fraction = financial_constrains_fraction
         self.maximum_debt_to_equity_ratio = maximum_debt_to_equity_ratio
 
@@ -123,6 +125,7 @@ class TargetProductionSetter(ABC):
         current_firm_deposits: np.ndarray,
         interest_on_overdraft_rates: np.ndarray,
         interest_paid_on_loans: np.ndarray,
+        current_realised_sales: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate target production levels for each firm.
 
@@ -229,6 +232,7 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         current_firm_deposits: np.ndarray,
         interest_on_overdraft_rates: np.ndarray,
         interest_paid_on_loans: np.ndarray,
+        current_realised_sales: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate target production levels using the default strategy.
 
@@ -243,8 +247,11 @@ class DefaultTargetProductionSetter(TargetProductionSetter):
         Returns:
             np.ndarray: Target production quantities for each firm
         """
-        desired_inventory = self.target_inventory_to_demand_fraction * current_estimated_demand
-        target_production = current_estimated_demand + self.inventory_adjustment_speed * (
+        sales_forecast = current_estimated_demand
+        if self.use_realised_sales_for_target and current_realised_sales is not None:
+            sales_forecast = np.maximum(0.0, current_realised_sales)
+        desired_inventory = self.target_inventory_to_demand_fraction * sales_forecast
+        target_production = sales_forecast + self.inventory_adjustment_speed * (
             desired_inventory - previous_inventory
         )
 

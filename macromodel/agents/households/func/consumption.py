@@ -931,9 +931,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             )
         real_lagged_consumption = np.asarray(lagged_real_consumption_budget, dtype=float)
         if real_lagged_consumption.shape != income.shape or not np.all(np.isfinite(real_lagged_consumption)):
-            raise ValueError(
-                "lagged_real_consumption_budget must be finite and have one real budget per household."
-            )
+            raise ValueError("lagged_real_consumption_budget must be finite and have one real budget per household.")
         real_lagged_consumption = np.maximum(real_lagged_consumption, self.consumption_floor)
         real_net_liquid_assets = (
             lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt

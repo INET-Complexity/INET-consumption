@@ -2027,9 +2027,7 @@ class Country:
             durable_exclusion = durable_exclusion & carrier_event_mask
             durable_episode_ids = np.where(durable_exclusion, durable_episode_ids, 0.0)
             durable_component_mask = (
-                (durable_principal > 0.0)
-                | (durable_principal_arrears > 0.0)
-                | (durable_interest_arrears > 0.0)
+                (durable_principal > 0.0) | (durable_principal_arrears > 0.0) | (durable_interest_arrears > 0.0)
             )
         if np.any(pending_mask):
             expected_durable_episode_ids = np.where(durable_exclusion, episode_ids[None, :], 0.0)
@@ -2045,12 +2043,8 @@ class Country:
                             "durable_episode_id": float(durable_episode_ids[bank_id, household_id]),
                             "durable_exclusion": bool(durable_exclusion[bank_id, household_id]),
                             "durable_principal": float(durable_principal[bank_id, household_id]),
-                            "durable_principal_arrears": float(
-                                durable_principal_arrears[bank_id, household_id]
-                            ),
-                            "durable_interest_arrears": float(
-                                durable_interest_arrears[bank_id, household_id]
-                            ),
+                            "durable_principal_arrears": float(durable_principal_arrears[bank_id, household_id]),
+                            "durable_interest_arrears": float(durable_interest_arrears[bank_id, household_id]),
                         }
                     )
                 raise RuntimeError(
@@ -2127,13 +2121,22 @@ class Country:
             for household_id in np.flatnonzero(stage_zero):
                 if (
                     not np.allclose(
-                        contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=balance_tolerance
+                        contractual_principal[household_id],
+                        contractual_events[household_id],
+                        rtol=1e-10,
+                        atol=balance_tolerance,
                     )
                     or not np.allclose(
-                        principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=balance_tolerance
+                        principal_arrears[household_id],
+                        principal_arrears_events[household_id],
+                        rtol=1e-10,
+                        atol=balance_tolerance,
                     )
                     or not np.allclose(
-                        interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=balance_tolerance
+                        interest_arrears[household_id],
+                        interest_arrears_events[household_id],
+                        rtol=1e-10,
+                        atol=balance_tolerance,
                     )
                 ):
                     raise RuntimeError(

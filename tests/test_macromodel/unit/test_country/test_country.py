@@ -370,9 +370,7 @@ class TestCountry:
         country.households.ts.override_current(
             "ficp_forgiveness_event_residual_principal_arrears", np.array([0.0, 3.0])
         )
-        country.households.ts.override_current(
-            "ficp_forgiveness_event_residual_interest_arrears", np.array([0.0, 7.0])
-        )
+        country.households.ts.override_current("ficp_forgiveness_event_residual_interest_arrears", np.array([0.0, 7.0]))
 
         exclusion, pending_events = Country._process_ficp_forgiveness_events(country, period_index=23)
 

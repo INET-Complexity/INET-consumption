@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
@@ -93,20 +94,112 @@ def test_overlapping_firm_cohorts_retire_payments_without_unbounded_state():
         cohorts = market._firm_loan_cohorts["st_loans"]
         scheduled_payments.append(market.states["st_loans"][2, 0, 0])
         assert cohorts.shape == ladder_shape
-        assert np.allclose(market.states["st_loans"], np.stack((
-            cohorts[0].sum(axis=0),
-            np.divide(
-                (cohorts[0] * cohorts[1]).sum(axis=0),
-                cohorts[0].sum(axis=0),
-                out=np.zeros_like(cohorts[0].sum(axis=0)),
-                where=cohorts[0].sum(axis=0) > 0.0,
+        assert np.allclose(
+            market.states["st_loans"],
+            np.stack(
+                (
+                    cohorts[0].sum(axis=0),
+                    np.divide(
+                        (cohorts[0] * cohorts[1]).sum(axis=0),
+                        cohorts[0].sum(axis=0),
+                        out=np.zeros_like(cohorts[0].sum(axis=0)),
+                        where=cohorts[0].sum(axis=0) > 0.0,
+                    ),
+                    cohorts[2].sum(axis=0),
+                )
             ),
-            cohorts[2].sum(axis=0),
-        )))
+        )
 
     assert np.isclose(scheduled_payments[30], 12.0 * payment)
     assert np.isclose(scheduled_payments[31], scheduled_payments[30])
     assert np.count_nonzero(market._firm_loan_cohorts["st_loans"][0, :, 0, 0]) == maturity
+
+
+def test_initial_firm_debt_can_be_loaded_as_seasoned_bounded_cohorts():
+    st_loans = _loan_array(n_banks=1, n_borrowers=1)
+    rate = 0.05
+    maturity = 4
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = rate
+    st_loans[2, 0, 0] = 100.0 * _annuity_payment_factor(rate, maturity)
+
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+        season_initial_firm_loans=True,
+    )
+
+    cohorts = market._firm_loan_cohorts["st_loans"]
+    assert cohorts.shape[1] == 21
+    assert np.count_nonzero(cohorts[0, :, 0, 0]) == maturity
+    assert np.allclose(cohorts[0, 1 : maturity + 1, 0, 0], 25.0)
+    assert np.allclose(cohorts[1, 1 : maturity + 1, 0, 0], rate)
+    assert np.allclose(
+        cohorts[2, 1 : maturity + 1, 0, 0],
+        [25.0 * _annuity_payment_factor(rate, term) for term in range(1, maturity + 1)],
+    )
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 100.0)
+    assert np.allclose(
+        market.states["st_loans"],
+        np.stack(
+            (
+                cohorts[0].sum(axis=0),
+                np.divide(
+                    (cohorts[0] * cohorts[1]).sum(axis=0),
+                    cohorts[0].sum(axis=0),
+                    out=np.zeros_like(cohorts[0].sum(axis=0)),
+                    where=cohorts[0].sum(axis=0) > 0.0,
+                ),
+                cohorts[2].sum(axis=0),
+            )
+        ),
+    )
+
+
+def test_seasoned_initial_firm_debt_without_payment_preserves_principal():
+    st_loans = _loan_array(n_banks=1, n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.05
+
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+        season_initial_firm_loans=True,
+    )
+
+    assert np.isclose(market.states["st_loans"][0, 0, 0], 100.0)
+    assert np.count_nonzero(market._firm_loan_cohorts["st_loans"][0, :, 0, 0]) == 20
+
+
+@pytest.mark.parametrize("invalid_maturity", [True, 2.5, 0, -1])
+def test_new_firm_loans_reject_invalid_maturity_before_mutation(invalid_maturity):
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_loan_array(n_banks=1, n_borrowers=1),
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+    )
+    new_loan = _loan_array(n_banks=1, n_borrowers=1)
+    new_loan[0, 0, 0] = 100.0
+    new_loan[1, 0, 0] = 0.05
+    new_loan[2, 0, 0] = 30.0
+    state_before = market.states["st_loans"].copy()
+    new_tracker_before = market._new_loans_this_period["st_loans"].copy()
+    cohorts_before = market._firm_loan_cohorts["st_loans"].copy()
+
+    with pytest.raises(ValueError, match="positive integer"):
+        market._add_new_loans("st_loans", new_loan, maturity=invalid_maturity)
+
+    assert np.array_equal(market.states["st_loans"], state_before)
+    assert np.array_equal(market._new_loans_this_period["st_loans"], new_tracker_before)
+    assert np.array_equal(market._firm_loan_cohorts["st_loans"], cohorts_before)
 
 
 def test_bank_interest_income_matches_borrower_loan_interest():
@@ -246,6 +339,95 @@ def test_capitalized_firm_interest_is_not_cash_interest_received():
     assert np.isclose(market.states["st_loans"][0, 0, 0], 110.0)
     assert np.isclose(market.compute_interest_paid_by_firm()[0], 0.0)
     assert np.isclose(market.compute_interest_received_by_bank()[0], 0.0)
+
+
+def test_firm_installments_cannot_be_settled_twice_from_one_stage():
+    st_loans = _loan_array(n_banks=1, n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.10
+    st_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+    )
+
+    staged = market.schedule_firm_installments()
+    market.settle_firm_installments(
+        payable_principal_by_firm=staged["scheduled_principal_due"],
+        payable_interest_by_firm=staged["scheduled_interest_due"],
+    )
+    state_after_first_settlement = market.states["st_loans"].copy()
+
+    with pytest.raises(RuntimeError, match="staged exactly once"):
+        market.settle_firm_installments(
+            payable_principal_by_firm=staged["scheduled_principal_due"],
+            payable_interest_by_firm=staged["scheduled_interest_due"],
+        )
+
+    assert np.array_equal(market.states["st_loans"], state_after_first_settlement)
+    for schedules in (
+        market._scheduled_firm_contractual_interest_due_by_cohort,
+        market._scheduled_firm_contractual_principal_due_by_cohort,
+        market._scheduled_firm_opening_principal_arrears_by_cohort,
+    ):
+        assert all(not np.any(values) for values in schedules.values())
+
+
+def test_removing_firm_after_staging_clears_phantom_service():
+    st_loans = _loan_array(n_banks=1, n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.10
+    st_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+    )
+
+    staged = market.schedule_firm_installments()
+    market.remove_loans_to_firm(0)
+    principal_paid = market.settle_firm_installments(
+        payable_principal_by_firm=staged["scheduled_principal_due"],
+        payable_interest_by_firm=staged["scheduled_interest_due"],
+        overwrite_bank_interest=True,
+    )
+
+    assert np.allclose(principal_paid, 0.0)
+    assert np.allclose(market.compute_interest_paid_by_firm(), 0.0)
+    assert np.allclose(market.compute_interest_received_by_bank(), 0.0)
+    assert np.allclose(market.states["st_loans"], 0.0)
+
+
+def test_removing_bank_after_staging_clears_phantom_service():
+    st_loans = _loan_array(n_banks=1, n_borrowers=1)
+    st_loans[0, 0, 0] = 100.0
+    st_loans[1, 0, 0] = 0.10
+    st_loans[2, 0, 0] = 30.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=st_loans,
+        lt_loans=_loan_array(n_banks=1, n_borrowers=1),
+        cons_loans=_loan_array(n_banks=1, n_borrowers=1),
+        mort_loans=_loan_array(n_banks=1, n_borrowers=1),
+    )
+
+    staged = market.schedule_firm_installments()
+    market.remove_loans_by_bank(0)
+    principal_paid = market.settle_firm_installments(
+        payable_principal_by_firm=staged["scheduled_principal_due"],
+        payable_interest_by_firm=staged["scheduled_interest_due"],
+        overwrite_bank_interest=True,
+    )
+
+    assert np.allclose(principal_paid, 0.0)
+    assert np.allclose(market.compute_interest_paid_by_firm(), 0.0)
+    assert np.allclose(market.compute_interest_received_by_bank(), 0.0)
+    assert np.allclose(market.states["st_loans"], 0.0)
 
 
 def test_principal_arrears_do_not_exceed_outstanding_principal_next_period():

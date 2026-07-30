@@ -919,20 +919,22 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # solves for. When the caller persists that budget it is supplied
         # directly and must not be deflated again (it is already real).
         #
-        # The fallback deflates a nominal realised-consumption series instead.
-        # That is a proxy, not the concept: it is net of VAT while the target is
-        # gross of it, it reflects goods-market rationing and the zero floor,
-        # and -- since GH #120 carved housing out of goods demand -- it excludes
-        # rent entirely. Using it makes the gap term compare a rent-inclusive
-        # target against a rent-exclusive lag, which drags the target down every
-        # period and compounds. Kept only to bootstrap the first period and for
-        # callers that do not persist a budget.
-        if lagged_real_consumption_budget is not None:
-            real_lagged_consumption = np.maximum(
-                np.asarray(lagged_real_consumption_budget, dtype=float), self.consumption_floor
+        # Realised consumption is deliberately not accepted as a fallback: it is
+        # net of VAT, reflects goods-market rationing and the zero floor, and --
+        # since GH #120 carved housing out of goods demand -- excludes rent.
+        # Using it would compare a rent-inclusive target against a rent-exclusive
+        # lag and drag the target down every period.
+        if lagged_real_consumption_budget is None:
+            raise ValueError(
+                "CreditAugmentedConsumption requires lagged_real_consumption_budget; "
+                "realised consumption is not a valid ECM state fallback."
             )
-        else:
-            real_lagged_consumption = np.maximum(lagged_consumption / lagged_deflator, self.consumption_floor)
+        real_lagged_consumption = np.asarray(lagged_real_consumption_budget, dtype=float)
+        if real_lagged_consumption.shape != income.shape or not np.all(np.isfinite(real_lagged_consumption)):
+            raise ValueError(
+                "lagged_real_consumption_budget must be finite and have one real budget per household."
+            )
+        real_lagged_consumption = np.maximum(real_lagged_consumption, self.consumption_floor)
         real_net_liquid_assets = (
             lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt
         ) / lagged_deflator
@@ -1322,8 +1324,18 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # ``Households.compute_rent`` (disjoint tenure-status masks), and are
         # authoritative from here on: downstream code must not reconstruct
         # either from ``target_total`` or from the returned goods target.
-        cash_rent = np.maximum(0.0, rent)
-        imputed_rent = np.maximum(0.0, rent_imputed)
+        raw_cash_rent = np.asarray(rent, dtype=float)
+        raw_imputed_rent = np.asarray(rent_imputed, dtype=float)
+        for name, housing_flow in (("rent", raw_cash_rent), ("rent_imputed", raw_imputed_rent)):
+            if housing_flow.shape != income.shape or not np.all(np.isfinite(housing_flow)):
+                raise ValueError(f"{name} must be finite and have one value per household.")
+        # Preserve PR #124's existing nonnegative accounting convention for
+        # malformed negative raw housing observations, then enforce the
+        # economically meaningful split on the values actually routed onward.
+        cash_rent = np.maximum(0.0, raw_cash_rent)
+        imputed_rent = np.maximum(0.0, raw_imputed_rent)
+        if np.any((cash_rent > 0.0) & (imputed_rent > 0.0)):
+            raise ValueError("rent and rent_imputed must be mutually exclusive per household.")
         non_goods_housing_component = cash_rent + imputed_rent
         goods_target_total = np.maximum(0.0, target_total - non_goods_housing_component)
 

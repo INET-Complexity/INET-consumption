@@ -351,6 +351,38 @@ class TestCountry:
         )
         np.testing.assert_allclose(country.banks.ts.current("consumer_default_credit_loss"), np.zeros(2))
 
+    def test__process_ficp_forgiveness_events_clears_completed_carrier_with_other_pending_event(self):
+        country = _make_ficp_test_country()
+        Country._process_ficp_forgiveness_events(country, period_index=22)
+
+        # Household 0's episode has completed, while household 1 enters a new
+        # stage-zero episode in the same processing pass. The prior durable
+        # carrier for household 0 must not be compared with household 1's event.
+        country.households.ts.override_current("ficp_forgiveness_event", np.array([False, True]))
+        country.households.ts.override_current("ficp_forgiveness_event_emitted", np.array([False, True]))
+        country.households.ts.override_current("ficp_forgiveness_event_processed", np.array([False, False]))
+        country.households.ts.override_current("ficp_forgiveness_event_stage", np.array([3.0, 0.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_episode_id", np.array([0.0, 4.0]))
+        country.households.ts.override_current("ficp_forgiveness_event_horizon_end_period", np.array([0.0, 23.0]))
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_contractual_principal", np.array([0.0, 47.0])
+        )
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_principal_arrears", np.array([0.0, 3.0])
+        )
+        country.households.ts.override_current(
+            "ficp_forgiveness_event_residual_interest_arrears", np.array([0.0, 7.0])
+        )
+
+        exclusion, pending_events = Country._process_ficp_forgiveness_events(country, period_index=23)
+
+        np.testing.assert_array_equal(exclusion, np.array([[False, True], [False, True]]))
+        assert pending_events == ((1, 4),)
+        np.testing.assert_array_equal(
+            country.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"),
+            np.array([[False, True], [False, True]]),
+        )
+
     def test__stage5_subsistence_support_defaults_to_empty_current_period_vector(self, test_country):
         n_households = test_country.households.ts.current("n_households")
 

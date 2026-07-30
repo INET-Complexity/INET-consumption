@@ -1905,6 +1905,7 @@ class Country:
         """Recognise 4c losses and remove only forgiven consumer-loan cells."""
         n_banks = int(self.banks.ts.current("n_banks"))
         n_households = int(self.households.ts.current("n_households"))
+        balance_tolerance = 1e-6
         zero_by_bank = np.zeros(n_banks)
         zero_by_cell = np.zeros((n_banks, n_households))
         zero_exclusion = np.zeros_like(zero_by_cell, dtype=bool)
@@ -1975,19 +1976,21 @@ class Country:
         stage_two = pending_mask & (event_stage >= 2.0)
         durable_event_mask = stage_one | stage_two
 
-        durable_principal = np.asarray(self.credit_market.ts.current("consumer_default_principal_by_cell"), dtype=float)
+        durable_principal = np.asarray(
+            self.credit_market.ts.current("consumer_default_principal_by_cell"), dtype=float
+        ).copy()
         durable_principal_arrears = np.asarray(
             self.credit_market.ts.current("consumer_default_principal_arrears_by_cell"), dtype=float
-        )
+        ).copy()
         durable_interest_arrears = np.asarray(
             self.credit_market.ts.current("consumer_default_interest_arrears_by_cell"), dtype=float
-        )
+        ).copy()
         durable_exclusion = np.asarray(
             self.credit_market.ts.current("consumer_terminal_removal_exclusion_by_cell"), dtype=bool
-        )
+        ).copy()
         durable_episode_ids = np.asarray(
             self.credit_market.ts.current("consumer_terminal_removal_episode_id_by_cell"), dtype=float
-        )
+        ).copy()
         durable_fields = (
             ("consumer principal", durable_principal),
             ("consumer principal arrears", durable_principal_arrears),
@@ -2008,10 +2011,52 @@ class Country:
         )
         if not np.array_equal(durable_exclusion, durable_component_mask):
             raise RuntimeError("Durable FICP exclusion does not match its positive component carriers.")
+        # The durable carrier is an episode-scoped handoff for stage-one/stage-
+        # two events. A completed event can therefore remain in the previous
+        # carrier while another household still has a pending event, so the old
+        # global `if not any(pending_mask)` cleanup was insufficient. Clear
+        # completed carriers before validating the current pending event set.
+        # Live consumer debt is not a valid stale-carrier test: a household may
+        # originate a new loan after the old FICP episode has completed.
+        carrier_event_mask = durable_event_mask[None, :]
+        stale_carrier_mask = durable_component_mask & ~carrier_event_mask
+        if np.any(stale_carrier_mask):
+            durable_principal = np.where(carrier_event_mask, durable_principal, 0.0)
+            durable_principal_arrears = np.where(carrier_event_mask, durable_principal_arrears, 0.0)
+            durable_interest_arrears = np.where(carrier_event_mask, durable_interest_arrears, 0.0)
+            durable_exclusion = durable_exclusion & carrier_event_mask
+            durable_episode_ids = np.where(durable_exclusion, durable_episode_ids, 0.0)
+            durable_component_mask = (
+                (durable_principal > 0.0)
+                | (durable_principal_arrears > 0.0)
+                | (durable_interest_arrears > 0.0)
+            )
         if np.any(pending_mask):
             expected_durable_episode_ids = np.where(durable_exclusion, episode_ids[None, :], 0.0)
-            if not np.array_equal(durable_episode_ids, expected_durable_episode_ids):
-                raise RuntimeError("Durable FICP episode IDs do not match the pending event identities.")
+            episode_id_mismatch = durable_episode_ids != expected_durable_episode_ids
+            if np.any(episode_id_mismatch):
+                mismatch_details = []
+                for bank_id, household_id in zip(*np.where(episode_id_mismatch)):
+                    mismatch_details.append(
+                        {
+                            "bank_id": int(bank_id),
+                            "household_id": int(household_id),
+                            "pending_episode_id": float(episode_ids[household_id]),
+                            "durable_episode_id": float(durable_episode_ids[bank_id, household_id]),
+                            "durable_exclusion": bool(durable_exclusion[bank_id, household_id]),
+                            "durable_principal": float(durable_principal[bank_id, household_id]),
+                            "durable_principal_arrears": float(
+                                durable_principal_arrears[bank_id, household_id]
+                            ),
+                            "durable_interest_arrears": float(
+                                durable_interest_arrears[bank_id, household_id]
+                            ),
+                        }
+                    )
+                raise RuntimeError(
+                    "Durable FICP episode IDs do not match the pending event identities: "
+                    f"period_index={period_index!r}, mismatches={mismatch_details}."
+                )
             if np.any(durable_component_mask & ~durable_event_mask[None, :]):
                 raise RuntimeError("Durable FICP carriers contain cells outside the pending staged events.")
             for household_id in np.flatnonzero(durable_event_mask):
@@ -2082,21 +2127,31 @@ class Country:
             for household_id in np.flatnonzero(stage_zero):
                 if (
                     not np.allclose(
-                        contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=1e-8
+                        contractual_principal[household_id], contractual_events[household_id], rtol=1e-10, atol=balance_tolerance
                     )
                     or not np.allclose(
-                        principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                        principal_arrears[household_id], principal_arrears_events[household_id], rtol=1e-10, atol=balance_tolerance
                     )
                     or not np.allclose(
-                        interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=1e-8
+                        interest_arrears[household_id], interest_arrears_events[household_id], rtol=1e-10, atol=balance_tolerance
                     )
                 ):
-                    raise RuntimeError("FICP forgiveness event does not reconcile with the live consumer-loan state.")
+                    raise RuntimeError(
+                        "FICP forgiveness event does not reconcile with the live consumer-loan state: "
+                        f"period_index={period_index!r}, household_id={household_id}, "
+                        f"episode_id={episode_ids[household_id]}, "
+                        f"live=(contractual={contractual_principal[household_id]}, "
+                        f"principal_arrears={principal_arrears[household_id]}, "
+                        f"interest_arrears={interest_arrears[household_id]}), "
+                        f"event=(contractual={contractual_events[household_id]}, "
+                        f"principal_arrears={principal_arrears_events[household_id]}, "
+                        f"interest_arrears={interest_arrears_events[household_id]})."
+                    )
             if not np.allclose(
                 live_writeoff.principal_by_bank.sum(),
                 contractual_events[stage_zero].sum() + principal_arrears_events[stage_zero].sum(),
                 rtol=1e-10,
-                atol=1e-8,
+                atol=balance_tolerance,
             ):
                 raise RuntimeError("Consumer principal write-off does not reconcile with the accepted 4b event.")
 

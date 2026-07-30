@@ -159,6 +159,15 @@ def create_households_timeseries(
         target_consumption_alpha_2=np.zeros(len(data)),
         target_consumption_gamma_1=np.zeros(len(data)),
         target_consumption_wealth_drag_clipped=np.zeros(len(data)),
+        target_consumption_cash_rent=np.zeros(len(data)),
+        target_consumption_imputed_rent=np.zeros(len(data)),
+        target_consumption_non_goods_housing=np.zeros(len(data)),
+        target_consumption_calibrated_total=np.zeros(len(data)),
+        target_consumption_goods_total=np.zeros(len(data)),
+        # ECM state variable for CreditAugmentedConsumption: the real consumption
+        # budget it produced. Seeded from initial consumption, which is already
+        # real at t=0 since the CPI deflator is 1 there.
+        cacf_real_consumption_budget=data["Consumption"].values,
         income_belief_floor_used=np.zeros(len(data)),
         income_belief_posterior_fallback_used=np.zeros(len(data)),
         income_belief_growth_clipped=np.zeros(len(data)),

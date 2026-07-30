@@ -1826,6 +1826,7 @@ class Households(Agent):
                 self.states["consumption_weights_data"],
             ).astype(float)
             self._append_target_consumption_diagnostics(None, replace_current=replace_current_diagnostics)
+            self._persist_cacf_real_consumption_budget(None, replace_current=replace_current_diagnostics)
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
@@ -1834,6 +1835,20 @@ class Households(Agent):
             )
             mortgage_payment = (
                 np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
+            )
+            # ECM state variable: the previous period's real consumption budget
+            # produced by this rule (GH #120). Read positionally, because
+            # `_set_household_target_demand` runs twice per period: on the
+            # planning pass no row for `t` exists yet, so `current` is `t-1`;
+            # on the authoritative pass the planning row for `t` is already
+            # there, so `t-1` is `prev`. Getting this wrong silently shifts the
+            # whole ECM by a period -- which is what the old `prev("consumption")`
+            # wiring did, since realised series are only appended later in the
+            # loop (it read `t-2`, verified against seed-15 output).
+            lagged_real_consumption_budget = (
+                self.ts.prev("cacf_real_consumption_budget")
+                if replace_current_diagnostics
+                else self.ts.current("cacf_real_consumption_budget")
             )
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
@@ -1865,6 +1880,8 @@ class Households(Agent):
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
                 lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
+                rent_imputed=self.ts.current("rent_imputed"),
+                lagged_real_consumption_budget=lagged_real_consumption_budget,
                 mortgage_debt=self.ts.current("mortgage_debt"),
                 mortgage_payment=mortgage_payment,
                 owner_occupied=owner_occupied,
@@ -1910,7 +1927,38 @@ class Households(Agent):
                 self.functions["consumption"],
                 replace_current=replace_current_diagnostics,
             )
+            self._persist_cacf_real_consumption_budget(
+                self.functions["consumption"],
+                replace_current=replace_current_diagnostics,
+            )
             return target_consumption
+
+    def _persist_cacf_real_consumption_budget(
+        self,
+        consumption_function: Any | None,
+        *,
+        replace_current: bool = False,
+    ) -> None:
+        """Persist the consumption rule's real budget as its ECM state variable.
+
+        This is the authoritative lag for the next period's error-correction
+        term (GH #120). It is stored rather than re-derived because the target
+        and the lag must be the same concept: realised goods spending is not,
+        since it is net of VAT, reflects goods-market rationing and the zero
+        floor, and excludes the housing flows carved out of goods demand.
+
+        Rules that do not produce a budget (the non-CACF consumption rules)
+        leave the series carrying its previous value forward, so a period is
+        never skipped and the lag never silently becomes two periods old.
+        """
+        budget = getattr(consumption_function, "last_real_consumption_budget", None) if consumption_function else None
+        if budget is None:
+            budget = np.asarray(self.ts.current("cacf_real_consumption_budget"), dtype=float)
+        budget = np.asarray(budget, dtype=float).copy()
+        if replace_current:
+            self.ts.override_current("cacf_real_consumption_budget", budget)
+        else:
+            self.ts.cacf_real_consumption_budget.append(budget)
 
     def compute_and_record_liquidity_shortfall(
         self,
@@ -1949,10 +1997,19 @@ class Households(Agent):
         (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
         definition and the exit criterion.
 
+        Since GH #120 the array returned by ``compute_target_consumption()``
+        carries market expenditure only (the housing-flow components of the
+        calibrated target are carved out before demand reaches firms), so this
+        method supplies the period's actual cash rent to the shortfall
+        computation as its own use. Imputed rent is deliberately never passed:
+        it is measured consumption, not a liability, and must not create a
+        feasibility shortfall.
+
         Args:
             target_consumption (np.ndarray): This period's per-household
                 target consumption, summed across goods (i.e. the same total
-                already returned by ``compute_target_consumption()``).
+                already returned by ``compute_target_consumption()``, which is
+                the market-expenditure part of the calibrated target).
             scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
                 consumer-loan instalments for the period, per household.
             income_override (Optional[np.ndarray]): Explicit income basis,
@@ -1972,6 +2029,7 @@ class Households(Agent):
             income=income,
             target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
+            cash_rent=self.ts.current("rent"),
         )
         if replace_current:
             self.ts.override_current("liquidity_shortfall", result.liquidity_shortfall)
@@ -2373,6 +2431,11 @@ class Households(Agent):
             "target_consumption_alpha_2",
             "target_consumption_gamma_1",
             "target_consumption_wealth_drag_clipped",
+            "target_consumption_cash_rent",
+            "target_consumption_imputed_rent",
+            "target_consumption_non_goods_housing",
+            "target_consumption_calibrated_total",
+            "target_consumption_goods_total",
         ]
 
     def _append_target_consumption_diagnostics(

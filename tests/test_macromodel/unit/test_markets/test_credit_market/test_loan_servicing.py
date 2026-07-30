@@ -69,6 +69,46 @@ def test_newly_originated_firm_loan_service_starts_next_quarter():
     assert next_quarter_principal[0] > 0.0
 
 
+def test_overlapping_firm_cohorts_retire_payments_without_unbounded_state():
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_loan_array(n_borrowers=1),
+        lt_loans=_loan_array(n_borrowers=1),
+        cons_loans=_loan_array(n_borrowers=1),
+        mort_loans=_loan_array(n_borrowers=1),
+    )
+    maturity = 12
+    payment = 100.0 * _annuity_payment_factor(0.05, maturity)
+    ladder_shape = market._firm_loan_cohorts["st_loans"].shape
+    scheduled_payments = []
+
+    for _ in range(32):
+        new_loan = _loan_array(n_borrowers=1)
+        new_loan[0, 0, 0] = 100.0
+        new_loan[1, 0, 0] = 0.05
+        new_loan[2, 0, 0] = payment
+        market._add_new_loans("st_loans", new_loan, maturity=maturity)
+        market.pay_firm_installments()
+
+        cohorts = market._firm_loan_cohorts["st_loans"]
+        scheduled_payments.append(market.states["st_loans"][2, 0, 0])
+        assert cohorts.shape == ladder_shape
+        assert np.allclose(market.states["st_loans"], np.stack((
+            cohorts[0].sum(axis=0),
+            np.divide(
+                (cohorts[0] * cohorts[1]).sum(axis=0),
+                cohorts[0].sum(axis=0),
+                out=np.zeros_like(cohorts[0].sum(axis=0)),
+                where=cohorts[0].sum(axis=0) > 0.0,
+            ),
+            cohorts[2].sum(axis=0),
+        )))
+
+    assert np.isclose(scheduled_payments[30], 12.0 * payment)
+    assert np.isclose(scheduled_payments[31], scheduled_payments[30])
+    assert np.count_nonzero(market._firm_loan_cohorts["st_loans"][0, :, 0, 0]) == maturity
+
+
 def test_bank_interest_income_matches_borrower_loan_interest():
     st_loans = _loan_array()
     st_loans[0, 0, 0] = 100.0

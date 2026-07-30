@@ -22,6 +22,8 @@ class FirmTimeSeries(TimeSeries):
     - target_production: Desired production levels
     - total_sales: Revenue from sales net of production taxes
     - demand: Realized demand for each firm's output
+    - accepted_goods_order: Goods quantities actually received after market clearing
+    - unsold_output: Current production minus realized sales before inventory carryover
     - estimated_demand: Expected future demand
     - price: Output prices set by firms
     - price_offered: Average price offered by industry
@@ -348,6 +350,7 @@ class FirmTimeSeries(TimeSeries):
             activity_finance_realised_feasible_technical_investment=np.full((data.shape[0], n_industries), np.nan),
             activity_finance_realised_feasible_plan_ready=False,
             goods_order=used_intermediate_inputs + used_capital_inputs,
+            accepted_goods_order=used_intermediate_inputs + used_capital_inputs,
             intermediate_purchase_finance_scale=np.ones(data.shape[0]),
             capital_purchase_finance_scale=np.ones(data.shape[0]),
             technical_investment_finance_scale=np.ones(data.shape[0]),
@@ -395,6 +398,7 @@ class FirmTimeSeries(TimeSeries):
             #
             inventory=data["Inventory"].values,
             inventory_nominal=data["Price"].values * data["Inventory"].values,
+            unsold_output=np.zeros(data.shape[0]),
             total_inventory_change=np.zeros(data.shape[0]),
             #
             intermediate_inputs_stock=intermediate_inputs_stock,
@@ -733,6 +737,7 @@ def create_firms_timeseries(
         activity_finance_realised_feasible_technical_investment=np.full((data.shape[0], n_industries), np.nan),
         activity_finance_realised_feasible_plan_ready=False,
         goods_order=used_intermediate_inputs + used_capital_inputs,
+        accepted_goods_order=used_intermediate_inputs + used_capital_inputs,
         intermediate_purchase_finance_scale=np.ones(data.shape[0]),
         capital_purchase_finance_scale=np.ones(data.shape[0]),
         technical_investment_finance_scale=np.ones(data.shape[0]),
@@ -779,6 +784,7 @@ def create_firms_timeseries(
         #
         inventory=data["Inventory"].values,
         inventory_nominal=data["Price"].values * data["Inventory"].values,
+        unsold_output=np.zeros(data.shape[0]),
         total_inventory_change=np.zeros(data.shape[0]),
         #
         intermediate_inputs_stock=intermediate_inputs_stock,

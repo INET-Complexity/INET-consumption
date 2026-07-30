@@ -2445,6 +2445,9 @@ class Country:
             )
         )
         self.firms.ts.inventory.append(self.firms.compute_inventory())
+        self.firms.ts.unsold_output.append(
+            self.firms.ts.current("production") - self.firms.ts.current("real_amount_sold")
+        )
         self.firms.ts.inventory_nominal.append(
             self.firms.compute_nominal_inventory(
                 current_good_prices=self.economy.ts.current("good_prices"),

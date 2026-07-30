@@ -3136,6 +3136,7 @@ class Firms(Agent):
             desired_investment=self.ts.current("target_capital_inputs"),
             buy_real=self.ts.current("real_amount_bought"),
         )
+        self.ts.accepted_goods_order.append(self.ts.current("real_amount_bought").copy())
         self.ts.real_amount_bought_as_intermediate_inputs.append(new_intermediate_inputs)
         self.ts.real_amount_bought_as_capital_goods.append(new_capital_inputs)
         """

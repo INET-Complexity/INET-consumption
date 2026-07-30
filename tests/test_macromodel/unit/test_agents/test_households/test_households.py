@@ -1434,15 +1434,18 @@ class TestComputeAndRecordLiquidityShortfall:
         n_industries = test_households.n_industries
         test_households.ts.override_current("income", np.full(n_households, 111.0))
         test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+        # Isolate the income basis under test: cash rent is a separate use of
+        # the period's resources (GH #120) and is covered by its own test below.
+        test_households.ts.override_current("rent", np.zeros(n_households))
 
         shortfall = test_households.compute_and_record_liquidity_shortfall(
             target_consumption=np.zeros((n_households, n_industries)),
             scheduled_debt_service=np.zeros(n_households),
         )
 
-        # target_consumption and scheduled_debt_service are both zero, so
-        # liquidity_shortfall == -income; must reflect expected_income (222),
-        # not income (111). See round-2 review finding in households.py's
+        # target_consumption, cash rent, and scheduled_debt_service are all
+        # zero, so liquidity_shortfall == -income; must reflect expected_income
+        # (222), not income (111). See round-2 review finding in households.py's
         # compute_and_record_liquidity_shortfall docstring.
         np.testing.assert_allclose(shortfall, np.full(n_households, -222.0))
 
@@ -1456,6 +1459,7 @@ class TestComputeAndRecordLiquidityShortfall:
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
         test_households.ts.override_current("expected_income", np.full(n_households, 222.0))
+        test_households.ts.override_current("rent", np.zeros(n_households))
         income_override = np.full(n_households, 999.0)
 
         shortfall = test_households.compute_and_record_liquidity_shortfall(
@@ -1465,6 +1469,27 @@ class TestComputeAndRecordLiquidityShortfall:
         )
 
         np.testing.assert_allclose(shortfall, np.full(n_households, -999.0))
+
+    def test__cash_rent_counts_as_a_use_but_imputed_rent_never_does(self, test_households):
+        # GH #120: target_consumption now carries market expenditure only, so
+        # actual rent must enter the shortfall as its own cash use. Imputed rent
+        # is measured consumption, not a liability, and must never move the
+        # shortfall -- otherwise owner-occupiers would draw feasibility support
+        # for a payment nobody is owed.
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_households.ts.override_current("rent", np.full(n_households, 30.0))
+        test_households.ts.override_current("rent_imputed", np.full(n_households, 500.0))
+
+        shortfall = test_households.compute_and_record_liquidity_shortfall(
+            target_consumption=np.zeros((n_households, n_industries)),
+            scheduled_debt_service=np.zeros(n_households),
+        )
+
+        # 30 (cash rent) - 100 (income) = -70. The 500 of imputed rent is absent.
+        np.testing.assert_allclose(shortfall, np.full(n_households, -70.0))
+        np.testing.assert_allclose(test_households.ts.current("household_saving"), np.full(n_households, 70.0))
 
 
 class TestComputeAndRecordLiquidAssetDrawdown:

@@ -482,6 +482,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.1,
             house_price_growth=0.1,
             lagged_consumption=historic_consumption_sum[-1],
+            lagged_real_consumption_budget=historic_consumption_sum[-1],
             lagged_income=np.array([80.0]),
             lagged_liquid_wealth=np.array([60.0]),
             lagged_illiquid_wealth=np.array([30.0]),
@@ -583,6 +584,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(n_households, 50.0),
+            lagged_real_consumption_budget=np.full(n_households, 50.0),
             lagged_income=np.array([80.0]),
             lagged_liquid_wealth=np.array([60.0]),
             lagged_illiquid_wealth=np.array([30.0]),
@@ -635,6 +637,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(1, 50.0),
+            lagged_real_consumption_budget=np.full(1, 50.0),
             lagged_income=np.full(1, 80.0),
             lagged_liquid_wealth=np.zeros(1),
             lagged_illiquid_wealth=np.zeros(1),
@@ -685,6 +688,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.2,
             house_price_growth=0.05,
             lagged_consumption=np.array([80.0]),
+            lagged_real_consumption_budget=np.array([80.0]),
             lagged_income=np.array([160.0]),
             lagged_cpi=2.0,
             lagged_liquid_wealth=np.array([60.0]),
@@ -754,6 +758,7 @@ class TestCreditAugmentedHouseholdConsumption:
             illiquid_wealth=np.full(n_households, 10.0),
             housing_wealth=np.full(n_households, 10.0),
             lagged_consumption=np.full(n_households, 50.0),
+            lagged_real_consumption_budget=np.full(n_households, 50.0),
             lagged_income=np.full(n_households, 100.0),
             lagged_cpi=1.0,
             lagged_house_price_index=1.0,
@@ -793,6 +798,40 @@ class TestCreditAugmentedHouseholdConsumption:
             calibrated_total - np.array([12.0, 20.0]),
         )
         np.testing.assert_allclose(result.sum(axis=1), calibrated_total - np.array([12.0, 20.0]))
+
+    def test_housing_carve_out_rejects_overlapping_cash_and_imputed_rent(self):
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            house_price_propensity=0.0,
+        )
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            consumption_obj.compute_target_consumption(
+                **self._housing_carve_out_args(n_households=1),
+                rent=np.array([12.0]),
+                rent_imputed=np.array([20.0]),
+            )
+
+    def test_credit_augmented_consumption_requires_budget_lag(self):
+        consumption_obj = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.4,
+            house_price_propensity=0.0,
+        )
+
+        args = self._housing_carve_out_args(n_households=1)
+        args["lagged_real_consumption_budget"] = None
+        with pytest.raises(ValueError, match="lagged_real_consumption_budget"):
+            consumption_obj.compute_target_consumption(
+                **args,
+                rent=np.zeros(1),
+                rent_imputed=np.zeros(1),
+            )
 
     def test_housing_carve_out_leaves_calibrated_total_and_mpc_untouched(self):
         # The carve-out is a classification of an already-calibrated total, not
@@ -863,11 +902,14 @@ class TestCreditAugmentedHouseholdConsumption:
             """Correct wiring: feed back the persisted real consumption budget."""
             rule, budget, path = _rule(), None, []
             for _ in range(n_periods):
+                args = _base_args()
+                args["lagged_real_consumption_budget"] = (
+                    args["lagged_real_consumption_budget"] if budget is None else budget
+                )
                 rule.compute_target_consumption(
-                    **_base_args(),
+                    **args,
                     rent=np.full(1, housing),
                     rent_imputed=np.zeros(1),
-                    lagged_real_consumption_budget=budget,
                 )
                 budget = rule.last_real_consumption_budget
                 path.append(float(budget[0]))
@@ -881,6 +923,7 @@ class TestCreditAugmentedHouseholdConsumption:
             for _ in range(n_periods):
                 args = _base_args()
                 args["lagged_consumption"] = lagged_goods
+                args["lagged_real_consumption_budget"] = lagged_goods
                 result = rule.compute_target_consumption(**args, rent=np.full(1, housing), rent_imputed=np.zeros(1))
                 lagged_goods = result.sum(axis=1)
                 path.append(float(lagged_goods[0]))
@@ -970,6 +1013,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(3, 50.0),
+            lagged_real_consumption_budget=np.full(3, 50.0),
             lagged_income=np.array([40.0, 80.0, 400.0]),
             lagged_liquid_wealth=np.array([10.0, 60.0, 4_000.0]),
             lagged_illiquid_wealth=np.array([0.0, 30.0, 1_500.0]),
@@ -1027,6 +1071,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(3, 50.0),
+            lagged_real_consumption_budget=np.full(3, 50.0),
             lagged_income=income,
             lagged_liquid_wealth=np.array([0.0, 50.0, 200.0]),
             lagged_illiquid_wealth=np.array([0.0, 30.0, 350.0]),
@@ -1091,6 +1136,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(2, 50.0),
+            lagged_real_consumption_budget=np.full(2, 50.0),
             lagged_income=np.array([100.0, 100.0]),
             lagged_liquid_wealth=np.array([100.0, 100.0]),
             lagged_illiquid_wealth=np.array([50.0, 50.0]),
@@ -1198,6 +1244,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(4, 50.0),
+            lagged_real_consumption_budget=np.full(4, 50.0),
             lagged_income=income,
             lagged_liquid_wealth=np.array([20.0, 0.0, 150.0, 200.0]),
             lagged_illiquid_wealth=np.array([10.0, 0.0, 250.0, 300.0]),
@@ -1255,6 +1302,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(1, 50.0),
+            lagged_real_consumption_budget=np.full(1, 50.0),
             lagged_income=np.full(1, 100.0),
             lagged_liquid_wealth=np.array([0.0]),
             lagged_illiquid_wealth=np.array([0.0]),
@@ -1323,6 +1371,7 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
             house_price_growth=0.0,
             lagged_consumption=np.full(1, 100.0),
+            lagged_real_consumption_budget=np.full(1, 100.0),
             lagged_income=np.full(1, 10.0),
             lagged_liquid_wealth=np.array([0.0]),
             lagged_illiquid_wealth=np.array([0.0]),
@@ -1397,6 +1446,7 @@ class TestCreditAugmentedHouseholdConsumption:
                 house_price_index=1.0,
                 house_price_growth=0.0,
                 lagged_consumption=np.full(1, 100.0),
+                lagged_real_consumption_budget=np.full(1, 100.0),
                 lagged_income=np.full(1, 10.0),
                 lagged_liquid_wealth=np.array([0.0]),
                 lagged_illiquid_wealth=np.array([0.0]),
@@ -1452,6 +1502,7 @@ class TestCreditAugmentedHouseholdConsumption:
                 house_price_index=1.0,
                 house_price_growth=0.0,
                 lagged_consumption=np.full(1, 100.0),
+                lagged_real_consumption_budget=np.full(1, 100.0),
                 lagged_income=np.full(1, 10.0),
                 lagged_liquid_wealth=np.array([0.0]),
                 lagged_illiquid_wealth=np.array([0.0]),

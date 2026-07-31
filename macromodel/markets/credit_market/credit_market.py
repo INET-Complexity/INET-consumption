@@ -51,6 +51,9 @@ if TYPE_CHECKING:
 
 
 _LOAN_KEYS = ("st_loans", "lt_loans", "cons_loans", "mort_loans")
+_FIRM_LOAN_KEYS = ("st_loans", "lt_loans")
+_DEFAULT_FIRM_LOAN_MATURITIES = {"st_loans": 20, "lt_loans": 60}
+_MAX_INITIAL_FIRM_LOAN_MATURITY = 600
 
 
 @dataclass(frozen=True)
@@ -173,6 +176,147 @@ def _scheduled_service_components(
             np.maximum(loans[0] - principal_arrears, 0.0),
         )
     return interest_due, principal_due
+
+
+def _infer_firm_loan_remaining_terms(
+    loans: np.ndarray,
+    fallback_maturity: int,
+    maximum_maturity: int | None = None,
+) -> np.ndarray:
+    """Infer integer remaining terms from an aggregate annuity loan state."""
+    if maximum_maturity is None:
+        maximum_maturity = fallback_maturity
+    principal = loans[0]
+    rate = loans[1]
+    payment = loans[2]
+    terms = np.zeros_like(principal, dtype=int)
+    active = principal > 0.0
+    scheduled = active & (payment > 0.0)
+    zero_rate = scheduled & np.isclose(rate, 0.0)
+    terms[zero_rate] = np.rint(principal[zero_rate] / payment[zero_rate]).astype(int)
+
+    positive_rate = scheduled & (rate > 0.0)
+    payment_rate = np.divide(
+        payment,
+        principal,
+        out=np.zeros_like(payment),
+        where=principal > 0.0,
+    )
+    valid_annuity = positive_rate & (payment_rate > rate)
+    terms[valid_annuity] = np.rint(
+        -np.log1p(-rate[valid_annuity] / payment_rate[valid_annuity]) / np.log1p(rate[valid_annuity])
+    ).astype(int)
+    terms[active & (terms <= 0)] = fallback_maturity
+    terms[active] = np.clip(terms[active], 1, maximum_maturity)
+    return terms
+
+
+def _firm_cohorts_from_aggregate(
+    loans: np.ndarray,
+    minimum_maturity: int,
+    *,
+    season_initial_loans: bool = False,
+) -> np.ndarray:
+    """Create a bounded cohort ladder from aggregate loan cells.
+
+    Synthetic initial debt has no loan-level age data. In production it is
+    therefore treated as a seasoned portfolio by distributing each cell's
+    principal uniformly across residual terms 1..M, where M is inferred from
+    its aggregate annuity. Direct-data callers can retain the explicit
+    aggregate contract as one cohort.
+    """
+    terms = _infer_firm_loan_remaining_terms(
+        loans,
+        minimum_maturity,
+        max(minimum_maturity, _MAX_INITIAL_FIRM_LOAN_MATURITY),
+    )
+    maximum_maturity = max(minimum_maturity, int(terms.max(initial=0)))
+    cohorts = np.zeros((3, maximum_maturity + 1, *loans.shape[1:]), dtype=float)
+    if not season_initial_loans:
+        for remaining_term in range(maximum_maturity + 1):
+            mask = terms == remaining_term
+            if np.any(mask):
+                cohorts[:, remaining_term, mask] = loans[:, mask]
+        return cohorts
+
+    active = terms > 0
+    principal_share = np.divide(
+        loans[0],
+        terms,
+        out=np.zeros_like(loans[0]),
+        where=active,
+    )
+    for remaining_term in range(1, maximum_maturity + 1):
+        mask = terms >= remaining_term
+        if not np.any(mask):
+            continue
+        rates = loans[1, mask]
+        growth = np.power(1.0 + rates, remaining_term)
+        annuity_factor = np.divide(
+            rates * growth,
+            growth - 1.0,
+            out=np.full_like(rates, 1.0 / remaining_term),
+            where=~np.isclose(rates, 0.0),
+        )
+        cohorts[0, remaining_term, mask] = principal_share[mask]
+        cohorts[1, remaining_term, mask] = rates
+        cohorts[2, remaining_term, mask] = principal_share[mask] * annuity_factor
+    return cohorts
+
+
+def _merge_firm_cohorts(target: np.ndarray, addition: np.ndarray) -> np.ndarray:
+    """Merge matching bounded cohorts while preserving principal-weighted rates."""
+    target_principal = target[0]
+    addition_principal = addition[0]
+    total_principal = target_principal + addition_principal
+    target[1] = np.divide(
+        target_principal * target[1] + addition_principal * addition[1],
+        total_principal,
+        out=np.zeros_like(total_principal),
+        where=total_principal > 0.0,
+    )
+    target[0] = total_principal
+    target[2] += addition[2]
+    return target
+
+
+def _aggregate_firm_cohorts(cohorts: np.ndarray) -> np.ndarray:
+    """Collapse bounded cohorts to the legacy principal/rate/payment state."""
+    principal = cohorts[0].sum(axis=0)
+    weighted_rate = (cohorts[0] * cohorts[1]).sum(axis=0)
+    rate = np.divide(
+        weighted_rate,
+        principal,
+        out=np.zeros_like(principal),
+        where=principal > 0.0,
+    )
+    payment = cohorts[2].sum(axis=0)
+    return np.stack((principal, rate, payment))
+
+
+def _allocate_arrears_to_oldest_cohorts(principal: np.ndarray, arrears: np.ndarray) -> np.ndarray:
+    """Allocate cell-level principal arrears to oldest cohorts first."""
+    allocated = np.zeros_like(principal)
+    remaining = np.minimum(np.maximum(arrears, 0.0), principal.sum(axis=0))
+    for remaining_term in range(principal.shape[0]):
+        allocated[remaining_term] = np.minimum(principal[remaining_term], remaining)
+        remaining -= allocated[remaining_term]
+    return allocated
+
+
+def _firm_cohort_service_components(
+    cohorts: np.ndarray,
+    opening_principal_arrears: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return cohort interest, contractual principal, and allocated arrears."""
+    principal = cohorts[0]
+    interest_due = principal * cohorts[1]
+    arrears_by_cohort = _allocate_arrears_to_oldest_cohorts(principal, opening_principal_arrears)
+    principal_due = np.minimum(
+        np.maximum(cohorts[2] - interest_due, 0.0),
+        np.maximum(principal - arrears_by_cohort, 0.0),
+    )
+    return interest_due, principal_due, arrears_by_cohort
 
 
 def _compute_credit_supply_caps_by_type(
@@ -358,6 +502,8 @@ class CreditMarket:
         ts: TimeSeries,
         states: dict[str, np.ndarray],
         initial_states: dict[str, np.ndarray],
+        *,
+        season_initial_firm_loans: bool = False,
     ):
         """Initialize a new credit market instance.
 
@@ -373,6 +519,21 @@ class CreditMarket:
         self.ts = ts
         self.states = states
         self.initial_states = initial_states
+        self._season_initial_firm_loans = season_initial_firm_loans
+        self._firm_loan_cohorts = {
+            key: _firm_cohorts_from_aggregate(
+                self.states[key],
+                _DEFAULT_FIRM_LOAN_MATURITIES[key],
+                season_initial_loans=season_initial_firm_loans,
+            )
+            for key in _FIRM_LOAN_KEYS
+        }
+        self._firm_loan_maturities = {key: cohorts.shape[1] - 1 for key, cohorts in self._firm_loan_cohorts.items()}
+        if season_initial_firm_loans:
+            for key in _FIRM_LOAN_KEYS:
+                self._sync_firm_aggregate_state(key)
+        self._serviceable_firm_loan_cohorts = {key: cohorts.copy() for key, cohorts in self._firm_loan_cohorts.items()}
+        self._new_firm_loan_cohorts = {key: np.zeros_like(cohorts) for key, cohorts in self._firm_loan_cohorts.items()}
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period: np.ndarray | None = None
@@ -401,6 +562,37 @@ class CreditMarket:
         self._consumer_interest_accrued_by_bank = np.zeros(self.states["cons_loans"].shape[1])
         self._reset_firm_service_period_tracking()
 
+    def _sync_firm_aggregate_state(self, key: str) -> None:
+        """Keep the public aggregate loan state derived from bounded cohorts."""
+        self.states[key][...] = _aggregate_firm_cohorts(self._firm_loan_cohorts[key])
+
+    def _ensure_firm_cohort_capacity(self, key: str, maturity: int) -> None:
+        """Grow a loan-type ladder once when configuration requires a longer term."""
+        current_maturity = self._firm_loan_cohorts[key].shape[1] - 1
+        if maturity <= current_maturity:
+            return
+        extra_shape = (3, maturity - current_maturity, *self.states[key].shape[1:])
+        for attribute in (
+            "_firm_loan_cohorts",
+            "_serviceable_firm_loan_cohorts",
+            "_new_firm_loan_cohorts",
+        ):
+            ladders = getattr(self, attribute)
+            ladders[key] = np.concatenate((ladders[key], np.zeros(extra_shape)), axis=1)
+        cohort_schedule_shape = (maturity - current_maturity, *self.states[key].shape[1:])
+        for attribute in (
+            "_scheduled_firm_contractual_interest_due_by_cohort",
+            "_scheduled_firm_contractual_principal_due_by_cohort",
+            "_scheduled_firm_opening_principal_arrears_by_cohort",
+        ):
+            if hasattr(self, attribute):
+                schedules = getattr(self, attribute)
+                schedules[key] = np.concatenate(
+                    (schedules[key], np.zeros(cohort_schedule_shape)),
+                    axis=0,
+                )
+        self._firm_loan_maturities[key] = maturity
+
     def _reset_firm_service_period_tracking(self) -> None:
         self._last_interest_by_firm = np.zeros(self.states["st_loans"].shape[2])
         self._last_interest_by_household = np.zeros(self.states["cons_loans"].shape[2])
@@ -411,6 +603,71 @@ class CreditMarket:
         self._scheduled_firm_contractual_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
         self._scheduled_firm_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
         self._scheduled_firm_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_interest_due_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._scheduled_firm_contractual_principal_due_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._scheduled_firm_opening_principal_arrears_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._firm_installments_staged = False
+
+    def _clear_staged_firm_installment_schedules(self) -> None:
+        """Clear every staged service carrier after settlement."""
+        self._scheduled_firm_opening_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_opening_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._scheduled_firm_contractual_interest_due_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._scheduled_firm_contractual_principal_due_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._scheduled_firm_opening_principal_arrears_by_cohort = {
+            key: np.zeros_like(self._serviceable_firm_loan_cohorts[key][0]) for key in _FIRM_LOAN_KEYS
+        }
+        self._firm_installments_staged = False
+
+    def _clear_staged_firm_service_selection(
+        self,
+        key: str,
+        *,
+        firm_id: int | np.ndarray | None = None,
+        bank_id: int | np.ndarray | None = None,
+    ) -> None:
+        """Remove selected bank-firm cells from an in-flight service stage."""
+        if firm_id is None and bank_id is None:
+            return
+        cell_attributes = (
+            "_scheduled_firm_opening_interest_arrears_by_cell",
+            "_scheduled_firm_opening_principal_arrears_by_cell",
+            "_scheduled_firm_contractual_interest_due_by_cell",
+            "_scheduled_firm_contractual_principal_due_by_cell",
+            "_scheduled_firm_interest_due_by_cell",
+            "_scheduled_firm_principal_due_by_cell",
+        )
+        cohort_attributes = (
+            "_scheduled_firm_contractual_interest_due_by_cohort",
+            "_scheduled_firm_contractual_principal_due_by_cohort",
+            "_scheduled_firm_opening_principal_arrears_by_cohort",
+        )
+        for attribute in cell_attributes:
+            values = getattr(self, attribute)[key]
+            if firm_id is not None:
+                values[:, firm_id] = 0.0
+            if bank_id is not None:
+                values[bank_id] = 0.0
+        for attribute in cohort_attributes:
+            values = getattr(self, attribute)[key]
+            if firm_id is not None:
+                values[:, :, firm_id] = 0.0
+            if bank_id is not None:
+                values[:, bank_id] = 0.0
 
     @classmethod
     def from_pickled_market(
@@ -473,6 +730,7 @@ class CreditMarket:
             ts,
             states=states,
             initial_states=initial_states,
+            season_initial_firm_loans=True,
         )
 
     def reset(self, configuration: CreditMarketConfiguration) -> None:
@@ -487,6 +745,20 @@ class CreditMarket:
         """
         self.states = deepcopy(self.initial_states)
         self.ts.reset()
+        self._firm_loan_cohorts = {
+            key: _firm_cohorts_from_aggregate(
+                self.states[key],
+                _DEFAULT_FIRM_LOAN_MATURITIES[key],
+                season_initial_loans=self._season_initial_firm_loans,
+            )
+            for key in _FIRM_LOAN_KEYS
+        }
+        self._firm_loan_maturities = {key: cohorts.shape[1] - 1 for key, cohorts in self._firm_loan_cohorts.items()}
+        if self._season_initial_firm_loans:
+            for key in _FIRM_LOAN_KEYS:
+                self._sync_firm_aggregate_state(key)
+        self._serviceable_firm_loan_cohorts = {key: cohorts.copy() for key, cohorts in self._firm_loan_cohorts.items()}
+        self._new_firm_loan_cohorts = {key: np.zeros_like(cohorts) for key, cohorts in self._firm_loan_cohorts.items()}
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period = None
@@ -524,6 +796,8 @@ class CreditMarket:
         lt_loans: np.ndarray,
         cons_loans: np.ndarray,
         mort_loans: np.ndarray,
+        *,
+        season_initial_firm_loans: bool = False,
     ) -> "CreditMarket":
         """Create a credit market instance directly from loan data arrays.
 
@@ -568,6 +842,7 @@ class CreditMarket:
             ts=ts,
             states=states,
             initial_states=deepcopy(states),
+            season_initial_firm_loans=season_initial_firm_loans,
         )
 
     def clear(
@@ -609,6 +884,8 @@ class CreditMarket:
         """
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
+        self._serviceable_firm_loan_cohorts = {key: cohorts.copy() for key, cohorts in self._firm_loan_cohorts.items()}
+        self._new_firm_loan_cohorts = {key: np.zeros_like(cohorts) for key, cohorts in self._firm_loan_cohorts.items()}
         self._pending_consumer_loans_this_period = None
         self._consumer_loan_remodulation_maturity = None
         self._household_service_snapshot = None
@@ -672,8 +949,16 @@ class CreditMarket:
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
-        self._add_new_loans("st_loans", new_st_loans)
-        self._add_new_loans("lt_loans", new_lt_loans)
+        self._add_new_loans(
+            "st_loans",
+            new_st_loans,
+            maturity=banks.parameters.short_term_firm_loan_maturity,
+        )
+        self._add_new_loans(
+            "lt_loans",
+            new_lt_loans,
+            maturity=banks.parameters.long_term_firm_loan_maturity,
+        )
         if households.uses_feasibility_resolver:
             self._pending_consumer_loans_this_period = new_cons_loans.copy()
         else:
@@ -777,8 +1062,38 @@ class CreditMarket:
             )
         )
 
-    def _add_new_loans(self, key: str, new_loans: np.ndarray) -> None:
+    def _add_new_loans(
+        self,
+        key: str,
+        new_loans: np.ndarray,
+        *,
+        maturity: int | None = None,
+    ) -> None:
         """Add new principal while preserving period-rate loan semantics."""
+        if key in _FIRM_LOAN_KEYS:
+            if maturity is not None and (
+                isinstance(maturity, (bool, np.bool_)) or not isinstance(maturity, (int, np.integer)) or maturity <= 0
+            ):
+                raise ValueError("Firm-loan maturity must be a positive integer.")
+            self._new_loans_this_period[key] = new_loans.copy()
+            if maturity is None:
+                maturity = self._firm_loan_maturities[key]
+                terms = _infer_firm_loan_remaining_terms(new_loans, maturity)
+            else:
+                maturity = int(maturity)
+                self._ensure_firm_cohort_capacity(key, maturity)
+                terms = np.where(new_loans[0] > 0.0, maturity, 0)
+
+            new_cohorts = np.zeros_like(self._firm_loan_cohorts[key])
+            for remaining_term in range(new_cohorts.shape[1]):
+                mask = terms == remaining_term
+                if np.any(mask):
+                    new_cohorts[:, remaining_term, mask] = new_loans[:, mask]
+            _merge_firm_cohorts(self._firm_loan_cohorts[key], new_cohorts)
+            _merge_firm_cohorts(self._new_firm_loan_cohorts[key], new_cohorts)
+            self._sync_firm_aggregate_state(key)
+            return
+
         self._new_loans_this_period[key] = new_loans.copy()
         loans = self.states[key]
         old_principal = loans[0].copy()
@@ -1395,7 +1710,8 @@ class CreditMarket:
 
     def compute_scheduled_debt_service_by_firm(self) -> np.ndarray:
         """Calculate next-period scheduled firm loan interest and principal service."""
-        return self._scheduled_service_by_borrower(("st_loans", "lt_loans"))
+        preview = self.compute_scheduled_firm_installments_preview()
+        return preview["scheduled_interest_due"] + preview["scheduled_principal_due"]
 
     def _compute_firm_installment_buckets(
         self,
@@ -1406,17 +1722,30 @@ class CreditMarket:
             loan_states = self.states
 
         n_firms = loan_states["st_loans"].shape[2]
-        (
-            contractual_interest_due_by_key,
-            contractual_principal_due_by_key,
-            contractual_principal_due_by_firm,
-            contractual_interest_due_by_firm,
-            _,
-        ) = self._scheduled_service_by_borrower_and_bank(
-            ("st_loans", "lt_loans"),
-            loan_states=loan_states,
-            principal_arrears_by_key=self._firm_principal_arrears_by_cell,
+        cohort_states = (
+            self._serviceable_firm_loan_cohorts
+            if loan_states is self._serviceable_loans_this_period
+            else self._firm_loan_cohorts
         )
+        contractual_interest_due_by_key: dict[str, np.ndarray] = {}
+        contractual_principal_due_by_key: dict[str, np.ndarray] = {}
+        contractual_interest_due_by_cohort: dict[str, np.ndarray] = {}
+        contractual_principal_due_by_cohort: dict[str, np.ndarray] = {}
+        opening_principal_arrears_by_cohort: dict[str, np.ndarray] = {}
+        contractual_principal_due_by_firm = np.zeros(n_firms)
+        contractual_interest_due_by_firm = np.zeros(n_firms)
+        for key in _FIRM_LOAN_KEYS:
+            interest_by_cohort, principal_by_cohort, arrears_by_cohort = _firm_cohort_service_components(
+                cohort_states[key],
+                self._firm_principal_arrears_by_cell[key],
+            )
+            contractual_interest_due_by_cohort[key] = interest_by_cohort
+            contractual_principal_due_by_cohort[key] = principal_by_cohort
+            opening_principal_arrears_by_cohort[key] = arrears_by_cohort
+            contractual_interest_due_by_key[key] = interest_by_cohort.sum(axis=0)
+            contractual_principal_due_by_key[key] = principal_by_cohort.sum(axis=0)
+            contractual_interest_due_by_firm += contractual_interest_due_by_key[key].sum(axis=0)
+            contractual_principal_due_by_firm += contractual_principal_due_by_key[key].sum(axis=0)
         opening_interest_arrears_by_key = _copy_firm_service_schedule(self._firm_interest_arrears_by_cell)
         opening_principal_arrears_by_key = _copy_firm_service_schedule(self._firm_principal_arrears_by_cell)
         opening_interest_arrears_by_firm = np.zeros(n_firms)
@@ -1438,6 +1767,9 @@ class CreditMarket:
             "opening_principal_arrears_by_key": opening_principal_arrears_by_key,
             "contractual_interest_due_by_key": contractual_interest_due_by_key,
             "contractual_principal_due_by_key": contractual_principal_due_by_key,
+            "contractual_interest_due_by_cohort": contractual_interest_due_by_cohort,
+            "contractual_principal_due_by_cohort": contractual_principal_due_by_cohort,
+            "opening_principal_arrears_by_cohort": opening_principal_arrears_by_cohort,
             "scheduled_interest_due_by_key": scheduled_interest_due_by_key,
             "scheduled_principal_due_by_key": scheduled_principal_due_by_key,
             "opening_interest_arrears_by_firm": opening_interest_arrears_by_firm,
@@ -1462,6 +1794,8 @@ class CreditMarket:
 
     def schedule_firm_installments(self) -> dict[str, np.ndarray]:
         """Stage current-period firm loan service for later cash-feasible settlement."""
+        if self._firm_installments_staged:
+            raise RuntimeError("Firm installments are already staged for this period.")
         buckets = self._compute_firm_installment_buckets(
             loan_states=self._serviceable_loans_this_period,
         )
@@ -1477,12 +1811,22 @@ class CreditMarket:
         self._scheduled_firm_contractual_principal_due_by_cell = _copy_firm_service_schedule(
             buckets["contractual_principal_due_by_key"]
         )
+        self._scheduled_firm_contractual_interest_due_by_cohort = {
+            key: values.copy() for key, values in buckets["contractual_interest_due_by_cohort"].items()
+        }
+        self._scheduled_firm_contractual_principal_due_by_cohort = {
+            key: values.copy() for key, values in buckets["contractual_principal_due_by_cohort"].items()
+        }
+        self._scheduled_firm_opening_principal_arrears_by_cohort = {
+            key: values.copy() for key, values in buckets["opening_principal_arrears_by_cohort"].items()
+        }
         self._scheduled_firm_interest_due_by_cell = _copy_firm_service_schedule(
             buckets["scheduled_interest_due_by_key"]
         )
         self._scheduled_firm_principal_due_by_cell = _copy_firm_service_schedule(
             buckets["scheduled_principal_due_by_key"]
         )
+        self._firm_installments_staged = True
         return {
             "opening_interest_arrears": np.asarray(buckets["opening_interest_arrears_by_firm"], dtype=float).copy(),
             "opening_principal_arrears": np.asarray(buckets["opening_principal_arrears_by_firm"], dtype=float).copy(),
@@ -1504,6 +1848,8 @@ class CreditMarket:
         payable_contractual_principal_by_firm: np.ndarray | None = None,
     ) -> np.ndarray:
         """Apply actual firm debt-service payments after cash-feasibility is known."""
+        if not self._firm_installments_staged:
+            raise RuntimeError("Firm installments must be staged exactly once before settlement.")
         n_firms = self.states["st_loans"].shape[2]
         payable_principal_by_firm = np.asarray(payable_principal_by_firm, dtype=float).copy()
         payable_interest_by_firm = np.asarray(payable_interest_by_firm, dtype=float).copy()
@@ -1583,9 +1929,7 @@ class CreditMarket:
         interest_paid_by_bank = np.zeros(self.states["st_loans"].shape[1])
 
         for key in ("st_loans", "lt_loans"):
-            loans = self.states[key]
-            serviceable = self._serviceable_loans_this_period.get(key, loans).copy()
-            current_new = self._new_loans_this_period.get(key, np.zeros_like(loans))
+            serviceable_cohorts = self._serviceable_firm_loan_cohorts[key].copy()
             opening_interest_due = self._scheduled_firm_opening_interest_arrears_by_cell[key]
             contractual_interest_due = self._scheduled_firm_contractual_interest_due_by_cell[key]
             opening_principal_due = self._scheduled_firm_opening_principal_arrears_by_cell[key]
@@ -1622,56 +1966,81 @@ class CreditMarket:
             contractual_principal_paid = contractual_principal_due * contractual_principal_ratio[None, :]
             interest_paid = opening_interest_paid + contractual_interest_paid
             principal_paid = opening_principal_paid + contractual_principal_paid
-            serviceable_principal = np.minimum(serviceable[0], loans[0])
-            capitalized_interest = np.maximum(0.0, opening_interest_due - opening_interest_paid)
-            capitalized_interest += np.maximum(0.0, contractual_interest_due - contractual_interest_paid)
 
-            loans[0] = np.maximum(loans[0] - principal_paid, 0.0)
-            loans[0] += capitalized_interest
+            opening_principal_due_by_cohort = self._scheduled_firm_opening_principal_arrears_by_cohort[key]
+            contractual_principal_due_by_cohort = self._scheduled_firm_contractual_principal_due_by_cohort[key]
+            contractual_interest_due_by_cohort = self._scheduled_firm_contractual_interest_due_by_cohort[key]
+            opening_principal_paid_by_cohort = opening_principal_due_by_cohort * opening_principal_ratio[None, None, :]
+            contractual_principal_paid_by_cohort = (
+                contractual_principal_due_by_cohort * contractual_principal_ratio[None, None, :]
+            )
+            principal_paid_by_cohort = opening_principal_paid_by_cohort + contractual_principal_paid_by_cohort
+            contractual_interest_paid_by_cohort = (
+                contractual_interest_due_by_cohort * contractual_interest_ratio[None, None, :]
+            )
+            principal_shares = np.divide(
+                serviceable_cohorts[0],
+                serviceable_cohorts[0].sum(axis=0)[None, :, :],
+                out=np.zeros_like(serviceable_cohorts[0]),
+                where=serviceable_cohorts[0].sum(axis=0)[None, :, :] > 0.0,
+            )
+            capitalized_interest_by_cohort = (
+                principal_shares
+                * np.maximum(
+                    opening_interest_due - opening_interest_paid,
+                    0.0,
+                )[None, :, :]
+            )
+            capitalized_interest_by_cohort += np.maximum(
+                contractual_interest_due_by_cohort - contractual_interest_paid_by_cohort,
+                0.0,
+            )
 
-            remaining_serviceable_principal = np.maximum(serviceable_principal - principal_paid, 0.0)
-            fully_repaid = np.isclose(remaining_serviceable_principal + capitalized_interest, 0.0, atol=1e-2)
-            loans[2] = np.maximum(loans[2] - np.where(fully_repaid, serviceable[2], 0.0), 0.0)
-            self._firm_interest_arrears_by_cell[key] = np.zeros_like(capitalized_interest)
+            serviceable_cohorts[0] = np.maximum(
+                serviceable_cohorts[0] - principal_paid_by_cohort,
+                0.0,
+            )
+            serviceable_cohorts[0] += capitalized_interest_by_cohort
+            empty_cohorts = np.isclose(serviceable_cohorts[0], 0.0, atol=1e-2)
+            serviceable_cohorts[:, empty_cohorts] = 0.0
+
+            aged_cohorts = np.zeros_like(serviceable_cohorts)
+            overdue = serviceable_cohorts[:, 0].copy()
+            maturing = serviceable_cohorts[:, 1].copy()
+            aged_cohorts[:, 0] = _merge_firm_cohorts(overdue, maturing)
+            if serviceable_cohorts.shape[1] > 2:
+                aged_cohorts[:, 1:-1] = serviceable_cohorts[:, 2:]
+            _merge_firm_cohorts(aged_cohorts, self._new_firm_loan_cohorts[key])
+            self._firm_loan_cohorts[key] = aged_cohorts
+            self._sync_firm_aggregate_state(key)
+            loans = self.states[key]
+
+            self._firm_interest_arrears_by_cell[key] = np.zeros_like(opening_interest_due)
             self._firm_principal_arrears_by_cell[key] = np.maximum(0.0, opening_principal_due - opening_principal_paid)
             self._firm_principal_arrears_by_cell[key] += np.maximum(
                 0.0,
                 contractual_principal_due - contractual_principal_paid,
             )
             self._firm_principal_arrears_by_cell[key] = np.minimum(self._firm_principal_arrears_by_cell[key], loans[0])
+            fully_repaid = np.isclose(loans[0], 0.0, atol=1e-2)
             self._firm_interest_arrears_by_cell[key][fully_repaid] = 0.0
             self._firm_principal_arrears_by_cell[key][fully_repaid] = 0.0
-
-            rate_weighted_principal = (
-                remaining_serviceable_principal * serviceable[1]
-                + capitalized_interest * serviceable[1]
-                + current_new[0] * current_new[1]
-            )
-            loans[1] = np.divide(
-                rate_weighted_principal,
-                loans[0],
-                out=np.zeros_like(loans[0]),
-                where=loans[0] > 0.0,
-            )
 
             principal_paid_by_firm += principal_paid.sum(axis=0)
             interest_paid_by_firm += interest_paid.sum(axis=0)
             interest_paid_by_bank += interest_paid.sum(axis=1)
 
             self._new_loans_this_period[key] = np.zeros_like(loans)
+            self._new_firm_loan_cohorts[key] = np.zeros_like(aged_cohorts)
             self._serviceable_loans_this_period[key] = loans.copy()
+            self._serviceable_firm_loan_cohorts[key] = aged_cohorts.copy()
 
         self._last_interest_by_firm = interest_paid_by_firm
         if overwrite_bank_interest:
             self._last_interest_by_bank = interest_paid_by_bank
         else:
             self._last_interest_by_bank += interest_paid_by_bank
-        self._scheduled_firm_opening_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
-        self._scheduled_firm_opening_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
-        self._scheduled_firm_contractual_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
-        self._scheduled_firm_contractual_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
-        self._scheduled_firm_interest_due_by_cell = _zero_like_firm_service_schedule(self.states)
-        self._scheduled_firm_principal_due_by_cell = _zero_like_firm_service_schedule(self.states)
+        self._clear_staged_firm_installment_schedules()
         return principal_paid_by_firm
 
     def pay_firm_installments(self) -> np.ndarray:
@@ -1729,6 +2098,9 @@ class CreditMarket:
                 self._consumer_interest_arrears_by_cell[ind] = 0.0
                 self._consumer_principal_arrears_by_cell[ind] = 0.0
             if key in ("st_loans", "lt_loans"):
+                self._firm_loan_cohorts[key][:, :, ind] = 0.0
+                self._serviceable_firm_loan_cohorts[key][:, :, ind] = 0.0
+                self._new_firm_loan_cohorts[key][:, :, ind] = 0.0
                 self._firm_interest_arrears_by_cell[key][ind] = 0.0
                 self._firm_principal_arrears_by_cell[key][ind] = 0.0
 
@@ -1966,6 +2338,11 @@ class CreditMarket:
         total_amount = self.states["st_loans"][0][:, firm_id].sum() + self.states["lt_loans"][0][:, firm_id].sum()
         self.states["st_loans"][:, :, firm_id] = 0.0
         self.states["lt_loans"][:, :, firm_id] = 0.0
+        for key in _FIRM_LOAN_KEYS:
+            self._firm_loan_cohorts[key][:, :, :, firm_id] = 0.0
+            self._serviceable_firm_loan_cohorts[key][:, :, :, firm_id] = 0.0
+            self._new_firm_loan_cohorts[key][:, :, :, firm_id] = 0.0
+            self._clear_staged_firm_service_selection(key, firm_id=firm_id)
         self._firm_interest_arrears_by_cell["st_loans"][:, firm_id] = 0.0
         self._firm_interest_arrears_by_cell["lt_loans"][:, firm_id] = 0.0
         self._firm_principal_arrears_by_cell["st_loans"][:, firm_id] = 0.0
@@ -2014,6 +2391,11 @@ class CreditMarket:
         """
         self.states["st_loans"][:, bank_id] = 0.0
         self.states["lt_loans"][:, bank_id] = 0.0
+        for key in _FIRM_LOAN_KEYS:
+            self._firm_loan_cohorts[key][:, :, bank_id] = 0.0
+            self._serviceable_firm_loan_cohorts[key][:, :, bank_id] = 0.0
+            self._new_firm_loan_cohorts[key][:, :, bank_id] = 0.0
+            self._clear_staged_firm_service_selection(key, bank_id=bank_id)
         self.states["cons_loans"][:, bank_id] = 0.0
         self.states["mort_loans"][:, bank_id] = 0.0
         self._consumer_principal_arrears_by_cell[bank_id] = 0.0

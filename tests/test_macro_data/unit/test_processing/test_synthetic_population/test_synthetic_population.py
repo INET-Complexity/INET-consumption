@@ -21,6 +21,7 @@ PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
 def test__compute_notebook_household_accounts_uses_notebook_definitions():
     data = {
         "Wealth in Deposits": [10.0],
+        "HD1320c": [20.0],
         "Mutual Funds": [1.0],
         "Bonds": [2.0],
         "Value of Private Businesses": [100.0],
@@ -38,8 +39,8 @@ def test__compute_notebook_household_accounts_uses_notebook_definitions():
 
     accounts = compute_notebook_household_accounts(pd.DataFrame(data))
 
-    assert accounts.loc[0, "lfa"] == 10.0
-    assert accounts.loc[0, "ifa"] == 28.0
+    assert accounts.loc[0, "lfa"] == 30.0
+    assert accounts.loc[0, "ifa"] == 8.0
     assert accounts.loc[0, "ha"] == 58.0
     assert accounts.loc[0, "mr"] == 19.0
     assert accounts.loc[0, "db"] == 11.0

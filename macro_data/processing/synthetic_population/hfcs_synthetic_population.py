@@ -128,8 +128,9 @@ def compute_notebook_household_accounts(data: pd.DataFrame) -> pd.DataFrame:
     """Compute notebook-style household account variables without mutating data.
 
     The definitions follow ``consumption-notebooks/build_variab_from_HFCS.py``:
-    liquid assets are deposits, illiquid financial assets exclude private
-    business wealth, housing assets use non-business other real estate, and
+    liquid assets are deposits plus money market funds, illiquid financial
+    assets exclude private business wealth and money market funds, housing
+    assets use non-business other real estate, and
     non-mortgage debt follows the HFCS aggregate when available.
 
     Use this on raw reader or sampled household data, before ``restrict()`` and
@@ -139,8 +140,9 @@ def compute_notebook_household_accounts(data: pd.DataFrame) -> pd.DataFrame:
     credit line and credit-card balances.
     """
 
-    lfa = _numeric_series(data, ["Wealth in Deposits", "DA2101"])
-    ifa = _sum_account_components(
+    money_market_funds = _numeric_series(data, ["HD1320c"], required=False)
+    lfa = _numeric_series(data, ["Wealth in Deposits", "DA2101"]) + money_market_funds
+    ifa_components = _sum_account_components(
         data,
         [
             ["Mutual Funds", "DA2102"],
@@ -152,6 +154,7 @@ def compute_notebook_household_accounts(data: pd.DataFrame) -> pd.DataFrame:
             ["Voluntary Pension", "DA2109"],
         ],
     )
+    ifa = ifa_components - money_market_funds
     ha = _numeric_series(data, ["Value of the Main Residence", "DA1110"]) + _numeric_series(
         data,
         [

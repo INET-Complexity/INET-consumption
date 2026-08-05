@@ -74,6 +74,11 @@ def main(
     assume_zero_noise: bool | None = None,
     government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
     government_consumption_consistency: float | None = None,
+    inventory_adjustment_speed: float | None = None,
+    target_inventory_to_demand_fraction: float | None = None,
+    sectoral_growth_adjustment_speed: float | None = None,
+    firm_growth_adjustment_speed: float | None = None,
+    short_term_firm_loan_maturity: int | None = None,
 ) -> dict[str, object]:
     # Optional overrides (None means use Config/default env values)
     country_override = None
@@ -156,6 +161,20 @@ def main(
         )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
+    target_production_parameters = country_cfg.firms.functions.target_production.parameters
+    if inventory_adjustment_speed is not None:
+        target_production_parameters["inventory_adjustment_speed"] = inventory_adjustment_speed
+    if target_inventory_to_demand_fraction is not None:
+        target_production_parameters["target_inventory_to_demand_fraction"] = (
+            target_inventory_to_demand_fraction
+        )
+    demand_estimator_parameters = country_cfg.firms.functions.demand_estimator.parameters
+    if sectoral_growth_adjustment_speed is not None:
+        demand_estimator_parameters["sectoral_growth_adjustment_speed"] = sectoral_growth_adjustment_speed
+    if firm_growth_adjustment_speed is not None:
+        demand_estimator_parameters["firm_growth_adjustment_speed"] = firm_growth_adjustment_speed
+    if short_term_firm_loan_maturity is not None:
+        country_cfg.banks.parameters.short_term_firm_loan_maturity = short_term_firm_loan_maturity
 
     print("Configuration summary")
     pprint(
@@ -176,6 +195,15 @@ def main(
                 "parameters": country_cfg.government_entities.functions.consumption.parameters,
             },
             "assume_zero_noise": country_cfg.assume_zero_noise,
+            "inventory_adjustment_speed": target_production_parameters.get("inventory_adjustment_speed"),
+            "target_inventory_to_demand_fraction": target_production_parameters.get(
+                "target_inventory_to_demand_fraction"
+            ),
+            "sectoral_growth_adjustment_speed": demand_estimator_parameters.get(
+                "sectoral_growth_adjustment_speed"
+            ),
+            "firm_growth_adjustment_speed": demand_estimator_parameters.get("firm_growth_adjustment_speed"),
+            "short_term_firm_loan_maturity": country_cfg.banks.parameters.short_term_firm_loan_maturity,
         },
         sort_dicts=False,
     )
@@ -254,6 +282,36 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         help="Override AR government-consumption consistency. Default: use country configuration.",
     )
+    parser.add_argument(
+        "--inventory-adjustment-speed",
+        type=float,
+        default=None,
+        help="Override the firm finished-goods inventory adjustment speed.",
+    )
+    parser.add_argument(
+        "--target-inventory-to-demand-fraction",
+        type=float,
+        default=None,
+        help="Override the firm target finished-goods inventory share of expected demand.",
+    )
+    parser.add_argument(
+        "--sectoral-growth-adjustment-speed",
+        type=float,
+        default=None,
+        help="Override the economy-growth term in firm demand forecasts.",
+    )
+    parser.add_argument(
+        "--firm-growth-adjustment-speed",
+        type=float,
+        default=None,
+        help="Override the firm market-signal term in firm demand forecasts.",
+    )
+    parser.add_argument(
+        "--short-term-firm-loan-maturity",
+        type=int,
+        default=None,
+        help="Override short-term firm-loan maturity for credit-mechanism diagnostics.",
+    )
     return parser.parse_args()
 
 
@@ -267,4 +325,9 @@ if __name__ == "__main__":
         assume_zero_noise=args.assume_zero_noise,
         government_sectoral_weights=args.government_sectoral_weights,
         government_consumption_consistency=args.government_consumption_consistency,
+        inventory_adjustment_speed=args.inventory_adjustment_speed,
+        target_inventory_to_demand_fraction=args.target_inventory_to_demand_fraction,
+        sectoral_growth_adjustment_speed=args.sectoral_growth_adjustment_speed,
+        firm_growth_adjustment_speed=args.firm_growth_adjustment_speed,
+        short_term_firm_loan_maturity=args.short_term_firm_loan_maturity,
     )

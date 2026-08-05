@@ -1596,7 +1596,7 @@ class Firms(Agent):
         cash_after_hard_obligations = internal_cash - hard_obligations
         cash_after_non_debt_service_hard_obligations = internal_cash - non_debt_service_hard_obligations
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft
-        remaining_internal_finance_after_working_capital = available_after_hard_and_overdraft
+        remaining_internal_finance_after_working_capital = available_after_hard_and_overdraft - working_capital_budget
         target_debt_rollover_credit = np.maximum(
             0.0,
             loan_debt_service_preview - np.maximum(0.0, cash_after_non_debt_service_hard_obligations),
@@ -1612,7 +1612,7 @@ class Firms(Agent):
         ordinary_target_short_term_credit = target_operating_refinance_credit.copy()
         residual_internal_funds = np.maximum(
             0.0,
-            internal_cash - hard_obligations - existing_overdraft,
+            internal_cash - hard_obligations - existing_overdraft - working_capital_budget,
         )
         capital_internal_funds = np.minimum(residual_internal_funds, capital_costs)
         residual_internal_funds -= capital_internal_funds
@@ -1719,10 +1719,15 @@ class Firms(Agent):
             np.asarray(self.ts.current("received_overdraft_refinance_credit"), dtype=float),
             nan=0.0,
         )
+        received_operating_refinance_credit = np.nan_to_num(
+            np.asarray(self.ts.current("received_operating_refinance_credit"), dtype=float),
+            nan=0.0,
+        )
         if (
             float(np.nansum(ordinary_credit)) == 0.0
             and float(np.nansum(received_debt_rollover_credit)) == 0.0
             and float(np.nansum(received_overdraft_refinance_credit)) == 0.0
+            and float(np.nansum(received_operating_refinance_credit)) == 0.0
         ):
             ordinary_credit = np.nan_to_num(
                 np.asarray(self.ts.current("received_short_term_credit"), dtype=float),
@@ -1877,14 +1882,7 @@ class Firms(Agent):
             0.0,
             np.nan_to_num(self.ts.current("received_overdraft_refinance_credit"), nan=0.0),
         )
-        received_operating_refinance_credit = np.maximum(
-            0.0,
-            np.nan_to_num(self.ts.current("received_operating_refinance_credit"), nan=0.0),
-        )
-        ordinary_short_term_credit = self._current_received_ordinary_short_term_credit()
-        spendable_ordinary_short_term_credit = np.maximum(
-            0.0, ordinary_short_term_credit - received_operating_refinance_credit
-        )
+        spendable_ordinary_short_term_credit = self._current_received_ordinary_short_term_credit()
         available_cash_before_debt_service = (
             self.ts.current("deposits")
             + self.ts.current("nominal_amount_sold_in_lcu")
@@ -2084,7 +2082,9 @@ class Firms(Agent):
             + capital
             + closing_deposits
             - np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))
-            - np.maximum(0.0, np.nan_to_num(np.asarray(self.ts.current("operating_revolving_closing_balance"), dtype=float)))
+            - np.maximum(
+                0.0, np.nan_to_num(np.asarray(self.ts.current("operating_revolving_closing_balance"), dtype=float))
+            )
         )
         balance_sheet_residual = expected_equity - np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))
 

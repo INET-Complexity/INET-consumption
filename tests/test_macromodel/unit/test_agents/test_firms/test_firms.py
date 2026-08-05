@@ -1977,7 +1977,7 @@ class TestFirms:
         assert np.isclose(test_firms.ts.current("credit_budget_investment_budget")[0], 13.0)
         assert np.isclose(
             test_firms.ts.current("credit_budget_remaining_internal_finance_after_working_capital")[0],
-            -15.0,
+            -27.0,
         )
         assert np.allclose(test_firms.ts.current("target_short_term_credit")[1:], 0.0)
         assert np.allclose(test_firms.ts.current("target_long_term_credit")[1:], 0.0)
@@ -1996,6 +1996,45 @@ class TestFirms:
             test_firms.ts.current("credit_budget_working_capital_budget"),
             test_firms.ts.current("credit_budget_intermediate_costs"),
         )
+
+    def test__compute_target_credit_reserves_intermediate_costs_before_investment_finance(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        n_industries = test_firms.n_industries
+        zeros = np.zeros(n_firms)
+
+        test_firms.ts.override_current("deposits", np.r_[50.0, zeros[1:]])
+        test_firms.ts.override_current("price", np.ones(n_firms))
+        test_firms.ts.override_current("target_production", zeros)
+        test_firms.ts.override_current("corporate_taxes_paid", zeros)
+        test_firms.ts.override_current("interest_paid", zeros)
+        test_firms.ts.override_current("debt_installments", zeros)
+        test_firms.ts.override_current(
+            "unconstrained_target_intermediate_inputs_costs",
+            np.r_[20.0, zeros[1:]],
+        )
+        test_firms.ts.override_current(
+            "unconstrained_target_capital_inputs_costs",
+            np.r_[40.0, zeros[1:]],
+        )
+        planned_technical = np.zeros((n_firms, n_industries))
+        planned_technical[0, 0] = 10.0
+        test_firms.ts.override_current("planned_technical_investment", planned_technical)
+        test_firms.ts.override_current("planned_tfp_investment", np.r_[5.0, zeros[1:]])
+
+        test_firms.compute_target_credit(
+            estimated_growth=0.0,
+            estimated_inflation=0.0,
+            wage_obligation_preview=zeros,
+            production_tax_obligation_preview=zeros,
+            interest_obligation_preview=zeros,
+            loan_interest_obligation_preview=zeros,
+            debt_installment_preview=zeros,
+        )
+
+        assert test_firms.ts.current("credit_budget_remaining_internal_finance_after_working_capital")[
+            0
+        ] == pytest.approx(30.0)
+        assert test_firms.ts.current("target_long_term_credit")[0] == pytest.approx(25.0)
 
     def test__compute_target_credit_refinances_existing_overdraft_as_short_term_credit(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
@@ -2824,9 +2863,7 @@ class TestFirms:
         assert np.isclose(settlement["closing_balance"][0], 0.0)
         assert np.isclose(
             settlement["closing_balance"][0],
-            settlement["opening_balance"][0]
-            + settlement["current_draw"][0]
-            - settlement["repayment"][0],
+            settlement["opening_balance"][0] + settlement["current_draw"][0] - settlement["repayment"][0],
         )
 
     def test__operating_revolving_repayment_reserves_opening_debt_arrears(self, test_firms):

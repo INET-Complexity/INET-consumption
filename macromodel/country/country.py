@@ -1720,12 +1720,14 @@ class Country:
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
         )
-        firm_interest_obligation_preview = self.firms.ts.current(
-            "firm_settlement_scheduled_interest_due"
-        ) + self.firms.compute_interest_paid_on_deposits(
-            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
-            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
-        ) + self.firms.ts.current("operating_revolving_interest_paid")
+        firm_interest_obligation_preview = (
+            self.firms.ts.current("firm_settlement_scheduled_interest_due")
+            + self.firms.compute_interest_paid_on_deposits(
+                bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+                bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+            )
+            + self.firms.ts.current("operating_revolving_interest_paid")
+        )
         self.firms.prepare_feasible_activity_plan(
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],

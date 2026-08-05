@@ -56,59 +56,6 @@ _DEFAULT_FIRM_LOAN_MATURITIES = {"st_loans": 20, "lt_loans": 60}
 _MAX_INITIAL_FIRM_LOAN_MATURITY = 600
 
 
-def _operating_refinance_loans(
-    banks: Banks,
-    firms: Firms,
-    target_operating_refinance_credit: np.ndarray,
-    *,
-    allow_short_term_firm_loans: bool,
-) -> np.ndarray:
-    """Convert carried operating-facility principal into same-bank ST cohorts.
-
-    This is a liability substitution rather than new credit.  Booking the new
-    cohort with the facility's originating bank keeps that bank's total exposure
-    and capital usage unchanged while the facility principal is removed.
-    """
-    n_banks = banks.ts.current("n_banks")
-    n_firms = firms.ts.current("n_firms")
-    loans = np.zeros((3, n_banks, n_firms))
-    if not allow_short_term_firm_loans:
-        return loans
-
-    carried_balance = np.maximum(
-        0.0,
-        np.nan_to_num(np.asarray(firms.ts.current("operating_revolving_closing_balance"), dtype=float), nan=0.0),
-    )
-    requested = np.maximum(0.0, np.asarray(target_operating_refinance_credit, dtype=float))
-    target_short_term_credit = np.maximum(
-        0.0,
-        np.asarray(firms.ts.current("target_short_term_credit"), dtype=float),
-    )
-    converted_principal = np.minimum(np.minimum(carried_balance, requested), target_short_term_credit)
-    firm_bank_ids = np.asarray(firms.states["Corresponding Bank ID"], dtype=int)
-    if np.any((firm_bank_ids < 0) | (firm_bank_ids >= n_banks)):
-        raise ValueError("Firm corresponding-bank identifiers must reference an existing bank.")
-
-    bank_rates = np.maximum(
-        0.0,
-        np.nan_to_num(np.asarray(banks.ts.current("interest_rates_on_short_term_firm_loans"), dtype=float), nan=0.0),
-    )
-    maturity = int(banks.parameters.short_term_firm_loan_maturity)
-    if maturity <= 0:
-        raise ValueError("Short-term firm-loan maturity must be positive for operating-facility refinancing.")
-    annuity_factor = np.divide(
-        bank_rates,
-        1.0 - np.power(1.0 + bank_rates, -maturity),
-        out=np.full(n_banks, 1.0 / maturity),
-        where=bank_rates > 0.0,
-    )
-    firm_ids = np.arange(n_firms)
-    loans[0, firm_bank_ids, firm_ids] = converted_principal
-    loans[1, firm_bank_ids, firm_ids] = np.where(converted_principal > 0.0, bank_rates[firm_bank_ids], 0.0)
-    loans[2, firm_bank_ids, firm_ids] = converted_principal * annuity_factor[firm_bank_ids]
-    return loans
-
-
 @dataclass(frozen=True)
 class HouseholdServiceSnapshot:
     """Immutable opening household-service contract for one model period."""
@@ -961,26 +908,6 @@ class CreditMarket:
         target_debt_rollover_credit = firms.ts.current("target_debt_rollover_credit")
         target_overdraft_refinance_credit = firms.ts.current("target_overdraft_refinance_credit")
         target_operating_refinance_credit = firms.ts.current("target_operating_refinance_credit")
-        carried_operating_facility_balance = np.maximum(
-            0.0,
-            np.nan_to_num(np.asarray(firms.ts.current("operating_revolving_closing_balance"), dtype=float), nan=0.0),
-        )
-        operating_refinance_target = np.minimum(
-            np.minimum(
-                carried_operating_facility_balance,
-                np.maximum(0.0, np.nan_to_num(np.asarray(target_operating_refinance_credit), nan=0.0)),
-            ),
-            np.maximum(0.0, np.nan_to_num(np.asarray(target_short_term_credit), nan=0.0)),
-        )
-        operating_refinance_loans = _operating_refinance_loans(
-            banks=banks,
-            firms=firms,
-            target_operating_refinance_credit=target_operating_refinance_credit,
-            allow_short_term_firm_loans=bool(
-                getattr(self.functions["clearing"], "allow_short_term_firm_loans", False)
-            ),
-        )
-        converted_operating_refinance_credit = operating_refinance_loans[0].sum(axis=0)
         ordinary_target_short_term_credit = _ordinary_short_term_target_for_cap_split(
             target_short_term_credit=target_short_term_credit,
             ordinary_target_short_term_credit=firms.ts.current("ordinary_target_short_term_credit"),
@@ -1006,49 +933,22 @@ class CreditMarket:
             total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
         )
 
-        # Clear the credit market
-        # Facility conversion is a same-bank exposure substitution.  Exclude it
-        # from competitive new-credit demand, then add the converted ST cohorts
-        # after clearing so neither CAR nor lending-preference capacity is used.
-        competitive_target_short_term_credit = np.maximum(
-            0.0, target_short_term_credit - operating_refinance_target
+        # Operating-facility refinancing is ordinary short-term credit demand.
+        # The configured clearer therefore applies the normal bank-capacity,
+        # preference, borrower-capacity, and creditor-selection rules.
+        (
+            new_st_loans,
+            new_lt_loans,
+            new_cons_loans,
+            new_mort_loans,
+        ) = self.functions["clearing"].clear(
+            banks=banks,
+            firms=firms,
+            households=households,
+            current_npl_firm_loans=current_npl_firm_loans,
+            current_npl_hh_cons_loans=current_npl_hh_cons_loans,
+            current_npl_mortgages=current_npl_mortgages,
         )
-        competitive_ordinary_target_short_term_credit = np.maximum(
-            0.0, ordinary_target_short_term_credit - operating_refinance_target
-        )
-        firms.ts.override_current("target_short_term_credit", competitive_target_short_term_credit)
-        firms.ts.override_current(
-            "ordinary_target_short_term_credit",
-            competitive_ordinary_target_short_term_credit,
-        )
-        try:
-            (
-                new_st_loans,
-                new_lt_loans,
-                new_cons_loans,
-                new_mort_loans,
-            ) = self.functions["clearing"].clear(
-                banks=banks,
-                firms=firms,
-                households=households,
-                current_npl_firm_loans=current_npl_firm_loans,
-                current_npl_hh_cons_loans=current_npl_hh_cons_loans,
-                current_npl_mortgages=current_npl_mortgages,
-            )
-        finally:
-            firms.ts.override_current("target_short_term_credit", target_short_term_credit)
-            firms.ts.override_current("ordinary_target_short_term_credit", ordinary_target_short_term_credit)
-
-        total_st_principal = new_st_loans[0] + operating_refinance_loans[0]
-        new_st_loans[1] = np.divide(
-            new_st_loans[1] * new_st_loans[0]
-            + operating_refinance_loans[1] * operating_refinance_loans[0],
-            total_st_principal,
-            out=np.zeros_like(total_st_principal),
-            where=total_st_principal > 0.0,
-        )
-        new_st_loans[0] = total_st_principal
-        new_st_loans[2] += operating_refinance_loans[2]
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
@@ -1103,7 +1003,7 @@ class CreditMarket:
         )
         received_operating_refinance_credit = np.minimum(
             np.maximum(0.0, target_operating_refinance_credit),
-            converted_operating_refinance_credit,
+            received_ordinary_short_term_credit,
         )
         received_ordinary_short_term_credit = np.maximum(
             0.0,

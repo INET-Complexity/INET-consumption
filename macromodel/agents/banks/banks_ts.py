@@ -96,6 +96,8 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         #
         short_term_loans_to_firms=np.zeros(len(bank_data)),
         total_short_term_loans_to_firms=[0.0],
+        revolving_operating_facility_exposure=np.zeros(len(bank_data)),
+        total_revolving_operating_facility_exposure=[0.0],
         long_term_loans_to_firms=bank_data["Loans to Firms"].values,
         total_long_term_loans_to_firms=[bank_data["Loans to Firms"].values.sum()],
         consumption_loans_to_households=bank_data["Consumption Loans to Households"].values,
@@ -107,6 +109,8 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         + bank_data["Mortgages to Households"].values,
         #
         interest_received_on_loans=bank_data["Interest received from Loans"].values,
+        interest_received_on_revolving_operating_facility=np.zeros(len(bank_data)),
+        total_interest_received_on_revolving_operating_facility=[0.0],
         consumer_opening_interest_arrears_collected=np.zeros(len(bank_data)),
         consumer_interest_accrued=np.zeros(len(bank_data)),
         recognized_interest_received_on_loans=bank_data["Interest received from Loans"].values,
@@ -117,6 +121,8 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         total_firm_default_loan_writeoff=[0.0],
         firm_default_overdraft_writeoff=np.zeros(len(bank_data)),
         total_firm_default_overdraft_writeoff=[0.0],
+        firm_default_revolving_operating_facility_writeoff=np.zeros(len(bank_data)),
+        total_firm_default_revolving_operating_facility_writeoff=[0.0],
         firm_default_credit_loss=np.zeros(len(bank_data)),
         total_firm_default_credit_loss=[0.0],
         consumer_default_loan_writeoff=np.zeros(len(bank_data)),

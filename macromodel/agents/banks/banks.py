@@ -430,7 +430,11 @@ class Banks(Agent):
         self.ts.deposits_from_households.append(current_deposits_from_households)
         self.ts.total_deposits_from_households.append([current_deposits_from_households.sum()])
 
-    def update_loans(self, credit_market: CreditMarket) -> None:
+    def update_loans(
+        self,
+        credit_market: CreditMarket,
+        revolving_operating_facility_exposure: np.ndarray | None = None,
+    ) -> None:
         """Update loan balances.
 
         Records:
@@ -445,6 +449,13 @@ class Banks(Agent):
         """
         self.ts.short_term_loans_to_firms.append(credit_market.compute_outstanding_short_term_firm_loans_by_bank())
         self.ts.total_short_term_loans_to_firms.append([self.ts.current("short_term_loans_to_firms").sum()])
+        if revolving_operating_facility_exposure is None:
+            revolving_operating_facility_exposure = np.zeros(self.ts.current("n_banks"))
+        revolving_operating_facility_exposure = np.maximum(
+            0.0, np.asarray(revolving_operating_facility_exposure, dtype=float)
+        )
+        self.ts.revolving_operating_facility_exposure.append(revolving_operating_facility_exposure)
+        self.ts.total_revolving_operating_facility_exposure.append([revolving_operating_facility_exposure.sum()])
         self.ts.long_term_loans_to_firms.append(credit_market.compute_outstanding_long_term_firm_loans_by_bank())
         self.ts.total_long_term_loans_to_firms.append([self.ts.current("long_term_loans_to_firms").sum()])
         self.ts.consumption_loans_to_households.append(
@@ -453,7 +464,9 @@ class Banks(Agent):
         self.ts.total_consumption_loans_to_households.append([self.ts.current("consumption_loans_to_households").sum()])
         self.ts.mortgages_to_households.append(credit_market.compute_outstanding_mortgages_by_bank())
         self.ts.total_mortgages_to_households.append([self.ts.current("mortgages_to_households").sum()])
-        self.ts.total_outstanding_loans.append(credit_market.compute_outstanding_loans_by_bank())
+        self.ts.total_outstanding_loans.append(
+            credit_market.compute_outstanding_loans_by_bank() + revolving_operating_facility_exposure
+        )
 
     def compute_market_share(self) -> np.ndarray:
         """Calculate market share of each bank.

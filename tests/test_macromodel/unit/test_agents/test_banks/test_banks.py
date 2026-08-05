@@ -29,14 +29,17 @@ class TestBanks:
             "deposits_from_households",
             "short_term_loans_to_firms",
             "long_term_loans_to_firms",
+            "revolving_operating_facility_exposure",
             "consumption_loans_to_households",
             "mortgages_to_households",
             "total_outstanding_loans",
             "interest_received_on_loans",
+            "interest_received_on_revolving_operating_facility",
             "interest_received_on_deposits",
             "interest_received",
             "firm_default_loan_writeoff",
             "firm_default_overdraft_writeoff",
+            "firm_default_revolving_operating_facility_writeoff",
             "firm_default_credit_loss",
             "interest_rates_on_short_term_firm_loans",
             "interest_rates_on_long_term_firm_loans",
@@ -50,6 +53,25 @@ class TestBanks:
         ]
 
         assert set(ts_keys).issubset(set(test_banks.ts.get_keys()))
+
+    def test__update_loans_includes_revolving_operating_facility_exposure(self, test_banks, test_credit_market):
+        n_banks = test_banks.ts.current("n_banks")
+        facility_exposure = np.arange(1.0, n_banks + 1.0)
+        cohort_loans = test_credit_market.compute_outstanding_loans_by_bank()
+
+        test_banks.update_loans(
+            credit_market=test_credit_market,
+            revolving_operating_facility_exposure=facility_exposure,
+        )
+
+        np.testing.assert_allclose(
+            test_banks.ts.current("revolving_operating_facility_exposure"),
+            facility_exposure,
+        )
+        np.testing.assert_allclose(
+            test_banks.ts.current("total_outstanding_loans"),
+            cohort_loans + facility_exposure,
+        )
 
     def test__compute_profits_subtracts_firm_default_credit_loss(self, test_banks):
         n_banks = test_banks.ts.current("n_banks")

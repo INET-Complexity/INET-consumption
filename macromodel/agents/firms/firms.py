@@ -2605,6 +2605,8 @@ class Firms(Agent):
 
     def revise_activity_against_realised_labour(self, expected_lcu_prices: np.ndarray) -> None:
         """Revise current activity plans after labour clearing with effective labour inputs."""
+        post_credit_intermediate = self.ts.current("target_intermediate_inputs").copy()
+        post_credit_capital = self.ts.current("target_capital_inputs").copy()
         feasible_y = np.maximum(
             0.0,
             np.nan_to_num(self.ts.current("activity_finance_feasible_target_production"), nan=0.0),
@@ -2619,13 +2621,20 @@ class Firms(Agent):
             feasible_labour=feasible_labour,
             realised_labour=realised_labour,
         )
-        candidate_intermediate, candidate_capital, _, _ = self._activity_finance_candidate_inputs(
+        candidate_intermediate, _, _, _ = self._activity_finance_candidate_inputs(
             realised_feasible_y,
             expected_lcu_prices,
         )
+        labour_rationed = labour_scale < 1.0
+        realised_feasible_intermediate = post_credit_intermediate.copy()
+        realised_feasible_intermediate[labour_rationed] = np.minimum(
+            candidate_intermediate[labour_rationed],
+            post_credit_intermediate[labour_rationed],
+        )
+        realised_feasible_capital = post_credit_capital * labour_scale[:, None]
 
-        self.ts.override_current("target_intermediate_inputs", candidate_intermediate)
-        self.ts.override_current("target_capital_inputs", candidate_capital)
+        self.ts.override_current("target_intermediate_inputs", realised_feasible_intermediate)
+        self.ts.override_current("target_capital_inputs", realised_feasible_capital)
         self.ts.override_current(
             "planned_productivity_investment",
             self.ts.current("planned_tfp_investment") + self.ts.current("planned_technical_investment").sum(axis=1),
@@ -2633,8 +2642,8 @@ class Firms(Agent):
 
         self.ts.activity_finance_realised_feasible_target_production.append(realised_feasible_y)
         self.ts.activity_finance_realised_labour_scale.append(labour_scale)
-        self.ts.activity_finance_realised_feasible_intermediate_inputs.append(candidate_intermediate.copy())
-        self.ts.activity_finance_realised_feasible_capital_inputs.append(candidate_capital.copy())
+        self.ts.activity_finance_realised_feasible_intermediate_inputs.append(realised_feasible_intermediate.copy())
+        self.ts.activity_finance_realised_feasible_capital_inputs.append(realised_feasible_capital.copy())
         self.ts.activity_finance_realised_feasible_technical_investment.append(
             self.ts.current("planned_technical_investment").copy()
         )

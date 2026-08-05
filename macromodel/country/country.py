@@ -1400,6 +1400,9 @@ class Country:
         Updates loan demands and interest rates before market clearing.
         """
         self.banks.set_interest_rates(central_bank_policy_rate=self.central_bank.ts.current("policy_rate")[0])
+        self.firms.prepare_operating_revolving_facility_interest(
+            short_term_firm_loan_rates=self.banks.ts.current("interest_rates_on_short_term_firm_loans"),
+        )
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             individual_wages=self.individuals.ts.current("employee_income"),
@@ -1420,7 +1423,9 @@ class Country:
             wage_obligation_preview=firm_wage_obligation_preview,
             production_tax_obligation_preview=firm_production_tax_obligation_preview,
             interest_obligation_preview=(
-                scheduled_firm_installment_preview["scheduled_interest_due"] + firm_interest_on_deposits_preview
+                scheduled_firm_installment_preview["scheduled_interest_due"]
+                + firm_interest_on_deposits_preview
+                + self.firms.ts.current("operating_revolving_interest_paid")
             ),
             loan_interest_obligation_preview=scheduled_firm_installment_preview["scheduled_interest_due"],
             debt_installment_preview=scheduled_firm_installment_preview["scheduled_principal_due"],
@@ -1706,7 +1711,7 @@ class Country:
         """Revise firm activity after credit clears and before labour clearing."""
         if self.configuration.households.parameters.uses_feasibility_resolver:
             self.households.current_post_grant_residual_shortfall()
-        n_firms = self.firms.ts.current("n_firms")
+        self.firms.begin_operating_revolving_facility_period()
         firm_wage_obligation_preview = self.firms.compute_total_wage_obligation(
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             individual_wages=self.individuals.ts.current("employee_income"),
@@ -1715,18 +1720,23 @@ class Country:
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
         )
-        firm_interest_obligation_preview = self.firms.ts.current(
-            "firm_settlement_scheduled_interest_due"
-        ) + self.firms.compute_interest_paid_on_deposits(
-            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
-            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        firm_interest_obligation_preview = (
+            self.firms.ts.current("firm_settlement_scheduled_interest_due")
+            + self.firms.compute_interest_paid_on_deposits(
+                bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+                bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+            )
+            + self.firms.ts.current("operating_revolving_interest_paid")
         )
         self.firms.prepare_feasible_activity_plan(
             previous_good_prices=self.economy.ts.current("good_prices"),
             expected_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
             wage_obligation_preview=firm_wage_obligation_preview,
-            production_tax_obligation_preview=np.zeros(n_firms),
-            corporate_tax_obligation_preview=np.zeros(n_firms),
+            production_tax_obligation_preview=self.compute_pre_credit_production_tax_obligation_preview(),
+            corporate_tax_obligation_preview=self.firms.estimate_corporate_tax_obligation(
+                estimated_growth=self.economy.ts.current("estimated_growth")[0],
+                estimated_inflation=self.economy.ts.current("estimated_ppi_inflation")[0],
+            ),
             interest_obligation_preview=firm_interest_obligation_preview,
             loan_interest_obligation_preview=self.firms.ts.current("firm_settlement_scheduled_interest_due"),
             debt_installment_preview=self.firms.ts.current("firm_settlement_scheduled_principal_due"),
@@ -2536,10 +2546,33 @@ class Country:
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
         )
         firm_corporate_tax_obligation_preview = self.current_firm_corporate_tax_obligation_preview()
+        self.firms.draw_operating_revolving_facility(
+            intermediate_purchases=self.firms.ts.current("total_intermediate_inputs_bought_costs"),
+            taxes_paid_on_production=current_taxes_paid_on_production,
+            non_loan_interest_paid=(
+                firm_interest_paid_on_deposits + self.firms.ts.current("operating_revolving_interest_paid")
+            ),
+            corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
+        )
         firm_debt_settlement = self.firms.plan_firm_debt_settlement(
             taxes_paid_on_production=current_taxes_paid_on_production,
-            interest_paid_on_deposits=firm_interest_paid_on_deposits,
+            interest_paid_on_deposits=(
+                firm_interest_paid_on_deposits + self.firms.ts.current("operating_revolving_interest_paid")
+            ),
             corporate_tax_obligation_preview=firm_corporate_tax_obligation_preview,
+        )
+        cash_available_after_debt_service = (
+            firm_debt_settlement["cash_after_tax_reserve"]
+            + firm_debt_settlement["overdraft_refinance_used"]
+            + np.maximum(
+                0.0,
+                np.nan_to_num(self.firms.ts.current("received_debt_rollover_credit"), nan=0.0),
+            )
+            - firm_debt_settlement["payable_interest"]
+            - firm_debt_settlement["payable_principal"]
+        )
+        self.firms.settle_operating_revolving_facility(
+            cash_available_after_debt_service=cash_available_after_debt_service,
         )
         self.firms.ts.debt_installments.append(
             self.credit_market.settle_firm_installments(
@@ -2555,7 +2588,18 @@ class Country:
         self.firms.ts.interest_paid_on_deposits.append(firm_interest_paid_on_deposits)
         self.firms.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_firm())
         self.firms.ts.interest_paid.append(self.firms.compute_interest_paid())
-        self.banks.ts.interest_received_on_loans.append(self.credit_market.compute_interest_received_by_bank())
+        operating_revolving_interest_by_bank = np.bincount(
+            self.firms.states["Corresponding Bank ID"],
+            weights=self.firms.ts.current("operating_revolving_interest_paid"),
+            minlength=self.banks.ts.current("n_banks"),
+        )
+        self.banks.ts.interest_received_on_revolving_operating_facility.append(operating_revolving_interest_by_bank)
+        self.banks.ts.total_interest_received_on_revolving_operating_facility.append(
+            [operating_revolving_interest_by_bank.sum()]
+        )
+        self.banks.ts.interest_received_on_loans.append(
+            self.credit_market.compute_interest_received_by_bank() + operating_revolving_interest_by_bank
+        )
         self.banks.ts.consumer_opening_interest_arrears_collected.append(
             self.credit_market.compute_consumer_opening_interest_arrears_collected_by_bank()
         )
@@ -2610,6 +2654,12 @@ class Country:
         self.banks.ts.firm_default_overdraft_writeoff.append(firm_insolvency_result.overdraft_writeoff_by_bank)
         self.banks.ts.total_firm_default_overdraft_writeoff.append(
             [firm_insolvency_result.overdraft_writeoff_by_bank.sum()]
+        )
+        self.banks.ts.firm_default_revolving_operating_facility_writeoff.append(
+            firm_insolvency_result.revolving_operating_facility_writeoff_by_bank
+        )
+        self.banks.ts.total_firm_default_revolving_operating_facility_writeoff.append(
+            [firm_insolvency_result.revolving_operating_facility_writeoff_by_bank.sum()]
         )
         self.banks.ts.firm_default_credit_loss.append(firm_insolvency_result.credit_loss_by_bank)
         self.banks.ts.total_firm_default_credit_loss.append([firm_insolvency_result.credit_loss_by_bank.sum()])
@@ -2806,7 +2856,14 @@ class Country:
             firm_corresponding_bank=self.firms.states["Corresponding Bank ID"],
             households_corresponding_bank=self.households.states["Corresponding Bank ID"],
         )
-        self.banks.update_loans(credit_market=self.credit_market)
+        self.banks.update_loans(
+            credit_market=self.credit_market,
+            revolving_operating_facility_exposure=np.bincount(
+                self.firms.states["Corresponding Bank ID"],
+                weights=self.firms.ts.current("operating_revolving_closing_balance"),
+                minlength=self.banks.ts.current("n_banks"),
+            ),
+        )
 
         self.banks.ts.market_share.append(self.banks.compute_market_share())
         self.banks.ts.market_share_histogram.append(get_histogram(self.banks.ts.current("market_share"), None))

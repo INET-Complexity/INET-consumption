@@ -907,6 +907,7 @@ class CreditMarket:
         target_short_term_credit = firms.ts.current("target_short_term_credit")
         target_debt_rollover_credit = firms.ts.current("target_debt_rollover_credit")
         target_overdraft_refinance_credit = firms.ts.current("target_overdraft_refinance_credit")
+        target_operating_refinance_credit = firms.ts.current("target_operating_refinance_credit")
         ordinary_target_short_term_credit = _ordinary_short_term_target_for_cap_split(
             target_short_term_credit=target_short_term_credit,
             ordinary_target_short_term_credit=firms.ts.current("ordinary_target_short_term_credit"),
@@ -932,7 +933,9 @@ class CreditMarket:
             total_ordinary_target_short_term_credit=total_ordinary_target_short_term_credit,
         )
 
-        # Clear the credit market
+        # Operating-facility refinancing is ordinary short-term credit demand.
+        # The configured clearer therefore applies the normal bank-capacity,
+        # preference, borrower-capacity, and creditor-selection rules.
         (
             new_st_loans,
             new_lt_loans,
@@ -998,10 +1001,20 @@ class CreditMarket:
             - received_debt_rollover_credit
             - received_overdraft_refinance_credit,
         )
+        received_operating_refinance_credit = np.minimum(
+            np.maximum(0.0, target_operating_refinance_credit),
+            received_ordinary_short_term_credit,
+        )
+        received_ordinary_short_term_credit = np.maximum(
+            0.0,
+            received_ordinary_short_term_credit - received_operating_refinance_credit,
+        )
         firms.ts.received_debt_rollover_credit.append(received_debt_rollover_credit)
         firms.ts.total_received_debt_rollover_credit.append([received_debt_rollover_credit.sum()])
         firms.ts.received_overdraft_refinance_credit.append(received_overdraft_refinance_credit)
         firms.ts.total_received_overdraft_refinance_credit.append([received_overdraft_refinance_credit.sum()])
+        firms.ts.received_operating_refinance_credit.append(received_operating_refinance_credit)
+        firms.ts.total_received_operating_refinance_credit.append([received_operating_refinance_credit.sum()])
         firms.ts.received_ordinary_short_term_credit.append(received_ordinary_short_term_credit)
         firms.ts.total_received_ordinary_short_term_credit.append([received_ordinary_short_term_credit.sum()])
         firms.ts.received_long_term_credit.append(new_lt_loans[0].sum(axis=0))

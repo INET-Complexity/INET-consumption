@@ -24,6 +24,7 @@ class FirmInsolvencyResult:
     default_flag: np.ndarray
     loan_writeoff_by_bank: np.ndarray
     overdraft_writeoff_by_bank: np.ndarray
+    revolving_operating_facility_writeoff_by_bank: np.ndarray
     credit_loss_by_bank: np.ndarray
 
 
@@ -1527,12 +1528,14 @@ class Firms(Agent):
           loan interest plus principal service that expected liquidity cannot cover.
         - `target_overdraft_refinance_credit`: the part needed to repair existing
           negative deposits after hard obligations and expected sales are budgeted.
-        - `ordinary_target_short_term_credit`: the remaining short-term request for
-          ordinary working-capital activity.
+        - `target_operating_refinance_credit`: an unpaid balance from the previous
+          period's operating revolving facility, refinanced through normal
+          short-term clearing.
 
-        The split is used by the credit market so scheduled debt-service rollover
-        and emergency overdraft refinance cannot determine the ordinary
-        short-term/long-term firm lending cap split.
+        Operating needs are financed during the period by the separate revolving
+        facility. Residual deposits after operating commitments fund capital first
+        and then productivity investment; their remaining gaps request long-term
+        credit.
 
         Args:
             estimated_growth (float): Expected real growth rate
@@ -1588,25 +1591,9 @@ class Firms(Agent):
         )
         intermediate_costs = self.ts.current("unconstrained_target_intermediate_inputs_costs")
         capital_costs = self.ts.current("unconstrained_target_capital_inputs_costs")
-        working_capital_budget = intermediate_costs + planned_tfp_investment_costs
-        investment_budget = capital_costs + planned_technical_investment_costs
-        ordinary_target_short_term_credit, target_long_term_credit = self.functions[
-            "target_credit"
-        ].compute_target_credit(
-            internal_cash=internal_cash,
-            existing_overdraft=existing_overdraft,
-            expected_sales=expected_sales,
-            hard_obligations=hard_obligations,
-            unconstrained_target_intermediate_inputs_costs=intermediate_costs,
-            unconstrained_target_capital_inputs_costs=capital_costs,
-            planned_technical_investment_costs=planned_technical_investment_costs,
-            planned_tfp_investment_costs=planned_tfp_investment_costs,
-        )
+        working_capital_budget = intermediate_costs
+        investment_budget = capital_costs + planned_technical_investment_costs + planned_tfp_investment_costs
         cash_after_hard_obligations = internal_cash - hard_obligations
-        non_debt_service_hard_obligation_shortfall = np.maximum(
-            0.0,
-            non_debt_service_hard_obligations - internal_cash,
-        )
         cash_after_non_debt_service_hard_obligations = internal_cash - non_debt_service_hard_obligations
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft
         remaining_internal_finance_after_working_capital = available_after_hard_and_overdraft - working_capital_budget
@@ -1618,11 +1605,23 @@ class Firms(Agent):
             0.0,
             existing_overdraft - np.maximum(0.0, cash_after_hard_obligations),
         )
-        ordinary_target_short_term_credit = np.maximum(
+        target_operating_refinance_credit = np.maximum(
             0.0,
-            ordinary_target_short_term_credit + non_debt_service_hard_obligation_shortfall,
+            np.asarray(self.ts.current("operating_revolving_closing_balance"), dtype=float),
         )
-        target_long_term_credit = np.maximum(0.0, target_long_term_credit)
+        ordinary_target_short_term_credit = target_operating_refinance_credit.copy()
+        residual_internal_funds = np.maximum(
+            0.0,
+            internal_cash - hard_obligations - existing_overdraft - working_capital_budget,
+        )
+        capital_internal_funds = np.minimum(residual_internal_funds, capital_costs)
+        residual_internal_funds -= capital_internal_funds
+        productivity_costs = planned_technical_investment_costs + planned_tfp_investment_costs
+        productivity_internal_funds = np.minimum(residual_internal_funds, productivity_costs)
+        target_long_term_credit = np.maximum(
+            0.0,
+            (capital_costs - capital_internal_funds) + (productivity_costs - productivity_internal_funds),
+        )
         target_short_term_credit = (
             target_debt_rollover_credit + target_overdraft_refinance_credit + ordinary_target_short_term_credit
         )
@@ -1652,6 +1651,8 @@ class Firms(Agent):
         self.ts.total_target_debt_rollover_credit.append([target_debt_rollover_credit.sum()])
         self.ts.target_overdraft_refinance_credit.append(target_overdraft_refinance_credit)
         self.ts.total_target_overdraft_refinance_credit.append([target_overdraft_refinance_credit.sum()])
+        self.ts.target_operating_refinance_credit.append(target_operating_refinance_credit)
+        self.ts.total_target_operating_refinance_credit.append([target_operating_refinance_credit.sum()])
         self.ts.ordinary_target_short_term_credit.append(ordinary_target_short_term_credit)
         self.ts.total_ordinary_target_short_term_credit.append([ordinary_target_short_term_credit.sum()])
         self.ts.target_long_term_credit.append(target_long_term_credit)
@@ -1718,16 +1719,91 @@ class Firms(Agent):
             np.asarray(self.ts.current("received_overdraft_refinance_credit"), dtype=float),
             nan=0.0,
         )
+        received_operating_refinance_credit = np.nan_to_num(
+            np.asarray(self.ts.current("received_operating_refinance_credit"), dtype=float),
+            nan=0.0,
+        )
         if (
             float(np.nansum(ordinary_credit)) == 0.0
             and float(np.nansum(received_debt_rollover_credit)) == 0.0
             and float(np.nansum(received_overdraft_refinance_credit)) == 0.0
+            and float(np.nansum(received_operating_refinance_credit)) == 0.0
         ):
             ordinary_credit = np.nan_to_num(
                 np.asarray(self.ts.current("received_short_term_credit"), dtype=float),
                 nan=0.0,
             )
         return np.maximum(0.0, ordinary_credit)
+
+    def prepare_operating_revolving_facility_interest(
+        self,
+        short_term_firm_loan_rates: np.ndarray,
+    ) -> None:
+        """Record the current-period interest due on the opening facility exposure."""
+        opening_balance = np.maximum(0.0, self.ts.current("operating_revolving_closing_balance"))
+        rates = np.asarray(short_term_firm_loan_rates, dtype=float)[self.states["Corresponding Bank ID"]]
+        rates = np.maximum(0.0, np.nan_to_num(rates, nan=0.0))
+        self.ts.operating_revolving_interest_base.append(opening_balance)
+        self.ts.operating_revolving_rate.append(rates)
+        self.ts.operating_revolving_interest_paid.append(opening_balance * rates)
+
+    def begin_operating_revolving_facility_period(self) -> None:
+        """Apply cleared ST refinancing to the carried facility before new operating draws."""
+        carried_balance = np.maximum(0.0, self.ts.current("operating_revolving_closing_balance"))
+        received_refinance = np.maximum(
+            0.0,
+            np.nan_to_num(self.ts.current("received_operating_refinance_credit"), nan=0.0),
+        )
+        converted_principal = np.minimum(carried_balance, received_refinance)
+        self.ts.operating_revolving_opening_balance.append(np.maximum(0.0, carried_balance - converted_principal))
+
+    def draw_operating_revolving_facility(
+        self,
+        intermediate_purchases: np.ndarray,
+        taxes_paid_on_production: np.ndarray,
+        non_loan_interest_paid: np.ndarray,
+        corporate_tax_obligation_preview: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Draw the separate operating revolving facility for operating commitments."""
+        opening_balance = np.maximum(0.0, self.ts.current("operating_revolving_opening_balance"))
+        positive_deposits = np.maximum(0.0, self.ts.current("deposits"))
+        intermediate_purchases = np.maximum(0.0, np.asarray(intermediate_purchases, dtype=float))
+        operating_commitments = (
+            self.ts.current("total_wage")
+            + intermediate_purchases
+            + taxes_paid_on_production
+            + np.maximum(0.0, corporate_tax_obligation_preview)
+            + np.maximum(0.0, non_loan_interest_paid)
+        )
+        current_draw = np.maximum(0.0, operating_commitments - positive_deposits)
+        self.ts.operating_revolving_current_draw.append(current_draw)
+        return {
+            "opening_balance": opening_balance,
+            "current_draw": current_draw,
+        }
+
+    def settle_operating_revolving_facility(
+        self,
+        cash_available_after_debt_service: np.ndarray,
+    ) -> dict[str, np.ndarray]:
+        """Repay the facility only from cash left by authoritative debt settlement."""
+        opening_balance = np.maximum(0.0, self.ts.current("operating_revolving_opening_balance"))
+        current_draw = np.maximum(0.0, self.ts.current("operating_revolving_current_draw"))
+        cash_available_after_debt_service = np.asarray(cash_available_after_debt_service, dtype=float)
+        repayment = np.minimum(
+            opening_balance + current_draw,
+            np.maximum(0.0, cash_available_after_debt_service),
+        )
+        closing_balance = np.maximum(0.0, opening_balance + current_draw - repayment)
+        self.ts.operating_revolving_repayment.append(repayment)
+        self.ts.operating_revolving_closing_balance.append(closing_balance)
+        return {
+            "opening_balance": opening_balance,
+            "current_draw": current_draw,
+            "repayment": repayment,
+            "closing_balance": closing_balance,
+            "cash_available_after_debt_service": cash_available_after_debt_service,
+        }
 
     def begin_firm_debt_settlement(
         self,
@@ -1806,11 +1882,12 @@ class Firms(Agent):
             0.0,
             np.nan_to_num(self.ts.current("received_overdraft_refinance_credit"), nan=0.0),
         )
-        ordinary_short_term_credit = self._current_received_ordinary_short_term_credit()
+        spendable_ordinary_short_term_credit = self._current_received_ordinary_short_term_credit()
         available_cash_before_debt_service = (
             self.ts.current("deposits")
             + self.ts.current("nominal_amount_sold_in_lcu")
-            + ordinary_short_term_credit
+            + spendable_ordinary_short_term_credit
+            + self.ts.current("operating_revolving_current_draw")
             + np.nan_to_num(self.ts.current("received_long_term_credit"), nan=0.0)
             - self.ts.current("total_wage")
             - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
@@ -1950,6 +2027,15 @@ class Firms(Agent):
         taxes_paid_on_production = np.nan_to_num(np.asarray(self.ts.current("taxes_paid_on_production"), dtype=float))
         corporate_taxes_paid = np.nan_to_num(np.asarray(self.ts.current("corporate_taxes_paid"), dtype=float))
         interest_paid = np.nan_to_num(np.asarray(self.ts.current("interest_paid"), dtype=float))
+        operating_revolving_current_draw = np.nan_to_num(
+            np.asarray(self.ts.current("operating_revolving_current_draw"), dtype=float)
+        )
+        received_operating_refinance_credit = np.nan_to_num(
+            np.asarray(self.ts.current("received_operating_refinance_credit"), dtype=float)
+        )
+        operating_revolving_repayment = np.nan_to_num(
+            np.asarray(self.ts.current("operating_revolving_repayment"), dtype=float)
+        )
 
         expected_closing_deposits = (
             opening_deposits
@@ -1961,6 +2047,9 @@ class Firms(Agent):
             - taxes_paid_on_production
             - corporate_taxes_paid
             - interest_paid
+            + operating_revolving_current_draw
+            - received_operating_refinance_credit
+            - operating_revolving_repayment
             - debt_installments
         )
         transaction_flow_residual = expected_closing_deposits - closing_deposits
@@ -1976,6 +2065,9 @@ class Firms(Agent):
                 np.abs(taxes_paid_on_production),
                 np.abs(corporate_taxes_paid),
                 np.abs(interest_paid),
+                np.abs(operating_revolving_current_draw),
+                np.abs(received_operating_refinance_credit),
+                np.abs(operating_revolving_repayment),
                 np.abs(debt_installments),
                 np.abs(closing_deposits),
             ]
@@ -1990,6 +2082,9 @@ class Firms(Agent):
             + capital
             + closing_deposits
             - np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))
+            - np.maximum(
+                0.0, np.nan_to_num(np.asarray(self.ts.current("operating_revolving_closing_balance"), dtype=float))
+            )
         )
         balance_sheet_residual = expected_equity - np.nan_to_num(np.asarray(self.ts.current("equity"), dtype=float))
 
@@ -2002,6 +2097,12 @@ class Firms(Agent):
                 np.abs(capital),
                 np.abs(closing_deposits),
                 np.abs(np.nan_to_num(np.asarray(self.ts.current("debt"), dtype=float))),
+                np.abs(
+                    np.maximum(
+                        0.0,
+                        np.nan_to_num(np.asarray(self.ts.current("operating_revolving_closing_balance"), dtype=float)),
+                    )
+                ),
             ]
         )
 
@@ -2097,7 +2198,11 @@ class Firms(Agent):
         return self.ts.current("short_term_loan_debt") + self.ts.current("long_term_loan_debt")
 
     def compute_total_credit_exposure(self) -> np.ndarray:
-        return self.compute_debt() + np.maximum(0.0, -self.ts.current("deposits"))
+        return (
+            self.compute_debt()
+            + np.maximum(0.0, self.ts.current("operating_revolving_closing_balance"))
+            + np.maximum(0.0, -self.ts.current("deposits"))
+        )
 
     def compute_interest_paid_on_deposits(
         self,
@@ -2121,7 +2226,11 @@ class Firms(Agent):
         Returns:
             np.ndarray: Total interest paid by each firm
         """
-        return self.ts.current("interest_paid_on_loans") + self.ts.current("interest_paid_on_deposits")
+        return (
+            self.ts.current("interest_paid_on_loans")
+            + self.ts.current("interest_paid_on_deposits")
+            + self.ts.current("operating_revolving_interest_paid")
+        )
 
     def compute_offered_price(self) -> np.ndarray:
         """Calculate offered prices by industry.
@@ -2372,10 +2481,6 @@ class Firms(Agent):
         planned_capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
         planned_technical_costs = planned_technical.sum(axis=1)
         planned_tfp_costs = planned_tfp.copy()
-        total_planned_costs = (
-            planned_intermediate_costs + planned_capital_costs + planned_technical_costs + planned_tfp_costs
-        )
-
         if mode == "none":
             self._append_activity_finance_diagnostics(
                 activity_finance_opening_deposits=self.ts.current("deposits"),
@@ -2406,124 +2511,53 @@ class Firms(Agent):
             )
 
         opening_deposits = self.ts.current("deposits").copy()
-        hard_obligations = non_loan_interest_obligation_preview + unfunded_loan_debt_service
-        available_finance = np.maximum(
+        operating_commitments = (
+            wage_obligation_preview
+            + planned_intermediate_costs
+            + production_tax_obligation_preview
+            + corporate_tax_obligation_preview
+            + non_loan_interest_obligation_preview
+        )
+        hard_obligations = operating_commitments + unfunded_loan_debt_service
+        available_internal_finance = np.maximum(0.0, opening_deposits - hard_obligations)
+        available_finance = available_internal_finance + np.maximum(
             0.0,
-            opening_deposits
-            + self._current_received_ordinary_short_term_credit()
-            + np.nan_to_num(self.ts.current("received_long_term_credit"), nan=0.0)
-            - hard_obligations,
+            np.nan_to_num(self.ts.current("received_long_term_credit"), nan=0.0),
         )
         y_high = np.maximum(0.0, np.nan_to_num(self.ts.current("target_production"), nan=0.0))
         tfp_for_labour = self._activity_finance_tfp_for_feasible_labour()
-        wage_cost_rate = self._activity_finance_wage_cost_rate(wage_obligation_preview)
         full_bound_labour = self._activity_finance_feasible_labour(y_high, tfp_for_labour)
-        full_bound_wage_costs = wage_cost_rate * full_bound_labour
-        full_bound_costs = full_bound_wage_costs + total_planned_costs
-        finance_gap = np.maximum(0.0, full_bound_costs - available_finance)
-
-        constrained = full_bound_costs > available_finance + 1e-8
         feasible_y = y_high.copy()
         feasible_labour = full_bound_labour.copy()
         feasible_intermediate = target_intermediate.copy()
-        feasible_capital = target_capital.copy()
         feasible_intermediate_costs = planned_intermediate_costs.copy()
-        feasible_capital_costs = planned_capital_costs.copy()
-        feasible_technical = planned_technical.copy()
-        feasible_technical_costs = planned_technical_costs.copy()
-        feasible_tfp = planned_tfp.copy()
-        feasible_tfp_costs = planned_tfp_costs.copy()
-
-        if np.any(constrained):
-            tfp_ratio, technical_ratio = self._activity_finance_investment_ratios(
-                planned_tfp_costs=planned_tfp_costs,
-                planned_technical_costs=planned_technical_costs,
-                planned_intermediate_costs=planned_intermediate_costs,
-            )
-            low = np.zeros(n_firms)
-            high = y_high.copy()
-            for _ in range(25):
-                candidate = 0.5 * (low + high)
-                _, _, candidate_intermediate_costs, candidate_capital_costs = self._activity_finance_candidate_inputs(
-                    candidate,
-                    expected_lcu_prices,
-                )
-                candidate_labour = self._activity_finance_feasible_labour(candidate, tfp_for_labour)
-                candidate_costs = (
-                    wage_cost_rate * candidate_labour
-                    + (1.0 + tfp_ratio + technical_ratio) * candidate_intermediate_costs
-                    + candidate_capital_costs
-                )
-                candidate_feasible = candidate_costs <= available_finance + 1e-8
-                update_low = constrained & candidate_feasible
-                update_high = constrained & ~candidate_feasible
-                low = np.where(update_low, candidate, low)
-                high = np.where(update_high, candidate, high)
-
-            (
-                candidate_intermediate,
-                candidate_capital,
-                candidate_intermediate_costs,
-                candidate_capital_costs,
-            ) = self._activity_finance_candidate_inputs(low, expected_lcu_prices)
-            candidate_labour = self._activity_finance_feasible_labour(low, tfp_for_labour)
-            candidate_tfp = tfp_ratio * candidate_intermediate_costs
-            candidate_technical_costs = technical_ratio * candidate_intermediate_costs
-            candidate_technical_scale = np.divide(
-                candidate_technical_costs,
-                planned_technical_costs,
-                out=np.zeros_like(planned_technical_costs),
-                where=planned_technical_costs > 0.0,
-            )
-            candidate_technical = planned_technical * candidate_technical_scale[:, None]
-
-            feasible_y = np.where(constrained, low, feasible_y)
-            feasible_labour = np.where(constrained, candidate_labour, feasible_labour)
-            feasible_intermediate = np.where(constrained[:, None], candidate_intermediate, feasible_intermediate)
-            feasible_capital = np.where(constrained[:, None], candidate_capital, feasible_capital)
-            feasible_intermediate_costs = np.where(
-                constrained,
-                candidate_intermediate_costs,
-                feasible_intermediate_costs,
-            )
-            feasible_capital_costs = np.where(constrained, candidate_capital_costs, feasible_capital_costs)
-            feasible_technical = np.where(constrained[:, None], candidate_technical, feasible_technical)
-            feasible_technical_costs = np.where(constrained, candidate_technical_costs, feasible_technical_costs)
-            feasible_tfp = np.where(constrained, candidate_tfp, feasible_tfp)
-            feasible_tfp_costs = feasible_tfp.copy()
-
-        feasible_activity_costs = (
-            wage_cost_rate * feasible_labour
-            + feasible_intermediate_costs
-            + feasible_capital_costs
-            + feasible_technical_costs
-            + feasible_tfp_costs
-        )
-        feasibility_residual = available_finance - feasible_activity_costs
-        intermediate_scale = np.divide(
-            feasible_intermediate_costs,
-            planned_intermediate_costs,
-            out=np.ones_like(planned_intermediate_costs),
-            where=planned_intermediate_costs > 0.0,
-        )
         capital_scale = np.divide(
-            feasible_capital_costs,
+            np.minimum(available_finance, planned_capital_costs),
             planned_capital_costs,
             out=np.ones_like(planned_capital_costs),
             where=planned_capital_costs > 0.0,
         )
-        technical_scale = np.divide(
-            feasible_technical_costs,
-            planned_technical_costs,
-            out=np.ones_like(planned_technical_costs),
-            where=planned_technical_costs > 0.0,
+        feasible_capital = target_capital * capital_scale[:, None]
+        feasible_capital_costs = planned_capital_costs * capital_scale
+        residual_investment_finance = np.maximum(0.0, available_finance - feasible_capital_costs)
+        planned_productivity_costs = planned_technical_costs + planned_tfp_costs
+        productivity_scale = np.divide(
+            np.minimum(residual_investment_finance, planned_productivity_costs),
+            planned_productivity_costs,
+            out=np.ones_like(planned_productivity_costs),
+            where=planned_productivity_costs > 0.0,
         )
-        tfp_scale = np.divide(
-            feasible_tfp_costs,
-            planned_tfp_costs,
-            out=np.ones_like(planned_tfp_costs),
-            where=planned_tfp_costs > 0.0,
+        feasible_technical = planned_technical * productivity_scale[:, None]
+        feasible_technical_costs = planned_technical_costs * productivity_scale
+        feasible_tfp = planned_tfp * productivity_scale
+        feasible_tfp_costs = planned_tfp_costs * productivity_scale
+        finance_gap = np.maximum(0.0, planned_capital_costs + planned_productivity_costs - available_finance)
+        feasibility_residual = available_finance - (
+            feasible_capital_costs + feasible_technical_costs + feasible_tfp_costs
         )
+        intermediate_scale = np.ones(n_firms)
+        technical_scale = productivity_scale
+        tfp_scale = productivity_scale
 
         self.ts.override_current("target_intermediate_inputs", feasible_intermediate)
         self.ts.override_current("target_capital_inputs", feasible_capital)
@@ -2571,6 +2605,8 @@ class Firms(Agent):
 
     def revise_activity_against_realised_labour(self, expected_lcu_prices: np.ndarray) -> None:
         """Revise current activity plans after labour clearing with effective labour inputs."""
+        post_credit_intermediate = self.ts.current("target_intermediate_inputs").copy()
+        post_credit_capital = self.ts.current("target_capital_inputs").copy()
         feasible_y = np.maximum(
             0.0,
             np.nan_to_num(self.ts.current("activity_finance_feasible_target_production"), nan=0.0),
@@ -2585,13 +2621,20 @@ class Firms(Agent):
             feasible_labour=feasible_labour,
             realised_labour=realised_labour,
         )
-        candidate_intermediate, candidate_capital, _, _ = self._activity_finance_candidate_inputs(
+        candidate_intermediate, _, _, _ = self._activity_finance_candidate_inputs(
             realised_feasible_y,
             expected_lcu_prices,
         )
+        labour_rationed = labour_scale < 1.0
+        realised_feasible_intermediate = post_credit_intermediate.copy()
+        realised_feasible_intermediate[labour_rationed] = np.minimum(
+            candidate_intermediate[labour_rationed],
+            post_credit_intermediate[labour_rationed],
+        )
+        realised_feasible_capital = post_credit_capital * labour_scale[:, None]
 
-        self.ts.override_current("target_intermediate_inputs", candidate_intermediate)
-        self.ts.override_current("target_capital_inputs", candidate_capital)
+        self.ts.override_current("target_intermediate_inputs", realised_feasible_intermediate)
+        self.ts.override_current("target_capital_inputs", realised_feasible_capital)
         self.ts.override_current(
             "planned_productivity_investment",
             self.ts.current("planned_tfp_investment") + self.ts.current("planned_technical_investment").sum(axis=1),
@@ -2599,8 +2642,8 @@ class Firms(Agent):
 
         self.ts.activity_finance_realised_feasible_target_production.append(realised_feasible_y)
         self.ts.activity_finance_realised_labour_scale.append(labour_scale)
-        self.ts.activity_finance_realised_feasible_intermediate_inputs.append(candidate_intermediate.copy())
-        self.ts.activity_finance_realised_feasible_capital_inputs.append(candidate_capital.copy())
+        self.ts.activity_finance_realised_feasible_intermediate_inputs.append(realised_feasible_intermediate.copy())
+        self.ts.activity_finance_realised_feasible_capital_inputs.append(realised_feasible_capital.copy())
         self.ts.activity_finance_realised_feasible_technical_investment.append(
             self.ts.current("planned_technical_investment").copy()
         )
@@ -3535,6 +3578,9 @@ class Firms(Agent):
             - self.ts.current("corporate_taxes_paid")
             - self.ts.current("interest_paid")
             + self.ts.current("received_credit")
+            + self.ts.current("operating_revolving_current_draw")
+            - self.ts.current("received_operating_refinance_credit")
+            - self.ts.current("operating_revolving_repayment")
             - self.ts.current("debt_installments")
         )
 
@@ -3622,7 +3668,18 @@ class Firms(Agent):
             weights=np.maximum(0.0, -self.ts.current("deposits")) * default_flag,
             minlength=loan_writeoff_by_bank.shape[0],
         )
-        credit_loss_by_bank = loan_writeoff_by_bank + overdraft_writeoff_by_bank
+        facility_exposure_before_default = np.maximum(
+            0.0,
+            self.ts.current("operating_revolving_closing_balance"),
+        )
+        revolving_operating_facility_writeoff_by_bank = np.bincount(
+            self.states["Corresponding Bank ID"],
+            weights=facility_exposure_before_default * default_flag,
+            minlength=loan_writeoff_by_bank.shape[0],
+        )
+        credit_loss_by_bank = (
+            loan_writeoff_by_bank + overdraft_writeoff_by_bank + revolving_operating_facility_writeoff_by_bank
+        )
         self.states["is_insolvent"] = np.logical_or(self.states["is_insolvent"], default_flag)
         self.ts.override_current("firm_settlement_default_flag", default_flag.copy())
 
@@ -3636,26 +3693,36 @@ class Firms(Agent):
         self.ts.deposits.pop()
         self.ts.deposits.append(new_firm_deposits)
 
+        new_operating_revolving_closing_balance = self.ts.current("operating_revolving_closing_balance").copy()
+        new_operating_revolving_closing_balance[default_flag] = 0.0
+        self.ts.operating_revolving_closing_balance.pop()
+        self.ts.operating_revolving_closing_balance.append(new_operating_revolving_closing_balance)
+
         # Update equity
         new_firm_equity = self.ts.current("equity")
         new_firm_equity[default_flag] = 0.0
         self.ts.equity.pop()
         self.ts.equity.append(new_firm_equity)
 
-        # Calculate the NPL ratio for firm loans
-        total_loans_granted = (
+        # Both the numerator and denominator use pre-default exposure. Converted
+        # facility balances are already absent here and remain represented once as
+        # ordinary short-term loan cohorts.
+        total_firm_credit_exposure = (
             credit_market.ts.current("total_outstanding_loans_granted_firms_short_term")[0]
             + credit_market.ts.current("total_outstanding_loans_granted_firms_long_term")[0]
+            + facility_exposure_before_default.sum()
         )
-        if total_loans_granted == 0.0:
+        bad_firm_credit = bad_firm_loans + revolving_operating_facility_writeoff_by_bank.sum()
+        if total_firm_credit_exposure == 0.0:
             npl_ratio = 0.0
         else:
-            npl_ratio = bad_firm_loans / total_loans_granted
+            npl_ratio = bad_firm_credit / total_firm_credit_exposure
         return FirmInsolvencyResult(
             npl_ratio=npl_ratio,
             default_flag=default_flag.copy(),
             loan_writeoff_by_bank=loan_writeoff_by_bank,
             overdraft_writeoff_by_bank=overdraft_writeoff_by_bank,
+            revolving_operating_facility_writeoff_by_bank=revolving_operating_facility_writeoff_by_bank,
             credit_loss_by_bank=credit_loss_by_bank,
         )
 
@@ -3664,7 +3731,7 @@ class Firms(Agent):
 
         Computes firm equity as:
         Assets (inventory, materials, capital, deposits)
-        - Liabilities (debt)
+        - Liabilities (debt and the operating revolving facility)
 
         Args:
             current_good_prices (np.ndarray): Current prices for valuation
@@ -3680,6 +3747,7 @@ class Firms(Agent):
             + capital
             + self.ts.current("deposits")
             - self.ts.current("debt")
+            - np.maximum(0.0, self.ts.current("operating_revolving_closing_balance"))
         )
 
     def compute_insolvency_rate(self) -> tuple[float, np.ndarray]:

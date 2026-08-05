@@ -905,6 +905,11 @@ class TestCountry:
         test_country.firms.ts.override_current("activity_finance_feasible_desired_labour_inputs", feasible_labour)
         monkeypatch.setattr(test_country.firms, "compute_total_wage_obligation", lambda **kwargs: wage_preview)
         monkeypatch.setattr(
+            test_country,
+            "compute_pre_credit_production_tax_obligation_preview",
+            lambda: np.zeros(n_firms),
+        )
+        monkeypatch.setattr(
             test_country.firms,
             "estimate_corporate_tax_obligation",
             lambda **kwargs: corporate_tax_preview,
@@ -936,7 +941,7 @@ class TestCountry:
         assert captured["assume_zero_growth"] is True
         assert np.allclose(captured["wage_obligation_preview"], wage_preview)
         assert np.allclose(captured["production_tax_obligation_preview"], 0.0)
-        assert np.allclose(captured["corporate_tax_obligation_preview"], 0.0)
+        assert np.allclose(captured["corporate_tax_obligation_preview"], corporate_tax_preview)
         assert np.allclose(test_country.firms.ts.current("desired_labour_inputs"), feasible_labour)
         assert np.allclose(test_country.firms.ts.current("wage_tightness_markup"), refreshed_wage_markup)
         assert test_country.firms.states["offered_wage_function"] is offered_wage_function

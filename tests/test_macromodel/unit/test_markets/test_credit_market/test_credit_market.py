@@ -89,6 +89,82 @@ def test_default_clearer_integrates_with_credit_market_array_contract(test_banks
     assert market.states["st_loans"][2, :, 0].sum() > 0.0
 
 
+def test_operating_facility_refinance_clears_as_ordinary_short_term_credit(
+    test_banks,
+    test_firms,
+    test_households,
+):
+    _configure_single_firm_credit_case(test_banks, test_firms, test_households)
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    facility_balance = np.r_[100.0, np.zeros(n_firms - 1)]
+    test_firms.ts.override_current("target_operating_refinance_credit", facility_balance)
+    test_firms.ts.override_current("ordinary_target_short_term_credit", facility_balance)
+    test_firms.ts.override_current("operating_revolving_closing_balance", facility_balance)
+    test_banks.ts.override_current("interest_rates_on_short_term_firm_loans", np.full(n_banks, 0.05))
+    market = _credit_market_with_clearer(
+        DefaultCreditMarketClearer(
+            allow_short_term_firm_loans=True,
+            allow_household_loans=False,
+            firms_max_number_of_banks_visiting=3,
+            households_max_number_of_banks_visiting=3,
+            consider_loan_type_fractions=False,
+            credit_supply_temperature=1.0,
+            interest_rates_selection_temperature=1.0,
+            creditor_selection_is_deterministic=True,
+            creditor_minimum_fill=False,
+            debtor_minimum_fill=False,
+        ),
+        test_banks,
+        test_firms,
+        test_households,
+    )
+
+    market.clear(test_banks, test_firms, test_households, 0.0, 0.0, 0.0)
+
+    assert test_firms.ts.current("received_operating_refinance_credit")[0] == pytest.approx(100.0)
+    assert test_firms.ts.current("received_ordinary_short_term_credit")[0] == pytest.approx(0.0)
+    assert market.states["st_loans"][0, :, 0].sum() == pytest.approx(100.0)
+
+
+def test_operating_facility_refinance_obeys_normal_car_capacity(
+    test_banks,
+    test_firms,
+    test_households,
+):
+    _configure_single_firm_credit_case(test_banks, test_firms, test_households)
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    facility_balance = np.r_[100.0, np.zeros(n_firms - 1)]
+    test_firms.ts.override_current("target_operating_refinance_credit", facility_balance)
+    test_firms.ts.override_current("ordinary_target_short_term_credit", facility_balance)
+    test_firms.ts.override_current("operating_revolving_closing_balance", facility_balance)
+    test_banks.ts.override_current("equity", np.zeros(n_banks))
+    market = _credit_market_with_clearer(
+        DefaultCreditMarketClearer(
+            allow_short_term_firm_loans=True,
+            allow_household_loans=False,
+            firms_max_number_of_banks_visiting=3,
+            households_max_number_of_banks_visiting=3,
+            consider_loan_type_fractions=False,
+            credit_supply_temperature=1.0,
+            interest_rates_selection_temperature=1.0,
+            creditor_selection_is_deterministic=True,
+            creditor_minimum_fill=False,
+            debtor_minimum_fill=False,
+        ),
+        test_banks,
+        test_firms,
+        test_households,
+    )
+
+    market.clear(test_banks, test_firms, test_households, 0.0, 0.0, 0.0)
+
+    assert test_firms.ts.current("received_operating_refinance_credit")[0] == pytest.approx(0.0)
+    assert test_firms.ts.current("received_short_term_credit")[0] == pytest.approx(0.0)
+    assert market.states["st_loans"][0, :, 0].sum() == pytest.approx(0.0)
+
+
 def test_poledna_clearer_integrates_with_credit_market_array_contract(test_banks, test_firms, test_households):
     _configure_single_firm_credit_case(test_banks, test_firms, test_households)
     market = _credit_market_with_clearer(

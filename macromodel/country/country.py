@@ -2304,6 +2304,76 @@ class Country:
             raise
         return exclusion_mask, pending_events
 
+    def record_diagnostic_dividend_fund(self):
+        """Persist the read-only hypothetical dividend-fund allocation.
+
+        This method is called after bank cash-distributable profits are known.
+        Household wealth has already closed for the period, so ``prev`` is the
+        authoritative beginning-of-period IFA stock required by the contract.
+        """
+        from macromodel.country.diagnostic_dividend_fund import compute_diagnostic_dividend_fund
+
+        firm_cash_profit_after_settlement = (
+            self.firms.ts.current("nominal_amount_sold_in_lcu")
+            - self.firms.ts.current("total_wage")
+            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - self.firms.direct_tfp_investment_cash_expense()
+            - self.firms.ts.current("taxes_paid_on_production")
+            - self.firms.ts.current("corporate_taxes_paid")
+            - self.firms.ts.current("interest_paid")
+            - self.firms.ts.current("debt_installments")
+            - self.firms.ts.current("operating_revolving_repayment")
+        )
+        result = compute_diagnostic_dividend_fund(
+            beginning_ifa=self.households.ts.prev("wealth_other_financial_assets"),
+            firm_cash_profit_after_settlement=firm_cash_profit_after_settlement,
+            firm_closing_deposits=self.firms.ts.current("deposits"),
+            firm_unpaid_interest=self.firms.ts.current("firm_settlement_unpaid_interest"),
+            firm_closing_principal_arrears=self.firms.ts.current("firm_settlement_closing_principal_arrears"),
+            firm_residual_overdraft_exposure=self.firms.ts.current("firm_settlement_residual_overdraft_exposure"),
+            firm_default_flag=self.firms.ts.current("firm_settlement_default_flag"),
+            bank_cash_distributable_profits=self.banks.ts.current("cash_distributable_profits"),
+        )
+        self.firms.ts.dividend_fund_cash_distributable_profit_candidate.append(
+            result.firm_distributable_profit_candidate
+        )
+        self.firms.ts.dividend_fund_distress_gate_passed.append(result.firm_distress_gate_passed)
+        self.banks.ts.dividend_fund_cash_distributable_profit_candidate.append(
+            result.bank_distributable_profit_candidate
+        )
+        ts = self.households.ts
+        ts.dividend_fund_beginning_ifa.append(result.beginning_ifa)
+        ts.dividend_fund_ifa_weight.append(result.ifa_weight)
+        ts.dividend_fund_hypothetical_firm_distribution.append(result.hypothetical_firm_distribution)
+        ts.dividend_fund_hypothetical_bank_distribution.append(result.hypothetical_bank_distribution)
+        ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
+        ts.dividend_fund_distribution_by_ifa_quintile.append(result.distribution_by_ifa_quintile)
+        ts.dividend_fund_total_positive_ifa.append([result.total_positive_ifa])
+        ts.dividend_fund_positive_ifa_household_count.append([result.positive_ifa_household_count])
+        ts.dividend_fund_positive_ifa_household_share.append([result.positive_ifa_household_share])
+        ts.dividend_fund_total_firm_distributable_profit_candidate.append(
+            [result.total_firm_distributable_profit_candidate]
+        )
+        ts.dividend_fund_total_bank_distributable_profit_candidate.append(
+            [result.total_bank_distributable_profit_candidate]
+        )
+        ts.dividend_fund_firm_distress_gate_passed_count.append([result.firm_distress_gate_passed_count])
+        ts.dividend_fund_firm_distress_gate_passed_share.append([result.firm_distress_gate_passed_share])
+        ts.dividend_fund_hypothetical_firm_fund_inflow.append([result.hypothetical_firm_fund_inflow])
+        ts.dividend_fund_hypothetical_bank_fund_inflow.append([result.hypothetical_bank_fund_inflow])
+        ts.dividend_fund_hypothetical_fund_inflow.append([result.hypothetical_fund_inflow])
+        ts.dividend_fund_hypothetical_fund_outflow.append([result.hypothetical_fund_outflow])
+        ts.dividend_fund_aggregate_distribution_yield.append([result.aggregate_distribution_yield])
+        ts.dividend_fund_firm_identity_error.append([result.firm_identity_error])
+        ts.dividend_fund_bank_identity_error.append([result.bank_identity_error])
+        ts.dividend_fund_identity_error.append([result.fund_identity_error])
+        # Increment 1 is read-only: no payer or household deposits move.
+        ts.dividend_fund_firm_deposit_change_attributable.append([0.0])
+        ts.dividend_fund_bank_deposit_change_attributable.append([0.0])
+        ts.dividend_fund_household_deposit_change_attributable.append([0.0])
+        ts.dividend_fund_household_deposit_identity_error.append([0.0])
+        return result
+
     def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.
 
@@ -2848,6 +2918,7 @@ class Country:
         self.banks.ts.profits.append(self.banks.compute_profits())
         self.banks.ts.cash_distributable_profits.append(self.banks.compute_cash_distributable_profits())
         self.banks.ts.profits_histogram.append(get_histogram(self.banks.ts.current("profits"), self.scale))
+        self.record_diagnostic_dividend_fund()
 
         # G3. BANK BALANCE SHEETS
         self.banks.update_deposits(

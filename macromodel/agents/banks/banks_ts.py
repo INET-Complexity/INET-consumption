@@ -82,6 +82,7 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         deposits_histogram=get_histogram(bank_data["Deposits"].values, scale),
         profits=bank_data["Profits"].values,
         cash_distributable_profits=bank_data["Profits"].values,
+        dividend_fund_cash_distributable_profit_candidate=np.zeros(len(bank_data)),
         expected_profits=bank_data["Profits"].values,
         profits_histogram=get_histogram(bank_data["Profits"].values, scale),
         market_share=bank_data["Market Share"].values,

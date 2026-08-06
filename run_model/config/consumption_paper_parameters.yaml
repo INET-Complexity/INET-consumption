@@ -79,6 +79,9 @@ asset_returns:
     rho: -0.2585
     equity_weight: 0.5
     draw_scope: country_period
+    # Fixed-policy Increment 2 experiment. Converts Increment 1's full-capacity
+    # diagnostic into an authoritative calibrated receipt carrier.
+    dividend_fund_payout_ratio: 0.05
 
 desired_consumption:
   credit_augmented_v1:

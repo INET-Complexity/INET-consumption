@@ -1633,6 +1633,27 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
         )
 
+    def stage_illiquid_valuation_return(self, period_index: int | None = None) -> np.ndarray:
+        """Stage the current valuation gain/loss without classifying it as income."""
+        wealth_function = self.functions["wealth"]
+        stage_return = getattr(wealth_function, "stage_illiquid_valuation_return", None)
+        if stage_return is None:
+            return self.compute_income_from_financial_assets(period_index=period_index)
+        return stage_return(
+            current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
+            period_index=period_index,
+        )
+
+    def expected_non_negative_valuation_return(self) -> np.ndarray:
+        """Expected positive valuation-return profile used to scale residual income."""
+        wealth_function = self.functions["wealth"]
+        expected_return = getattr(wealth_function, "compute_expected_non_negative_valuation_return", None)
+        if expected_return is None:
+            return np.maximum(self.compute_expected_income_from_financial_assets(), 0.0)
+        return expected_return(
+            current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets")
+        )
+
     def current_illiquid_financial_asset_return_rate(self) -> float:
         """Return the current aggregate illiquid financial asset return rate, if available."""
         current_rate = getattr(self.functions["wealth"], "current_illiquid_return_rate", None)

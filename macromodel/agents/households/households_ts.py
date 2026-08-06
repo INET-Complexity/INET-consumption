@@ -239,6 +239,8 @@ def create_households_timeseries(
         dividend_fund_hypothetical_firm_distribution=np.zeros(len(data)),
         dividend_fund_hypothetical_bank_distribution=np.zeros(len(data)),
         dividend_fund_hypothetical_total_distribution=np.zeros(len(data)),
+        dividend_fund_calibrated_total_distribution=np.zeros(len(data)),
+        dividend_fund_payout_ratio=[0.0],
         dividend_fund_distribution_by_ifa_quintile=np.zeros(5),
         dividend_fund_total_positive_ifa=[0.0],
         dividend_fund_positive_ifa_household_count=[0.0],

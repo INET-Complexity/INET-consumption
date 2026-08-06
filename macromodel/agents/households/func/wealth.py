@@ -14,6 +14,7 @@ The implementation handles:
 """
 
 from abc import ABC, abstractmethod
+from math import erf, exp, sqrt
 from typing import Any, Optional, Tuple
 
 import numpy as np
@@ -452,6 +453,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         dynamic_shifters_enabled: bool = False,
         dynamic_shifters: dict | None = None,
         data_paths: dict | None = None,
+        dividend_fund_payout_ratio: float = 0.05,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -482,6 +484,8 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"Unsupported participation_source: {participation_source}.")
         if liquid_return_source != "policy_rate_markup":
             raise ValueError(f"Unsupported liquid_return_source: {liquid_return_source}.")
+        if not 0.0 <= dividend_fund_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_payout_ratio must be in [0, 1].")
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq
@@ -489,6 +493,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self.rho = rho
         self.equity_weight = equity_weight
         self.draw_scope = draw_scope
+        self.dividend_fund_payout_ratio = dividend_fund_payout_ratio
         self._current_illiquid_return_rate: float | None = None
         self._current_illiquid_return_amount: np.ndarray | None = None
         self._current_illiquid_return_period: int | None = None
@@ -529,6 +534,22 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             self.expected_illiquid_log_return + 0.5 * self.illiquid_log_return_variance
         )
 
+    def expected_non_negative_illiquid_return_rate(self) -> float:
+        """Expected positive part of the simple return implied by the log-normal draw."""
+        mean = self.expected_illiquid_log_return
+        variance = self.illiquid_log_return_variance
+        if variance <= 0.0:
+            return max(exp(mean) - 1.0, 0.0)
+        sigma = sqrt(variance)
+
+        def normal_cdf(value: float) -> float:
+            return 0.5 * (1.0 + erf(value / sqrt(2.0)))
+
+        return float(
+            exp(mean + 0.5 * variance) * normal_cdf((mean + variance) / sigma)
+            - normal_cdf(mean / sigma)
+        )
+
     def draw_illiquid_return_rate(self) -> float:
         covariance = np.array(
             [
@@ -547,11 +568,12 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
     def _return_amount(current_wealth_in_other_financial_assets: np.ndarray, return_rate: float) -> np.ndarray:
         return np.maximum(current_wealth_in_other_financial_assets, 0.0) * return_rate
 
-    def compute_income_from_financial_assets(
+    def stage_illiquid_valuation_return(
         self,
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> np.ndarray:
+        """Draw and stage the valuation return later consumed by the wealth update."""
         if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
             if period_index is not None:
                 if self._current_illiquid_return_period is None:
@@ -571,6 +593,25 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self._current_illiquid_return_period = period_index
         self._current_illiquid_return_consumed = False
         return return_amount
+
+    def compute_income_from_financial_assets(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        """Backward-compatible alias for the pre-fund financial-return contract."""
+        return self.stage_illiquid_valuation_return(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
+
+    def compute_expected_non_negative_valuation_return(
+        self, current_wealth_in_other_financial_assets: np.ndarray
+    ) -> np.ndarray:
+        return (
+            np.maximum(current_wealth_in_other_financial_assets, 0.0)
+            * self.expected_non_negative_illiquid_return_rate()
+        )
 
     def current_illiquid_return_rate(self) -> float:
         if self._current_illiquid_return_rate is None:

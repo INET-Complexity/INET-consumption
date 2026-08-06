@@ -125,6 +125,8 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
         dividend_fund_hypothetical_firm_distribution=np.zeros(3),
         dividend_fund_hypothetical_bank_distribution=np.zeros(3),
         dividend_fund_hypothetical_total_distribution=np.zeros(3),
+        dividend_fund_calibrated_total_distribution=np.zeros(3),
+        dividend_fund_payout_ratio=[0.0],
         dividend_fund_distribution_by_ifa_quintile=np.zeros(5),
         dividend_fund_total_positive_ifa=[0.0],
         dividend_fund_positive_ifa_household_count=[0.0],
@@ -175,7 +177,10 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
         direct_tfp_investment_cash_expense=lambda: np.array([5.0]),
     )
     country = SimpleNamespace(
-        households=SimpleNamespace(ts=households_ts),
+        households=SimpleNamespace(
+            ts=households_ts,
+            functions={"wealth": SimpleNamespace(dividend_fund_payout_ratio=0.25)},
+        ),
         firms=firms,
         banks=SimpleNamespace(ts=banks_ts),
     )
@@ -194,6 +199,11 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
     np.testing.assert_array_equal(result.firm_distributable_profit_candidate, [50.0])
     np.testing.assert_array_equal(result.beginning_ifa, [100.0, 200.0, 300.0])
     np.testing.assert_array_equal(households_ts.current("dividend_fund_beginning_ifa"), result.beginning_ifa)
+    np.testing.assert_allclose(
+        households_ts.current("dividend_fund_calibrated_total_distribution"),
+        0.25 * result.hypothetical_total_distribution,
+    )
+    assert households_ts.current("dividend_fund_payout_ratio")[0] == pytest.approx(0.25)
     np.testing.assert_array_equal(firms_ts.current("dividend_fund_cash_distributable_profit_candidate"), [50.0])
     np.testing.assert_array_equal(banks_ts.current("dividend_fund_cash_distributable_profit_candidate"), [40.0])
     assert households_ts.current("dividend_fund_household_deposit_identity_error")[0] == 0.0

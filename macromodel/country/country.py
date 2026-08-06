@@ -2347,6 +2347,12 @@ class Country:
         ts.dividend_fund_hypothetical_firm_distribution.append(result.hypothetical_firm_distribution)
         ts.dividend_fund_hypothetical_bank_distribution.append(result.hypothetical_bank_distribution)
         ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
+        wealth_function = getattr(self.households, "functions", {}).get("wealth")
+        payout_ratio = float(getattr(wealth_function, "dividend_fund_payout_ratio", 0.0))
+        ts.dividend_fund_calibrated_total_distribution.append(
+            result.hypothetical_total_distribution * payout_ratio
+        )
+        ts.dividend_fund_payout_ratio.append([payout_ratio])
         ts.dividend_fund_distribution_by_ifa_quintile.append(result.distribution_by_ifa_quintile)
         ts.dividend_fund_total_positive_ifa.append([result.total_positive_ifa])
         ts.dividend_fund_positive_ifa_household_count.append([result.positive_ifa_household_count])
@@ -2380,17 +2386,28 @@ class Country:
         At this execution point the current dividend-fund carrier is last
         period's allocation: the new current-period allocation is appended only
         later, after bank cash-distributable profits are available in G2.
-        Expected financial income remains the unchanged aggregate calibration
-        target used by household planning.
+        The calibration target is the initial empirical financial-income yield
+        applied to current positive IFA; the separate planning expectation is
+        left unchanged.
         """
-        from macromodel.agents.households.func.financial_asset_income import compose_financial_asset_income
+        from macromodel.agents.households.func.financial_asset_income import (
+            compose_financial_asset_income,
+            empirical_financial_income_target,
+        )
 
-        residual_profile = self.households.compute_income_from_financial_assets(period_index=period_index)
+        residual_profile = self.households.stage_illiquid_valuation_return(period_index=period_index)
+        expected_residual_profile = self.households.expected_non_negative_valuation_return()
         ts = self.households.ts
+        calibration_target = empirical_financial_income_target(
+            current_ifa=ts.current("wealth_other_financial_assets"),
+            initial_ifa=ts.initial("wealth_other_financial_assets"),
+            initial_financial_income=ts.initial("income_financial_assets_calibration_target"),
+        )
         result = compose_financial_asset_income(
-            lagged_distribution_income=ts.current("dividend_fund_hypothetical_total_distribution"),
+            lagged_distribution_income=ts.current("dividend_fund_calibrated_total_distribution"),
             residual_profile=residual_profile,
-            calibration_target=ts.current("expected_income_financial_assets"),
+            expected_non_negative_residual_profile=expected_residual_profile,
+            calibration_target=calibration_target,
         )
         ts.income_financial_assets_distribution.append(result.distribution_income)
         ts.income_financial_assets_residual_portfolio_return.append(result.residual_portfolio_return)

@@ -77,6 +77,19 @@ def test__paper_asset_return_wealth_setter_expected_return_includes_log_variance
     assert setter.expected_illiquid_return_rate() == pytest.approx(expected_rate)
 
 
+def test__paper_asset_return_expected_positive_part_matches_deterministic_cases():
+    positive = _paper_setter(mu_eq=np.log(1.1), mu_bond=np.log(1.1), equity_weight=0.5)
+    negative = _paper_setter(mu_eq=np.log(0.9), mu_bond=np.log(0.9), equity_weight=0.5)
+
+    assert positive.expected_non_negative_illiquid_return_rate() == pytest.approx(0.1)
+    assert negative.expected_non_negative_illiquid_return_rate() == 0.0
+
+
+def test__paper_asset_return_rejects_invalid_dividend_fund_payout_ratio():
+    with pytest.raises(ValueError, match="dividend_fund_payout_ratio"):
+        _paper_setter(dividend_fund_payout_ratio=1.01)
+
+
 def test__paper_asset_return_wealth_setter_caps_drawdown_after_negative_return():
     setter = _paper_setter(mu_eq=np.log(0.2), mu_bond=np.log(0.2), equity_weight=0.5)
     opening_ifa = np.array([100.0])

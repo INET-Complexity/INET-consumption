@@ -525,9 +525,9 @@ FRA:
       firm_loans_return_on_equity_ratio: 0.15  # 0.05
       enable_firm_loans_dscr_restriction: false
       firm_loans_min_dscr: 1.25
+      firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       firm_loans_cfads_window: 4
       firm_loans_cfads_haircut: 1.0
-      firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       household_consumption_loan_maturity: 2
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
       long_term_firm_loan_maturity: 60 # 60

@@ -164,6 +164,49 @@ def test_dscr_caps_principal_and_keeps_actual_loan_output_semantics(test_banks, 
     assert np.allclose(result[2, :, 0], result[0, :, 0] * _annuity_payment_factor(0.05, 8))
 
 
+def test_dscr_higher_underwriting_rate_reduces_permitted_principal(test_banks, test_firms):
+    clearer = _credit_market_clearer()
+    _set_single_firm_case(test_firms, target_long_term_credit=1.0e6, cfads=1_250.0)
+    test_banks.parameters.enable_firm_loans_return_on_assets_restriction = False
+    test_banks.parameters.enable_firm_loans_return_on_equity_restriction = False
+    test_banks.parameters.enable_firm_loans_dscr_restriction = True
+    test_banks.parameters.firm_loans_min_dscr = 1.25
+    test_banks.parameters.firm_loans_cfads_window = 1
+    test_banks.parameters.firm_loans_cfads_haircut = 1.0
+    test_banks.parameters.long_term_firm_loan_maturity = 8
+
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    max_supply = np.full(n_banks, np.inf)
+
+    _set_bank_supply_and_rates(test_banks, rate=0.05)
+    low_rate = clearer.clear_loans(
+        banks=test_banks,
+        firms=test_firms,
+        households=None,
+        loan_type=LoanTypes.FIRM_LONG_TERM_LOAN,
+        new_credit_by_bank=np.zeros(n_banks),
+        new_credit_by_firm=np.zeros(n_firms),
+        new_credit_by_household=np.zeros(1),
+        max_supply_based_on_preferences=max_supply,
+    )
+
+    _set_bank_supply_and_rates(test_banks, rate=0.10)
+    high_rate = clearer.clear_loans(
+        banks=test_banks,
+        firms=test_firms,
+        households=None,
+        loan_type=LoanTypes.FIRM_LONG_TERM_LOAN,
+        new_credit_by_bank=np.zeros(n_banks),
+        new_credit_by_firm=np.zeros(n_firms),
+        new_credit_by_household=np.zeros(1),
+        max_supply_based_on_preferences=max_supply,
+    )
+
+    assert _annuity_payment_factor(0.10, 8) > _annuity_payment_factor(0.05, 8)
+    assert high_rate[0, :, 0].sum() < low_rate[0, :, 0].sum()
+
+
 def test_dscr_underwriting_rate_uses_max_finite_bank_rate():
     bank_rates = np.array([0.02, np.nan, 0.08, -0.01, 0.04])
 

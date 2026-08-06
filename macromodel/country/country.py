@@ -2374,6 +2374,36 @@ class Country:
         ts.dividend_fund_household_deposit_identity_error.append([0.0])
         return result
 
+    def record_household_financial_asset_income(self, period_index: int | None = None):
+        """Record lagged fund receipts plus a calibrated non-negative residual.
+
+        At this execution point the current dividend-fund carrier is last
+        period's allocation: the new current-period allocation is appended only
+        later, after bank cash-distributable profits are available in G2.
+        Expected financial income remains the unchanged aggregate calibration
+        target used by household planning.
+        """
+        from macromodel.agents.households.func.financial_asset_income import compose_financial_asset_income
+
+        residual_profile = self.households.compute_income_from_financial_assets(period_index=period_index)
+        ts = self.households.ts
+        result = compose_financial_asset_income(
+            lagged_distribution_income=ts.current("dividend_fund_hypothetical_total_distribution"),
+            residual_profile=residual_profile,
+            calibration_target=ts.current("expected_income_financial_assets"),
+        )
+        ts.income_financial_assets_distribution.append(result.distribution_income)
+        ts.income_financial_assets_residual_portfolio_return.append(result.residual_portfolio_return)
+        ts.income_financial_assets_calibration_target.append(result.calibration_target)
+        ts.total_income_financial_assets_distribution.append([result.aggregate_distribution_income])
+        ts.total_income_financial_assets_residual_portfolio_return.append([result.aggregate_residual_portfolio_return])
+        ts.total_income_financial_assets_calibration_target.append([result.aggregate_calibration_target])
+        ts.income_financial_assets_target_gap.append([result.target_gap])
+        ts.income_financial_assets_calibration_error.append([result.calibration_error])
+        ts.income_financial_assets.append(result.total_income)
+        ts.total_income_financial_assets.append([result.total_income.sum()])
+        return result
+
     def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.
 
@@ -2786,12 +2816,7 @@ class Country:
         )
         self.households.ts.total_income_employee.append([self.households.ts.current("income_employee").sum()])
         self.settle_household_social_transfers()
-        self.households.ts.income_financial_assets.append(
-            self.households.compute_income_from_financial_assets(period_index=period_index)
-        )
-        self.households.ts.total_income_financial_assets.append(
-            [self.households.ts.current("income_financial_assets").sum()]
-        )
+        self.record_household_financial_asset_income(period_index=period_index)
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()

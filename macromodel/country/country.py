@@ -2453,9 +2453,7 @@ class Country:
         ts.total_income_financial_assets_distribution.append([result.aggregate_distribution_income])
         ts.total_income_financial_assets_residual_portfolio_return.append([result.aggregate_residual_portfolio_return])
         ts.total_income_financial_assets_calibration_target.append([result.aggregate_calibration_target])
-        ts.income_financial_assets_distribution_excess_over_target.append(
-            [result.distribution_excess_over_target]
-        )
+        ts.income_financial_assets_distribution_excess_over_target.append([result.distribution_excess_over_target])
         ts.income_financial_assets_target_gap.append([result.target_gap])
         ts.income_financial_assets_calibration_error.append([result.calibration_error])
         ts.income_financial_assets_residual_calibration_scale.append([result.residual_calibration_scale])

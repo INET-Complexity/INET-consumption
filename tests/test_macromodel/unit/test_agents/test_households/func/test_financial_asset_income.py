@@ -32,6 +32,7 @@ def test__financial_asset_income_reduces_residual_without_double_counting():
     assert result.aggregate_residual_portfolio_return == 50.0
     assert result.aggregate_expected_residual_portfolio_return == 50.0
     assert result.aggregate_calibration_target == 100.0
+    assert result.distribution_excess_over_target == 0.0
     assert result.target_gap == pytest.approx(0.0)
     assert result.residual_calibration_scale == pytest.approx(1.25)
     assert result.calibration_error == pytest.approx(10.0)
@@ -56,9 +57,14 @@ def test__distribution_at_target_leaves_zero_residual():
     np.testing.assert_array_equal(result.total_income, result.distribution_income)
 
 
-def test__distribution_above_target_requires_recalibration():
-    with pytest.raises(ValueError, match="recalibrate payout ratios"):
-        _compose(lagged_distribution_income=np.array([10.0, 30.0, 61.0]))
+def test__distribution_above_target_is_preserved_and_floors_residual_at_zero():
+    result = _compose(lagged_distribution_income=np.array([10.0, 30.0, 61.0]))
+
+    np.testing.assert_array_equal(result.distribution_income, [10.0, 30.0, 61.0])
+    np.testing.assert_array_equal(result.residual_portfolio_return, np.zeros(3))
+    np.testing.assert_array_equal(result.total_income, result.distribution_income)
+    assert result.distribution_excess_over_target == pytest.approx(1.0)
+    assert result.target_gap == pytest.approx(-1.0)
 
 
 def test__non_positive_realised_profile_produces_zero_current_residual():
@@ -119,6 +125,7 @@ def test__country_records_lagged_components_without_moving_deposits():
         total_income_financial_assets_distribution=[0.0],
         total_income_financial_assets_residual_portfolio_return=[0.0],
         total_income_financial_assets_calibration_target=[0.0],
+        income_financial_assets_distribution_excess_over_target=[0.0],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
         income_financial_assets_residual_calibration_scale=[1.0],
@@ -151,6 +158,7 @@ def test__country_records_lagged_components_without_moving_deposits():
     assert ts.current("total_income_financial_assets")[0] == pytest.approx(100.0)
     assert result.calibration_error == pytest.approx(40.0)
     assert result.residual_calibration_scale == pytest.approx(1.8)
+    assert ts.current("income_financial_assets_distribution_excess_over_target")[0] == 0.0
     np.testing.assert_array_equal(ts.current("wealth_other_financial_assets_capital_gains"), np.zeros(2))
     np.testing.assert_array_equal(ts.current("wealth_deposits"), deposits_before)
     np.testing.assert_array_equal(ts.current("expected_income_financial_assets"), expected_before)
@@ -158,7 +166,7 @@ def test__country_records_lagged_components_without_moving_deposits():
     np.testing.assert_array_equal(banks.ts.current("deposits"), bank_deposits_before)
 
 
-def test__country_consumes_distribution_only_after_carrier_is_appended():
+def test__country_consumes_lagged_distribution_and_records_target_excess():
     ts = TimeSeries(
         dividend_fund_calibrated_total_distribution=np.zeros(2),
         income_financial_assets=np.array([40.0, 60.0]),
@@ -170,6 +178,7 @@ def test__country_consumes_distribution_only_after_carrier_is_appended():
         total_income_financial_assets_distribution=[0.0],
         total_income_financial_assets_residual_portfolio_return=[100.0],
         total_income_financial_assets_calibration_target=[100.0],
+        income_financial_assets_distribution_excess_over_target=[0.0],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
         income_financial_assets_residual_calibration_scale=[1.0],
@@ -185,11 +194,14 @@ def test__country_consumes_distribution_only_after_carrier_is_appended():
     country = SimpleNamespace(households=households)
 
     first = Country.record_household_financial_asset_income(country, period_index=1)
-    ts.dividend_fund_calibrated_total_distribution.append(np.array([4.0, 6.0]))
+    ts.dividend_fund_calibrated_total_distribution.append(np.array([40.0, 61.0]))
     second = Country.record_household_financial_asset_income(country, period_index=2)
 
     np.testing.assert_array_equal(first.distribution_income, np.zeros(2))
-    np.testing.assert_array_equal(second.distribution_income, [4.0, 6.0])
+    np.testing.assert_array_equal(second.distribution_income, [40.0, 61.0])
+    np.testing.assert_array_equal(second.residual_portfolio_return, np.zeros(2))
+    assert second.distribution_excess_over_target == pytest.approx(1.0)
+    assert ts.current("income_financial_assets_distribution_excess_over_target")[0] == pytest.approx(1.0)
 
 
 def test__known_distribution_is_handed_into_expected_income_composition():

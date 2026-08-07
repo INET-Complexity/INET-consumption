@@ -17,6 +17,7 @@ class FinancialAssetIncomeComponents:
     aggregate_residual_portfolio_return: float
     aggregate_expected_residual_portfolio_return: float
     aggregate_calibration_target: float
+    distribution_excess_over_target: float
     stochastic_multiplier: float
     residual_calibration_scale: float
     target_gap: float
@@ -48,9 +49,9 @@ def compose_financial_asset_income(
     multiplier around the *expected* residual. Consequently the calibration
     target is a long-run expectation, not a period-by-period accounting identity.
 
-    A distribution above the aggregate target is an economic calibration error:
-    it must be resolved through payout or target parameters, never silently
-    clipped here.
+    A distribution may exceed the calibration target in an individual period.
+    In that case the authoritative distribution is preserved, the residual is
+    zero, and the excess is returned as a diagnostic.
     """
     for name, tolerance in (
         ("absolute_tolerance", absolute_tolerance),
@@ -76,13 +77,7 @@ def compose_financial_asset_income(
     if aggregate_target < -tolerance:
         raise ValueError("Aggregate financial-income calibration target must be non-negative.")
     aggregate_target = max(aggregate_target, 0.0)
-    if aggregate_distribution > aggregate_target + tolerance:
-        raise ValueError(
-            "Lagged dividend distribution exceeds the aggregate financial-income calibration target; "
-            "recalibrate payout ratios or the portfolio-return target "
-            f"(distribution={aggregate_distribution:.12g}, target={aggregate_target:.12g}, "
-            f"tolerance={tolerance:.12g})."
-        )
+    distribution_excess_over_target = max(aggregate_distribution - aggregate_target, 0.0)
 
     aggregate_expected_residual = max(aggregate_target - aggregate_distribution, 0.0)
     target_weights = np.maximum(target, 0.0)
@@ -121,6 +116,7 @@ def compose_financial_asset_income(
         aggregate_residual_portfolio_return=float(residual.sum()),
         aggregate_expected_residual_portfolio_return=aggregate_expected_residual,
         aggregate_calibration_target=aggregate_target,
+        distribution_excess_over_target=distribution_excess_over_target,
         stochastic_multiplier=stochastic_multiplier,
         residual_calibration_scale=residual_calibration_scale,
         target_gap=target_gap,

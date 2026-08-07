@@ -212,6 +212,7 @@ def create_households_timeseries(
         total_income_financial_assets_distribution=[0.0],
         total_income_financial_assets_residual_portfolio_return=[data["Income from Financial Assets"].values.sum()],
         total_income_financial_assets_calibration_target=[data["Income from Financial Assets"].values.sum()],
+        income_financial_assets_distribution_excess_over_target=[0.0],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
         income_financial_assets_residual_calibration_scale=[1.0],

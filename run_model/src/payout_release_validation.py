@@ -16,6 +16,7 @@ class PayoutReleaseResult:
     period_count: int
     payout_ratio: float
     max_distribution_target_ratio: float
+    max_distribution_excess_over_target: float
     max_realised_identity_error: float
     max_expected_identity_error: float
     max_absolute_capital_gains: float
@@ -43,6 +44,7 @@ def validate_payout_release_file(
         residual = households["total_income_financial_assets_residual_portfolio_return"][1:, 0]
         total_income = households["total_income_financial_assets"][1:, 0]
         target = households["total_income_financial_assets_calibration_target"][1:, 0]
+        distribution_excess = households["income_financial_assets_distribution_excess_over_target"][1:, 0]
         expected_distribution = households["total_expected_income_financial_assets_distribution"][1:, 0]
         expected_residual = households["total_expected_income_financial_assets_residual"][1:, 0]
         expected_total = households["expected_income_financial_assets"][1:].sum(axis=1)
@@ -54,6 +56,7 @@ def validate_payout_release_file(
         residual,
         total_income,
         target,
+        distribution_excess,
         expected_distribution,
         expected_residual,
         expected_total,
@@ -82,10 +85,14 @@ def validate_payout_release_file(
         where=target > absolute_tolerance,
     )
     max_ratio = float(np.max(ratio)) if ratio.size else 0.0
-    if max_ratio > 1.0 + relative_tolerance:
-        raise AssertionError(
-            f"Seed {seed} distribution exceeds the financial-income target: max ratio={max_ratio:.6f}."
-        )
+    expected_distribution_excess = np.maximum(distribution - target, 0.0)
+    if not np.allclose(
+        distribution_excess,
+        expected_distribution_excess,
+        atol=absolute_tolerance,
+        rtol=relative_tolerance,
+    ):
+        raise AssertionError(f"Seed {seed} fails the distribution-excess-over-target identity.")
 
     realised_error = total_income - distribution - residual
     expected_error = expected_total - expected_distribution - expected_residual
@@ -103,6 +110,7 @@ def validate_payout_release_file(
         period_count=period_count,
         payout_ratio=float(payout_ratio[-1]),
         max_distribution_target_ratio=max_ratio,
+        max_distribution_excess_over_target=_maximum_absolute(distribution_excess),
         max_realised_identity_error=_maximum_absolute(realised_error),
         max_expected_identity_error=_maximum_absolute(expected_error),
         max_absolute_capital_gains=_maximum_absolute(capital_gains),

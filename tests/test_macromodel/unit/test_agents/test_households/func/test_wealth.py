@@ -87,6 +87,9 @@ def test__paper_asset_return_rejects_invalid_dividend_fund_payout_ratio():
     with pytest.raises(ValueError, match="dividend_fund_payout_ratio"):
         _paper_setter(dividend_fund_payout_ratio=1.01)
 
+    with pytest.raises(ValueError, match="dividend_fund_empirical_proxy_ratio"):
+        _paper_setter(dividend_fund_empirical_proxy_ratio=np.nan)
+
 
 def test__paper_asset_return_wealth_setter_caps_drawdown_after_negative_return():
     setter = _paper_setter(mu_eq=np.log(0.2), mu_bond=np.log(0.2), equity_weight=0.5)

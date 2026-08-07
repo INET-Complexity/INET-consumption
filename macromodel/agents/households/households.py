@@ -439,10 +439,6 @@ class Households(Agent):
             "wealth_distribution_model": synthetic_population.wealth_distribution_model,
             "average_saving_rate": synthetic_population.household_data["Saving Rate"].mean(),
             "coefficient_fa_income": synthetic_population.coefficient_fa_income,
-            # Existing Eurostat reader output.  It is an empirical benchmark
-            # for the national-accounts payout concept, not a drop-in runtime
-            # rate for the narrower cash-eligible dividend-fund denominator.
-            "dividend_fund_empirical_payout_ratio": float(synthetic_country.dividend_payout_ratio),
             "investment_rate": synthetic_population.household_data["Investment Rate"].values,
         }
 
@@ -1638,7 +1634,7 @@ class Households(Agent):
         )
 
     def stage_illiquid_valuation_return(self, period_index: int | None = None) -> np.ndarray:
-        """Stage the current valuation gain/loss without classifying it as income."""
+        """Stage the stochastic financial-income draw under the legacy API name."""
         wealth_function = self.functions["wealth"]
         stage_return = getattr(wealth_function, "stage_illiquid_valuation_return", None)
         if stage_return is None:
@@ -1649,7 +1645,7 @@ class Households(Agent):
         )
 
     def expected_non_negative_valuation_return(self) -> np.ndarray:
-        """Expected positive valuation-return profile used to scale residual income."""
+        """Expected positive financial-income profile under the legacy API name."""
         wealth_function = self.functions["wealth"]
         expected_return = getattr(wealth_function, "compute_expected_non_negative_valuation_return", None)
         if expected_return is None:

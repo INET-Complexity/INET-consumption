@@ -60,6 +60,9 @@ class TestEuroStatReader:
         assert readers.eurostat.dividend_payout_ratio("AUT", 2016) == pytest.approx(0.463, abs=0.01)
         assert readers.eurostat.dividend_payout_ratio("LUX", 2012) == pytest.approx(0.299, abs=0.01)
 
+    def test__household_non_interest_property_income_ratio(self, readers):
+        assert readers.eurostat.household_non_interest_property_income_ratio("FRA", 2014) == pytest.approx(0.1337409703)
+
     def test__firm_risk_premium(self, readers):
         assert readers.eurostat.firm_risk_premium("FRA", 2014) == pytest.approx(0.00570, abs=0.001)
 

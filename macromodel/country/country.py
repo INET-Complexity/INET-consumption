@@ -2386,7 +2386,7 @@ class Country:
         ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
         wealth_function = getattr(self.households, "functions", {}).get("wealth")
         payout_ratio = float(getattr(wealth_function, "dividend_fund_payout_ratio", 0.0))
-        empirical_payout_ratio = float(self.households.states["dividend_fund_empirical_payout_ratio"])
+        empirical_payout_ratio = float(getattr(wealth_function, "dividend_fund_empirical_proxy_ratio", 0.0))
         ts.dividend_fund_calibrated_total_distribution.append(result.hypothetical_total_distribution * payout_ratio)
         ts.dividend_fund_payout_ratio.append([payout_ratio])
         ts.dividend_fund_empirical_payout_ratio.append([empirical_payout_ratio])

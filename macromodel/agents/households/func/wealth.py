@@ -426,9 +426,11 @@ class DefaultWealthSetter(WealthSetter):
 class PaperAssetReturnWealthSetter(DefaultWealthSetter):
     """Financial-income draw plus the default wealth-allocation contract.
 
-    The paper return is financial income in the current increment.  It is not
-    also capitalised as an illiquid-asset valuation gain.  A separate zero
-    capital-gains carrier preserves the future extension point.
+    The reference paper's ``r_kappa`` is a reinvested return in the IFA law of
+    motion.  This income-only increment deliberately reuses that calibrated
+    stochastic process as financial income instead: it enters household income
+    and saving, but is not also capitalised as an IFA valuation gain.  A separate
+    zero capital-gains carrier preserves the future extension point.
     """
 
     exclude_financial_asset_income_from_saving = False
@@ -459,6 +461,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         dynamic_shifters: dict | None = None,
         data_paths: dict | None = None,
         dividend_fund_payout_ratio: float = 0.0,
+        dividend_fund_empirical_proxy_ratio: float = 0.0,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -491,6 +494,8 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"Unsupported liquid_return_source: {liquid_return_source}.")
         if not 0.0 <= dividend_fund_payout_ratio <= 1.0:
             raise ValueError("dividend_fund_payout_ratio must be in [0, 1].")
+        if not 0.0 <= dividend_fund_empirical_proxy_ratio <= 1.0:
+            raise ValueError("dividend_fund_empirical_proxy_ratio must be in [0, 1].")
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq
@@ -499,6 +504,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self.equity_weight = equity_weight
         self.draw_scope = draw_scope
         self.dividend_fund_payout_ratio = dividend_fund_payout_ratio
+        self.dividend_fund_empirical_proxy_ratio = dividend_fund_empirical_proxy_ratio
         self._current_illiquid_return_rate: float | None = None
         self._current_illiquid_return_amount: np.ndarray | None = None
         self._current_illiquid_return_period: int | None = None

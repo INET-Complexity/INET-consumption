@@ -181,8 +181,12 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
     country = SimpleNamespace(
         households=SimpleNamespace(
             ts=households_ts,
-            states={"dividend_fund_empirical_payout_ratio": 0.30},
-            functions={"wealth": SimpleNamespace(dividend_fund_payout_ratio=0.25)},
+            functions={
+                "wealth": SimpleNamespace(
+                    dividend_fund_payout_ratio=0.25,
+                    dividend_fund_empirical_proxy_ratio=0.30,
+                )
+            },
         ),
         firms=firms,
         banks=SimpleNamespace(ts=banks_ts),

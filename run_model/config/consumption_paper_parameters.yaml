@@ -79,11 +79,14 @@ asset_returns:
     rho: -0.2585
     equity_weight: 0.5
     draw_scope: country_period
-    # Reduced-form share of the narrower cash-eligible profit capacity, not the
-    # Eurostat national-accounts payout ratio. The Eurostat reader value is
-    # persisted separately as an empirical benchmark. This rate is validated
-    # over the declared seeds 12-16, t_max=50 release envelope.
-    dividend_fund_payout_ratio: 0.04
+    # Eurostat FRA 2011 proxy: (household D4 property income received minus D41
+    # interest received) / firm B2A3N surplus = 0.1337409703. The repository
+    # extract has no separate D42 dividend item, so this is an upper-bound proxy.
+    dividend_fund_empirical_proxy_ratio: 0.1337409703
+    # A 10% operational rate passes seeds 12-21 at t_max=50; the binding run
+    # uses 98.89% of the financial-income target. The raw 13.37% proxy requires
+    # payout smoothing or a revised target and is therefore not used directly.
+    dividend_fund_payout_ratio: 0.10
 
 desired_consumption:
   credit_augmented_v1:

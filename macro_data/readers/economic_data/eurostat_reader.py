@@ -683,6 +683,44 @@ class EuroStatReader:
 
         return (hh_prop + hh_surplus) / firm_surplus
 
+    def household_non_interest_property_income_ratio(
+        self, country: str | Country, year: int, proxy_country: Country = Country("FRA")
+    ) -> float:
+        """Estimate household dividend-like income relative to firm surplus.
+
+        Eurostat item D4 contains all property income and D41 contains interest.
+        The available repository extract does not expose D42 dividends
+        separately, so ``D4 received - D41 received`` is used as a transparent
+        upper-bound proxy for dividend and other non-interest property income.
+        Unlike :meth:`dividend_payout_ratio`, this measure does not add household
+        mixed/operating surplus to the numerator.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        if year not in [2010, 2011]:
+            year = 2011
+        transactions = self.data["nonfinancial_transactions"]
+        household_received = transactions[(transactions["direct"] == "RECV") & (transactions["sector"] == "S14")]
+        property_income = household_received[household_received["na_item"] == "D4"]
+        interest_income = household_received[household_received["na_item"] == "D41"]
+        firm_surplus = self.data["iot_tables"]
+        firm_surplus = firm_surplus[(firm_surplus["induse"] == "TOTAL") & (firm_surplus["prod_na"] == "B2A3N")]
+
+        property_value = self.find_value(property_income, country, str(year), return_last_value=False)
+        interest_value = self.find_value(interest_income, country, str(year), return_last_value=False)
+        firm_surplus_value = self.find_value(firm_surplus, country, str(year), return_last_value=False)
+        if property_value is None or interest_value is None or firm_surplus_value is None:
+            if country == proxy_country:
+                raise ValueError(f"No household property-income proxy is available for {country} in {year}.")
+            return self.household_non_interest_property_income_ratio(proxy_country, year)
+        values = np.asarray([property_value, interest_value, firm_surplus_value], dtype=float)
+        if not np.all(np.isfinite(values)):
+            raise ValueError("Property income, interest income, and firm surplus must be finite.")
+        if firm_surplus_value <= 0.0:
+            raise ValueError("Firm surplus must be finite and positive for the property-income ratio.")
+        numerator = max(float(property_value) - float(interest_value), 0.0)
+        return numerator / float(firm_surplus_value)
+
     def firm_risk_premium(self, country: Country, year: int) -> float:
         """
         Calculate the firm risk premium for a given country and year.

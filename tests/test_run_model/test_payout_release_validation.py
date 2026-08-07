@@ -92,6 +92,62 @@ def test__multi_seed_payout_release_envelope_rejects_capital_gains(tmp_path):
         validate_payout_release_envelope(tmp_path, seeds=(13,))
 
 
+@pytest.mark.parametrize(
+    ("dataset", "identity", "message"),
+    (
+        (
+            "total_income_financial_assets_distribution",
+            "realised",
+            "negative distribution component",
+        ),
+        (
+            "total_income_financial_assets_residual_portfolio_return",
+            "realised",
+            "negative residual portfolio return component",
+        ),
+        (
+            "total_income_financial_assets_calibration_target",
+            None,
+            "negative calibration target component",
+        ),
+        (
+            "income_financial_assets_distribution_excess_over_target",
+            None,
+            "negative distribution excess over target component",
+        ),
+        (
+            "total_expected_income_financial_assets_distribution",
+            "expected",
+            "negative expected distribution component",
+        ),
+        (
+            "total_expected_income_financial_assets_residual",
+            "expected",
+            "negative expected residual component",
+        ),
+    ),
+)
+def test__multi_seed_payout_release_envelope_rejects_negative_components(tmp_path, dataset, identity, message):
+    path = tmp_path / "seed-13" / "multi_country_simulation.h5"
+    _write_release_file(path, distribution_ratio=0.4)
+    with h5py.File(path, "r+") as h5_file:
+        households = h5_file["FRA/households"]
+        households[dataset][-1, 0] = -1.0
+        if identity == "realised":
+            households["total_income_financial_assets"][-1, 0] = (
+                households["total_income_financial_assets_distribution"][-1, 0]
+                + households["total_income_financial_assets_residual_portfolio_return"][-1, 0]
+            )
+        elif identity == "expected":
+            households["expected_income_financial_assets"][-1, 0] = (
+                households["total_expected_income_financial_assets_distribution"][-1, 0]
+                + households["total_expected_income_financial_assets_residual"][-1, 0]
+            )
+
+    with pytest.raises(AssertionError, match=message):
+        validate_payout_release_envelope(tmp_path, seeds=(13,))
+
+
 def test__multi_seed_payout_release_envelope_rejects_wrong_rate_or_horizon(tmp_path):
     path = tmp_path / "seed-13" / "multi_country_simulation.h5"
     _write_release_file(path, distribution_ratio=0.4, payout_ratio=0.04)

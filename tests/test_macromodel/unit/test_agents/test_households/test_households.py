@@ -3052,10 +3052,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.functions["wealth"].compute_income_from_financial_assets(
             current_wealth_in_other_financial_assets=test_households.ts.current("wealth_other_financial_assets"),
         )
-        expected_post_return_ifa = (
-            test_households.ts.current("wealth_other_financial_assets")
-            + test_households.current_illiquid_financial_asset_return_amount()
-        )
+        expected_post_return_ifa = test_households.ts.current("wealth_other_financial_assets")
         captured = {}
 
         def fake_stage4_helper(**kwargs):
@@ -3097,7 +3094,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         np.testing.assert_allclose(captured["post_return_ifa"], expected_post_return_ifa)
 
-    def test__current_stage4_handoff_draws_current_return_when_not_pre_drawn(self, test_households, monkeypatch):
+    def test__current_stage4_handoff_does_not_draw_financial_income(self, test_households, monkeypatch):
         n_households = test_households.ts.current("n_households")
         test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
             other_real_assets_depreciation_rate=0.05,
@@ -3118,15 +3115,19 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
         test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
-        monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
+
+        def fail_if_drawn():
+            raise AssertionError("Stage 4 must not realise the financial-income draw.")
+
+        monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", fail_if_drawn)
 
         handoff = test_households.current_stage4_handoff_for_stage5(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
-        np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
+        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 25.0))
+        np.testing.assert_allclose(handoff["r_kappa"], np.zeros(n_households))
 
 
 class TestComputeAndRecordResidualCapacityFallback:

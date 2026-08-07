@@ -70,6 +70,19 @@ def validate_payout_release_file(
         raise AssertionError(f"Seed {seed} has inconsistent payout diagnostic lengths.")
     if not all(np.all(np.isfinite(values)) for values in arrays):
         raise AssertionError(f"Seed {seed} contains non-finite payout release diagnostics.")
+    non_negative_components = {
+        "distribution": distribution,
+        "residual portfolio return": residual,
+        "total financial income": total_income,
+        "calibration target": target,
+        "distribution excess over target": distribution_excess,
+        "expected distribution": expected_distribution,
+        "expected residual": expected_residual,
+        "expected total financial income": expected_total,
+    }
+    for component_name, values in non_negative_components.items():
+        if np.any(values < -absolute_tolerance):
+            raise AssertionError(f"Seed {seed} has a negative {component_name} component.")
     if not np.allclose(
         payout_ratio,
         expected_payout_ratio,

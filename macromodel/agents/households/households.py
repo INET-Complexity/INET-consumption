@@ -2225,10 +2225,10 @@ class Households(Agent):
             }
 
         opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
-        current_return_amount = self.current_illiquid_financial_asset_return_amount()
-        if not np.all(np.isfinite(current_return_amount)):
-            current_return_amount = self.compute_income_from_financial_assets()
-        post_return_ifa = self.ts.current("wealth_other_financial_assets") + current_return_amount
+        # Increment 2 treats the stochastic asset return as realised financial
+        # income, not as a capital gain. Stage 4 therefore plans from the
+        # balance-sheet stock alone and must not draw or capitalise that income.
+        post_return_ifa = self.ts.current("wealth_other_financial_assets")
         investable_surplus = (
             self.ts.current("expected_income")
             - np.asarray(target_consumption_total, dtype=float)
@@ -2275,7 +2275,8 @@ class Households(Agent):
             "delta_tilde": diagnostics.rebalancing.delta_tilde,
             "opening_tfa_scale": diagnostics.portfolio_opening_tfa_scale,
             "post_return_ifa": diagnostics.portfolio_post_return_ifa,
-            "r_kappa": np.full(n_households, self.current_illiquid_financial_asset_return_rate()),
+            # Capital gains are intentionally disabled in this increment.
+            "r_kappa": np.zeros(n_households),
         }
 
     def update_income_belief_learning_state(

@@ -33,7 +33,8 @@ def test__financial_asset_income_reduces_residual_without_double_counting():
     assert result.aggregate_expected_residual_portfolio_return == 50.0
     assert result.aggregate_calibration_target == 100.0
     assert result.target_gap == pytest.approx(0.0)
-    assert result.calibration_error == pytest.approx(0.0)
+    assert result.residual_calibration_scale == pytest.approx(1.25)
+    assert result.calibration_error == pytest.approx(10.0)
     assert np.all(result.residual_portfolio_return >= 0.0)
 
 
@@ -68,7 +69,7 @@ def test__non_positive_realised_profile_produces_zero_current_residual():
 
     np.testing.assert_array_equal(result.residual_portfolio_return, np.zeros(3))
     assert result.target_gap == pytest.approx(100.0)
-    assert result.calibration_error == pytest.approx(0.0)
+    assert result.calibration_error == pytest.approx(60.0)
 
 
 def test__stochastic_residual_does_not_force_period_target_identity():
@@ -79,7 +80,7 @@ def test__stochastic_residual_does_not_force_period_target_identity():
     assert result.stochastic_multiplier == pytest.approx(0.5)
     assert result.total_income.sum() == pytest.approx(75.0)
     assert result.target_gap == pytest.approx(25.0)
-    assert result.calibration_error == pytest.approx(0.0)
+    assert result.calibration_error == pytest.approx(10.0)
 
 
 def test__empirical_target_scales_initial_observed_yield_by_current_ifa():
@@ -120,6 +121,9 @@ def test__country_records_lagged_components_without_moving_deposits():
         total_income_financial_assets_calibration_target=[0.0],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
+        income_financial_assets_residual_calibration_scale=[1.0],
+        wealth_other_financial_assets_capital_gains=np.zeros(2),
+        total_wealth_other_financial_assets_capital_gains=[0.0],
         wealth_deposits=np.array([100.0, 200.0]),
         wealth_other_financial_assets=np.array([40.0, 60.0]),
     )
@@ -145,7 +149,9 @@ def test__country_records_lagged_components_without_moving_deposits():
         + ts.current("income_financial_assets_residual_portfolio_return"),
     )
     assert ts.current("total_income_financial_assets")[0] == pytest.approx(100.0)
-    assert result.calibration_error == pytest.approx(0.0)
+    assert result.calibration_error == pytest.approx(40.0)
+    assert result.residual_calibration_scale == pytest.approx(1.8)
+    np.testing.assert_array_equal(ts.current("wealth_other_financial_assets_capital_gains"), np.zeros(2))
     np.testing.assert_array_equal(ts.current("wealth_deposits"), deposits_before)
     np.testing.assert_array_equal(ts.current("expected_income_financial_assets"), expected_before)
     np.testing.assert_array_equal(firms.ts.current("deposits"), firm_deposits_before)
@@ -166,6 +172,9 @@ def test__country_consumes_distribution_only_after_carrier_is_appended():
         total_income_financial_assets_calibration_target=[100.0],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
+        income_financial_assets_residual_calibration_scale=[1.0],
+        wealth_other_financial_assets_capital_gains=np.zeros(2),
+        total_wealth_other_financial_assets_capital_gains=[0.0],
         wealth_other_financial_assets=np.array([40.0, 60.0]),
     )
     households = SimpleNamespace(
@@ -181,3 +190,46 @@ def test__country_consumes_distribution_only_after_carrier_is_appended():
 
     np.testing.assert_array_equal(first.distribution_income, np.zeros(2))
     np.testing.assert_array_equal(second.distribution_income, [4.0, 6.0])
+
+
+def test__known_distribution_is_handed_into_expected_income_composition():
+    target = np.array([40.0, 60.0])
+
+    without_distribution = compose_financial_asset_income(
+        lagged_distribution_income=np.zeros(2),
+        residual_profile=target,
+        expected_non_negative_residual_profile=target,
+        calibration_target=target,
+    )
+    with_distribution = compose_financial_asset_income(
+        lagged_distribution_income=np.array([4.0, 6.0]),
+        residual_profile=target,
+        expected_non_negative_residual_profile=target,
+        calibration_target=target,
+    )
+
+    np.testing.assert_array_equal(with_distribution.distribution_income, [4.0, 6.0])
+    np.testing.assert_array_equal(with_distribution.residual_portfolio_return, [36.0, 54.0])
+    np.testing.assert_array_equal(with_distribution.total_income, target)
+    np.testing.assert_array_equal(without_distribution.total_income, target)
+
+
+def test__distribution_changes_realised_saving_income_when_residual_shock_is_not_at_expectation():
+    target = np.array([40.0, 60.0])
+    realised_profile = np.array([20.0, 30.0])
+
+    without_distribution = compose_financial_asset_income(
+        lagged_distribution_income=np.zeros(2),
+        residual_profile=realised_profile,
+        expected_non_negative_residual_profile=target,
+        calibration_target=target,
+    )
+    with_distribution = compose_financial_asset_income(
+        lagged_distribution_income=np.array([4.0, 6.0]),
+        residual_profile=realised_profile,
+        expected_non_negative_residual_profile=target,
+        calibration_target=target,
+    )
+
+    assert with_distribution.total_income.sum() == pytest.approx(55.0)
+    assert without_distribution.total_income.sum() == pytest.approx(50.0)

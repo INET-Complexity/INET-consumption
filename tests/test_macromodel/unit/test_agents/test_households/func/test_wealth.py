@@ -34,9 +34,7 @@ def test__paper_asset_return_wealth_setter_uses_common_illiquid_return():
     expected_rate = np.exp(0.05) - 1.0
     np.testing.assert_allclose(income, np.array([100.0, 200.0, 0.0]) * expected_rate)
     assert setter.current_illiquid_return_rate() == pytest.approx(expected_rate)
-    np.testing.assert_allclose(
-        updated_ifa, opening_ifa + income + np.array([1.0, 2.0, 3.0]) - np.array([4.0, 5.0, 6.0])
-    )
+    np.testing.assert_allclose(updated_ifa, opening_ifa + np.array([1.0, 2.0, 3.0]) - np.array([4.0, 5.0, 6.0]))
 
 
 def test__paper_asset_return_wealth_setter_seeded_draw_is_reproducible():
@@ -108,9 +106,9 @@ def test__paper_asset_return_wealth_setter_caps_drawdown_after_negative_return()
         period_index=1,
     )
 
-    np.testing.assert_allclose(used_ifa, np.array([20.0]))
-    np.testing.assert_allclose(used_deposits, np.array([30.0]))
-    np.testing.assert_allclose(updated_ifa, np.array([0.0]), atol=1e-12)
+    np.testing.assert_allclose(used_ifa, np.array([50.0]))
+    np.testing.assert_allclose(used_deposits, np.array([0.0]))
+    np.testing.assert_allclose(updated_ifa, np.array([50.0]), atol=1e-12)
 
 
 def test__paper_asset_return_wealth_setter_rejects_negative_volatility():
@@ -143,8 +141,8 @@ def test__paper_asset_return_wealth_setter_reuses_one_draw_until_wealth_update(m
 
     np.testing.assert_allclose(first_income, np.array([10.0, 20.0]))
     np.testing.assert_allclose(second_income, first_income)
-    np.testing.assert_allclose(updated_ifa, np.array([110.0, 220.0]))
-    np.testing.assert_allclose(next_period_income, np.array([22.0, 44.0]))
+    np.testing.assert_allclose(updated_ifa, opening_ifa)
+    np.testing.assert_allclose(next_period_income, np.array([20.0, 40.0]))
 
 
 def test__paper_asset_return_wealth_setter_allows_planning_draw_before_period_binding(monkeypatch):
@@ -163,7 +161,13 @@ def test__paper_asset_return_wealth_setter_allows_planning_draw_before_period_bi
 
     np.testing.assert_allclose(planning_income, np.array([10.0, 20.0]))
     np.testing.assert_allclose(realized_income, planning_income)
-    np.testing.assert_allclose(updated_ifa, np.array([110.0, 220.0]))
+    np.testing.assert_allclose(updated_ifa, opening_ifa)
+
+
+def test__paper_asset_income_is_saved_normally_and_capital_gains_are_not_imputed():
+    setter = _paper_setter()
+
+    assert setter.exclude_financial_asset_income_from_saving is False
 
 
 def test__paper_asset_return_wealth_setter_requires_period_draw_before_wealth_update():

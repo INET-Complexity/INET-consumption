@@ -18,6 +18,7 @@ class FinancialAssetIncomeComponents:
     aggregate_expected_residual_portfolio_return: float
     aggregate_calibration_target: float
     stochastic_multiplier: float
+    residual_calibration_scale: float
     target_gap: float
     calibration_error: float
 
@@ -60,9 +61,7 @@ def compose_financial_asset_income(
 
     distribution = _finite_1d("lagged_distribution_income", lagged_distribution_income)
     profile = _finite_1d("residual_profile", residual_profile)
-    expected_profile = _finite_1d(
-        "expected_non_negative_residual_profile", expected_non_negative_residual_profile
-    )
+    expected_profile = _finite_1d("expected_non_negative_residual_profile", expected_non_negative_residual_profile)
     target = _finite_1d("calibration_target", calibration_target)
     if any(values.shape != distribution.shape for values in (profile, expected_profile, target)):
         raise ValueError("All financial-asset income inputs must contain one value per household.")
@@ -95,6 +94,9 @@ def compose_financial_asset_income(
         raise ValueError("A positive residual target requires a positive expected residual profile.")
 
     realised_profile_total = float(np.maximum(profile, 0.0).sum())
+    residual_calibration_scale = (
+        aggregate_expected_residual / expected_profile_total if expected_profile_total > tolerance else 0.0
+    )
     stochastic_multiplier = (
         realised_profile_total / expected_profile_total if expected_profile_total > tolerance else 0.0
     )
@@ -104,7 +106,11 @@ def compose_financial_asset_income(
         residual = target_weights / target_weight_total * aggregate_expected_residual * stochastic_multiplier
     total = distribution + residual
     target_gap = float(aggregate_target - total.sum())
-    calibration_error = abs(aggregate_target - aggregate_distribution - aggregate_expected_residual)
+    # Independent diagnostic: how far the unscaled expected residual-return
+    # process is from the remaining empirical income target.  The previous
+    # identity compared the target with a residual defined as target minus
+    # distributions and was therefore zero by construction.
+    calibration_error = abs(aggregate_expected_residual - expected_profile_total)
 
     return FinancialAssetIncomeComponents(
         distribution_income=distribution,
@@ -116,6 +122,7 @@ def compose_financial_asset_income(
         aggregate_expected_residual_portfolio_return=aggregate_expected_residual,
         aggregate_calibration_target=aggregate_target,
         stochastic_multiplier=stochastic_multiplier,
+        residual_calibration_scale=residual_calibration_scale,
         target_gap=target_gap,
         calibration_error=calibration_error,
     )

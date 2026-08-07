@@ -202,6 +202,10 @@ def create_households_timeseries(
         income_financial_assets=data["Income from Financial Assets"].values,
         total_income_financial_assets=[data["Income from Financial Assets"].values.sum()],
         expected_income_financial_assets=data["Income from Financial Assets"].values,
+        expected_income_financial_assets_distribution=np.zeros(len(data)),
+        expected_income_financial_assets_residual=data["Income from Financial Assets"].values,
+        total_expected_income_financial_assets_distribution=[0.0],
+        total_expected_income_financial_assets_residual=[data["Income from Financial Assets"].values.sum()],
         income_financial_assets_distribution=np.zeros(len(data)),
         income_financial_assets_residual_portfolio_return=data["Income from Financial Assets"].values,
         income_financial_assets_calibration_target=data["Income from Financial Assets"].values,
@@ -210,6 +214,7 @@ def create_households_timeseries(
         total_income_financial_assets_calibration_target=[data["Income from Financial Assets"].values.sum()],
         income_financial_assets_target_gap=[0.0],
         income_financial_assets_calibration_error=[0.0],
+        income_financial_assets_residual_calibration_scale=[1.0],
         #
         price_paid_for_property=np.full(len(data), np.nan),
         rent=data["Rent Paid"].values,
@@ -231,6 +236,8 @@ def create_households_timeseries(
         total_wealth_deposits=[np.sum(data["Wealth in Deposits"].values)],
         wealth_other_financial_assets=data["Wealth in Other Financial Assets"].values,
         total_wealth_other_financial_assets=[np.sum(data["Wealth in Other Financial Assets"].values)],
+        wealth_other_financial_assets_capital_gains=np.zeros(len(data)),
+        total_wealth_other_financial_assets_capital_gains=[0.0],
         wealth_financial_assets=data["Wealth in Financial Assets"].values,
         # Increment 1 diagnostic dividend fund. These fields are observability
         # only and are never read by household income, wealth, or deposits.
@@ -241,6 +248,8 @@ def create_households_timeseries(
         dividend_fund_hypothetical_total_distribution=np.zeros(len(data)),
         dividend_fund_calibrated_total_distribution=np.zeros(len(data)),
         dividend_fund_payout_ratio=[0.0],
+        dividend_fund_empirical_payout_ratio=[0.0],
+        dividend_fund_payout_ratio_gap=[0.0],
         dividend_fund_distribution_by_ifa_quintile=np.zeros(5),
         dividend_fund_total_positive_ifa=[0.0],
         dividend_fund_positive_ifa_household_count=[0.0],

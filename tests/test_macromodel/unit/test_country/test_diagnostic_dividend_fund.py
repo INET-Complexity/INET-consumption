@@ -127,6 +127,8 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
         dividend_fund_hypothetical_total_distribution=np.zeros(3),
         dividend_fund_calibrated_total_distribution=np.zeros(3),
         dividend_fund_payout_ratio=[0.0],
+        dividend_fund_empirical_payout_ratio=[0.0],
+        dividend_fund_payout_ratio_gap=[0.0],
         dividend_fund_distribution_by_ifa_quintile=np.zeros(5),
         dividend_fund_total_positive_ifa=[0.0],
         dividend_fund_positive_ifa_household_count=[0.0],
@@ -179,6 +181,7 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
     country = SimpleNamespace(
         households=SimpleNamespace(
             ts=households_ts,
+            states={"dividend_fund_empirical_payout_ratio": 0.30},
             functions={"wealth": SimpleNamespace(dividend_fund_payout_ratio=0.25)},
         ),
         firms=firms,
@@ -204,6 +207,8 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
         0.25 * result.hypothetical_total_distribution,
     )
     assert households_ts.current("dividend_fund_payout_ratio")[0] == pytest.approx(0.25)
+    assert households_ts.current("dividend_fund_empirical_payout_ratio")[0] == pytest.approx(0.30)
+    assert households_ts.current("dividend_fund_payout_ratio_gap")[0] == pytest.approx(-0.05)
     np.testing.assert_array_equal(firms_ts.current("dividend_fund_cash_distributable_profit_candidate"), [50.0])
     np.testing.assert_array_equal(banks_ts.current("dividend_fund_cash_distributable_profit_candidate"), [40.0])
     assert households_ts.current("dividend_fund_household_deposit_identity_error")[0] == 0.0

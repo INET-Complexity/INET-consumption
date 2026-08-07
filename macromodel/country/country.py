@@ -1113,7 +1113,16 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
-        expected_income_financial_assets = self.households.compute_expected_income_from_financial_assets()
+        from macromodel.agents.households.func.financial_asset_income import compose_financial_asset_income
+
+        expected_financial_income_target = self.households.compute_expected_income_from_financial_assets()
+        expected_financial_income = compose_financial_asset_income(
+            lagged_distribution_income=self.households.ts.current("dividend_fund_calibrated_total_distribution"),
+            residual_profile=expected_financial_income_target,
+            expected_non_negative_residual_profile=expected_financial_income_target,
+            calibration_target=expected_financial_income_target,
+        )
+        expected_income_financial_assets = expected_financial_income.total_income
 
         if replace_current:
             self.households.ts.override_current("expected_income_employee", expected_income_employee)
@@ -1124,12 +1133,40 @@ class Country:
                 "expected_income_financial_assets",
                 expected_income_financial_assets,
             )
+            self.households.ts.override_current(
+                "expected_income_financial_assets_distribution",
+                expected_financial_income.distribution_income,
+            )
+            self.households.ts.override_current(
+                "expected_income_financial_assets_residual",
+                expected_financial_income.residual_portfolio_return,
+            )
+            self.households.ts.override_current(
+                "total_expected_income_financial_assets_distribution",
+                [expected_financial_income.aggregate_distribution_income],
+            )
+            self.households.ts.override_current(
+                "total_expected_income_financial_assets_residual",
+                [expected_financial_income.aggregate_residual_portfolio_return],
+            )
         else:
             self.households.ts.expected_income_employee.append(expected_income_employee)
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
             self.households.ts.income_rental.append(income_rental)
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
+            self.households.ts.expected_income_financial_assets_distribution.append(
+                expected_financial_income.distribution_income
+            )
+            self.households.ts.expected_income_financial_assets_residual.append(
+                expected_financial_income.residual_portfolio_return
+            )
+            self.households.ts.total_expected_income_financial_assets_distribution.append(
+                [expected_financial_income.aggregate_distribution_income]
+            )
+            self.households.ts.total_expected_income_financial_assets_residual.append(
+                [expected_financial_income.aggregate_residual_portfolio_return]
+            )
 
         expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
@@ -2349,10 +2386,11 @@ class Country:
         ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
         wealth_function = getattr(self.households, "functions", {}).get("wealth")
         payout_ratio = float(getattr(wealth_function, "dividend_fund_payout_ratio", 0.0))
-        ts.dividend_fund_calibrated_total_distribution.append(
-            result.hypothetical_total_distribution * payout_ratio
-        )
+        empirical_payout_ratio = float(self.households.states["dividend_fund_empirical_payout_ratio"])
+        ts.dividend_fund_calibrated_total_distribution.append(result.hypothetical_total_distribution * payout_ratio)
         ts.dividend_fund_payout_ratio.append([payout_ratio])
+        ts.dividend_fund_empirical_payout_ratio.append([empirical_payout_ratio])
+        ts.dividend_fund_payout_ratio_gap.append([payout_ratio - empirical_payout_ratio])
         ts.dividend_fund_distribution_by_ifa_quintile.append(result.distribution_by_ifa_quintile)
         ts.dividend_fund_total_positive_ifa.append([result.total_positive_ifa])
         ts.dividend_fund_positive_ifa_household_count.append([result.positive_ifa_household_count])
@@ -2387,8 +2425,8 @@ class Country:
         period's allocation: the new current-period allocation is appended only
         later, after bank cash-distributable profits are available in G2.
         The calibration target is the initial empirical financial-income yield
-        applied to current positive IFA; the separate planning expectation is
-        left unchanged.
+        applied to current positive IFA. The same known lagged distribution is
+        handed into pre-market expected financial income for planning.
         """
         from macromodel.agents.households.func.financial_asset_income import (
             compose_financial_asset_income,
@@ -2417,6 +2455,13 @@ class Country:
         ts.total_income_financial_assets_calibration_target.append([result.aggregate_calibration_target])
         ts.income_financial_assets_target_gap.append([result.target_gap])
         ts.income_financial_assets_calibration_error.append([result.calibration_error])
+        ts.income_financial_assets_residual_calibration_scale.append([result.residual_calibration_scale])
+        # Capital gains are deliberately out of scope in this increment. Keep
+        # an explicit zero carrier so a later valuation block cannot be confused
+        # with the financial-income residual.
+        capital_gains = np.zeros_like(result.total_income)
+        ts.wealth_other_financial_assets_capital_gains.append(capital_gains)
+        ts.total_wealth_other_financial_assets_capital_gains.append([0.0])
         ts.income_financial_assets.append(result.total_income)
         ts.total_income_financial_assets.append([result.total_income.sum()])
         return result

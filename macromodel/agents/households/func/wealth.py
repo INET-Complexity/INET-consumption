@@ -424,9 +424,14 @@ class DefaultWealthSetter(WealthSetter):
 
 
 class PaperAssetReturnWealthSetter(DefaultWealthSetter):
-    """Default wealth update plus paper-style illiquid financial asset returns."""
+    """Financial-income draw plus the default wealth-allocation contract.
 
-    exclude_financial_asset_income_from_saving = True
+    The paper return is financial income in the current increment.  It is not
+    also capitalised as an illiquid-asset valuation gain.  A separate zero
+    capital-gains carrier preserves the future extension point.
+    """
+
+    exclude_financial_asset_income_from_saving = False
     uses_periodic_illiquid_returns = True
 
     def __init__(
@@ -453,7 +458,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         dynamic_shifters_enabled: bool = False,
         dynamic_shifters: dict | None = None,
         data_paths: dict | None = None,
-        dividend_fund_payout_ratio: float = 0.05,
+        dividend_fund_payout_ratio: float = 0.0,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -545,10 +550,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         def normal_cdf(value: float) -> float:
             return 0.5 * (1.0 + erf(value / sqrt(2.0)))
 
-        return float(
-            exp(mean + 0.5 * variance) * normal_cdf((mean + variance) / sigma)
-            - normal_cdf(mean / sigma)
-        )
+        return float(exp(mean + 0.5 * variance) * normal_cdf((mean + variance) / sigma) - normal_cdf(mean / sigma))
 
     def draw_illiquid_return_rate(self) -> float:
         covariance = np.array(
@@ -573,7 +575,12 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> np.ndarray:
-        """Draw and stage the valuation return later consumed by the wealth update."""
+        """Draw and stage the stochastic residual financial-income profile.
+
+        The legacy method name is retained for configuration compatibility. The
+        staged amount is consumed for period-ordering checks but is not added to
+        the illiquid financial-asset stock.
+        """
         if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
             if period_index is not None:
                 if self._current_illiquid_return_period is None:
@@ -652,11 +659,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        post_return_other_financial_assets = current_wealth_in_other_financial_assets + self._current_return_amount_for(
-            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
-            period_index=period_index,
-        )
-        available_other_financial_assets = np.maximum(post_return_other_financial_assets, 0.0)
+        available_other_financial_assets = np.maximum(current_wealth_in_other_financial_assets, 0.0)
         used_up_wealth_in_other_financial_assets = np.minimum(available_other_financial_assets, used_up_wealth)
         used_up_wealth_in_deposits = np.minimum(
             current_wealth_in_deposits,
@@ -674,12 +677,14 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         used_up_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> np.ndarray:
+        # Validate and consume the staged financial-income draw without
+        # capitalising it a second time as a valuation gain.
+        self._current_return_amount_for(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
         updated_wealth = (
             current_wealth_in_other_financial_assets
-            + self._current_return_amount_for(
-                current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
-                period_index=period_index,
-            )
             + new_wealth_in_other_financial_assets
             - used_up_wealth_in_other_financial_assets
         )

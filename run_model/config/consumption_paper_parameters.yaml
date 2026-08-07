@@ -79,9 +79,11 @@ asset_returns:
     rho: -0.2585
     equity_weight: 0.5
     draw_scope: country_period
-    # Fixed-policy Increment 2 experiment. Converts Increment 1's full-capacity
-    # diagnostic into an authoritative calibrated receipt carrier.
-    dividend_fund_payout_ratio: 0.05
+    # Reduced-form share of the narrower cash-eligible profit capacity, not the
+    # Eurostat national-accounts payout ratio. The Eurostat reader value is
+    # persisted separately as an empirical benchmark. This rate is validated
+    # over the declared seeds 12-16, t_max=50 release envelope.
+    dividend_fund_payout_ratio: 0.04
 
 desired_consumption:
   credit_augmented_v1:

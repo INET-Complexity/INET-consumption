@@ -1684,9 +1684,7 @@ class Households(Agent):
         expected_return = getattr(wealth_function, "compute_expected_non_negative_valuation_return", None)
         if expected_return is None:
             return np.maximum(self.compute_expected_income_from_financial_assets(), 0.0)
-        return expected_return(
-            current_wealth_in_other_financial_assets=self.residual_return_ifa_proxy()
-        )
+        return expected_return(current_wealth_in_other_financial_assets=self.residual_return_ifa_proxy())
 
     def residual_return_ifa_proxy(self) -> np.ndarray:
         """Return current positive IFA excluding the fixed initial direct-share fraction."""

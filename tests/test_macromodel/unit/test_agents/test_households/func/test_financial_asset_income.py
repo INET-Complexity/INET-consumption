@@ -163,12 +163,8 @@ def test__country_records_lagged_components_without_moving_deposits():
         stage_illiquid_valuation_return=lambda period_index=None: np.array([20.0, 30.0]),
         expected_non_negative_valuation_return=lambda: np.array([20.0, 30.0]),
     )
-    firms = SimpleNamespace(
-        ts=TimeSeries(deposits=np.array([500.0]), dividend_fund_settlement_debit=np.array([0.0]))
-    )
-    banks = SimpleNamespace(
-        ts=TimeSeries(deposits=np.array([700.0]), dividend_fund_settlement_debit=np.array([10.0]))
-    )
+    firms = SimpleNamespace(ts=TimeSeries(deposits=np.array([500.0]), dividend_fund_settlement_debit=np.array([0.0])))
+    banks = SimpleNamespace(ts=TimeSeries(deposits=np.array([700.0]), dividend_fund_settlement_debit=np.array([10.0])))
     country = SimpleNamespace(households=households, firms=firms, banks=banks)
     firm_deposits_before = firms.ts.current("deposits").copy()
     bank_deposits_before = banks.ts.current("deposits").copy()

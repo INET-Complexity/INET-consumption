@@ -2376,12 +2376,8 @@ class Country:
         )
         wealth_function = getattr(self.households, "functions", {}).get("wealth")
         legacy_payout_ratio = float(getattr(wealth_function, "dividend_fund_payout_ratio", 0.0))
-        firm_payout_ratio = float(
-            getattr(wealth_function, "dividend_fund_firm_payout_ratio", legacy_payout_ratio)
-        )
-        bank_payout_ratio = float(
-            getattr(wealth_function, "dividend_fund_bank_payout_ratio", legacy_payout_ratio)
-        )
+        firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", legacy_payout_ratio))
+        bank_payout_ratio = float(getattr(wealth_function, "dividend_fund_bank_payout_ratio", legacy_payout_ratio))
         has_owners = float(result.ownership_quota.sum()) > 0.0
         firm_declared_by_payer = (
             result.firm_distributable_profit_candidate * firm_payout_ratio
@@ -2427,13 +2423,10 @@ class Country:
         ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
         empirical_payout_ratio = float(getattr(wealth_function, "dividend_fund_empirical_proxy_ratio", 0.0))
         total_candidate = (
-            result.total_firm_distributable_profit_candidate
-            + result.total_bank_distributable_profit_candidate
+            result.total_firm_distributable_profit_candidate + result.total_bank_distributable_profit_candidate
         )
         effective_payout_ratio = (
-            (firm_declared_total + bank_declared_total) / total_candidate
-            if total_candidate > 0.0
-            else 0.0
+            (firm_declared_total + bank_declared_total) / total_candidate if total_candidate > 0.0 else 0.0
         )
         current_positive_ifa = np.maximum(ts.prev("wealth_other_financial_assets"), 0.0)
         ownership_fraction = self.households.states["dividend_fund_initial_direct_share_fraction"]
@@ -2476,17 +2469,23 @@ class Country:
         ts.dividend_fund_bank_settlement_identity_error.append(
             [float(settled_bank_distribution.sum()) - bank_settlement_total]
         )
-        ts.dividend_fund_settlement_identity_error.append(
-            [settled_distribution_total - payer_settlement_total]
-        )
+        ts.dividend_fund_settlement_identity_error.append([settled_distribution_total - payer_settlement_total])
         ts.dividend_fund_household_delivery_identity_error.append(
             [float(ts.current("income_financial_assets_distribution").sum()) - settled_distribution_total]
         )
         ts.dividend_fund_firm_retained_capacity_identity_error.append(
-            [float((firm_declared_by_payer + firm_retained_capacity - result.firm_distributable_profit_candidate).sum())]
+            [
+                float(
+                    (firm_declared_by_payer + firm_retained_capacity - result.firm_distributable_profit_candidate).sum()
+                )
+            ]
         )
         ts.dividend_fund_bank_retained_capacity_identity_error.append(
-            [float((bank_declared_by_payer + bank_retained_capacity - result.bank_distributable_profit_candidate).sum())]
+            [
+                float(
+                    (bank_declared_by_payer + bank_retained_capacity - result.bank_distributable_profit_candidate).sum()
+                )
+            ]
         )
         ts.dividend_fund_quota_sum.append([float(result.ownership_quota.sum())])
         ts.dividend_fund_ifa_split_identity_error.append(
@@ -2848,12 +2847,10 @@ class Country:
         self.firms.settle_operating_revolving_facility(
             cash_available_after_debt_service=cash_available_after_debt_service,
         )
-        firm_settlement_debit, firm_settlement_shortfall = (
-            compute_cash_feasible_firm_distribution_settlement(
-                declared_distribution=self.firms.ts.current("dividend_fund_declared_distribution"),
-                cash_available_after_debt_service=cash_available_after_debt_service,
-                operating_revolving_repayment=self.firms.ts.current("operating_revolving_repayment"),
-            )
+        firm_settlement_debit, firm_settlement_shortfall = compute_cash_feasible_firm_distribution_settlement(
+            declared_distribution=self.firms.ts.current("dividend_fund_declared_distribution"),
+            cash_available_after_debt_service=cash_available_after_debt_service,
+            operating_revolving_repayment=self.firms.ts.current("operating_revolving_repayment"),
         )
         self.firms.ts.dividend_fund_settlement_debit.append(firm_settlement_debit)
         self.firms.ts.dividend_fund_settlement_shortfall.append(firm_settlement_shortfall)

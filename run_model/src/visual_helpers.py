@@ -932,6 +932,35 @@ def build_macro_output_df(model, country_code):
 
     firms_ts = getattr(getattr(country, "firms", None), "ts", None)
     households_ts = getattr(getattr(country, "households", None), "ts", None)
+    banks_ts = getattr(getattr(country, "banks", None), "ts", None)
+
+    # Agent-level balance-sheet aggregates (sum across agents each period)
+    add_aggregate_agent_ts_column("hh_net_wealth", households_ts, "net_wealth")
+    add_aggregate_agent_ts_column("firms_equity", firms_ts, "equity")
+    add_aggregate_agent_ts_column("banks_equity", banks_ts, "equity")
+
+    # Aggregate balance-sheet totals by agent type.
+    hh_total_assets = add_aggregate_agent_ts_column("hh_total_assets", households_ts, "wealth")
+    hh_total_liabilities = add_aggregate_agent_ts_column("hh_total_liabilities", households_ts, "debt")
+    if hh_total_assets is None:
+        hh_net_wealth = get_column("hh_net_wealth")
+        if hh_net_wealth is not None and hh_total_liabilities is not None:
+            hh_total_assets = add_column("hh_total_assets", hh_net_wealth + hh_total_liabilities)
+
+    firms_total_liabilities = add_aggregate_agent_ts_column("firms_total_liabilities", firms_ts, "total_credit_exposure")
+    if firms_total_liabilities is None:
+        firms_total_liabilities = add_aggregate_agent_ts_column("firms_total_liabilities", firms_ts, "debt")
+    firms_equity = get_column("firms_equity")
+    if firms_equity is not None and firms_total_liabilities is not None:
+        add_column("firms_total_assets", firms_equity + firms_total_liabilities)
+
+    banks_total_liabilities = add_aggregate_agent_ts_column("banks_total_liabilities", banks_ts, "liability")
+    if banks_total_liabilities is None:
+        banks_total_liabilities = add_aggregate_agent_ts_column("banks_total_liabilities", banks_ts, "deposits")
+    banks_equity = get_column("banks_equity")
+    if banks_equity is not None and banks_total_liabilities is not None:
+        add_column("banks_total_assets", banks_equity + banks_total_liabilities)
+
     add_aggregate_agent_ts_column("real_demand", firms_ts, "demand")
     add_aggregate_agent_ts_column("inventory", firms_ts, "inventory")
     add_aggregate_agent_ts_column("inventory_nominal", firms_ts, "inventory_nominal")

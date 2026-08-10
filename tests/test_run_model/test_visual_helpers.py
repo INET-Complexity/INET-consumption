@@ -107,13 +107,52 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
                     "average_interest_rates_on_long_term_firm_loans": [0.03, 0.031, 0.032],
                     "average_interest_rates_on_household_consumption_loans": [0.04, 0.041, 0.042],
                     "average_interest_rates_on_mortgages": [0.05, 0.051, 0.052],
+                    "equity": [
+                        np.array([50.0, 30.0]),
+                        np.array([51.0, 31.0]),
+                        np.array([52.0, 32.0]),
+                    ],
+                    "liability": [
+                        np.array([200.0, 100.0]),
+                        np.array([201.0, 101.0]),
+                        np.array([202.0, 102.0]),
+                    ],
                 }
             )
         ),
         economy=SimpleNamespace(ts=_ts(economy_ts)),
+        households=SimpleNamespace(
+            ts=SimpleNamespace(
+                wealth=[
+                    np.array([110.0, 120.0, 130.0]),
+                    np.array([111.0, 121.0, 131.0]),
+                    np.array([112.0, 122.0, 132.0]),
+                ],
+                debt=[
+                    np.array([100.0, 100.0, 100.0]),
+                    np.array([100.0, 100.0, 100.0]),
+                    np.array([100.0, 100.0, 100.0]),
+                ],
+                net_wealth=[
+                    np.array([10.0, 20.0, 30.0]),
+                    np.array([11.0, 21.0, 31.0]),
+                    np.array([12.0, 22.0, 32.0]),
+                ]
+            )
+        ),
         firms=SimpleNamespace(
             industries=["agriculture", "services"],
             ts=SimpleNamespace(
+                total_credit_exposure=[
+                    np.array([10.0, 20.0, 30.0]),
+                    np.array([11.0, 21.0, 31.0]),
+                    np.array([12.0, 22.0, 32.0]),
+                ],
+                equity=[
+                    np.array([1.0, 2.0, 3.0]),
+                    np.array([1.5, 2.5, 3.5]),
+                    np.array([2.0, 3.0, 4.0]),
+                ],
                 tfp_multiplier=[
                     np.array([1.0, 1.1, 1.2]),
                     np.array([1.1, 1.2, 1.3]),
@@ -182,6 +221,15 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "sector_tfp_investment_desired_mb_mc_ratio_agriculture",
         "sector_tfp_investment_desired_mb_mc_ratio_services",
         "avg_tfp_multiplier",
+        "hh_net_wealth",
+        "firms_equity",
+        "banks_equity",
+        "hh_total_assets",
+        "hh_total_liabilities",
+        "firms_total_assets",
+        "firms_total_liabilities",
+        "banks_total_assets",
+        "banks_total_liabilities",
     }
     assert expected_columns.issubset(output.columns)
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
@@ -192,6 +240,25 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
     assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
     assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
+    assert output["hh_net_wealth"].tolist() == pytest.approx([60.0, 63.0, 66.0])
+    assert output["firms_equity"].tolist() == pytest.approx([6.0, 7.5, 9.0])
+    assert output["banks_equity"].tolist() == pytest.approx([80.0, 82.0, 84.0])
+    assert output["hh_total_assets"].tolist() == pytest.approx([360.0, 363.0, 366.0])
+    assert output["hh_total_liabilities"].tolist() == pytest.approx([300.0, 300.0, 300.0])
+    assert output["firms_total_liabilities"].tolist() == pytest.approx([60.0, 63.0, 66.0])
+    assert output["firms_total_assets"].tolist() == pytest.approx([66.0, 70.5, 75.0])
+    assert output["banks_total_liabilities"].tolist() == pytest.approx([300.0, 302.0, 304.0])
+    assert output["banks_total_assets"].tolist() == pytest.approx([380.0, 384.0, 388.0])
+
+    # Balance-sheet identity checks.
+    hh_net_from_balance_sheet = output["hh_total_assets"] - output["hh_total_liabilities"]
+    assert hh_net_from_balance_sheet.tolist() == pytest.approx(output["hh_net_wealth"].tolist())
+
+    firms_net_from_balance_sheet = output["firms_total_assets"] - output["firms_total_liabilities"]
+    assert firms_net_from_balance_sheet.tolist() == pytest.approx(output["firms_equity"].tolist())
+
+    banks_net_from_balance_sheet = output["banks_total_assets"] - output["banks_total_liabilities"]
+    assert banks_net_from_balance_sheet.tolist() == pytest.approx(output["banks_equity"].tolist())
 
     clutter_columns = {
         "revenue",

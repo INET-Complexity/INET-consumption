@@ -634,9 +634,6 @@ class Households(Agent):
             oil_investment_emissions=oil_investment_emissions,
             refined_products_investment_emissions=refined_products_investment_emissions,
         )
-        ts["dividend_fund_initial_direct_share_fraction"] = initial_direct_share_fraction.copy()
-        ts["dividend_fund_ownership_quota"] = ownership_quota.copy()
-
         # Stage 4 (portfolio choice): register the diagnostic time series at init,
         # regardless of whether uses_portfolio_choice is active, so that
         # Households.update_wealth() can always call .append(...) on them via

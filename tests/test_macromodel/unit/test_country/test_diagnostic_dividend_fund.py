@@ -173,59 +173,6 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
         income=np.array([1.0, 2.0, 3.0]),
         income_financial_assets_distribution=np.zeros(3),
         wealth_deposits=np.array([10.0, 20.0, 30.0]),
-        dividend_fund_beginning_ifa=np.zeros(3),
-        dividend_fund_ifa_weight=np.zeros(3),
-        dividend_fund_hypothetical_firm_distribution=np.zeros(3),
-        dividend_fund_hypothetical_bank_distribution=np.zeros(3),
-        dividend_fund_hypothetical_total_distribution=np.zeros(3),
-        dividend_fund_calibrated_total_distribution=np.zeros(3),
-        dividend_fund_declared_firm_distribution=np.zeros(3),
-        dividend_fund_declared_bank_distribution=np.zeros(3),
-        dividend_fund_settled_firm_distribution=np.zeros(3),
-        dividend_fund_settled_bank_distribution=np.zeros(3),
-        dividend_fund_ownership_ifa_proxy=np.zeros(3),
-        dividend_fund_residual_return_ifa_proxy=np.zeros(3),
-        dividend_fund_payout_ratio=[0.0],
-        dividend_fund_effective_payout_ratio=[0.0],
-        dividend_fund_firm_payout_ratio=[0.0],
-        dividend_fund_bank_payout_ratio=[0.0],
-        dividend_fund_empirical_payout_ratio=[0.0],
-        dividend_fund_payout_ratio_gap=[0.0],
-        dividend_fund_distribution_by_ifa_quintile=np.zeros(5),
-        dividend_fund_total_positive_ifa=[0.0],
-        dividend_fund_positive_ifa_household_count=[0.0],
-        dividend_fund_positive_ifa_household_share=[0.0],
-        dividend_fund_total_firm_distributable_profit_candidate=[0.0],
-        dividend_fund_total_bank_distributable_profit_candidate=[0.0],
-        dividend_fund_total_firm_declared_distribution=[0.0],
-        dividend_fund_total_bank_declared_distribution=[0.0],
-        dividend_fund_total_firm_retained_capacity=[0.0],
-        dividend_fund_total_bank_retained_capacity=[0.0],
-        dividend_fund_total_settled_distribution=[0.0],
-        dividend_fund_total_firm_settlement_shortfall=[0.0],
-        dividend_fund_firm_settlement_identity_error=[0.0],
-        dividend_fund_bank_settlement_identity_error=[0.0],
-        dividend_fund_settlement_identity_error=[0.0],
-        dividend_fund_household_delivery_identity_error=[0.0],
-        dividend_fund_firm_retained_capacity_identity_error=[0.0],
-        dividend_fund_bank_retained_capacity_identity_error=[0.0],
-        dividend_fund_quota_sum=[0.0],
-        dividend_fund_ifa_split_identity_error=[0.0],
-        dividend_fund_firm_distress_gate_passed_count=[0.0],
-        dividend_fund_firm_distress_gate_passed_share=[0.0],
-        dividend_fund_hypothetical_firm_fund_inflow=[0.0],
-        dividend_fund_hypothetical_bank_fund_inflow=[0.0],
-        dividend_fund_hypothetical_fund_inflow=[0.0],
-        dividend_fund_hypothetical_fund_outflow=[0.0],
-        dividend_fund_aggregate_distribution_yield=[0.0],
-        dividend_fund_firm_identity_error=[0.0],
-        dividend_fund_bank_identity_error=[0.0],
-        dividend_fund_identity_error=[0.0],
-        dividend_fund_firm_deposit_change_attributable=[0.0],
-        dividend_fund_bank_deposit_change_attributable=[0.0],
-        dividend_fund_bank_equity_change_attributable=[0.0],
-        dividend_fund_household_deposit_change_attributable=[0.0],
-        dividend_fund_household_deposit_identity_error=[0.0],
     )
     households_ts.wealth_other_financial_assets.append(np.array([999.0, 999.0, 999.0]))
     firms_ts = TimeSeries(
@@ -293,31 +240,12 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
     # - 2 corporate tax - 6 interest - 7 principal - 8 facility repayment.
     np.testing.assert_array_equal(result.firm_distributable_profit_candidate, [50.0])
     np.testing.assert_array_equal(result.beginning_ifa, [100.0, 200.0, 300.0])
-    np.testing.assert_array_equal(households_ts.current("dividend_fund_beginning_ifa"), result.beginning_ifa)
-    np.testing.assert_allclose(
-        households_ts.current("dividend_fund_calibrated_total_distribution"),
-        0.25 * result.hypothetical_total_distribution,
-    )
     np.testing.assert_allclose(result.ownership_quota, [0.0, 0.25, 0.75])
-    np.testing.assert_allclose(
-        households_ts.current("dividend_fund_declared_firm_distribution"),
-        [0.0, 3.125, 9.375],
-    )
-    assert households_ts.current("dividend_fund_total_firm_retained_capacity")[0] == pytest.approx(37.5)
-    assert households_ts.current("dividend_fund_total_bank_retained_capacity")[0] == pytest.approx(30.0)
-    assert households_ts.current("dividend_fund_quota_sum")[0] == pytest.approx(1.0)
-    assert households_ts.current("dividend_fund_ifa_split_identity_error")[0] == pytest.approx(0.0)
-    assert households_ts.current("dividend_fund_payout_ratio")[0] == pytest.approx(0.25)
-    assert households_ts.current("dividend_fund_effective_payout_ratio")[0] == pytest.approx(0.25)
-    assert households_ts.current("dividend_fund_empirical_payout_ratio")[0] == pytest.approx(0.30)
-    assert households_ts.current("dividend_fund_payout_ratio_gap")[0] == pytest.approx(-0.05)
     np.testing.assert_array_equal(firms_ts.current("dividend_fund_cash_distributable_profit_candidate"), [50.0])
     np.testing.assert_array_equal(banks_ts.current("dividend_fund_cash_distributable_profit_candidate"), [40.0])
-    assert households_ts.current("dividend_fund_household_deposit_identity_error")[0] == 0.0
     assert len(firms_ts.dividend_fund_cash_distributable_profit_candidate) == len(firms_ts.deposits)
     assert len(firms_ts.dividend_fund_distress_gate_passed) == len(firms_ts.deposits)
     assert len(banks_ts.dividend_fund_cash_distributable_profit_candidate) == len(banks_ts.cash_distributable_profits)
-    assert len(households_ts.dividend_fund_beginning_ifa) == len(households_ts.wealth_other_financial_assets)
     np.testing.assert_array_equal(households_ts.current("income"), watched["income"])
     np.testing.assert_array_equal(households_ts.current("wealth_deposits"), watched["wealth_deposits"])
     np.testing.assert_array_equal(

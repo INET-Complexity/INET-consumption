@@ -17,7 +17,6 @@ def _write_release_file(
     *,
     distribution_ratio: float,
     capital_gains: float = 0.0,
-    payout_ratio: float = 0.10,
     periods: int = 50,
 ):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,19 +38,6 @@ def _write_release_file(
         capital_gain_series = np.zeros(periods + 1)
         capital_gain_series[-1] = capital_gains
         households["total_wealth_other_financial_assets_capital_gains"] = capital_gain_series[:, None]
-        households["dividend_fund_payout_ratio"] = np.full((periods + 1, 1), payout_ratio)
-        households["dividend_fund_quota_sum"] = np.ones((periods + 1, 1))
-        households["dividend_fund_total_firm_settlement_shortfall"] = np.zeros((periods + 1, 1))
-        for name in (
-            "dividend_fund_firm_settlement_identity_error",
-            "dividend_fund_bank_settlement_identity_error",
-            "dividend_fund_settlement_identity_error",
-            "dividend_fund_household_delivery_identity_error",
-            "dividend_fund_firm_retained_capacity_identity_error",
-            "dividend_fund_bank_retained_capacity_identity_error",
-            "dividend_fund_ifa_split_identity_error",
-        ):
-            households[name] = np.zeros((periods + 1, 1))
 
 
 def test__multi_seed_payout_release_envelope_accepts_income_only_handoff(tmp_path):
@@ -65,7 +51,6 @@ def test__multi_seed_payout_release_envelope_accepts_income_only_handoff(tmp_pat
 
     assert [result.seed for result in results] == [12, 13]
     assert all(result.period_count == 50 for result in results)
-    assert all(result.payout_ratio == pytest.approx(0.10) for result in results)
     assert all(result.max_distribution_target_ratio == pytest.approx(0.4) for result in results)
     assert all(result.max_distribution_excess_over_target == 0.0 for result in results)
     assert all(result.max_absolute_capital_gains == 0.0 for result in results)
@@ -101,16 +86,6 @@ def test__multi_seed_payout_release_envelope_rejects_capital_gains(tmp_path):
     )
 
     with pytest.raises(AssertionError, match="non-zero capital gains"):
-        validate_payout_release_envelope(tmp_path, seeds=(13,))
-
-
-def test__multi_seed_payout_release_envelope_rejects_increment_3_identity_error(tmp_path):
-    path = tmp_path / "seed-13" / "multi_country_simulation.h5"
-    _write_release_file(path, distribution_ratio=0.4)
-    with h5py.File(path, "r+") as h5_file:
-        h5_file["FRA/households/dividend_fund_household_delivery_identity_error"][-1, 0] = 1.0
-
-    with pytest.raises(AssertionError, match="household_delivery_identity_error"):
         validate_payout_release_envelope(tmp_path, seeds=(13,))
 
 
@@ -170,12 +145,8 @@ def test__multi_seed_payout_release_envelope_rejects_negative_components(tmp_pat
         validate_payout_release_envelope(tmp_path, seeds=(13,))
 
 
-def test__multi_seed_payout_release_envelope_rejects_wrong_rate_or_horizon(tmp_path):
+def test__multi_seed_payout_release_envelope_rejects_wrong_horizon(tmp_path):
     path = tmp_path / "seed-13" / "multi_country_simulation.h5"
-    _write_release_file(path, distribution_ratio=0.4, payout_ratio=0.04)
-    with pytest.raises(AssertionError, match="payout ratio"):
-        validate_payout_release_envelope(tmp_path, seeds=(13,))
-
     _write_release_file(path, distribution_ratio=0.4, periods=49)
     with pytest.raises(AssertionError, match="49 periods"):
         validate_payout_release_envelope(tmp_path, seeds=(13,))

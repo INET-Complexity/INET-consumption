@@ -1117,8 +1117,13 @@ class Country:
         from macromodel.agents.households.func.financial_asset_income import compose_financial_asset_income
 
         expected_financial_income_target = self.households.compute_expected_income_from_financial_assets()
+        ownership_quota = self.households.states["dividend_fund_ownership_quota"]
+        declared_distribution_total = float(
+            self.firms.ts.current("dividend_fund_declared_distribution").sum()
+            + self.banks.ts.current("dividend_fund_declared_distribution").sum()
+        )
         expected_financial_income = compose_financial_asset_income(
-            lagged_distribution_income=self.households.ts.current("dividend_fund_calibrated_total_distribution"),
+            lagged_distribution_income=ownership_quota * declared_distribution_total,
             residual_profile=expected_financial_income_target,
             expected_non_negative_residual_profile=expected_financial_income_target,
             calibration_target=expected_financial_income_target,
@@ -2389,11 +2394,6 @@ class Country:
             if has_owners
             else np.zeros_like(result.bank_distributable_profit_candidate)
         )
-        firm_declared_total = float(firm_declared_by_payer.sum())
-        bank_declared_total = float(bank_declared_by_payer.sum())
-        declared_firm_distribution = result.ownership_quota * firm_declared_total
-        declared_bank_distribution = result.ownership_quota * bank_declared_total
-        declared_total_distribution = declared_firm_distribution + declared_bank_distribution
         firm_retained_capacity = result.firm_distributable_profit_candidate - firm_declared_by_payer
         bank_retained_capacity = result.bank_distributable_profit_candidate - bank_declared_by_payer
 
@@ -2408,104 +2408,6 @@ class Country:
         )
         self.banks.ts.dividend_fund_declared_distribution.append(bank_declared_by_payer)
         self.banks.ts.dividend_fund_retained_capacity.append(bank_retained_capacity)
-        ts = self.households.ts
-        settled_firm_distribution = ts.current("dividend_fund_settled_firm_distribution").copy()
-        settled_bank_distribution = ts.current("dividend_fund_settled_bank_distribution").copy()
-        settled_distribution_total = float(settled_firm_distribution.sum() + settled_bank_distribution.sum())
-        payer_settlement_total = float(
-            self.firms.ts.current("dividend_fund_settlement_debit").sum()
-            + self.banks.ts.current("dividend_fund_settlement_debit").sum()
-        )
-        ts.dividend_fund_beginning_ifa.append(result.beginning_ifa)
-        ts.dividend_fund_ifa_weight.append(result.ifa_weight)
-        ts.dividend_fund_hypothetical_firm_distribution.append(result.hypothetical_firm_distribution)
-        ts.dividend_fund_hypothetical_bank_distribution.append(result.hypothetical_bank_distribution)
-        ts.dividend_fund_hypothetical_total_distribution.append(result.hypothetical_total_distribution)
-        empirical_payout_ratio = float(getattr(wealth_function, "dividend_fund_empirical_proxy_ratio", 0.0))
-        total_candidate = (
-            result.total_firm_distributable_profit_candidate + result.total_bank_distributable_profit_candidate
-        )
-        effective_payout_ratio = (
-            (firm_declared_total + bank_declared_total) / total_candidate if total_candidate > 0.0 else 0.0
-        )
-        current_positive_ifa = np.maximum(ts.prev("wealth_other_financial_assets"), 0.0)
-        ownership_fraction = self.households.states["dividend_fund_initial_direct_share_fraction"]
-        ownership_ifa_proxy = ownership_fraction * current_positive_ifa
-        residual_return_ifa_proxy = current_positive_ifa - ownership_ifa_proxy
-        ts.dividend_fund_declared_firm_distribution.append(declared_firm_distribution)
-        ts.dividend_fund_declared_bank_distribution.append(declared_bank_distribution)
-        ts.dividend_fund_calibrated_total_distribution.append(declared_total_distribution)
-        ts.dividend_fund_ownership_ifa_proxy.append(ownership_ifa_proxy)
-        ts.dividend_fund_residual_return_ifa_proxy.append(residual_return_ifa_proxy)
-        ts.dividend_fund_payout_ratio.append([legacy_payout_ratio])
-        ts.dividend_fund_effective_payout_ratio.append([effective_payout_ratio])
-        ts.dividend_fund_firm_payout_ratio.append([firm_payout_ratio])
-        ts.dividend_fund_bank_payout_ratio.append([bank_payout_ratio])
-        ts.dividend_fund_empirical_payout_ratio.append([empirical_payout_ratio])
-        ts.dividend_fund_payout_ratio_gap.append([legacy_payout_ratio - empirical_payout_ratio])
-        ts.dividend_fund_distribution_by_ifa_quintile.append(result.distribution_by_ifa_quintile)
-        ts.dividend_fund_total_positive_ifa.append([result.total_positive_ifa])
-        ts.dividend_fund_positive_ifa_household_count.append([result.positive_ifa_household_count])
-        ts.dividend_fund_positive_ifa_household_share.append([result.positive_ifa_household_share])
-        ts.dividend_fund_total_firm_distributable_profit_candidate.append(
-            [result.total_firm_distributable_profit_candidate]
-        )
-        ts.dividend_fund_total_bank_distributable_profit_candidate.append(
-            [result.total_bank_distributable_profit_candidate]
-        )
-        ts.dividend_fund_total_firm_declared_distribution.append([firm_declared_total])
-        ts.dividend_fund_total_bank_declared_distribution.append([bank_declared_total])
-        ts.dividend_fund_total_firm_retained_capacity.append([float(firm_retained_capacity.sum())])
-        ts.dividend_fund_total_bank_retained_capacity.append([float(bank_retained_capacity.sum())])
-        ts.dividend_fund_total_settled_distribution.append([settled_distribution_total])
-        firm_settlement_total = float(self.firms.ts.current("dividend_fund_settlement_debit").sum())
-        bank_settlement_total = float(self.banks.ts.current("dividend_fund_settlement_debit").sum())
-        ts.dividend_fund_total_firm_settlement_shortfall.append(
-            [float(self.firms.ts.current("dividend_fund_settlement_shortfall").sum())]
-        )
-        ts.dividend_fund_firm_settlement_identity_error.append(
-            [float(settled_firm_distribution.sum()) - firm_settlement_total]
-        )
-        ts.dividend_fund_bank_settlement_identity_error.append(
-            [float(settled_bank_distribution.sum()) - bank_settlement_total]
-        )
-        ts.dividend_fund_settlement_identity_error.append([settled_distribution_total - payer_settlement_total])
-        ts.dividend_fund_household_delivery_identity_error.append(
-            [float(ts.current("income_financial_assets_distribution").sum()) - settled_distribution_total]
-        )
-        ts.dividend_fund_firm_retained_capacity_identity_error.append(
-            [
-                float(
-                    (firm_declared_by_payer + firm_retained_capacity - result.firm_distributable_profit_candidate).sum()
-                )
-            ]
-        )
-        ts.dividend_fund_bank_retained_capacity_identity_error.append(
-            [
-                float(
-                    (bank_declared_by_payer + bank_retained_capacity - result.bank_distributable_profit_candidate).sum()
-                )
-            ]
-        )
-        ts.dividend_fund_quota_sum.append([float(result.ownership_quota.sum())])
-        ts.dividend_fund_ifa_split_identity_error.append(
-            [float((ownership_ifa_proxy + residual_return_ifa_proxy - current_positive_ifa).sum())]
-        )
-        ts.dividend_fund_firm_distress_gate_passed_count.append([result.firm_distress_gate_passed_count])
-        ts.dividend_fund_firm_distress_gate_passed_share.append([result.firm_distress_gate_passed_share])
-        ts.dividend_fund_hypothetical_firm_fund_inflow.append([result.hypothetical_firm_fund_inflow])
-        ts.dividend_fund_hypothetical_bank_fund_inflow.append([result.hypothetical_bank_fund_inflow])
-        ts.dividend_fund_hypothetical_fund_inflow.append([result.hypothetical_fund_inflow])
-        ts.dividend_fund_hypothetical_fund_outflow.append([result.hypothetical_fund_outflow])
-        ts.dividend_fund_aggregate_distribution_yield.append([result.aggregate_distribution_yield])
-        ts.dividend_fund_firm_identity_error.append([result.firm_identity_error])
-        ts.dividend_fund_bank_identity_error.append([result.bank_identity_error])
-        ts.dividend_fund_identity_error.append([result.fund_identity_error])
-        ts.dividend_fund_firm_deposit_change_attributable.append([-firm_settlement_total])
-        ts.dividend_fund_bank_deposit_change_attributable.append([0.0])
-        ts.dividend_fund_bank_equity_change_attributable.append([-bank_settlement_total])
-        ts.dividend_fund_household_deposit_change_attributable.append([0.0])
-        ts.dividend_fund_household_deposit_identity_error.append([0.0])
         return result
 
     def record_household_financial_asset_income(self, period_index: int | None = None):
@@ -2555,8 +2457,6 @@ class Country:
             expected_non_negative_residual_profile=expected_residual_profile,
             calibration_target=calibration_target,
         )
-        ts.dividend_fund_settled_firm_distribution.append(settled_firm_distribution)
-        ts.dividend_fund_settled_bank_distribution.append(settled_bank_distribution)
         ts.income_financial_assets_distribution.append(result.distribution_income)
         ts.income_financial_assets_residual_portfolio_return.append(result.residual_portfolio_return)
         ts.income_financial_assets_calibration_target.append(result.calibration_target)

@@ -90,6 +90,19 @@ def test__paper_asset_return_rejects_invalid_dividend_fund_payout_ratio():
     with pytest.raises(ValueError, match="dividend_fund_empirical_proxy_ratio"):
         _paper_setter(dividend_fund_empirical_proxy_ratio=np.nan)
 
+    with pytest.raises(ValueError, match="dividend_fund_firm_payout_ratio"):
+        _paper_setter(dividend_fund_firm_payout_ratio=-0.01)
+
+    with pytest.raises(ValueError, match="dividend_fund_bank_payout_ratio"):
+        _paper_setter(dividend_fund_bank_payout_ratio=1.01)
+
+
+def test__paper_asset_return_sector_payout_ratios_default_to_legacy_ratio():
+    setter = _paper_setter(dividend_fund_payout_ratio=0.2)
+
+    assert setter.dividend_fund_firm_payout_ratio == pytest.approx(0.2)
+    assert setter.dividend_fund_bank_payout_ratio == pytest.approx(0.2)
+
 
 def test__paper_asset_return_wealth_setter_caps_drawdown_after_negative_return():
     setter = _paper_setter(mu_eq=np.log(0.2), mu_bond=np.log(0.2), equity_weight=0.5)

@@ -1,4 +1,4 @@
-"""Read-only household financial-asset dividend-fund diagnostics."""
+"""Ownership-based firm and bank profit-distribution calculations."""
 
 from dataclasses import dataclass
 
@@ -7,10 +7,11 @@ import numpy as np
 
 @dataclass(frozen=True)
 class DiagnosticDividendFundResult:
-    """Read-only result of the hypothetical household dividend-fund allocation."""
+    """Eligible profit capacity and its allocation across household owners."""
 
     beginning_ifa: np.ndarray
     ifa_weight: np.ndarray
+    ownership_quota: np.ndarray
     firm_distributable_profit_candidate: np.ndarray
     firm_distress_gate_passed: np.ndarray
     bank_distributable_profit_candidate: np.ndarray
@@ -62,6 +63,26 @@ def _non_negative_state_1d(name: str, values: np.ndarray) -> np.ndarray:
     return np.maximum(array, 0.0)
 
 
+def compute_cash_feasible_firm_distribution_settlement(
+    *,
+    declared_distribution: np.ndarray,
+    cash_available_after_debt_service: np.ndarray,
+    operating_revolving_repayment: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Settle declared firm payouts only from cash left after senior claims."""
+    declared = _non_negative_state_1d("declared_distribution", declared_distribution)
+    available = _finite_1d("cash_available_after_debt_service", cash_available_after_debt_service)
+    revolving_repayment = _non_negative_state_1d(
+        "operating_revolving_repayment",
+        operating_revolving_repayment,
+    )
+    if available.shape != declared.shape or revolving_repayment.shape != declared.shape:
+        raise ValueError("Firm distribution settlement inputs must contain one value per firm.")
+    distributable_cash = np.maximum(available - revolving_repayment, 0.0)
+    settled = np.minimum(declared, distributable_cash)
+    return settled, declared - settled
+
+
 def _ifa_quintile_totals(positive_ifa: np.ndarray, distribution: np.ndarray) -> np.ndarray:
     """Sum receipts by stable midpoint-ranked IFA quintile for all households."""
     totals = np.zeros(5)
@@ -86,8 +107,9 @@ def compute_diagnostic_dividend_fund(
     firm_residual_overdraft_exposure: np.ndarray,
     firm_default_flag: np.ndarray,
     bank_cash_distributable_profits: np.ndarray,
+    ownership_quota: np.ndarray,
 ) -> DiagnosticDividendFundResult:
-    """Compute a hypothetical, behaviourally inert dividend-fund allocation.
+    """Compute eligible profit capacity and allocate it by fixed ownership.
 
     Firm candidates use current-period cash receipts net of production,
     investment, tax, interest, principal, and facility-repayment cash outflows.
@@ -129,6 +151,12 @@ def compute_diagnostic_dividend_fund(
         out=np.zeros_like(positive_ifa),
         where=total_positive_ifa > 0.0,
     )
+    allocation_weight = _non_negative_state_1d("ownership_quota", ownership_quota)
+    if allocation_weight.shape != beginning_ifa.shape:
+        raise ValueError("ownership_quota must contain one value per household.")
+    quota_sum = float(allocation_weight.sum())
+    if quota_sum > 0.0 and not np.isclose(quota_sum, 1.0, atol=1e-10, rtol=0.0):
+        raise ValueError("Positive ownership quotas must sum to one.")
 
     firm_distress_gate_passed = (
         (firm_unpaid_interest <= 1e-9)
@@ -148,11 +176,11 @@ def compute_diagnostic_dividend_fund(
 
     total_firm_candidate = float(firm_candidate.sum())
     total_bank_candidate = float(bank_candidate.sum())
-    holdings_available = total_positive_ifa > 0.0
+    holdings_available = float(allocation_weight.sum()) > 0.0
     firm_inflow = total_firm_candidate if holdings_available else 0.0
     bank_inflow = total_bank_candidate if holdings_available else 0.0
-    firm_distribution = ifa_weight * firm_inflow
-    bank_distribution = ifa_weight * bank_inflow
+    firm_distribution = allocation_weight * firm_inflow
+    bank_distribution = allocation_weight * bank_inflow
     total_distribution = firm_distribution + bank_distribution
     fund_inflow = firm_inflow + bank_inflow
     fund_outflow = float(total_distribution.sum())
@@ -161,6 +189,7 @@ def compute_diagnostic_dividend_fund(
     return DiagnosticDividendFundResult(
         beginning_ifa=beginning_ifa.copy(),
         ifa_weight=ifa_weight,
+        ownership_quota=allocation_weight.copy(),
         firm_distributable_profit_candidate=firm_candidate,
         firm_distress_gate_passed=firm_distress_gate_passed,
         bank_distributable_profit_candidate=bank_candidate,
@@ -181,7 +210,7 @@ def compute_diagnostic_dividend_fund(
         hypothetical_bank_fund_inflow=bank_inflow,
         hypothetical_fund_inflow=fund_inflow,
         hypothetical_fund_outflow=fund_outflow,
-        aggregate_distribution_yield=(fund_outflow / total_positive_ifa if holdings_available else 0.0),
+        aggregate_distribution_yield=(fund_outflow / total_positive_ifa if total_positive_ifa > 0.0 else 0.0),
         firm_identity_error=float(firm_distribution.sum() - firm_inflow),
         bank_identity_error=float(bank_distribution.sum() - bank_inflow),
         fund_identity_error=float(fund_outflow - fund_inflow),

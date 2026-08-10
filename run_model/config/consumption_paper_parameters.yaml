@@ -87,6 +87,8 @@ asset_returns:
     # uses 98.89% of the financial-income target. The raw 13.37% proxy requires
     # payout smoothing or a revised target and is therefore not used directly.
     dividend_fund_payout_ratio: 0.10
+    dividend_fund_firm_payout_ratio: 0.10
+    dividend_fund_bank_payout_ratio: 0.10
 
 desired_consumption:
   credit_augmented_v1:

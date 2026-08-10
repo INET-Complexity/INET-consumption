@@ -461,6 +461,8 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         dynamic_shifters: dict | None = None,
         data_paths: dict | None = None,
         dividend_fund_payout_ratio: float = 0.0,
+        dividend_fund_firm_payout_ratio: float | None = None,
+        dividend_fund_bank_payout_ratio: float | None = None,
         dividend_fund_empirical_proxy_ratio: float = 0.0,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
@@ -494,6 +496,14 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"Unsupported liquid_return_source: {liquid_return_source}.")
         if not 0.0 <= dividend_fund_payout_ratio <= 1.0:
             raise ValueError("dividend_fund_payout_ratio must be in [0, 1].")
+        if dividend_fund_firm_payout_ratio is None:
+            dividend_fund_firm_payout_ratio = dividend_fund_payout_ratio
+        if dividend_fund_bank_payout_ratio is None:
+            dividend_fund_bank_payout_ratio = dividend_fund_payout_ratio
+        if not 0.0 <= dividend_fund_firm_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_firm_payout_ratio must be in [0, 1].")
+        if not 0.0 <= dividend_fund_bank_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_bank_payout_ratio must be in [0, 1].")
         if not 0.0 <= dividend_fund_empirical_proxy_ratio <= 1.0:
             raise ValueError("dividend_fund_empirical_proxy_ratio must be in [0, 1].")
         self.mu_eq = mu_eq
@@ -504,6 +514,8 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self.equity_weight = equity_weight
         self.draw_scope = draw_scope
         self.dividend_fund_payout_ratio = dividend_fund_payout_ratio
+        self.dividend_fund_firm_payout_ratio = dividend_fund_firm_payout_ratio
+        self.dividend_fund_bank_payout_ratio = dividend_fund_bank_payout_ratio
         self.dividend_fund_empirical_proxy_ratio = dividend_fund_empirical_proxy_ratio
         self._current_illiquid_return_rate: float | None = None
         self._current_illiquid_return_amount: np.ndarray | None = None

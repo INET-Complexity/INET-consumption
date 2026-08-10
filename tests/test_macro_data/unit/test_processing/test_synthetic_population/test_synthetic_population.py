@@ -18,6 +18,48 @@ from macro_data.readers.population_data.hfcs_reader import HFCSReader, var_mappi
 PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
 
 
+def test__direct_share_fraction_uses_shares_only_and_does_not_preserve_asset_categories():
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 10
+    population.household_data = pd.DataFrame(
+        {
+            "Mutual Funds": [90.0, 0.0],
+            "Bonds": [0.0, 0.0],
+            "Value of Private Businesses": [500.0, 0.0],
+            "Shares": [10.0, 0.0],
+            "Managed Accounts": [0.0, 0.0],
+            "Money owed to Households": [0.0, 0.0],
+            "Other Assets": [0.0, 0.0],
+            "Voluntary Pension": [0.0, 0.0],
+        }
+    )
+
+    population.set_household_other_financial_assets()
+
+    np.testing.assert_allclose(population.household_data["Initial Direct Share Fraction"], [0.1, 0.0])
+    np.testing.assert_allclose(population.household_data["Wealth in Other Financial Assets"], [1000.0, 0.0])
+
+
+def test__direct_share_fraction_rejects_non_finite_asset_components():
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 1
+    population.household_data = pd.DataFrame(
+        {
+            "Mutual Funds": [0.0],
+            "Bonds": [0.0],
+            "Value of Private Businesses": [0.0],
+            "Shares": [np.inf],
+            "Managed Accounts": [0.0],
+            "Money owed to Households": [0.0],
+            "Other Assets": [0.0],
+            "Voluntary Pension": [0.0],
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be finite"):
+        population.set_household_other_financial_assets()
+
+
 def test__compute_notebook_household_accounts_uses_notebook_definitions():
     data = {
         "Wealth in Deposits": [10.0],

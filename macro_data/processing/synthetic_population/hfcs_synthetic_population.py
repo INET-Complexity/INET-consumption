@@ -55,6 +55,7 @@ RESTRICT_COLS = [
     "Wealth Other Real Assets",
     "Wealth in Deposits",
     "Wealth in Other Financial Assets",
+    "Initial Direct Share Fraction",
     "Wealth in Financial Assets",
     "Outstanding Balance of HMR Mortgages",
     "Outstanding Balance of Mortgages on other Properties",
@@ -535,16 +536,28 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.household_data.loc[self.household_data["Other Assets"].isna(), "Other Assets"] = 0.0
         self.household_data.loc[self.household_data["Voluntary Pension"].isna(), "Voluntary Pension"] = 0.0
 
-        self.household_data["Wealth in Other Financial Assets"] = (
-            self.household_data["Mutual Funds"]
-            + self.household_data["Bonds"]
-            + self.household_data["Value of Private Businesses"]
-            + self.household_data["Shares"]
-            + self.household_data["Managed Accounts"]
-            + self.household_data["Money owed to Households"]
-            + self.household_data["Other Assets"]
-            + self.household_data["Voluntary Pension"]
+        components = [
+            "Mutual Funds",
+            "Bonds",
+            "Shares",
+            "Managed Accounts",
+            "Money owed to Households",
+            "Other Assets",
+            "Voluntary Pension",
+        ]
+        raw_components = self.household_data[components].to_numpy(dtype=float)
+        if not np.all(np.isfinite(raw_components)):
+            raise ValueError("HFCS financial-asset components must be finite.")
+        positive_components = self.household_data[components].clip(lower=0.0)
+        positive_total_ifa = positive_components.sum(axis=1)
+        direct_shares = positive_components["Shares"]
+        self.household_data["Initial Direct Share Fraction"] = np.divide(
+            direct_shares,
+            positive_total_ifa,
+            out=np.zeros_like(direct_shares, dtype=float),
+            where=positive_total_ifa > 0.0,
         )
+        self.household_data["Wealth in Other Financial Assets"] = positive_total_ifa
         self.household_data.loc[:, "Wealth in Other Financial Assets"] *= self.scale
 
     def set_household_financial_assets(self) -> None:

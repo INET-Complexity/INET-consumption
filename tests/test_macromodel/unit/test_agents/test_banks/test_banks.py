@@ -101,6 +101,8 @@ class TestBanks:
         test_banks.ts.override_current("profits", test_banks.compute_profits())
 
         assert np.allclose(test_banks.compute_equity(profit_taxes=0.0), np.full(n_banks, 104.0))
+        test_banks.ts.override_current("dividend_fund_settlement_debit", np.full(n_banks, 3.0))
+        assert np.allclose(test_banks.compute_equity(profit_taxes=0.0), np.full(n_banks, 101.0))
 
     def test__accrued_consumer_interest_is_accounting_profit_but_not_cash_distributable(self, test_banks):
         n_banks = test_banks.ts.current("n_banks")

@@ -49,9 +49,9 @@ def compose_financial_asset_income(
     multiplier around the *expected* residual. Consequently the calibration
     target is a long-run expectation, not a period-by-period accounting identity.
 
-    A distribution may exceed the calibration target in an individual period.
-    In that case the authoritative distribution is preserved, the residual is
-    zero, and the excess is returned as a diagnostic.
+    The calibration target applies only to the residual-return portfolio.
+    Ownership distributions are a separate income source and are added on top;
+    they must not crowd out returns on the non-share part of IFA.
     """
     for name, tolerance in (
         ("absolute_tolerance", absolute_tolerance),
@@ -79,7 +79,7 @@ def compose_financial_asset_income(
     aggregate_target = max(aggregate_target, 0.0)
     distribution_excess_over_target = max(aggregate_distribution - aggregate_target, 0.0)
 
-    aggregate_expected_residual = max(aggregate_target - aggregate_distribution, 0.0)
+    aggregate_expected_residual = aggregate_target
     target_weights = np.maximum(target, 0.0)
     target_weight_total = float(target_weights.sum())
     expected_profile_total = float(np.maximum(expected_profile, 0.0).sum())
@@ -100,7 +100,7 @@ def compose_financial_asset_income(
     if aggregate_expected_residual > 0.0:
         residual = target_weights / target_weight_total * aggregate_expected_residual * stochastic_multiplier
     total = distribution + residual
-    target_gap = float(aggregate_target - total.sum())
+    target_gap = float(aggregate_target - residual.sum())
     # Independent diagnostic: how far the unscaled expected residual-return
     # process is from the remaining empirical income target.  The previous
     # identity compared the target with a residual defined as target minus

@@ -573,6 +573,8 @@ class TestFirms:
         test_firms.ts.debt_installments.append(np.full(18, 6.0))
 
         assert np.allclose(test_firms.compute_deposits(), np.full(18, 121.0))
+        test_firms.ts.override_current("dividend_fund_settlement_debit", np.full(18, 3.0))
+        assert np.allclose(test_firms.compute_deposits(), np.full(18, 118.0))
 
     def test__compute_deposits_uses_purchase_spending_not_used_input_costs(self, test_firms):
         test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
@@ -750,6 +752,7 @@ class TestFirms:
         corporate_taxes_paid = np.full(n_firms, 3.0)
         interest_paid = np.full(n_firms, 4.0)
         debt_installments = np.full(n_firms, 6.0)
+        dividend_fund_settlement_debit = np.full(n_firms, 7.0)
         closing_deposits = (
             opening_deposits
             + nominal_amount_sold_in_lcu
@@ -761,6 +764,7 @@ class TestFirms:
             - corporate_taxes_paid
             - interest_paid
             - debt_installments
+            - dividend_fund_settlement_debit
         )
         current_good_prices = np.ones(n_industries)
 
@@ -775,13 +779,14 @@ class TestFirms:
         test_firms.ts.override_current("corporate_taxes_paid", corporate_taxes_paid)
         test_firms.ts.override_current("interest_paid", interest_paid)
         test_firms.ts.override_current("debt_installments", debt_installments)
+        test_firms.ts.override_current("dividend_fund_settlement_debit", dividend_fund_settlement_debit)
         test_firms.ts.override_current("inventory", np.ones(n_firms))
         test_firms.ts.override_current("price", np.full(n_firms, 2.0))
         test_firms.ts.override_current("intermediate_inputs_stock", np.zeros((n_firms, n_industries)))
         test_firms.ts.override_current("capital_inputs_stock", np.zeros((n_firms, n_industries)))
         test_firms.ts.override_current("debt", np.full(n_firms, 5.0))
         test_firms.ts.override_current("operating_revolving_closing_balance", np.full(n_firms, 8.0))
-        test_firms.ts.override_current("equity", np.full(n_firms, 99.0))
+        test_firms.ts.override_current("equity", np.full(n_firms, 92.0))
 
         result = test_firms.check_firm_accounting_controls(
             current_good_prices=current_good_prices,

@@ -21,6 +21,7 @@ def _compute(**overrides):
         "firm_residual_overdraft_exposure": np.zeros(3),
         "firm_default_flag": np.zeros(3, dtype=bool),
         "bank_cash_distributable_profits": np.array([25.0, -2.0]),
+        "bank_resolved_flag": np.zeros(2, dtype=bool),
         "ownership_quota": np.array([0.0, 0.25, 0.75]),
     }
     inputs.update(overrides)
@@ -77,6 +78,13 @@ def test__zero_aggregate_direct_shares_create_no_fallback_owner_or_distribution(
     np.testing.assert_array_equal(result.ownership_quota, np.zeros(3))
     np.testing.assert_array_equal(result.hypothetical_total_distribution, np.zeros(3))
     assert result.hypothetical_fund_inflow == 0.0
+
+
+def test__resolved_bank_cannot_declare_a_new_distribution():
+    result = _compute(bank_resolved_flag=np.array([True, False]))
+
+    np.testing.assert_array_equal(result.bank_distributable_profit_candidate, [0.0, 0.0])
+    np.testing.assert_array_equal(result.hypothetical_bank_distribution, np.zeros(3))
 
 
 def test__diagnostic_dividend_fund_zero_holdings_produce_no_inflow_or_receipts():
@@ -148,6 +156,7 @@ def test__diagnostic_dividend_fund_accepts_empty_agent_populations():
         firm_residual_overdraft_exposure=np.array([]),
         firm_default_flag=np.array([], dtype=bool),
         bank_cash_distributable_profits=np.array([]),
+        bank_resolved_flag=np.array([], dtype=bool),
         ownership_quota=np.array([]),
     )
 
@@ -268,7 +277,7 @@ def test__record_diagnostic_dividend_fund_uses_cash_flow_and_preserves_core_seri
             },
         ),
         firms=firms,
-        banks=SimpleNamespace(ts=banks_ts),
+        banks=SimpleNamespace(ts=banks_ts, states={"is_insolvent": np.zeros(1, dtype=bool)}),
     )
     watched = {
         "income": households_ts.current("income").copy(),

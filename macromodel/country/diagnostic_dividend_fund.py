@@ -107,6 +107,7 @@ def compute_diagnostic_dividend_fund(
     firm_residual_overdraft_exposure: np.ndarray,
     firm_default_flag: np.ndarray,
     bank_cash_distributable_profits: np.ndarray,
+    bank_resolved_flag: np.ndarray,
     ownership_quota: np.ndarray,
 ) -> DiagnosticDividendFundResult:
     """Compute eligible profit capacity and allocate it by fixed ownership.
@@ -131,6 +132,7 @@ def compute_diagnostic_dividend_fund(
     )
     firm_default_flag = _boolean_1d("firm_default_flag", firm_default_flag)
     bank_cash_distributable_profits = _finite_1d("bank_cash_distributable_profits", bank_cash_distributable_profits)
+    bank_resolved_flag = _boolean_1d("bank_resolved_flag", bank_resolved_flag)
 
     firm_shape = firm_cash_profit_after_settlement.shape
     firm_inputs = (
@@ -142,6 +144,8 @@ def compute_diagnostic_dividend_fund(
     )
     if any(values.shape != firm_shape for values in firm_inputs):
         raise ValueError("All firm dividend-fund inputs must contain one value per firm.")
+    if bank_resolved_flag.shape != bank_cash_distributable_profits.shape:
+        raise ValueError("bank_resolved_flag must contain one value per bank.")
 
     positive_ifa = np.maximum(beginning_ifa, 0.0)
     total_positive_ifa = float(positive_ifa.sum())
@@ -172,7 +176,11 @@ def compute_diagnostic_dividend_fund(
         ),
         0.0,
     )
-    bank_candidate = np.maximum(bank_cash_distributable_profits, 0.0)
+    bank_candidate = np.where(
+        bank_resolved_flag,
+        0.0,
+        np.maximum(bank_cash_distributable_profits, 0.0),
+    )
 
     total_firm_candidate = float(firm_candidate.sum())
     total_bank_candidate = float(bank_candidate.sum())

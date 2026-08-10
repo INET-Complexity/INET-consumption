@@ -2371,6 +2371,7 @@ class Country:
             firm_residual_overdraft_exposure=self.firms.ts.current("firm_settlement_residual_overdraft_exposure"),
             firm_default_flag=self.firms.ts.current("firm_settlement_default_flag"),
             bank_cash_distributable_profits=self.banks.ts.current("cash_distributable_profits"),
+            bank_resolved_flag=self.banks.states["is_insolvent"],
             ownership_quota=self.households.states["dividend_fund_ownership_quota"],
         )
         wealth_function = getattr(self.households, "functions", {}).get("wealth")
@@ -3129,7 +3130,6 @@ class Country:
         self.banks.ts.profits.append(self.banks.compute_profits())
         self.banks.ts.cash_distributable_profits.append(self.banks.compute_cash_distributable_profits())
         self.banks.ts.profits_histogram.append(get_histogram(self.banks.ts.current("profits"), self.scale))
-        self.record_diagnostic_dividend_fund()
 
         # G3. BANK BALANCE SHEETS
         self.banks.update_deposits(
@@ -3171,6 +3171,9 @@ class Country:
         self.central_government.ts.bank_equity_injection.append(
             [self.banks.handle_insolvency(credit_market=self.credit_market)]
         )
+        # Declare new bank payouts only after the current-period resolution
+        # outcome is known, so public recapitalisation cannot fund a new claim.
+        self.record_diagnostic_dividend_fund()
         self.economy.ts.bank_insolvency_rate.append([self.banks.compute_insolvency_rate()])
 
         # G5. GOVERNMENT REVENUE

@@ -640,7 +640,7 @@ def test_household_income_shock_prehook_stages_equal_income_shock(datawrapper):
     simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
     country = simulation.countries["FRA"]
     income_before = country.households.ts.current("income").copy()
-    deposits_before = country.households.ts.current("wealth_deposits").copy()
+    deposits_before = country.households.ts.current("liquid_financial_assets").copy()
 
     hook = create_household_income_shock_hook(
         country_code="FRA",
@@ -659,7 +659,7 @@ def test_household_income_shock_prehook_stages_equal_income_shock(datawrapper):
     assert country._staged_household_income_shock.shape == income_before.shape
     assert np.allclose(country._staged_household_income_shock, expected_shock)
     np.testing.assert_allclose(country.households.ts.current("income"), income_before)
-    np.testing.assert_allclose(country.households.ts.current("wealth_deposits"), deposits_before)
+    np.testing.assert_allclose(country.households.ts.current("liquid_financial_assets"), deposits_before)
 
 
 def test_household_income_shock_prehook_fails_when_country_is_missing(datawrapper):

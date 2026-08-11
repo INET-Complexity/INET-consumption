@@ -716,16 +716,14 @@ class TestCountry:
         assert "consumer_debt_rate_delta" in captured
         assert "owner_occupied" in captured
         assert "mortgagor" in captured
-        assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("wealth_deposits"))
+        assert np.allclose(captured["liquid_wealth"], test_country.households.ts.current("liquid_financial_assets"))
         assert np.allclose(captured["income"], test_country.households.ts.current("expected_income"))
         assert np.allclose(captured["lagged_income"], test_country.households.ts.prev("expected_income"))
-        assert np.allclose(captured["lagged_liquid_wealth"], test_country.households.ts.prev("wealth_deposits"))
-        assert np.allclose(
-            captured["illiquid_wealth"], test_country.households.ts.current("wealth_other_financial_assets")
-        )
+        assert np.allclose(captured["lagged_liquid_wealth"], test_country.households.ts.prev("liquid_financial_assets"))
+        assert np.allclose(captured["illiquid_wealth"], test_country.households.ts.current("illiquid_financial_assets"))
         assert np.allclose(
             captured["lagged_illiquid_wealth"],
-            test_country.households.ts.prev("wealth_other_financial_assets"),
+            test_country.households.ts.prev("illiquid_financial_assets"),
         )
         assert np.allclose(captured["lagged_mortgage_debt"], test_country.households.ts.prev("mortgage_debt"))
         assert np.allclose(
@@ -2496,7 +2494,7 @@ class TestCountry:
         expected_residual = expected_shortfall - expected_funded
 
         test_country.households.ts.override_current("expected_income", expected_income)
-        test_country.households.ts.override_current("wealth_deposits", deposits)
+        test_country.households.ts.override_current("liquid_financial_assets", deposits)
         # Hold cash rent at zero so the expected shortfall stays exactly
         # target_consumption - expected_income; rent as a separate cash use is
         # covered in TestComputeAndRecordLiquidityShortfall (GH #120).
@@ -2507,8 +2505,8 @@ class TestCountry:
                 "target_consumption",
                 "target_consumption_loans",
                 "target_mortgage",
-                "wealth_deposits",
-                "wealth_other_financial_assets",
+                "liquid_financial_assets",
+                "illiquid_financial_assets",
                 "debt_installments",
             ]
             if key in test_country.households.ts.dicts
@@ -2549,15 +2547,15 @@ class TestCountry:
             test_country.households.ts.current("preferred_margin_amount"),
             expected_residual,
         )
-        np.testing.assert_allclose(test_country.households.ts.current("wealth_deposits"), deposits)
+        np.testing.assert_allclose(test_country.households.ts.current("liquid_financial_assets"), deposits)
         # Increment 1 is diagnostic-only: it must not touch credit targets,
         # wealth stocks, or debt-service state. target_consumption and
         # target_investment are allowed to update in this planning method.
         for key in [
             "target_consumption_loans",
             "target_mortgage",
-            "wealth_deposits",
-            "wealth_other_financial_assets",
+            "liquid_financial_assets",
+            "illiquid_financial_assets",
             "debt_installments",
         ]:
             if key in pre_call_series:
@@ -2576,8 +2574,8 @@ class TestCountry:
         deposits = np.resize(np.asarray([80.0, 300.0, -5.0]), n_households)
 
         test_country.households.ts.override_current("expected_income", expected_income)
-        test_country.households.ts.override_current("wealth_deposits", deposits)
-        expected_deposits = test_country.households.ts.current("wealth_deposits").copy()
+        test_country.households.ts.override_current("liquid_financial_assets", deposits)
+        expected_deposits = test_country.households.ts.current("liquid_financial_assets").copy()
         expected_credit = test_country.households.ts.current("target_consumption_loans").copy()
 
         monkeypatch.setattr(
@@ -2611,7 +2609,7 @@ class TestCountry:
             test_country.households.current_live_post_drawdown_residual(),
             test_country.households.ts.current("residual_shortfall_after_lfa"),
         )
-        np.testing.assert_allclose(test_country.households.ts.current("wealth_deposits"), expected_deposits)
+        np.testing.assert_allclose(test_country.households.ts.current("liquid_financial_assets"), expected_deposits)
         np.testing.assert_allclose(
             test_country.households.ts.current("target_consumption_loans"),
             expected_credit,
@@ -2630,7 +2628,7 @@ class TestCountry:
         captured: dict[str, np.ndarray] = {}
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(
             test_country.households,
@@ -2674,7 +2672,7 @@ class TestCountry:
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.configuration.households.parameters.uses_feasibility_resolver = True
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 10.0))
         first_target = np.zeros((n_households, n_industries))
         first_target[:, 0] = 120.0
         second_target = np.zeros((n_households, n_industries))
@@ -2733,8 +2731,8 @@ class TestCountry:
         )
         monkeypatch.setattr(test_country.households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.02)
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
-        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
         target_consumption = np.zeros((n_households, n_industries))
         target_consumption[:, 0] = 300.0
 
@@ -2788,8 +2786,8 @@ class TestCountry:
         )
         monkeypatch.setattr(test_country.households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.02)
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
-        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
         # Hold cash rent at zero so the shadow residual caps under test depend
         # only on the stubbed target consumption and debt service (GH #120).
         test_country.households.ts.override_current("rent", np.zeros(n_households))
@@ -2846,7 +2844,7 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -2894,8 +2892,8 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
-        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 50.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("illiquid_financial_assets", np.full(n_households, 50.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -2945,7 +2943,7 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -2973,7 +2971,7 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -3014,7 +3012,7 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -3069,7 +3067,7 @@ class TestCountry:
 
         test_country.households.post_grant_feasible_plan = post_grant_plan
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -3110,8 +3108,8 @@ class TestCountry:
         target_consumption[:, 0] = 300.0
 
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
-        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 500.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("illiquid_financial_assets", np.full(n_households, 500.0))
 
         monkeypatch.setattr(test_country.households, "compute_target_consumption", lambda **_kwargs: target_consumption)
         monkeypatch.setattr(
@@ -3171,8 +3169,8 @@ class TestCountry:
         )
         monkeypatch.setattr(test_country.households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.02)
         test_country.households.ts.override_current("expected_income", np.full(n_households, 100.0))
-        test_country.households.ts.override_current("wealth_deposits", np.full(n_households, 80.0))
-        test_country.households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_country.households.ts.override_current("liquid_financial_assets", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
         target_consumption = np.zeros((n_households, n_industries))
         target_consumption[:, 0] = 300.0
 

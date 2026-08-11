@@ -90,7 +90,7 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
         insolvent_households = np.where(
             np.logical_and(
                 households.ts.current("net_wealth") < 0,
-                households.ts.current("wealth_deposits") < 0,
+                households.ts.current("liquid_financial_assets") < 0,
             )
         )[0]
         bad_hh_cons_loans, bad_mortgages = credit_market.remove_loans_to_households(

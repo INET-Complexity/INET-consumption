@@ -19,7 +19,7 @@ The implementation handles:
 
 import inspect
 import warnings
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any, Optional, Tuple
 
 import h5py
@@ -36,6 +36,11 @@ from macromodel.agents.households.func.borrow_vs_sell import (
 from macromodel.agents.households.func.consumer_distress import (
     FICPForgivenessEvent,
     compute_stage6_consumer_distress_state,
+)
+from macromodel.agents.households.func.financial_feasibility import (
+    HouseholdFinancialFeasibility,
+    PostGrantFeasiblePlan,
+    PreGrantFeasiblePlan,
 )
 from macromodel.agents.households.func.liquid_asset_drawdown import (
     compute_liquid_asset_drawdown,
@@ -151,6 +156,7 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "shadow_credit_requested": 0.0,
     "forced_liquidation_amount": 0.0,
     "residual_shortfall_after_caps": 0.0,
+    "realised_cash_flow_adjustment": 0.0,
     # Increment 5: the credit_requested value actually used for target_consumption_loans
     # this period (mirrors the legacy formula when the resolver is off).
     "live_credit_requested": 0.0,
@@ -214,45 +220,6 @@ _STAGE6_DISTRESS_INITIAL_VALUES: dict[str, float | bool] = {
     "consumer_loan_rescheduling_new_maturity": 0.0,
     "consumer_loan_rescheduling_resulting_scheduled_payment": 0.0,
 }
-
-
-@dataclass
-class PreGrantFeasiblePlan:
-    """Minimal live Stage 5 pre-grant feasibility carrier.
-
-    ``credit_requested`` (Increment 5) defaults to ``None`` so that the
-    Increment 4 populate method, which constructs this dataclass without
-    knowledge of the field, keeps working unchanged.
-    """
-
-    liquidity_shortfall_before_repair: np.ndarray
-    funded_from_liquid_assets: np.ndarray
-    residual_shortfall_after_lfa: np.ndarray
-    credit_requested: np.ndarray | None = None
-    planned_liquidation_total: np.ndarray | None = None
-
-
-@dataclass
-class PostGrantFeasiblePlan:
-    """Settled Stage 5 feasibility carrier after consumer credit clearing."""
-
-    credit_granted: np.ndarray
-    credit_rationing_gap: np.ndarray
-    planned_liquidation_total: np.ndarray
-    residual_shortfall_after_granted_credit: np.ndarray
-    granted_consumer_credit_by_bank_and_household: np.ndarray | None = None
-    consumer_debt_liability_booking: np.ndarray | None = None
-    bank_consumer_loan_asset_booking: np.ndarray | None = None
-    consumption_before_floor: np.ndarray | None = None
-    residual_shortfall_before_floor: np.ndarray | None = None
-    consumption_after_floor: np.ndarray | None = None
-    consumption_cut_amount: np.ndarray | None = None
-    remaining_subsistence_shortfall: np.ndarray | None = None
-    early_consumer_repayment_capacity: np.ndarray | None = None
-    floor_binding: np.ndarray | None = None
-    post_liquidation_lfa: np.ndarray | None = None
-    post_liquidation_ifa: np.ndarray | None = None
-    settled_liquidation_total: np.ndarray | None = None
 
 
 class Households(Agent):
@@ -351,6 +318,7 @@ class Households(Agent):
 
         self.use_consumption_weights_by_income = use_consumption_weights_by_income
         self.uses_feasibility_resolver = uses_feasibility_resolver
+        self.financial_feasibility = HouseholdFinancialFeasibility()
         self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
         self.post_grant_feasible_plan: PostGrantFeasiblePlan | None = None
 
@@ -724,10 +692,10 @@ class Households(Agent):
         the existing Stage 5 liquid-drawdown diagnostics and must not mutate
         wealth or debt stocks.
         """
-        self.pre_grant_feasible_plan = PreGrantFeasiblePlan(
-            liquidity_shortfall_before_repair=np.asarray(liquidity_shortfall_before_repair, dtype=float).copy(),
-            funded_from_liquid_assets=np.asarray(funded_from_liquid_assets, dtype=float).copy(),
-            residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float).copy(),
+        self.pre_grant_feasible_plan = self.financial_feasibility.build_pre_grant_plan(
+            liquidity_shortfall_before_repair=liquidity_shortfall_before_repair,
+            funded_from_liquid_assets=funded_from_liquid_assets,
+            residual_shortfall_after_lfa=residual_shortfall_after_lfa,
         )
 
     def current_live_post_drawdown_residual(self) -> np.ndarray:
@@ -773,12 +741,9 @@ class Households(Agent):
         # dataclasses.replace only shallow-copies: re-copy the Increment 4
         # fields too, so the new carrier instance never aliases arrays with
         # the old one it replaces.
-        self.pre_grant_feasible_plan = replace(
+        self.pre_grant_feasible_plan = self.financial_feasibility.with_credit_requested(
             self.pre_grant_feasible_plan,
-            liquidity_shortfall_before_repair=self.pre_grant_feasible_plan.liquidity_shortfall_before_repair.copy(),
-            funded_from_liquid_assets=self.pre_grant_feasible_plan.funded_from_liquid_assets.copy(),
-            residual_shortfall_after_lfa=self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy(),
-            credit_requested=np.asarray(credit_requested, dtype=float).copy(),
+            credit_requested,
         )
 
     def current_live_credit_requested(self) -> np.ndarray:
@@ -850,17 +815,10 @@ class Households(Agent):
         cleaned_liquidation = np.where(np.isfinite(liquidation), np.maximum(liquidation, 0.0), 0.0)
         cleaned_liquidation = np.minimum(cleaned_liquidation, feasible_ifa)
 
-        self.pre_grant_feasible_plan = replace(
+        self.pre_grant_feasible_plan = self.financial_feasibility.with_planned_liquidation(
             self.pre_grant_feasible_plan,
-            liquidity_shortfall_before_repair=self.pre_grant_feasible_plan.liquidity_shortfall_before_repair.copy(),
-            funded_from_liquid_assets=self.pre_grant_feasible_plan.funded_from_liquid_assets.copy(),
-            residual_shortfall_after_lfa=self.pre_grant_feasible_plan.residual_shortfall_after_lfa.copy(),
-            credit_requested=(
-                None
-                if self.pre_grant_feasible_plan.credit_requested is None
-                else self.pre_grant_feasible_plan.credit_requested.copy()
-            ),
-            planned_liquidation_total=cleaned_liquidation.copy(),
+            planned_liquidation_total=cleaned_liquidation,
+            available_illiquid_assets=feasible_ifa,
         )
 
     def current_live_planned_liquidation_total(self) -> np.ndarray:
@@ -935,13 +893,9 @@ class Households(Agent):
                 )
 
         cleaned_granted = np.where(np.isfinite(granted), np.maximum(granted, 0.0), 0.0)
-        cleaned_requested = np.where(np.isfinite(requested), np.maximum(requested, 0.0), 0.0)
-        cleaned_liquidation = np.where(np.isfinite(planned_liquidation), np.maximum(planned_liquidation, 0.0), 0.0)
-        cleaned_residual_after_lfa = np.where(np.isfinite(residual_after_lfa), np.maximum(residual_after_lfa, 0.0), 0.0)
 
         settlement_matrix = None
         liability_booking = None
-        bank_asset_booking = None
         if granted_consumer_credit_by_bank_and_household is not None:
             settlement_matrix = np.asarray(granted_consumer_credit_by_bank_and_household, dtype=float)
             if settlement_matrix.ndim != 2 or settlement_matrix.shape[1] != n_households:
@@ -958,21 +912,11 @@ class Households(Agent):
                 raise RuntimeError(
                     "Stage 6 granted-credit settlement does not reconcile with household credit_granted."
                 )
-            bank_asset_booking = settlement_matrix.sum(axis=1)
 
-        self.post_grant_feasible_plan = PostGrantFeasiblePlan(
-            credit_granted=cleaned_granted.copy(),
-            credit_rationing_gap=np.maximum(cleaned_requested - cleaned_granted, 0.0).copy(),
-            planned_liquidation_total=cleaned_liquidation.copy(),
-            residual_shortfall_after_granted_credit=np.maximum(
-                cleaned_residual_after_lfa - cleaned_granted - cleaned_liquidation,
-                0.0,
-            ).copy(),
-            granted_consumer_credit_by_bank_and_household=(
-                None if settlement_matrix is None else settlement_matrix.copy()
-            ),
-            consumer_debt_liability_booking=None if liability_booking is None else liability_booking.copy(),
-            bank_consumer_loan_asset_booking=None if bank_asset_booking is None else bank_asset_booking.copy(),
+        self.post_grant_feasible_plan = self.financial_feasibility.build_post_grant_plan(
+            self.pre_grant_feasible_plan,
+            credit_granted=cleaned_granted,
+            granted_consumer_credit_by_bank_and_household=settlement_matrix,
         )
 
     def _current_post_grant_feasible_plan_field(self, field_name: str) -> np.ndarray:
@@ -1599,12 +1543,12 @@ class Households(Agent):
         paper_expected_income = getattr(wealth_function, "compute_expected_income_from_financial_assets", None)
         if paper_expected_income is not None:
             return paper_expected_income(
-                current_wealth_in_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
+                current_wealth_in_other_financial_assets=self.ts.current("illiquid_financial_assets"),
             )
         return self.functions["financial_assets"].compute_expected_income(
             income_coefficient=self.states["coefficient_fa_income"],
-            initial_other_financial_assets=self.ts.initial("wealth_other_financial_assets"),
-            current_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
+            initial_other_financial_assets=self.ts.initial("illiquid_financial_assets"),
+            current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
     def compute_income_from_financial_assets(self, period_index: int | None = None) -> np.ndarray:
@@ -1622,15 +1566,15 @@ class Households(Agent):
         paper_income = getattr(wealth_function, "compute_income_from_financial_assets", None)
         if paper_income is not None:
             kwargs = {
-                "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
+                "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
             }
             if getattr(wealth_function, "uses_periodic_illiquid_returns", False):
                 kwargs["period_index"] = period_index
             return paper_income(**kwargs)
         return self.functions["financial_assets"].compute_income(
             income_coefficient=self.states["coefficient_fa_income"],
-            initial_other_financial_assets=self.ts.initial("wealth_other_financial_assets"),
-            current_other_financial_assets=self.ts.current("wealth_other_financial_assets"),
+            initial_other_financial_assets=self.ts.initial("illiquid_financial_assets"),
+            current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
     def current_illiquid_financial_asset_return_rate(self) -> float:
@@ -1643,7 +1587,7 @@ class Households(Agent):
     def current_illiquid_financial_asset_return_amount(self) -> np.ndarray:
         """Return the current-period illiquid return amount vector, if available."""
         current_amount = getattr(self.functions["wealth"], "current_illiquid_return_amount", None)
-        current_wealth = self.ts.current("wealth_other_financial_assets")
+        current_wealth = self.ts.current("illiquid_financial_assets")
         if current_amount is None:
             return np.full(current_wealth.shape, np.nan)
         try:
@@ -1875,8 +1819,8 @@ class Households(Agent):
                 taxes=taxes,
                 initial_taxes=initial_taxes,
                 bundle_matrix=self.bundle_matrix,
-                liquid_wealth=self.ts.current("wealth_deposits"),
-                illiquid_wealth=self.ts.current("wealth_other_financial_assets"),
+                liquid_wealth=self.ts.current("liquid_financial_assets"),
+                illiquid_wealth=self.ts.current("illiquid_financial_assets"),
                 housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
                 lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
@@ -1891,8 +1835,8 @@ class Households(Agent):
                 lagged_consumption=self.ts.prev("consumption"),
                 lagged_income=lagged_income,
                 lagged_cpi=lagged_cpi,
-                lagged_liquid_wealth=self.ts.prev("wealth_deposits"),
-                lagged_illiquid_wealth=self.ts.prev("wealth_other_financial_assets"),
+                lagged_liquid_wealth=self.ts.prev("liquid_financial_assets"),
+                lagged_illiquid_wealth=self.ts.prev("illiquid_financial_assets"),
                 lagged_mortgage_debt=self.ts.prev("mortgage_debt"),
                 lagged_consumption_loan_debt=self.ts.prev("consumption_loan_debt"),
                 lagged_house_price_index=lagged_house_price_index,
@@ -2053,7 +1997,7 @@ class Households(Agent):
         )
         result = compute_liquid_asset_drawdown(
             liquidity_shortfall=liquidity_shortfall_before_repair,
-            available_lfa=self.ts.current("wealth_deposits"),
+            available_lfa=self.ts.current("liquid_financial_assets"),
         )
         if replace_current:
             self.ts.override_current("liquidity_shortfall_before_repair", liquidity_shortfall_before_repair)
@@ -2203,17 +2147,17 @@ class Households(Agent):
                 "r_kappa": np.full(n_households, np.nan),
             }
 
-        opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
+        opening_tfa_scale = self.ts.prev("illiquid_financial_assets") + self.ts.prev("liquid_financial_assets")
         current_return_amount = self.current_illiquid_financial_asset_return_amount()
         if not np.all(np.isfinite(current_return_amount)):
             current_return_amount = self.compute_income_from_financial_assets()
-        post_return_ifa = self.ts.current("wealth_other_financial_assets") + current_return_amount
+        post_return_ifa = self.ts.current("illiquid_financial_assets") + current_return_amount
         investable_surplus = (
             self.ts.current("expected_income")
             - np.asarray(target_consumption_total, dtype=float)
             - np.asarray(scheduled_debt_service, dtype=float)
         )
-        post_surplus_lfa = self.ts.current("wealth_deposits")
+        post_surplus_lfa = self.ts.current("liquid_financial_assets")
 
         frm_covariates = None
         frm_magnitude_coefficients = None
@@ -2878,9 +2822,9 @@ class Households(Agent):
             np.ndarray: Interest paid by household
         """
         return -bank_interest_rate_on_household_deposits[self.states["Corresponding Bank ID"]] * np.maximum(
-            0.0, self.ts.current("wealth_deposits")
+            0.0, self.ts.current("liquid_financial_assets")
         ) - bank_overdraft_rate_on_household_deposits[self.states["Corresponding Bank ID"]] * np.minimum(
-            0.0, self.ts.current("wealth_deposits")
+            0.0, self.ts.current("liquid_financial_assets")
         )
 
     def compute_interest_paid(self) -> np.ndarray:
@@ -3214,14 +3158,19 @@ class Households(Agent):
         if getattr(self.functions["wealth"], "exclude_financial_asset_income_from_saving", False):
             income_for_residual_saving = income_for_residual_saving - self.ts.current("income_financial_assets")
 
-        new_wealth = np.maximum(
-            0.0,
-            (
+        realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+        realised_cash_balance = income_for_residual_saving - self.ts.current("rent") - realised_expenditure
+        if self.uses_feasibility_resolver:
+            planned_cash_balance = np.asarray(self.ts.current("household_saving"), dtype=float)
+            new_wealth = np.maximum(planned_cash_balance, 0.0)
+            realised_cash_flow_adjustment = (
                 income_for_residual_saving
-                - self.ts.current("rent")
-                - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-            ),
-        )
+                - self.ts.current("expected_income")
+                - (realised_expenditure - self.ts.current("target_consumption").sum(axis=1))
+            )
+        else:
+            new_wealth = np.maximum(realised_cash_balance, 0.0)
+            realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)
         (
             new_wealth_in_deposits,
             new_wealth_in_other_financial_assets,
@@ -3232,25 +3181,27 @@ class Households(Agent):
         )
 
         # Used-up financial wealth
-        used_up_wealth = -np.minimum(
-            0.0,
+        if self.uses_feasibility_resolver:
+            if self.post_grant_feasible_plan is None:
+                raise RuntimeError("Stage 5 settlement requires the authoritative post-grant plan.")
+            funded = self.post_grant_feasible_plan.funded_from_liquid_assets
+            if funded is None:
+                raise RuntimeError("Stage 5 post-grant plan is missing liquid-asset funding authority.")
+            used_up_wealth_in_deposits = np.asarray(funded, dtype=float)
+            used_up_wealth_in_other_financial_assets = np.zeros_like(used_up_wealth_in_deposits)
+        else:
+            used_up_wealth = -np.minimum(0.0, realised_cash_balance)
+            use_up_wealth_kwargs = {
+                "used_up_wealth": used_up_wealth,
+                "current_wealth_in_deposits": self.ts.current("liquid_financial_assets"),
+                "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
+            }
+            if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
+                use_up_wealth_kwargs["period_index"] = period_index
             (
-                income_for_residual_saving
-                - self.ts.current("rent")
-                - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-            ),
-        )
-        use_up_wealth_kwargs = {
-            "used_up_wealth": used_up_wealth,
-            "current_wealth_in_deposits": self.ts.current("wealth_deposits"),
-            "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
-        }
-        if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
-            use_up_wealth_kwargs["period_index"] = period_index
-        (
-            used_up_wealth_in_deposits,
-            used_up_wealth_in_other_financial_assets,
-        ) = self.functions["wealth"].use_up_wealth(**use_up_wealth_kwargs)
+                used_up_wealth_in_deposits,
+                used_up_wealth_in_other_financial_assets,
+            ) = self.functions["wealth"].use_up_wealth(**use_up_wealth_kwargs)
 
         # Compute final post-return/post-surplus financial bases before any
         # financial-stock persistence. Stage 5 may settle forced liquidation
@@ -3266,6 +3217,7 @@ class Households(Agent):
             used_up_wealth_in_deposits=used_up_wealth_in_deposits,
             tau_cf=tau_cf,
         )
+        base_lfa = base_lfa + realised_cash_flow_adjustment
         if self.uses_feasibility_resolver:
             wealth_base_lfa, wealth_base_ifa = self.settle_post_grant_liquidation(
                 base_lfa=base_lfa,
@@ -3338,10 +3290,11 @@ class Households(Agent):
 
         # Append both closing stocks before either total so the financial-stock
         # persistence order matches the settlement contract.
-        self.ts.wealth_other_financial_assets.append(wealth_base_ifa)
-        self.ts.wealth_deposits.append(wealth_base_lfa)
-        self.ts.total_wealth_other_financial_assets.append([wealth_base_ifa.sum()])
-        self.ts.total_wealth_deposits.append([wealth_base_lfa.sum()])
+        self.ts.illiquid_financial_assets.append(wealth_base_ifa)
+        self.ts.liquid_financial_assets.append(wealth_base_lfa)
+        self.ts.total_illiquid_financial_assets.append([wealth_base_ifa.sum()])
+        self.ts.total_liquid_financial_assets.append([wealth_base_lfa.sum()])
+        self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
 
         if settlement is not None:
             self._append_stage4_portfolio_diagnostics(diagnostics)
@@ -3354,7 +3307,7 @@ class Households(Agent):
 
         # Compute total financial assets
         self.ts.wealth_financial_assets.append(
-            self.ts.current("wealth_other_financial_assets") + self.ts.current("wealth_deposits")
+            self.ts.current("illiquid_financial_assets") + self.ts.current("liquid_financial_assets")
         )
 
         # Compute total wealth
@@ -3382,20 +3335,20 @@ class Households(Agent):
         """
         wealth_function = self.functions["wealth"]
 
-        opening_tfa_scale = self.ts.prev("wealth_other_financial_assets") + self.ts.prev("wealth_deposits")
+        opening_tfa_scale = self.ts.prev("illiquid_financial_assets") + self.ts.prev("liquid_financial_assets")
         if post_return_ifa is None:
-            post_return_ifa = self.ts.current("wealth_other_financial_assets")
+            post_return_ifa = self.ts.current("illiquid_financial_assets")
         else:
             post_return_ifa = np.asarray(post_return_ifa, dtype=float)
         # post_surplus_lfa ("LFA at the entry point plus s-tilde") is the
         # household's actual, already-updated current liquid balance sheet —
-        # self.ts.current("wealth_deposits") — not a parallel shadow quantity
+        # self.ts.current("liquid_financial_assets") — not a parallel shadow quantity
         # built from new_wealth/rent/etc. That balance already reflects this
         # period's full deposit update (new savings, withdrawals, interest,
         # debt installments, new loans, tau_cf), so any positive-surplus
         # acquisition is already embedded in it.
         if post_surplus_lfa is None:
-            post_surplus_lfa = self.ts.current("wealth_deposits")
+            post_surplus_lfa = self.ts.current("liquid_financial_assets")
         else:
             post_surplus_lfa = np.asarray(post_surplus_lfa, dtype=float)
         # investable_surplus is computed independently per the Data Inputs
@@ -3583,7 +3536,7 @@ class Households(Agent):
             np.ndarray: Financial asset value by household
         """
         kwargs = {
-            "current_wealth_in_other_financial_assets": self.ts.current("wealth_other_financial_assets"),
+            "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
             "new_wealth_in_other_financial_assets": new_wealth_in_other_financial_assets,
             "used_up_wealth_in_other_financial_assets": used_up_wealth_in_other_financial_assets,
         }
@@ -3614,7 +3567,7 @@ class Households(Agent):
             np.ndarray: Deposit value by household
         """
         return self.functions["wealth"].compute_wealth_in_deposits(
-            current_wealth_in_deposits=self.ts.current("wealth_deposits"),
+            current_wealth_in_deposits=self.ts.current("liquid_financial_assets"),
             new_wealth_in_deposits=new_wealth_in_deposits,
             used_up_wealth_in_deposits=used_up_wealth_in_deposits,
             current_interest_paid=self.ts.current("interest_paid"),

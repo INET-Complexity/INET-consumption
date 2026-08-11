@@ -1302,7 +1302,7 @@ class Country:
             scheduled_mortgage_payment=scheduled_mortgage_payment,
             consumer_loan_maturity=consumer_credit_maturity,
             dsti_limit=consumer_credit_dsti_limit,
-            current_ifa=self.households.ts.current("wealth_other_financial_assets"),
+            current_ifa=self.households.ts.current("illiquid_financial_assets"),
             replace_current=replace_current,
         )
         # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
@@ -1331,7 +1331,7 @@ class Country:
             )
             self.households.populate_pre_grant_feasible_plan_planned_liquidation(
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
-                current_ifa=self.households.ts.current("wealth_other_financial_assets"),
+                current_ifa=self.households.ts.current("illiquid_financial_assets"),
             )
 
         target_investment = self.households.compute_target_investment(
@@ -2852,7 +2852,7 @@ class Country:
         # G3. BANK BALANCE SHEETS
         self.banks.update_deposits(
             current_firm_deposits=self.firms.ts.current("deposits"),
-            current_household_deposits=self.households.ts.current("wealth_deposits"),
+            current_household_deposits=self.households.ts.current("liquid_financial_assets"),
             firm_corresponding_bank=self.firms.states["Corresponding Bank ID"],
             households_corresponding_bank=self.households.states["Corresponding Bank ID"],
         )

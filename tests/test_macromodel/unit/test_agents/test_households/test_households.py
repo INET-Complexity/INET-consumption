@@ -778,7 +778,7 @@ class TestHouseholds:
             "target_consumption_loans",
             "received_consumption_loans",
             "liquidation_planned",
-            "wealth_deposits",
+            "liquid_financial_assets",
             "wealth_financial_assets",
             "wealth_real_assets",
             "wealth",
@@ -892,8 +892,8 @@ class TestHouseholds:
     #         "wealth_main_residence",
     #         "wealth_other_properties",
     #         "wealth_other_real_assets",
-    #         "wealth_deposits",
-    #         "wealth_other_financial_assets",
+    #         "liquid_financial_assets",
+    #         "illiquid_financial_assets",
     #         "wealth_financial_assets",
     #         "payday_loan_debt",
     #         "consumption_expansion_loan_debt",
@@ -1055,8 +1055,8 @@ class TestComputeStage4PortfolioDiagnostics:
     """Regression guard: Stage 4 diagnostics are diagnostics-only.
 
     ``compute_stage4_portfolio_diagnostics`` must never mutate the core
-    balance-sheet time series it reads from (``wealth_deposits``,
-    ``wealth_other_financial_assets``, ``wealth_financial_assets``,
+    balance-sheet time series it reads from (``liquid_financial_assets``,
+    ``illiquid_financial_assets``, ``wealth_financial_assets``,
     ``wealth``, ``income``, ``consumption``, ``debt_installments``). It is
     only reachable when ``uses_portfolio_choice=True`` on the wealth
     function, so the fixture's setter is swapped for a
@@ -1084,8 +1084,8 @@ class TestComputeStage4PortfolioDiagnostics:
     def test__core_wealth_and_income_series_are_bit_identical_after_call(self, test_households):
         self._enable_portfolio_choice(test_households)
         watched_keys = [
-            "wealth_deposits",
-            "wealth_other_financial_assets",
+            "liquid_financial_assets",
+            "illiquid_financial_assets",
             "wealth_financial_assets",
             "wealth",
             "income",
@@ -1154,8 +1154,8 @@ class TestComputeStage4PortfolioDiagnostics:
 
         test_households.compute_stage4_portfolio_diagnostics()
 
-        expected = test_households.ts.current("wealth_other_financial_assets") + test_households.ts.current(
-            "wealth_deposits"
+        expected = test_households.ts.current("illiquid_financial_assets") + test_households.ts.current(
+            "liquid_financial_assets"
         )
         np.testing.assert_allclose(test_households.ts.dicts["portfolio_opening_tfa_scale"][-1], expected)
 
@@ -1230,12 +1230,18 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         monkeypatch.setitem(test_households.functions, "wealth", WealthStub())
         test_households.uses_feasibility_resolver = resolver
         test_households.ts.override_current("income", np.full(n_households, 100.0))
+        test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         test_households.ts.override_current("income_financial_assets", zeros.copy())
         test_households.ts.override_current("rent", zeros.copy())
         test_households.ts.override_current(
             "nominal_amount_spent_in_lcu",
             np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu")),
         )
+        test_households.ts.override_current(
+            "target_consumption",
+            np.zeros_like(test_households.ts.current("target_consumption")),
+        )
+        test_households.ts.override_current("household_saving", np.zeros(n_households))
 
         monkeypatch.setattr(
             test_households,
@@ -1280,6 +1286,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         if resolver:
             test_households.post_grant_feasible_plan = SimpleNamespace(
+                funded_from_liquid_assets=np.zeros(n_households),
                 post_liquidation_lfa=np.full(n_households, 108.0),
                 post_liquidation_ifa=np.full(n_households, 42.0),
                 settled_liquidation_total=np.full(n_households, 8.0),
@@ -1302,16 +1309,16 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             resolver=True,
             settles=True,
         )
-        initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
-        initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+        initial_lfa_length = len(test_households.ts.dicts["liquid_financial_assets"])
+        initial_ifa_length = len(test_households.ts.dicts["illiquid_financial_assets"])
         shadow_append_observations = []
         append_shadow_diagnostics = test_households._append_stage4_portfolio_diagnostics
 
         def observe_shadow_append(diagnostics):
             shadow_append_observations.append(
                 (
-                    len(test_households.ts.dicts["wealth_deposits"]),
-                    len(test_households.ts.dicts["wealth_other_financial_assets"]),
+                    len(test_households.ts.dicts["liquid_financial_assets"]),
+                    len(test_households.ts.dicts["illiquid_financial_assets"]),
                 )
             )
             append_shadow_diagnostics(diagnostics)
@@ -1324,11 +1331,11 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         assert shadow_append_observations == [(initial_lfa_length + 1, initial_ifa_length + 1)]
         np.testing.assert_allclose(settlement_calls[0][0], np.full(n_households, 100.0))
         np.testing.assert_allclose(settlement_calls[0][1], np.full(n_households, 50.0))
-        assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length + 1
-        assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length + 1
-        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), np.full(n_households, 108.0))
+        assert len(test_households.ts.dicts["liquid_financial_assets"]) == initial_lfa_length + 1
+        assert len(test_households.ts.dicts["illiquid_financial_assets"]) == initial_ifa_length + 1
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), np.full(n_households, 108.0))
         np.testing.assert_allclose(
-            test_households.ts.current("wealth_other_financial_assets"),
+            test_households.ts.current("illiquid_financial_assets"),
             np.full(n_households, 42.0),
         )
         zero_flows = np.zeros(n_households)
@@ -1340,6 +1347,42 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         np.testing.assert_allclose(
             test_households.ts.current("portfolio_settlement_status"), np.full(n_households, 4.0)
         )
+
+    def test__resolver_bypasses_legacy_use_up_wealth(self, test_households, monkeypatch):
+        self._configure_update_wealth(test_households, monkeypatch, resolver=True, settles=True)
+
+        def fail_if_called(**_kwargs):
+            raise AssertionError("legacy use_up_wealth must not run with the feasibility resolver")
+
+        monkeypatch.setattr(test_households.functions["wealth"], "use_up_wealth", fail_if_called)
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+    def test__resolver_books_realised_cash_difference_only_to_liquid_assets(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=False,
+        )
+        test_households.ts.override_current("expected_income", np.full(n_households, 90.0))
+        test_households.ts.override_current("income", np.full(n_households, 100.0))
+        target = np.zeros_like(test_households.ts.current("target_consumption"))
+        target[:, 0] = 20.0
+        realised = np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu"))
+        realised[:, 0] = 15.0
+        test_households.ts.override_current("target_consumption", target)
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
+        monkeypatch.setattr(
+            test_households,
+            "settle_post_grant_liquidation",
+            lambda *, base_lfa, base_ifa: (base_lfa, base_ifa),
+        )
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        np.testing.assert_allclose(test_households.ts.current("realised_cash_flow_adjustment"), 15.0)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), 115.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0)
 
     def test__settled_update_runs_actual_stage4_and_settlement_blocks(
         self,
@@ -1366,7 +1409,8 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         assert expected_valid.any()
         np.testing.assert_allclose(
             test_households.ts.current("wealth_financial_assets"),
-            test_households.ts.current("wealth_deposits") + test_households.ts.current("wealth_other_financial_assets"),
+            test_households.ts.current("liquid_financial_assets")
+            + test_households.ts.current("illiquid_financial_assets"),
         )
         np.testing.assert_allclose(
             test_households.ts.current("portfolio_counterfactual_lfa_flow")
@@ -1386,9 +1430,9 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
         assert settlement_calls == []
-        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), np.full(n_households, 100.0))
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), np.full(n_households, 100.0))
         np.testing.assert_allclose(
-            test_households.ts.current("wealth_other_financial_assets"),
+            test_households.ts.current("illiquid_financial_assets"),
             np.full(n_households, 50.0),
         )
         np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_enabled"), np.zeros(n_households))
@@ -1402,15 +1446,15 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             settles=True,
         )
         test_households.post_grant_feasible_plan.post_liquidation_ifa = np.full(n_households, np.nan)
-        initial_lfa_length = len(test_households.ts.dicts["wealth_deposits"])
-        initial_ifa_length = len(test_households.ts.dicts["wealth_other_financial_assets"])
+        initial_lfa_length = len(test_households.ts.dicts["liquid_financial_assets"])
+        initial_ifa_length = len(test_households.ts.dicts["illiquid_financial_assets"])
         initial_real_length = len(test_households.ts.dicts["wealth_real_assets"])
 
         with pytest.raises(RuntimeError, match="valid post-liquidation authority"):
             test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
-        assert len(test_households.ts.dicts["wealth_deposits"]) == initial_lfa_length
-        assert len(test_households.ts.dicts["wealth_other_financial_assets"]) == initial_ifa_length
+        assert len(test_households.ts.dicts["liquid_financial_assets"]) == initial_lfa_length
+        assert len(test_households.ts.dicts["illiquid_financial_assets"]) == initial_ifa_length
         assert len(test_households.ts.dicts["wealth_real_assets"]) == initial_real_length
 
     def test__settled_update_rejects_inconsistent_stage5_authority(self, test_households, monkeypatch):
@@ -1495,13 +1539,13 @@ class TestComputeAndRecordLiquidityShortfall:
 class TestComputeAndRecordLiquidAssetDrawdown:
     """Stage 5 (feasibility resolver) Increment 1: liquid-asset drawdown diagnostic."""
 
-    def test__liquid_asset_drawdown_appends_diagnostics_using_current_wealth_deposits(self, test_households):
+    def test__liquid_asset_drawdown_appends_diagnostics_using_current_liquid_financial_assets(self, test_households):
         n_households = test_households.ts.current("n_households")
         deposits = np.resize(np.asarray([50.0, 20.0, -5.0]), n_households)
         liquidity_shortfall = np.resize(np.asarray([100.0, 10.0, 30.0]), n_households)
         expected_funded = np.resize(np.asarray([50.0, 10.0, 0.0]), n_households)
         expected_residual = np.resize(np.asarray([50.0, 0.0, 30.0]), n_households)
-        test_households.ts.override_current("wealth_deposits", deposits)
+        test_households.ts.override_current("liquid_financial_assets", deposits)
 
         residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
 
@@ -1523,7 +1567,7 @@ class TestComputeAndRecordLiquidAssetDrawdown:
         n_households = test_households.ts.current("n_households")
         first_shortfall = np.full(n_households, 10.0)
         second_shortfall = np.full(n_households, 25.0)
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 5.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 5.0))
 
         test_households.compute_and_record_liquid_asset_drawdown(first_shortfall)
         before_lengths = {
@@ -1548,7 +1592,7 @@ class TestComputeAndRecordLiquidAssetDrawdown:
 
     def test__liquid_asset_drawdown_non_finite_shortfall_snapshot_is_recorded_as_zero(self, test_households):
         n_households = test_households.ts.current("n_households")
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 10.0))
         liquidity_shortfall = np.resize(np.asarray([np.nan, np.inf, -8.0, 5.0]), n_households)
         expected_snapshot = np.resize(np.asarray([0.0, 0.0, 0.0, 5.0]), n_households)
 
@@ -1567,10 +1611,10 @@ class TestComputeAndRecordLiquidAssetDrawdown:
     def test__populate_pre_grant_feasible_plan_from_liquid_asset_drawdown_copies_shadow_values(self, test_households):
         n_households = test_households.ts.current("n_households")
         liquidity_shortfall = np.resize(np.asarray([15.0, np.nan, -2.0]), n_households)
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 10.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 10.0))
         test_households.configure_feasibility_resolver(True)
 
-        expected_deposits = test_households.ts.current("wealth_deposits").copy()
+        expected_deposits = test_households.ts.current("liquid_financial_assets").copy()
         expected_financial_assets = test_households.ts.current("wealth_financial_assets").copy()
         expected_loans = test_households.ts.current("target_consumption_loans").copy()
         residual = test_households.compute_and_record_liquid_asset_drawdown(liquidity_shortfall)
@@ -1593,7 +1637,7 @@ class TestComputeAndRecordLiquidAssetDrawdown:
             test_households.current_live_post_drawdown_residual(),
             test_households.ts.current("residual_shortfall_after_lfa"),
         )
-        np.testing.assert_allclose(test_households.ts.current("wealth_deposits"), expected_deposits)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), expected_deposits)
         np.testing.assert_allclose(
             test_households.ts.current("wealth_financial_assets"),
             expected_financial_assets,
@@ -2937,8 +2981,8 @@ class TestComputeAndRecordBorrowVsSellChoice:
         baseline = {
             key: test_households.ts.current(key).copy()
             for key in [
-                "wealth_deposits",
-                "wealth_other_financial_assets",
+                "liquid_financial_assets",
+                "illiquid_financial_assets",
                 "target_consumption_loans",
                 "target_mortgage",
                 "debt_installments",
@@ -2982,8 +3026,8 @@ class TestComputeAndRecordBorrowVsSellChoice:
             fixed_cost_share=0.001,
         )
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
-        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 50.0))
+        test_households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
         captured = {}
 
         def fake_stage4_helper(**kwargs):
@@ -3046,14 +3090,14 @@ class TestComputeAndRecordBorrowVsSellChoice:
             lambda_kappa=0.1,
             fixed_cost_share=0.001,
         )
-        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 50.0))
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
         test_households.functions["wealth"].compute_income_from_financial_assets(
-            current_wealth_in_other_financial_assets=test_households.ts.current("wealth_other_financial_assets"),
+            current_wealth_in_other_financial_assets=test_households.ts.current("illiquid_financial_assets"),
         )
         expected_post_return_ifa = (
-            test_households.ts.current("wealth_other_financial_assets")
+            test_households.ts.current("illiquid_financial_assets")
             + test_households.current_illiquid_financial_asset_return_amount()
         )
         captured = {}
@@ -3115,8 +3159,8 @@ class TestComputeAndRecordBorrowVsSellChoice:
             lambda_kappa=0.1,
             fixed_cost_share=0.001,
         )
-        test_households.ts.override_current("wealth_other_financial_assets", np.full(n_households, 25.0))
-        test_households.ts.override_current("wealth_deposits", np.full(n_households, 50.0))
+        test_households.ts.override_current("illiquid_financial_assets", np.full(n_households, 25.0))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 50.0))
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
         monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
 
@@ -3145,8 +3189,8 @@ class TestComputeAndRecordResidualCapacityFallback:
         baseline = {
             key: test_households.ts.current(key).copy()
             for key in [
-                "wealth_deposits",
-                "wealth_other_financial_assets",
+                "liquid_financial_assets",
+                "illiquid_financial_assets",
                 "target_consumption_loans",
                 "target_mortgage",
                 "debt_installments",

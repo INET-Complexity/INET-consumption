@@ -1159,6 +1159,112 @@ def build_macro_output_df(model, country_code):
     return out
 
 
+def build_household_ifa_decomposition_df(model, country_code: str) -> pd.DataFrame:
+    """Return period-by-period aggregate decomposition of household IFA changes.
+
+    The core decomposition is:
+
+    - ``new_ifa_alloc``
+    - ``baseline_ifa_drawdown``
+    - ``stage5_liquidation``
+
+    and explains ``delta_ifa`` through:
+
+    ``explained_core = new_ifa_alloc - baseline_ifa_drawdown - stage5_liquidation``.
+
+    A second variant also includes ``portfolio_ifa_flow`` when available.
+    """
+    country = model.countries[country_code]
+    households_ts = getattr(getattr(country, "households", None), "ts", None)
+    if households_ts is None:
+        raise ValueError(f"No households.ts found for country {country_code!r}.")
+
+    ifa_hist = _safe_ts_values(households_ts, "wealth_other_financial_assets")
+    if ifa_hist is None:
+        raise ValueError("Household IFA series 'wealth_other_financial_assets' is unavailable.")
+
+    ifa_array = np.asarray(ifa_hist, dtype=float)
+    if ifa_array.ndim == 1:
+        ifa_stock = ifa_array.astype(float)
+    else:
+        ifa_stock = np.nansum(ifa_array, axis=1).astype(float)
+
+    periods = int(ifa_stock.shape[0])
+
+    def _aggregate_household_series(ts_name: str, default: float = 0.0) -> np.ndarray:
+        values = _safe_ts_values(households_ts, ts_name)
+        if values is None:
+            return np.full(periods, default, dtype=float)
+
+        array = np.asarray(values, dtype=float)
+        if array.size == 0:
+            return np.full(periods, default, dtype=float)
+        if array.ndim == 1:
+            out = array.astype(float)
+        else:
+            out = np.nansum(array, axis=1).astype(float)
+
+        if out.shape[0] < periods:
+            pad = np.full(periods - out.shape[0], default, dtype=float)
+            out = np.concatenate([out, pad])
+        return out[:periods]
+
+    new_ifa_alloc = _aggregate_household_series("new_wealth_in_other_financial_assets")
+    baseline_ifa_drawdown = _aggregate_household_series("used_up_wealth_in_other_financial_assets")
+    stage5_liquidation = _aggregate_household_series("liquidation_planned")
+    portfolio_ifa_flow = _aggregate_household_series("portfolio_settlement_committed_ifa_flow")
+
+    delta_ifa = np.concatenate([[np.nan], np.diff(ifa_stock)])
+    explained_core = new_ifa_alloc - baseline_ifa_drawdown - stage5_liquidation
+    residual_wedge_core = delta_ifa - explained_core
+    explained_plus_portfolio = explained_core + portfolio_ifa_flow
+    residual_wedge_plus_portfolio = delta_ifa - explained_plus_portfolio
+
+    return pd.DataFrame(
+        {
+            "period": np.arange(periods),
+            "ifa_stock": ifa_stock,
+            "delta_ifa": delta_ifa,
+            "new_ifa_alloc": new_ifa_alloc,
+            "baseline_ifa_drawdown": baseline_ifa_drawdown,
+            "stage5_liquidation": stage5_liquidation,
+            "portfolio_ifa_flow": portfolio_ifa_flow,
+            "explained_core": explained_core,
+            "residual_wedge_core": residual_wedge_core,
+            "explained_plus_portfolio": explained_plus_portfolio,
+            "residual_wedge_plus_portfolio": residual_wedge_plus_portfolio,
+        }
+    )
+
+
+def plot_household_ifa_diagnostics(
+    model,
+    country_code: str,
+    *,
+    base_height: int = 260,
+    base_width: int = 900,
+    show: bool = True,
+):
+    """Plot aggregate household diagnostics used to interpret IFA depletion."""
+    diag_vars = [
+        ["wealth_other_financial_assets", "wealth_deposits"],
+        ["liquidity_shortfall", "funded_from_liquid_assets", "residual_shortfall_after_lfa"],
+        ["liquidation_planned", "forced_liquidation_amount"],
+    ]
+    return plot_agent_timeseries(
+        model,
+        country_code,
+        "households",
+        diag_vars,
+        agg="sum",
+        no_cols=1,
+        show_legend=True,
+        show=show,
+        base_height=base_height,
+        base_width=base_width,
+    )
+
+
 def _panel_to_frame(values, index, width=None):
     values = list(values)
     horizon = min(len(index), len(values))

@@ -3161,6 +3161,7 @@ class Households(Agent):
         realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
         realised_cash_balance = income_for_residual_saving - self.ts.current("rent") - realised_expenditure
         if self.uses_feasibility_resolver:
+
             def optional_cash_flow(name: str) -> np.ndarray:
                 values = np.asarray(self.ts.current(name), dtype=float)
                 return np.where(np.isfinite(values), values, 0.0)
@@ -3180,7 +3181,9 @@ class Households(Agent):
                 or np.any(granted_credit < 0.0)
                 or np.any(received_credit < 0.0)
             ):
-                raise RuntimeError("Stage 5 early committed consumer credit must be a finite non-negative household vector.")
+                raise RuntimeError(
+                    "Stage 5 early committed consumer credit must be a finite non-negative household vector."
+                )
             if not np.allclose(granted_credit, received_credit, rtol=1e-10, atol=1e-12):
                 raise RuntimeError(
                     "Stage 5 cash settlement requires received_consumption_loans to reconcile with early committed credit_granted."

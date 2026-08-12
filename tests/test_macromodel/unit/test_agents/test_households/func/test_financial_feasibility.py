@@ -101,7 +101,9 @@ def test__consumption_floor_policy_is_pure_and_keeps_the_carrier_immutable():
         residual_shortfall_after_lfa=np.array([8.0]),
     )
     pre = resolver.with_credit_requested(pre, np.array([3.0]))
-    pre = resolver.with_planned_liquidation(pre, planned_liquidation_total=np.array([1.0]), available_illiquid_assets=np.array([1.0]))
+    pre = resolver.with_planned_liquidation(
+        pre, planned_liquidation_total=np.array([1.0]), available_illiquid_assets=np.array([1.0])
+    )
     post = resolver.build_post_grant_plan(pre, credit_granted=np.array([3.0]))
 
     settled = resolver.settle_consumption_floor(

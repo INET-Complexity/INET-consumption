@@ -38,9 +38,9 @@ def test__zero_liquidation_preserves_financial_bases():
 def test__unhonoured_reserved_liquidation_fails_settlement():
     with pytest.raises(RuntimeError, match="cannot be honoured"):
         _settle(
-        base_ifa=np.asarray([2.0, 3.0, 0.0]),
-        planned_liquidation_total=np.asarray([8.0, 5.0, 0.0]),
-        residual_shortfall_after_granted_credit=np.asarray([1.0, 4.0, 0.0]),
+            base_ifa=np.asarray([2.0, 3.0, 0.0]),
+            planned_liquidation_total=np.asarray([8.0, 5.0, 0.0]),
+            residual_shortfall_after_granted_credit=np.asarray([1.0, 4.0, 0.0]),
         )
 
 

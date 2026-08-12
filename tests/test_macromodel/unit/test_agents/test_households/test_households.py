@@ -1291,9 +1291,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             "received_mortgages",
         ):
             test_households.ts.override_current(field, zeros.copy())
-        test_households.ts.override_current(
-            "investment", np.zeros_like(test_households.ts.current("investment"))
-        )
+        test_households.ts.override_current("investment", np.zeros_like(test_households.ts.current("investment")))
         test_households.ts.override_current(
             "nominal_amount_spent_in_lcu",
             np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu")),
@@ -1369,6 +1367,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
                 )
 
             if not use_real_liquidation:
+
                 def expose_post_liquidation_bases(*, base_lfa, base_ifa):
                     settlement_calls.append((base_lfa.copy(), base_ifa.copy()))
                     return np.full(n_households, 108.0), np.full(n_households, 42.0)
@@ -1632,9 +1631,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0)
 
     @pytest.mark.parametrize(
-        (
-            "opening_lfa, granted_credit, liquidation, expenditure, principal, interest, expected_lfa, expected_ifa"
-        ),
+        ("opening_lfa, granted_credit, liquidation, expenditure, principal, interest, expected_lfa, expected_ifa"),
         [
             pytest.param(100.0, 0.0, 0.0, 30.0, 0.0, 0.0, 70.0, 50.0, id="lfa-only"),
             pytest.param(0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0, id="credit-only"),
@@ -1685,9 +1682,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), expected_lfa)
         np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), expected_ifa)
-        np.testing.assert_allclose(
-            test_households.ts.current("wealth_financial_assets"), expected_lfa + expected_ifa
-        )
+        np.testing.assert_allclose(test_households.ts.current("wealth_financial_assets"), expected_lfa + expected_ifa)
         np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), 0.0)
 
     def test__resolver_rejects_a_cash_grant_that_does_not_match_early_origination(
@@ -1747,7 +1742,9 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             np.zeros(n_households),
         )
 
-    def test__legacy_compatibility_disabled_settlement_preserves_shadow_stock_update(self, test_households, monkeypatch):
+    def test__legacy_compatibility_disabled_settlement_preserves_shadow_stock_update(
+        self, test_households, monkeypatch
+    ):
         n_households, settlement_calls = self._configure_update_wealth(
             test_households,
             monkeypatch,
@@ -2049,9 +2046,7 @@ class TestComputeAndRecordLiquidAssetDrawdown:
         assert test_households.uses_feasibility_resolver is True
         assert test_households.pre_grant_feasible_plan is None
 
-    def test__legacy_compatibility_post_drawdown_residual_falls_back_to_clipped_shadow_value(
-        self, test_households
-    ):
+    def test__legacy_compatibility_post_drawdown_residual_falls_back_to_clipped_shadow_value(self, test_households):
         n_households = test_households.ts.current("n_households")
         residual_shortfall_after_lfa = np.resize(np.asarray([12.0, -3.0, np.nan, np.inf]), n_households)
         expected = np.resize(np.asarray([12.0, 0.0, 0.0, 0.0]), n_households)

@@ -10,12 +10,7 @@ REAL_FRM_PATH = next(
     path
     for path in (
         REPO_ROOT / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
-        REPO_ROOT
-        / "run_model"
-        / "data"
-        / "raw_data"
-        / "portfolio"
-        / "FR_portfolio_frm_coefficients.json",
+        REPO_ROOT / "run_model" / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
     )
     if path.is_file()
 )

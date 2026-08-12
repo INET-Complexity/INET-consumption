@@ -623,12 +623,7 @@ class TestCountry:
             path
             for path in (
                 repo_root / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
-                repo_root
-                / "run_model"
-                / "data"
-                / "raw_data"
-                / "portfolio"
-                / "FR_portfolio_frm_coefficients.json",
+                repo_root / "run_model" / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
             )
             if path.is_file()
         )
@@ -1138,7 +1133,9 @@ class TestCountry:
         with pytest.raises(RuntimeError, match="cash-ledger residual"):
             test_country.validate_stage5_closing_balance_sheets()
 
-        test_country.households.ts.override_current("stage5_cash_ledger_residual", np.zeros_like(liquid_financial_assets))
+        test_country.households.ts.override_current(
+            "stage5_cash_ledger_residual", np.zeros_like(liquid_financial_assets)
+        )
         test_country.households.ts.override_current(
             "wealth_financial_assets",
             liquid_financial_assets + illiquid_financial_assets + 1.0,
@@ -1159,7 +1156,9 @@ class TestCountry:
         market_mortgage_debt = test_country.credit_market.compute_outstanding_mortgages_by_household()
         np.testing.assert_allclose(test_country.households.ts.current("consumption_loan_debt"), market_consumer_debt)
         np.testing.assert_allclose(test_country.households.ts.current("mortgage_debt"), market_mortgage_debt)
-        np.testing.assert_allclose(test_country.households.ts.current("debt"), market_consumer_debt + market_mortgage_debt)
+        np.testing.assert_allclose(
+            test_country.households.ts.current("debt"), market_consumer_debt + market_mortgage_debt
+        )
 
     def test__late_stage5_liquidation_failure_preserves_early_credit_origination(self, test_country, monkeypatch):
         """A post-origination wealth failure is fatal, not an implicit rollback."""
@@ -1204,7 +1203,8 @@ class TestCountry:
         for field in ("income", "income_financial_assets", "rent", "interest_paid", "debt_installments"):
             test_country.households.ts.override_current(field, zeros)
         test_country.households.ts.override_current(
-            "nominal_amount_spent_in_lcu", np.zeros_like(test_country.households.ts.current("nominal_amount_spent_in_lcu"))
+            "nominal_amount_spent_in_lcu",
+            np.zeros_like(test_country.households.ts.current("nominal_amount_spent_in_lcu")),
         )
         test_country.households.ts.override_current(
             "investment", np.zeros_like(test_country.households.ts.current("investment"))
@@ -1214,7 +1214,9 @@ class TestCountry:
             "compute_wealth_of_the_main_residence",
             lambda *, housing_data: zeros,
         )
-        monkeypatch.setattr(test_country.households, "compute_wealth_of_other_properties", lambda *, housing_data: zeros)
+        monkeypatch.setattr(
+            test_country.households, "compute_wealth_of_other_properties", lambda *, housing_data: zeros
+        )
         monkeypatch.setattr(test_country.households, "compute_wealth_of_other_real_assets", lambda: zeros)
         monkeypatch.setattr(test_country.households, "compute_wealth_of_other_financial_assets", lambda **_: zeros)
         monkeypatch.setattr(test_country.households, "current_illiquid_financial_asset_return_rate", lambda: 0.0)
@@ -1237,9 +1239,15 @@ class TestCountry:
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", lambda **kwargs: None)
         monkeypatch.setattr(test_country.government_entities, "prepare_goods_market_clearing", lambda **kwargs: None)
         n_households = test_country.households.ts.current("n_households")
-        monkeypatch.setattr(test_country.households, "current_post_grant_residual_shortfall", lambda: np.zeros(n_households))
-        monkeypatch.setattr(test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households))
-        monkeypatch.setattr(test_country.households, "record_pre_support_payment_suspension_diagnostics", lambda **_: None)
+        monkeypatch.setattr(
+            test_country.households, "current_post_grant_residual_shortfall", lambda: np.zeros(n_households)
+        )
+        monkeypatch.setattr(
+            test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
+        )
+        monkeypatch.setattr(
+            test_country.households, "record_pre_support_payment_suspension_diagnostics", lambda **_: None
+        )
         monkeypatch.setattr(test_country, "set_stage5_subsistence_support_by_household", lambda _support: None)
 
         test_country.prepare_goods_market_clearing()
@@ -1331,9 +1339,7 @@ class TestCountry:
 
         def capture_household_goods_prep(**_kwargs):
             calls["households"] += 1
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=np.zeros(n_households)
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=np.zeros(n_households))
             return np.zeros(n_households)
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1386,9 +1392,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=sentinel_shortfall
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=sentinel_shortfall)
             return sentinel_shortfall
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1429,9 +1433,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=np.zeros(n_households)
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=np.zeros(n_households))
             return np.zeros(n_households)
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1469,9 +1471,7 @@ class TestCountry:
         residual = np.resize(np.asarray([0.0, 8.0, 25.0, 4.0]), n_households)
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=residual.copy()
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=residual.copy())
             return residual.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1515,9 +1515,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy()
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy())
             return stale_shortfall.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1798,9 +1796,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(
-                test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy()
-            )
+            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy())
             return settled_shortfall.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -3109,9 +3105,7 @@ class TestCountry:
             liquidation_planned,
         )
 
-    def test__legacy_nonresolver_target_demand_leaves_credit_requested_carrier_unset(
-        self, test_country, monkeypatch
-    ):
+    def test__legacy_nonresolver_target_demand_leaves_credit_requested_carrier_unset(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))
         # Set explicitly rather than relying on the dataclass default: Country's

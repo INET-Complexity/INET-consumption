@@ -24,9 +24,9 @@ def settle_post_liquidation(
 ) -> PostLiquidationSettlement:
     """Settle sanctioned liquidation once against final wealth bases.
 
-    ``residual_shortfall_after_granted_credit`` already reflects the planned
-    liquidation amount. If available IFA is lower than planned, only the
-    unexecuted difference is restored to the residual shortfall.
+    ``planned_liquidation_total`` is the reservation made before floor and goods
+    demand were fixed. It must be executable in full at settlement; a shortfall
+    is a failed transaction, not a reason to silently shrink the reservation.
     """
     arrays = {
         "base_lfa": np.asarray(base_lfa, dtype=float),
@@ -41,17 +41,18 @@ def settle_post_liquidation(
         raise RuntimeError("Stage 5 liquidation settlement requires finite inputs.")
 
     base_lfa_values = arrays["base_lfa"]
-    base_ifa_values = np.maximum(arrays["base_ifa"], 0.0)
+    base_ifa_values = arrays["base_ifa"]
     planned = np.maximum(arrays["planned_liquidation_total"], 0.0)
     residual_after_granted_credit = np.maximum(arrays["residual_shortfall_after_granted_credit"], 0.0)
-    settled = np.minimum(planned, base_ifa_values)
+    if np.any(base_ifa_values < 0.0):
+        raise RuntimeError("Stage 5 liquidation settlement requires non-negative IFA bases.")
+    if np.any(planned > base_ifa_values):
+        raise RuntimeError("Reserved Stage 5 liquidation cannot be honoured at settlement.")
+    settled = planned
 
     return PostLiquidationSettlement(
         post_liquidation_lfa=base_lfa_values + settled,
         post_liquidation_ifa=base_ifa_values - settled,
         settled_liquidation_total=settled,
-        residual_shortfall_after_settlement=np.maximum(
-            residual_after_granted_credit + planned - settled,
-            0.0,
-        ),
+        residual_shortfall_after_settlement=residual_after_granted_credit.copy(),
     )

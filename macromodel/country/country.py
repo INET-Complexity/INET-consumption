@@ -95,6 +95,37 @@ def _positive_float_or_default(value: object, default: float) -> float:
     return parsed if np.isfinite(parsed) and parsed > 0.0 else default
 
 
+def _resolve_frm_coefficients_path(
+    configured_path: str | Path | None,
+    data_paths: Optional[DataPaths],
+) -> Path | None:
+    """Resolve configured FRM paths without overriding explicit absolute paths.
+
+    Consumption-paper parameter files historically use either the
+    data/raw_data/... or run_model/data/raw_data/... form. Both describe the
+    same file beneath the runner's raw-data root, not necessarily the process
+    working directory.
+    """
+    if configured_path is None:
+        return data_paths.frm_coefficients_path if data_paths is not None else None
+
+    candidate = Path(configured_path)
+    if candidate.is_absolute() or data_paths is None:
+        return candidate
+
+    default_path = data_paths.frm_coefficients_path
+    if default_path is None:
+        return candidate
+
+    try:
+        raw_data_index = candidate.parts.index("raw_data")
+    except ValueError:
+        return candidate
+
+    raw_data_root = Path(default_path).parent.parent
+    return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
+
+
 def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarray) -> np.ndarray:
     """Return cleaned real Stage 5 support implied by the post-floor shortfall."""
     shortfall = np.asarray(remaining_subsistence_shortfall, dtype=float)
@@ -608,11 +639,7 @@ class Country:
         # DataPaths.default_paths() always populates it unconditionally.
         if getattr(households.functions["wealth"], "uses_portfolio_choice", False):
             frm_coefficients_path = households.functions["wealth"].frm_coefficients_path
-            resolved_frm_path = (
-                Path(frm_coefficients_path)
-                if frm_coefficients_path is not None
-                else (data_paths.frm_coefficients_path if data_paths is not None else None)
-            )
+            resolved_frm_path = _resolve_frm_coefficients_path(frm_coefficients_path, data_paths)
             if resolved_frm_path is None:
                 raise ValueError(
                     "uses_portfolio_choice=True requires a non-null frm_coefficients_path, "
@@ -1548,6 +1575,9 @@ class Country:
             credit_granted=credit_granted,
             granted_consumer_credit_by_bank_and_household=granted_consumer_credit_by_bank_and_household,
         )
+        self.households.reserve_post_grant_executable_liquidation(
+            available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
+        )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:
             raise RuntimeError("Stage 6 consumer-credit settlement carrier was not populated.")
@@ -1581,13 +1611,13 @@ class Country:
             scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             eligible_ficp=self.households.current_ficp_active(),
         )
-        early_repayment_capacity = np.minimum(
-            self.households.current_early_consumer_repayment_capacity(),
-            self.credit_market.current_consumer_balance_by_household(),
-        )
         settlement = self.credit_market.settle_consumer_payments(
             remaining_shortfall=self.households.current_remaining_subsistence_shortfall(),
-            early_repayment_capacity=early_repayment_capacity,
+            # CreditMarket caps this capacity against the post-service balance
+            # as part of the authoritative settlement. Country only routes the
+            # household feasibility carrier; it does not impose a second
+            # financing-policy calculation.
+            early_repayment_capacity=self.households.current_early_consumer_repayment_capacity(),
         )
         # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
@@ -1649,6 +1679,84 @@ class Country:
             )
         )
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
+    def validate_stage5_closing_balance_sheets(self) -> None:
+        """Verify the resolver-path Stage 5 closing-account identities.
+
+        This is the final single-period control. It checks financial-asset and
+        cash-ledger identities alongside the CreditMarket-authoritative debt and
+        bank-loan identities, preventing independent household or bank booking.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return
+
+        household_lfa = self.households.ts.current("liquid_financial_assets")
+        household_ifa = self.households.ts.current("illiquid_financial_assets")
+        household_financial_wealth = self.households.ts.current("wealth_financial_assets")
+        cash_ledger_residual = self.households.ts.current("stage5_cash_ledger_residual")
+        household_consumer_debt = self.households.ts.current("consumption_loan_debt")
+        household_mortgage_debt = self.households.ts.current("mortgage_debt")
+        household_debt = self.households.ts.current("debt")
+        market_consumer_debt = self.credit_market.compute_outstanding_consumption_loans_by_household()
+        market_mortgage_debt = self.credit_market.compute_outstanding_mortgages_by_household()
+        bank_consumer_assets = self.banks.ts.current("consumption_loans_to_households")
+        market_bank_consumer_assets = self.credit_market.compute_outstanding_household_consumption_loans_by_bank()
+
+        values = (
+            household_lfa,
+            household_ifa,
+            household_financial_wealth,
+            cash_ledger_residual,
+            household_consumer_debt,
+            household_mortgage_debt,
+            household_debt,
+            market_consumer_debt,
+            market_mortgage_debt,
+            bank_consumer_assets,
+            market_bank_consumer_assets,
+        )
+        if not all(np.all(np.isfinite(value)) for value in values):
+            raise RuntimeError("Stage 5 closing accounts must be finite.")
+        non_negative_values = (
+            household_ifa,
+            household_consumer_debt,
+            household_mortgage_debt,
+            household_debt,
+            market_consumer_debt,
+            market_mortgage_debt,
+            bank_consumer_assets,
+            market_bank_consumer_assets,
+        )
+        if not all(np.all(value >= 0.0) for value in non_negative_values):
+            raise RuntimeError("Stage 5 closing debt and bank-loan balances must be finite and non-negative.")
+        if not np.allclose(cash_ledger_residual, 0.0, rtol=1e-10, atol=1e-7):
+            raise RuntimeError("Stage 5 cash-ledger residual does not reconcile at closing.")
+        if not np.allclose(
+            household_financial_wealth,
+            household_lfa + household_ifa,
+            rtol=1e-10,
+            atol=1e-7,
+        ):
+            raise RuntimeError("Stage 5 household financial wealth does not reconcile with LFA and IFA.")
+        if not np.allclose(household_consumer_debt, market_consumer_debt, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Stage 5 household consumer debt does not reconcile with the CreditMarket.")
+        if not np.allclose(household_mortgage_debt, market_mortgage_debt, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Stage 5 household mortgage debt does not reconcile with the CreditMarket.")
+        if not np.allclose(household_debt, market_consumer_debt + market_mortgage_debt, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Stage 5 total household debt does not reconcile with its committed components.")
+        if not np.allclose(bank_consumer_assets, market_bank_consumer_assets, rtol=1e-10, atol=1e-8):
+            raise RuntimeError("Stage 5 bank consumer-loan assets do not reconcile with the CreditMarket.")
+
+    def refresh_stage5_household_debt_views(self) -> None:
+        """Refresh resolver-path household debt views after market-side write-offs."""
+        consumer_debt = self.credit_market.compute_outstanding_consumption_loans_by_household()
+        mortgage_debt = self.credit_market.compute_outstanding_mortgages_by_household()
+        total_debt = consumer_debt + mortgage_debt
+        self.households.ts.override_current("consumption_loan_debt", consumer_debt)
+        self.households.ts.override_current("mortgage_debt", mortgage_debt)
+        self.households.ts.override_current("debt", total_debt)
+        self.households.ts.override_current("total_consumption_loan_debt", [consumer_debt.sum()])
+        self.households.ts.override_current("total_mortgage_debt", [mortgage_debt.sum()])
 
     def compute_activity_tax_previews(
         self,
@@ -2813,17 +2921,11 @@ class Country:
             consumer_terminal_removal_exclusion=consumer_terminal_removal_exclusion,
         )
         # Reconcile household liabilities after generic insolvency completes any
-        # overlapping mortgage cleanup.
-        if pending_ficp_forgiveness_events:
-            current_consumption_debt = self.credit_market.compute_outstanding_consumption_loans_by_household()
-            current_mortgage_debt = self.credit_market.compute_outstanding_mortgages_by_household()
-            current_debt = current_consumption_debt + current_mortgage_debt
-            self.households.ts.override_current("consumption_loan_debt", current_consumption_debt)
-            self.households.ts.override_current("mortgage_debt", current_mortgage_debt)
-            self.households.ts.override_current("debt", current_debt)
-            self.households.ts.override_current("total_consumption_loan_debt", [current_consumption_debt.sum()])
-            self.households.ts.override_current("total_mortgage_debt", [current_mortgage_debt.sum()])
-            self.households.ts.override_current("net_wealth", self.households.compute_net_wealth())
+        # overlapping loan removal. The CreditMarket remains the sole debt
+        # authority; this overwrites the earlier payment snapshot only after a
+        # realised write-off changes that market state.
+        if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.refresh_stage5_household_debt_views()
         self.economy.ts.household_insolvency_rate.append([household_insolvency_rate])
         self.economy.ts.npl_hh_cons_loans.append([npl_hh_cons_loans])
         self.economy.ts.npl_mortgages.append([npl_mortgages])
@@ -2864,6 +2966,7 @@ class Country:
                 minlength=self.banks.ts.current("n_banks"),
             ),
         )
+        self.validate_stage5_closing_balance_sheets()
 
         self.banks.ts.market_share.append(self.banks.compute_market_share())
         self.banks.ts.market_share_histogram.append(get_histogram(self.banks.ts.current("market_share"), None))

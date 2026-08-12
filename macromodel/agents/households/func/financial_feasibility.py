@@ -1,11 +1,22 @@
 """Pure Stage 5 household financial-feasibility plans and policy."""
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 
 import numpy as np
 
 
-@dataclass
+def _freeze_plan_arrays(instance: object) -> None:
+    """Defensively copy and freeze every array carried across Stage 5 stages."""
+    for data_field in fields(instance):
+        value = getattr(instance, data_field.name)
+        if value is None:
+            continue
+        array = np.asarray(value).copy()
+        array.setflags(write=False)
+        object.__setattr__(instance, data_field.name, array)
+
+
+@dataclass(frozen=True)
 class PreGrantFeasiblePlan:
     """Provisional Stage 5 plan constructed before consumer-credit clearing."""
 
@@ -15,8 +26,11 @@ class PreGrantFeasiblePlan:
     credit_requested: np.ndarray | None = None
     planned_liquidation_total: np.ndarray | None = None
 
+    def __post_init__(self) -> None:
+        _freeze_plan_arrays(self)
 
-@dataclass
+
+@dataclass(frozen=True)
 class PostGrantFeasiblePlan:
     """Authoritative Stage 5 plan after consumer-credit clearing."""
 
@@ -38,6 +52,12 @@ class PostGrantFeasiblePlan:
     post_liquidation_lfa: np.ndarray | None = None
     post_liquidation_ifa: np.ndarray | None = None
     settled_liquidation_total: np.ndarray | None = None
+    residual_shortfall_after_lfa: np.ndarray | None = None
+    reserved_liquidation_total: np.ndarray | None = None
+    liquidation_reservation_ifa: np.ndarray | None = None
+
+    def __post_init__(self) -> None:
+        _freeze_plan_arrays(self)
 
 
 class HouseholdFinancialFeasibility:
@@ -116,4 +136,66 @@ class HouseholdFinancialFeasibility:
             granted_consumer_credit_by_bank_and_household=None if matrix is None else matrix.copy(),
             consumer_debt_liability_booking=None if liabilities is None else liabilities.copy(),
             bank_consumer_loan_asset_booking=None if bank_assets is None else bank_assets.copy(),
+            residual_shortfall_after_lfa=residual.copy(),
+        )
+
+    def reserve_executable_liquidation(
+        self,
+        plan: PostGrantFeasiblePlan,
+        *,
+        available_pre_stage4_ifa: np.ndarray,
+    ) -> PostGrantFeasiblePlan:
+        """Reserve the Stage 5 liquidation before floors and goods demand are fixed."""
+        if plan.reserved_liquidation_total is not None:
+            raise RuntimeError("Stage 5 executable liquidation has already been reserved for this period.")
+        available = self._non_negative(available_pre_stage4_ifa)
+        planned = self._non_negative(plan.planned_liquidation_total)
+        granted = self._non_negative(plan.credit_granted)
+        residual_after_lfa = plan.residual_shortfall_after_lfa
+        if residual_after_lfa is None:
+            raise RuntimeError("Stage 5 liquidation reservation requires residual_shortfall_after_lfa.")
+        residual = self._non_negative(residual_after_lfa)
+        if not (available.shape == planned.shape == granted.shape == residual.shape):
+            raise ValueError("Stage 5 liquidation reservation requires equal-length household vectors.")
+        reserved = np.minimum(planned, available)
+        return replace(
+            plan,
+            planned_liquidation_total=reserved.copy(),
+            reserved_liquidation_total=reserved.copy(),
+            liquidation_reservation_ifa=available.copy(),
+            residual_shortfall_after_granted_credit=np.maximum(residual - granted - reserved, 0.0).copy(),
+        )
+
+    def settle_consumption_floor(
+        self,
+        plan: PostGrantFeasiblePlan,
+        *,
+        consumption_before_floor: np.ndarray,
+        subsistence_floor: np.ndarray,
+    ) -> PostGrantFeasiblePlan:
+        """Apply the Stage 5 floor policy without writing household state."""
+        consumption_before = np.asarray(consumption_before_floor, dtype=float)
+        floor = np.asarray(subsistence_floor, dtype=float)
+        residual_shortfall = np.asarray(plan.residual_shortfall_after_granted_credit, dtype=float)
+        if not (consumption_before.shape == floor.shape == residual_shortfall.shape):
+            raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
+
+        cleaned_consumption_before = self._non_negative(consumption_before)
+        cleaned_floor = self._non_negative(floor)
+        residual_before_floor = self._non_negative(residual_shortfall)
+        maximum_floor_cut = np.maximum(cleaned_consumption_before - cleaned_floor, 0.0)
+        consumption_cut_amount = np.minimum(residual_before_floor, maximum_floor_cut)
+        consumption_before_support = cleaned_consumption_before - consumption_cut_amount
+        residual_after_floor_cut = residual_before_floor - consumption_cut_amount
+        floor_top_up = np.maximum(cleaned_floor - consumption_before_support, 0.0)
+        consumption_after_floor = consumption_before_support + floor_top_up
+        remaining_subsistence_shortfall = floor_top_up + residual_after_floor_cut
+        return replace(
+            plan,
+            consumption_before_floor=cleaned_consumption_before,
+            residual_shortfall_before_floor=residual_before_floor,
+            consumption_after_floor=consumption_after_floor,
+            consumption_cut_amount=consumption_cut_amount,
+            remaining_subsistence_shortfall=remaining_subsistence_shortfall,
+            floor_binding=(consumption_cut_amount + floor_top_up) > 0.0,
         )

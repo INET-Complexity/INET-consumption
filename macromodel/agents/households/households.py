@@ -157,6 +157,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "forced_liquidation_amount": 0.0,
     "residual_shortfall_after_caps": 0.0,
     "realised_cash_flow_adjustment": 0.0,
+    # Final Stage 5 cash-ledger control.  A resolver-path period may persist
+    # only when this is numerically zero: it is the difference between closing
+    # LFA and the realised cash sources/uses, including the one sanctioned IFA
+    # liquidation and any Stage 4 LFA transfer/cost.
+    "stage5_cash_ledger_residual": 0.0,
     # Increment 5: the credit_requested value actually used for target_consumption_loans
     # this period (mirrors the legacy formula when the resolver is off).
     "live_credit_requested": 0.0,
@@ -667,6 +672,17 @@ class Households(Agent):
     ) -> None:
         """Configure whether the live Stage 5 feasibility handoff is active."""
         self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
+        if (
+            not self.uses_feasibility_resolver
+            and type(self.functions["wealth"]).__name__ == "PaperAssetReturnWealthSetter"
+        ):
+            warnings.warn(
+                "uses_feasibility_resolver=False with PaperAssetReturnWealthSetter "
+                "uses the deprecated legacy use_up_wealth() withdrawal path; "
+                "migrate this configuration to the resolver.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.pre_grant_feasible_plan = None
         if clear_post_grant or not self.uses_feasibility_resolver:
             self.post_grant_feasible_plan = None
@@ -945,6 +961,15 @@ class Households(Agent):
     def current_post_grant_planned_liquidation_total(self) -> np.ndarray:
         """Return planned liquidation carried into the settled feasibility plan."""
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
+
+    def reserve_post_grant_executable_liquidation(self, *, available_pre_stage4_ifa: np.ndarray) -> None:
+        """Reserve executable Stage 5 liquidation before floor and goods planning."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
+        self.post_grant_feasible_plan = self.financial_feasibility.reserve_executable_liquidation(
+            self.post_grant_feasible_plan,
+            available_pre_stage4_ifa=available_pre_stage4_ifa,
+        )
 
     def settle_post_grant_liquidation(
         self,
@@ -1333,16 +1358,13 @@ class Households(Agent):
             )
 
         n_households = self.ts.current("n_households")
-        consumption_before = np.asarray(consumption_before_floor, dtype=float)
-        floor = np.asarray(subsistence_floor, dtype=float)
-        residual_shortfall = np.asarray(
-            self.post_grant_feasible_plan.residual_shortfall_after_granted_credit,
-            dtype=float,
-        )
         for name, values in (
-            ("consumption_before_floor", consumption_before),
-            ("subsistence_floor", floor),
-            ("post_grant_feasible_plan.residual_shortfall_after_granted_credit", residual_shortfall),
+            ("consumption_before_floor", np.asarray(consumption_before_floor)),
+            ("subsistence_floor", np.asarray(subsistence_floor)),
+            (
+                "post_grant_feasible_plan.residual_shortfall_after_granted_credit",
+                np.asarray(self.post_grant_feasible_plan.residual_shortfall_after_granted_credit),
+            ),
         ):
             if values.shape != (n_households,):
                 raise ValueError(
@@ -1350,36 +1372,10 @@ class Households(Agent):
                     f"expected shape {(n_households,)}, got {values.shape}."
                 )
 
-        cleaned_consumption_before = np.where(
-            np.isfinite(consumption_before),
-            np.maximum(consumption_before, 0.0),
-            0.0,
-        )
-        cleaned_floor = np.where(np.isfinite(floor), np.maximum(floor, 0.0), 0.0)
-        residual_before_floor = np.where(
-            np.isfinite(residual_shortfall),
-            np.maximum(residual_shortfall, 0.0),
-            0.0,
-        )
-        maximum_floor_cut = np.maximum(cleaned_consumption_before - cleaned_floor, 0.0)
-        consumption_cut_amount = np.minimum(residual_before_floor, maximum_floor_cut)
-        consumption_before_support = cleaned_consumption_before - consumption_cut_amount
-        residual_after_floor_cut = residual_before_floor - consumption_cut_amount
-        floor_top_up = np.maximum(cleaned_floor - consumption_before_support, 0.0)
-        # The target is topped up to the floor, while the top-up and any
-        # remaining post-credit financing gap are handed to government through
-        # the existing Stage-5 other-benefits settlement path.
-        consumption_after_floor = consumption_before_support + floor_top_up
-        remaining_subsistence_shortfall = floor_top_up + residual_after_floor_cut
-
-        self.post_grant_feasible_plan = replace(
+        self.post_grant_feasible_plan = self.financial_feasibility.settle_consumption_floor(
             self.post_grant_feasible_plan,
-            consumption_before_floor=cleaned_consumption_before.copy(),
-            residual_shortfall_before_floor=residual_before_floor.copy(),
-            consumption_after_floor=consumption_after_floor.copy(),
-            consumption_cut_amount=consumption_cut_amount.copy(),
-            remaining_subsistence_shortfall=remaining_subsistence_shortfall.copy(),
-            floor_binding=((consumption_cut_amount + floor_top_up) > 0.0).copy(),
+            consumption_before_floor=consumption_before_floor,
+            subsistence_floor=subsistence_floor,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -1607,12 +1603,14 @@ class Households(Agent):
         Returns:
             np.ndarray: Total expected income by household
         """
-        return (
+        expected_income = (
             self.ts.current("expected_income_employee")
             + self.ts.current("expected_income_social_transfers")
             + self.ts.current("income_rental")
-            + self.ts.current("expected_income_financial_assets")
         )
+        if not getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+            expected_income = expected_income + self.ts.current("expected_income_financial_assets")
+        return expected_income
 
     def compute_income(self) -> np.ndarray:
         """Calculate total current income.
@@ -1626,12 +1624,14 @@ class Households(Agent):
         Returns:
             np.ndarray: Total current income by household
         """
-        return (
+        income = (
             self.ts.current("income_employee")
             + self.ts.current("income_social_transfers")
             + self.ts.current("income_rental")
-            + self.ts.current("income_financial_assets")
         )
+        if not getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+            income = income + self.ts.current("income_financial_assets")
+        return income
 
     def compute_non_property_income(self) -> np.ndarray:
         """Calculate non-property current income (employment + social transfers + rental).
@@ -3161,13 +3161,45 @@ class Households(Agent):
         realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
         realised_cash_balance = income_for_residual_saving - self.ts.current("rent") - realised_expenditure
         if self.uses_feasibility_resolver:
-            planned_cash_balance = np.asarray(self.ts.current("household_saving"), dtype=float)
-            new_wealth = np.maximum(planned_cash_balance, 0.0)
-            realised_cash_flow_adjustment = (
+            def optional_cash_flow(name: str) -> np.ndarray:
+                values = np.asarray(self.ts.current(name), dtype=float)
+                return np.where(np.isfinite(values), values, 0.0)
+
+            plan = self.post_grant_feasible_plan
+            if plan is None:
+                raise RuntimeError("Stage 5 settlement requires the authoritative post-grant plan.")
+            granted_credit = getattr(plan, "credit_granted", None)
+            if granted_credit is None:
+                raise RuntimeError("Stage 5 post-grant plan is missing early committed consumer credit.")
+            granted_credit = np.asarray(granted_credit, dtype=float)
+            received_credit = np.asarray(self.ts.current("received_consumption_loans"), dtype=float)
+            if (
+                granted_credit.shape != received_credit.shape
+                or not np.all(np.isfinite(granted_credit))
+                or not np.all(np.isfinite(received_credit))
+                or np.any(granted_credit < 0.0)
+                or np.any(received_credit < 0.0)
+            ):
+                raise RuntimeError("Stage 5 early committed consumer credit must be a finite non-negative household vector.")
+            if not np.allclose(granted_credit, received_credit, rtol=1e-10, atol=1e-12):
+                raise RuntimeError(
+                    "Stage 5 cash settlement requires received_consumption_loans to reconcile with early committed credit_granted."
+                )
+
+            # Stage 5 financing allocations (F, granted credit, and reserved
+            # liquidation) are constraints on this ledger, not additional cash
+            # debits/credits. Settle each realised cash source and use once.
+            cash_saving_before_financing = (
                 income_for_residual_saving
-                - self.ts.current("expected_income")
-                - (realised_expenditure - self.ts.current("target_consumption").sum(axis=1))
+                - self.ts.current("rent")
+                - realised_expenditure
+                - optional_cash_flow("interest_paid")
+                - optional_cash_flow("price_paid_for_property")
+                - optional_cash_flow("debt_installments")
+                - tau_cf * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
             )
+            new_wealth = np.maximum(cash_saving_before_financing, 0.0)
+            realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)
         else:
             new_wealth = np.maximum(realised_cash_balance, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)
@@ -3187,7 +3219,9 @@ class Households(Agent):
             funded = self.post_grant_feasible_plan.funded_from_liquid_assets
             if funded is None:
                 raise RuntimeError("Stage 5 post-grant plan is missing liquid-asset funding authority.")
-            used_up_wealth_in_deposits = np.asarray(funded, dtype=float)
+            # ``funded`` is F=min(H,LFA): an allocation of opening LFA, not a
+            # second withdrawal once realised consumption and service are paid.
+            used_up_wealth_in_deposits = np.zeros_like(np.asarray(funded, dtype=float))
             used_up_wealth_in_other_financial_assets = np.zeros_like(used_up_wealth_in_deposits)
         else:
             used_up_wealth = -np.minimum(0.0, realised_cash_balance)
@@ -3203,28 +3237,74 @@ class Households(Agent):
                 used_up_wealth_in_other_financial_assets,
             ) = self.functions["wealth"].use_up_wealth(**use_up_wealth_kwargs)
 
-        # Compute final post-return/post-surplus financial bases before any
-        # financial-stock persistence. Stage 5 may settle forced liquidation
-        # against these bases, but remains the carrier authority rather than a
-        # second time-series writer.
-        base_ifa = self.compute_wealth_of_other_financial_assets(
-            new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
-            used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
-            period_index=period_index,
-        )
-        base_lfa = self.compute_wealth_in_deposits(
-            new_wealth_in_deposits=new_wealth_in_deposits,
-            used_up_wealth_in_deposits=used_up_wealth_in_deposits,
-            tau_cf=tau_cf,
-        )
-        base_lfa = base_lfa + realised_cash_flow_adjustment
         if self.uses_feasibility_resolver:
-            wealth_base_lfa, wealth_base_ifa = self.settle_post_grant_liquidation(
-                base_lfa=base_lfa,
-                base_ifa=base_ifa,
+            new_loans = granted_credit + optional_cash_flow("received_mortgages")
+            base_lfa = (
+                self.ts.current("liquid_financial_assets")
+                + cash_saving_before_financing
+                + new_loans
+                - new_wealth_in_other_financial_assets
             )
         else:
-            wealth_base_lfa, wealth_base_ifa = base_lfa, base_ifa
+            base_lfa = self.compute_wealth_in_deposits(
+                new_wealth_in_deposits=new_wealth_in_deposits,
+                used_up_wealth_in_deposits=used_up_wealth_in_deposits,
+                tau_cf=tau_cf,
+            )
+            base_lfa = base_lfa + realised_cash_flow_adjustment
+
+        reserved_liquidation = np.zeros_like(self.ts.current("illiquid_financial_assets"))
+        if self.uses_feasibility_resolver:
+            plan = self.post_grant_feasible_plan
+            if plan is None:
+                raise RuntimeError("Stage 5 settlement requires the authoritative post-grant plan.")
+            reserved = getattr(plan, "reserved_liquidation_total", None)
+            if reserved is None:
+                reserved = getattr(plan, "planned_liquidation_total", None)
+            if reserved is None:
+                reserved = getattr(plan, "settled_liquidation_total", None)
+            if reserved is None:
+                raise RuntimeError("Stage 5 settlement requires an executable liquidation reservation.")
+            reserved_liquidation = np.asarray(reserved, dtype=float)
+            opening_ifa = self.ts.current("illiquid_financial_assets")
+            if reserved_liquidation.shape != opening_ifa.shape or not np.all(np.isfinite(reserved_liquidation)):
+                raise RuntimeError("Stage 5 liquidation reservation must be a finite household vector.")
+            if np.any(reserved_liquidation < 0.0) or np.any(reserved_liquidation > opening_ifa):
+                raise RuntimeError("Reserved Stage 5 liquidation cannot be honoured before return settlement.")
+            planned_liquidation = getattr(plan, "planned_liquidation_total", None)
+            if planned_liquidation is not None and not np.array_equal(
+                np.asarray(planned_liquidation, dtype=float), reserved_liquidation
+            ):
+                raise RuntimeError("Stage 5 planned and reserved liquidation quantities must agree exactly.")
+            # Q_exec is a cash transaction against opening IFA. It settles
+            # before the current-period capital return, so adverse returns
+            # cannot silently reduce the sanctioned quantity.
+            wealth_base_lfa, post_liquidation_ifa = self.settle_post_grant_liquidation(
+                base_lfa=base_lfa,
+                base_ifa=opening_ifa,
+            )
+            settled_liquidation = getattr(self.post_grant_feasible_plan, "settled_liquidation_total", None)
+            if settled_liquidation is None:
+                settlement_matches_reservation = np.all(reserved_liquidation == 0.0)
+            else:
+                settlement_matches_reservation = np.array_equal(
+                    np.asarray(settled_liquidation, dtype=float), reserved_liquidation
+                )
+            if not settlement_matches_reservation:
+                raise RuntimeError("Reserved Stage 5 liquidation was not settled in full.")
+            wealth_base_ifa = self.compute_wealth_of_other_financial_assets(
+                current_wealth_in_other_financial_assets=post_liquidation_ifa,
+                new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
+                used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
+                period_index=period_index,
+            )
+        else:
+            wealth_base_lfa = base_lfa
+            wealth_base_ifa = self.compute_wealth_of_other_financial_assets(
+                new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
+                used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
+                period_index=period_index,
+            )
 
         settlement = None
         if getattr(self.functions["wealth"], "uses_portfolio_choice", False):
@@ -3241,32 +3321,6 @@ class Households(Agent):
             if settles:
                 if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
                     raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
-                post_liquidation_lfa = self.post_grant_feasible_plan.post_liquidation_lfa
-                post_liquidation_ifa = self.post_grant_feasible_plan.post_liquidation_ifa
-                settled_liquidation = self.post_grant_feasible_plan.settled_liquidation_total
-                if post_liquidation_lfa is None or post_liquidation_ifa is None or settled_liquidation is None:
-                    raise RuntimeError(
-                        "Settled portfolio choice requires post-liquidation bases from the final feasibility carrier."
-                    )
-                portfolio_base_lfa = np.asarray(post_liquidation_lfa, dtype=float)
-                portfolio_base_ifa = np.asarray(post_liquidation_ifa, dtype=float)
-                settled_liquidation = np.asarray(settled_liquidation, dtype=float)
-                expected_shape = base_lfa.shape
-                authority_values = (portfolio_base_lfa, portfolio_base_ifa, settled_liquidation)
-                if any(values.shape != expected_shape for values in authority_values):
-                    raise RuntimeError("Settled portfolio choice requires one post-liquidation value per household.")
-                if (
-                    not all(np.all(np.isfinite(values)) for values in authority_values)
-                    or np.any(portfolio_base_ifa < 0.0)
-                    or np.any(settled_liquidation < 0.0)
-                ):
-                    raise RuntimeError("Settled portfolio choice requires valid post-liquidation authority.")
-                if not (
-                    np.allclose(portfolio_base_lfa, wealth_base_lfa, rtol=1e-10, atol=1e-8)
-                    and np.allclose(portfolio_base_ifa, wealth_base_ifa, rtol=1e-10, atol=1e-8)
-                ):
-                    raise RuntimeError("Stage 5 post-liquidation authority is inconsistent with its settled bases.")
-                forced_liquidation_active = settled_liquidation > 0.0
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
@@ -3277,6 +3331,28 @@ class Households(Agent):
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa
+
+        if self.uses_feasibility_resolver:
+            portfolio_lfa_change = np.zeros_like(wealth_base_lfa)
+            expected_closing_lfa = base_lfa + reserved_liquidation
+            if settlement is not None:
+                portfolio_lfa_change = settlement.committed_lfa_flow - settlement.committed_adjustment_cost
+                # Match the ordered stock arithmetic in
+                # ``settle_portfolio_reallocation``. Computing an inferred
+                # delta from two large balances loses enough precision to trip
+                # the absolute accounting guard despite an exact settlement.
+                expected_closing_lfa = expected_closing_lfa + settlement.committed_lfa_flow
+                expected_closing_lfa = expected_closing_lfa - settlement.committed_adjustment_cost
+            stage5_cash_ledger_residual = wealth_base_lfa - expected_closing_lfa
+            if not np.allclose(stage5_cash_ledger_residual, 0.0, rtol=1e-10, atol=1e-7):
+                raise RuntimeError(
+                    "Stage 5 realised cash ledger does not reconcile with closing liquid assets: "
+                    f"max_abs_residual={np.max(np.abs(stage5_cash_ledger_residual)):.6g}, "
+                    f"max_reserved_liquidation={np.max(reserved_liquidation):.6g}, "
+                    f"max_portfolio_lfa_change={np.max(np.abs(portfolio_lfa_change)):.6g}."
+                )
+        else:
+            stage5_cash_ledger_residual = np.zeros_like(wealth_base_lfa)
 
         # Commit the staged real-wealth block only after settlement preflight has
         # completed, preserving the existing series order on successful runs.
@@ -3295,6 +3371,7 @@ class Households(Agent):
         self.ts.total_illiquid_financial_assets.append([wealth_base_ifa.sum()])
         self.ts.total_liquid_financial_assets.append([wealth_base_lfa.sum()])
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
+        self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)
 
         if settlement is not None:
             self._append_stage4_portfolio_diagnostics(diagnostics)
@@ -3520,6 +3597,7 @@ class Households(Agent):
         new_wealth_in_other_financial_assets: float,
         used_up_wealth_in_other_financial_assets: float,
         period_index: int | None = None,
+        current_wealth_in_other_financial_assets: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate other financial asset wealth.
 
@@ -3535,8 +3613,13 @@ class Households(Agent):
         Returns:
             np.ndarray: Financial asset value by household
         """
+        current_wealth = (
+            self.ts.current("illiquid_financial_assets")
+            if current_wealth_in_other_financial_assets is None
+            else np.asarray(current_wealth_in_other_financial_assets, dtype=float)
+        )
         kwargs = {
-            "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
+            "current_wealth_in_other_financial_assets": current_wealth,
             "new_wealth_in_other_financial_assets": new_wealth_in_other_financial_assets,
             "used_up_wealth_in_other_financial_assets": used_up_wealth_in_other_financial_assets,
         }

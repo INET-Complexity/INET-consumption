@@ -947,7 +947,9 @@ def build_macro_output_df(model, country_code):
         if hh_net_wealth is not None and hh_total_liabilities is not None:
             hh_total_assets = add_column("hh_total_assets", hh_net_wealth + hh_total_liabilities)
 
-    firms_total_liabilities = add_aggregate_agent_ts_column("firms_total_liabilities", firms_ts, "total_credit_exposure")
+    firms_total_liabilities = add_aggregate_agent_ts_column(
+        "firms_total_liabilities", firms_ts, "total_credit_exposure"
+    )
     if firms_total_liabilities is None:
         firms_total_liabilities = add_aggregate_agent_ts_column("firms_total_liabilities", firms_ts, "debt")
     firms_equity = get_column("firms_equity")

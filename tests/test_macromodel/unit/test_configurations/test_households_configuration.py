@@ -6,8 +6,13 @@ from macromodel.configurations.households_configuration import (
     ConsumptionFunction,
     HouseholdsConfiguration,
     HouseholdsFunctions,
+    HouseholdsParameters,
 )
 from macromodel.util.function_mapping import functions_from_model
+
+
+def test_households_parameters_enable_feasibility_resolver_by_default():
+    assert HouseholdsParameters().uses_feasibility_resolver is True
 
 
 def test_households_configuration_accepts_credit_augmented_consumption():

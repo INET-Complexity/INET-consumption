@@ -17,13 +17,13 @@ stage_0:
       paper_concept: liquid_financial_assets
       notebook_source: DA2101
       macro_reader_source: Wealth in Deposits
-      runtime_source: wealth_deposits
+      runtime_source: liquid_financial_assets
       note: Do not use notebook nla as LFA.
     ifa:
       paper_concept: illiquid_financial_assets
       notebook_source: DA2102 + DA2103 + DA2105 + DA2106 + DA2107 + DA2108 + DA2109
       macro_reader_source: "Mutual funds, bonds, shares, managed accounts, receivables, other assets, voluntary pension"
-      runtime_source: wealth_other_financial_assets
+      runtime_source: illiquid_financial_assets
       note: Excludes DA2104 private business wealth.
     ha:
       paper_concept: housing_wealth
@@ -90,10 +90,10 @@ stage_2:
         fallback: historic_consumption_sum_last
         deflator: lagged_consumer_price_level
       real_net_liquid_assets:
-        formula: lagged_wealth_deposits - lagged_mortgage_debt - lagged_consumption_loan_debt
+        formula: lagged_liquid_financial_assets - lagged_mortgage_debt - lagged_consumption_loan_debt
         deflator: lagged_consumer_price_level
       illiquid_financial_assets:
-        source: households.ts.prev.wealth_other_financial_assets
+        source: households.ts.prev.illiquid_financial_assets
         deflator: lagged_consumer_price_level
       housing_wealth:
         formula: households.ts.current.wealth_main_residence + households.ts.current.wealth_other_properties

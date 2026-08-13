@@ -484,13 +484,13 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
     n_households = int(households.ts.current("n_households"))
     wealth_main = np.asarray(households.ts.current("wealth_main_residence"), dtype=float)
     wealth_other_property = np.asarray(households.ts.current("wealth_other_properties"), dtype=float)
-    wealth_deposits = np.asarray(households.ts.current("wealth_deposits"), dtype=float)
-    wealth_other_financial_assets = np.asarray(households.ts.current("wealth_other_financial_assets"), dtype=float)
+    liquid_financial_assets = np.asarray(households.ts.current("liquid_financial_assets"), dtype=float)
+    illiquid_financial_assets = np.asarray(households.ts.current("illiquid_financial_assets"), dtype=float)
     wealth_other_real_assets = _current_or_zero(households, "wealth_other_real_assets", n_households=n_households)
     consumption_loan_debt = np.asarray(households.ts.current("consumption_loan_debt"), dtype=float)
     mortgage_debt = _current_or_zero(households, "mortgage_debt", n_households=n_households)
     debt = consumption_loan_debt + mortgage_debt
-    gross_wealth = wealth_deposits + wealth_other_financial_assets + wealth_main + wealth_other_property
+    gross_wealth = liquid_financial_assets + illiquid_financial_assets + wealth_main + wealth_other_property
     gross_wealth = gross_wealth + wealth_other_real_assets
     debt_asset_ratio = np.divide(
         debt,
@@ -507,8 +507,8 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
             "household_id": np.arange(n_households, dtype=int),
             "income": np.asarray(households.ts.current("income"), dtype=float),
             "net_wealth": np.asarray(households.ts.current("net_wealth"), dtype=float),
-            "net_liquid_financial_assets": wealth_deposits - consumption_loan_debt,
-            "illiquid_financial_assets": wealth_other_financial_assets,
+            "net_liquid_financial_assets": liquid_financial_assets - consumption_loan_debt,
+            "illiquid_financial_assets": illiquid_financial_assets,
             "housing_wealth": wealth_main + wealth_other_property,
             "debt": debt,
             "gross_wealth": gross_wealth,

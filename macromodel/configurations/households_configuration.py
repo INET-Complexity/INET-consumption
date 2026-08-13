@@ -67,11 +67,12 @@ class HouseholdsParameters(BaseModel):
         take_consumption_weights_by_income_quantile (bool): Whether to use income-based
             consumption weights. Defaults to False.
         uses_feasibility_resolver (bool): Whether Stage 5 live feasibility
-            handoffs are enabled. Defaults to False.
+            handoffs are enabled. Defaults to True. Set False only for the
+            deprecated legacy-withdrawal compatibility path.
     """
 
     take_consumption_weights_by_income_quantile: bool = False
-    uses_feasibility_resolver: bool = False
+    uses_feasibility_resolver: bool = True
 
 
 class FinancialAssetsFunction(BaseModel):

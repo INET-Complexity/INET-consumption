@@ -59,8 +59,8 @@ account_diagnostics:
     household_account_fields:
       - income
       - consumption
-      - wealth_deposits
-      - wealth_other_financial_assets
+      - liquid_financial_assets
+      - illiquid_financial_assets
       - wealth_main_residence
       - wealth_other_properties
       - wealth_other_real_assets  # optional — stripped from the required set by diagnostics code; retained here so the optional HDF5 read is attempted

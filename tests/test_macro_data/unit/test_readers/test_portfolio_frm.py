@@ -5,13 +5,14 @@ import pytest
 
 from macro_data.readers.portfolio_frm import FRMCoefficients, load_frm_coefficients
 
-REAL_FRM_PATH = (
-    Path(__file__).resolve().parents[4]
-    / "run_model"
-    / "data"
-    / "raw_data"
-    / "portfolio"
-    / "FR_portfolio_frm_coefficients.json"
+REPO_ROOT = Path(__file__).resolve().parents[4]
+REAL_FRM_PATH = next(
+    path
+    for path in (
+        REPO_ROOT / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
+        REPO_ROOT / "run_model" / "data" / "raw_data" / "portfolio" / "FR_portfolio_frm_coefficients.json",
+    )
+    if path.is_file()
 )
 
 

@@ -77,7 +77,7 @@ def test__paper_asset_return_wealth_setter_expected_return_includes_log_variance
     assert setter.expected_illiquid_return_rate() == pytest.approx(expected_rate)
 
 
-def test__paper_asset_return_wealth_setter_caps_drawdown_after_negative_return():
+def test__legacy_compatibility_paper_asset_return_setter_caps_drawdown_after_negative_return():
     setter = _paper_setter(mu_eq=np.log(0.2), mu_bond=np.log(0.2), equity_weight=0.5)
     opening_ifa = np.array([100.0])
 

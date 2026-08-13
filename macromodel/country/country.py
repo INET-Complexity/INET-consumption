@@ -1755,6 +1755,7 @@ class Country:
         self.households.ts.override_current("consumption_loan_debt", consumer_debt)
         self.households.ts.override_current("mortgage_debt", mortgage_debt)
         self.households.ts.override_current("debt", total_debt)
+        self.households.ts.override_current("net_wealth", self.households.compute_net_wealth())
         self.households.ts.override_current("total_consumption_loan_debt", [consumer_debt.sum()])
         self.households.ts.override_current("total_mortgage_debt", [mortgage_debt.sum()])
 

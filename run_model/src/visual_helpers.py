@@ -930,6 +930,43 @@ def build_macro_output_df(model, country_code):
             aggregated.append(float(np.nansum(array)) if array.size else np.nan)
         return add_column(output_name, as_output_series(aggregated))
 
+    def aggregate_agent_ts(ts_obj, ts_name):
+        values = _safe_ts_values(ts_obj, ts_name)
+        if values is None:
+            return None
+
+        aggregated = []
+        for value in list(values):
+            array = np.asarray(value, dtype=float).reshape(-1)
+            aggregated.append(float(np.nansum(array)) if array.size else np.nan)
+        return as_output_series(aggregated)
+
+    def aggregate_firm_ts_by_sector(ts_name):
+        if firms_ts is None:
+            return None
+        values = _safe_ts_values(firms_ts, ts_name)
+        if values is None:
+            return None
+
+        industry_index = np.asarray(getattr(country.firms, "states", {}).get("Industry", []), dtype=int).reshape(-1)
+        sector_codes = list(getattr(country.firms, "industries", []))
+        n_sectors = len(sector_codes)
+        n_firms = industry_index.size
+        if n_sectors == 0 or n_firms == 0:
+            return None
+
+        panel_rows = []
+        for value in list(values):
+            row = np.asarray(value, dtype=float).reshape(-1)
+            if row.size != n_firms:
+                row = np.resize(row, n_firms)
+            safe_row = np.nan_to_num(row, nan=0.0)
+            panel_rows.append(np.bincount(industry_index, weights=safe_row, minlength=n_sectors))
+
+        panel = np.asarray(panel_rows, dtype=float)
+        horizon = min(panel.shape[0], len(out_index))
+        return pd.DataFrame(panel[:horizon], index=out_index[:horizon], columns=[str(code) for code in sector_codes])
+
     firms_ts = getattr(getattr(country, "firms", None), "ts", None)
     households_ts = getattr(getattr(country, "households", None), "ts", None)
     add_aggregate_agent_ts_column("real_demand", firms_ts, "demand")
@@ -945,6 +982,88 @@ def build_macro_output_df(model, country_code):
     add_agent_ts_column("household_credit_demand_mortgage", households_ts, "total_target_mortgage")
     add_agent_ts_column("household_credit_received_consumption", households_ts, "total_received_consumption_loans")
     add_agent_ts_column("household_credit_received_mortgage", households_ts, "total_received_mortgages")
+
+    hh_assets = add_column("household_assets", aggregate_agent_ts(households_ts, "wealth"))
+    hh_liabilities = add_column("household_liabilities", aggregate_agent_ts(households_ts, "debt"))
+    hh_equity = add_column("household_net_worth", aggregate_agent_ts(households_ts, "net_wealth"))
+    if hh_assets is not None and hh_liabilities is not None and hh_equity is not None:
+        add_column("household_balance_sheet_identity_residual", hh_assets - hh_liabilities - hh_equity)
+
+    firm_assets = None
+    firm_inventory_nominal = aggregate_agent_ts(firms_ts, "inventory_nominal")
+    firm_intermediate_stock_value = aggregate_agent_ts(firms_ts, "intermediate_inputs_stock_value")
+    firm_capital_stock_value = aggregate_agent_ts(firms_ts, "capital_inputs_stock_value")
+    firm_deposits = aggregate_agent_ts(firms_ts, "deposits")
+    if (
+        firm_inventory_nominal is not None
+        and firm_intermediate_stock_value is not None
+        and firm_capital_stock_value is not None
+        and firm_deposits is not None
+    ):
+        firm_assets = add_column(
+            "firm_assets",
+            firm_inventory_nominal + firm_intermediate_stock_value + firm_capital_stock_value + firm_deposits,
+        )
+
+    firm_revolving_facility = aggregate_agent_ts(firms_ts, "operating_revolving_closing_balance")
+    firm_liabilities = None
+    firm_debt = aggregate_agent_ts(firms_ts, "debt")
+    if firm_debt is not None and firm_revolving_facility is not None:
+        firm_liabilities = add_column(
+            "firm_liabilities",
+            firm_debt + np.maximum(0.0, firm_revolving_facility),
+        )
+    firm_equity = add_column("firm_equity", aggregate_agent_ts(firms_ts, "equity"))
+    firm_settlement_residual = aggregate_agent_ts(firms_ts, "firm_settlement_balance_sheet_residual")
+    if firm_settlement_residual is not None:
+        add_column("firm_balance_sheet_identity_residual", firm_settlement_residual)
+    elif firm_assets is not None and firm_liabilities is not None and firm_equity is not None:
+        add_column("firm_balance_sheet_identity_residual", firm_assets - firm_liabilities - firm_equity)
+
+    sector_firm_assets = None
+    sector_inventory_nominal = aggregate_firm_ts_by_sector("inventory_nominal")
+    sector_intermediate_stock_value = aggregate_firm_ts_by_sector("intermediate_inputs_stock_value")
+    sector_capital_stock_value = aggregate_firm_ts_by_sector("capital_inputs_stock_value")
+    sector_deposits = aggregate_firm_ts_by_sector("deposits")
+    if (
+        sector_inventory_nominal is not None
+        and sector_intermediate_stock_value is not None
+        and sector_capital_stock_value is not None
+        and sector_deposits is not None
+    ):
+        sector_firm_assets = (
+            sector_inventory_nominal + sector_intermediate_stock_value + sector_capital_stock_value + sector_deposits
+        )
+
+    sector_firm_debt = aggregate_firm_ts_by_sector("debt")
+    sector_revolving_facility = aggregate_firm_ts_by_sector("operating_revolving_closing_balance")
+    sector_firm_liabilities = None
+    if sector_firm_debt is not None and sector_revolving_facility is not None:
+        sector_firm_liabilities = sector_firm_debt + np.maximum(0.0, sector_revolving_facility)
+    sector_firm_equity = aggregate_firm_ts_by_sector("equity")
+    if sector_firm_assets is not None and sector_firm_liabilities is not None and sector_firm_equity is not None:
+        sector_identity_residual = sector_firm_assets - sector_firm_liabilities - sector_firm_equity
+        for sector_code in sector_identity_residual.columns:
+            add_column(
+                f"firm_balance_sheet_identity_residual_sector_{sector_code}",
+                sector_identity_residual[sector_code].reindex(out_index),
+            )
+
+    bank_assets = None
+    banks_ts = getattr(getattr(country, "banks", None), "ts", None)
+    bank_deposits = add_column("bank_deposits", aggregate_agent_ts(banks_ts, "deposits"))
+    bank_equity = add_column("bank_equity", aggregate_agent_ts(banks_ts, "equity"))
+    bank_total_loans = add_column(
+        "bank_total_outstanding_loans",
+        aggregate_agent_ts(banks_ts, "total_outstanding_loans"),
+    )
+    if bank_total_loans is not None and bank_deposits is not None:
+        bank_assets = add_column("bank_assets_proxy", bank_total_loans + np.maximum(0.0, bank_deposits))
+    bank_liabilities = None
+    if banks_ts is not None:
+        bank_liabilities = add_column("bank_liabilities", aggregate_agent_ts(banks_ts, "liability"))
+    if bank_assets is not None and bank_liabilities is not None:
+        add_column("bank_balance_sheet_identity_residual_proxy", bank_assets - bank_liabilities)
 
     if (
         get_column("firm_credit_demand_short_term") is not None

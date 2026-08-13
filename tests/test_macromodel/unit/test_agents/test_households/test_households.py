@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import is_dataclass, replace
 from types import SimpleNamespace
 
@@ -78,6 +79,38 @@ class TestHouseholds:
             "ficp_exclusion_remaining_periods",
         ]:
             assert field_name in test_households.ts.get_keys()
+
+    def test__from_pickled_agent_rejects_missing_direct_share_data_when_payout_is_enabled(self, datawrapper):
+        country = datawrapper.synthetic_countries["FRA"]
+        population = deepcopy(country.population)
+        population.household_data = population.household_data.drop(columns="Initial Direct Share Fraction")
+        configuration = HouseholdsConfiguration()
+        configuration.functions.wealth.name = "PaperAssetReturnWealthSetter"
+        configuration.functions.wealth.parameters = {
+            "other_real_assets_depreciation_rate": 0.05,
+            "mu_eq": 0.0029,
+            "mu_bond": 0.0081,
+            "sigma_eq": 0.0,
+            "sigma_bond": 0.0,
+            "rho": 0.0,
+            "equity_weight": 0.5,
+            "dividend_fund_payout_ratio": 0.10,
+        }
+
+        with pytest.raises(ValueError, match="Initial Direct Share Fraction is required"):
+            households_module.Households.from_pickled_agent(
+                synthetic_population=population,
+                configuration=configuration,
+                country_name="FRA",
+                all_country_names=["FRA", "ROW"],
+                industries=datawrapper.industries,
+                initial_consumption_by_industry=country.industry_data["industry_vectors"][
+                    "Household Consumption in LCU"
+                ],
+                value_added_tax=country.tax_data.value_added_tax,
+                scale=datawrapper.configuration.country_configs["FRA"].scale,
+                synthetic_country=country,
+            )
 
     def test__handle_insolvency_supports_legacy_handler_signature(self, test_households, monkeypatch):
         class LegacyHandler:

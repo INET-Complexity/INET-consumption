@@ -523,7 +523,7 @@ FRA:
       firm_loans_return_on_assets_ratio: 0.05
       enable_firm_loans_return_on_equity_restriction: false
       firm_loans_return_on_equity_ratio: 0.15  # 0.05
-      enable_firm_loans_dscr_restriction: false
+      enable_firm_loans_dscr_restriction: true
       firm_loans_min_dscr: 1.25
       firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       firm_loans_cfads_window: 4

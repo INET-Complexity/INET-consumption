@@ -647,9 +647,17 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_deposits: np.ndarray,
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
+        illiquid_return_base: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
+        return_base = (
+            current_wealth_in_other_financial_assets
+            if illiquid_return_base is None
+            else np.asarray(illiquid_return_base, dtype=float)
+        )
+        if return_base.shape != current_wealth_in_other_financial_assets.shape:
+            raise ValueError("Illiquid return base must match household financial-asset shape.")
         post_return_other_financial_assets = current_wealth_in_other_financial_assets + self._current_return_amount_for(
-            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            current_wealth_in_other_financial_assets=return_base,
             period_index=period_index,
         )
         available_other_financial_assets = np.maximum(post_return_other_financial_assets, 0.0)
@@ -669,11 +677,19 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         new_wealth_in_other_financial_assets: np.ndarray,
         used_up_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
+        illiquid_return_base: np.ndarray | None = None,
     ) -> np.ndarray:
+        return_base = (
+            current_wealth_in_other_financial_assets
+            if illiquid_return_base is None
+            else np.asarray(illiquid_return_base, dtype=float)
+        )
+        if return_base.shape != current_wealth_in_other_financial_assets.shape:
+            raise ValueError("Illiquid return base must match household financial-asset shape.")
         updated_wealth = (
             current_wealth_in_other_financial_assets
             + self._current_return_amount_for(
-                current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+                current_wealth_in_other_financial_assets=return_base,
                 period_index=period_index,
             )
             + new_wealth_in_other_financial_assets

@@ -616,7 +616,6 @@ class Households(Agent):
         # same value the call site would produce anyway when uses_portfolio_choice
         # is False, so the t=0 row is consistent with every later disabled period.
         n_households_at_init = ts.current("n_households")
-        ts["dividend_fund_initial_direct_share_fraction"] = initial_direct_share_fraction.copy()
         ts["dividend_fund_ownership_quota"] = ownership_quota.copy()
         for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
@@ -1619,18 +1618,51 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
-    def stage_illiquid_valuation_return(self, period_index: int | None = None) -> np.ndarray:
+    def stage_illiquid_valuation_return(
+        self,
+        period_index: int | None = None,
+        current_wealth_in_other_financial_assets: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Stage the return that later changes only the illiquid asset stock."""
         wealth_function = self.functions["wealth"]
         stage_return = getattr(wealth_function, "stage_illiquid_valuation_return", None)
         if stage_return is None:
             return self.compute_income_from_financial_assets(period_index=period_index)
+        current_wealth = (
+            self.ts.current("illiquid_financial_assets")
+            if current_wealth_in_other_financial_assets is None
+            else np.asarray(current_wealth_in_other_financial_assets, dtype=float)
+        )
         kwargs = {
-            "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
+            "current_wealth_in_other_financial_assets": current_wealth,
         }
         if getattr(wealth_function, "uses_periodic_illiquid_returns", False):
             kwargs["period_index"] = period_index
         return stage_return(**kwargs)
+
+    def residual_illiquid_return_base(
+        self,
+        aggregate_illiquid_financial_assets: np.ndarray,
+    ) -> np.ndarray:
+        """Return the fixed-proxy IFA share eligible for paper valuation returns.
+
+        Aggregate IFA remains the sole tracked stock. The immutable HFCS direct
+        share fraction excludes the modeled ownership proxy from paper returns;
+        after aggregate Stage 5 liquidation this is algebraically equivalent to
+        a pro-rata split without persisting separate ownership stocks.
+        """
+        aggregate_ifa = np.asarray(aggregate_illiquid_financial_assets, dtype=float)
+        direct_share_fraction = np.asarray(
+            self.states["dividend_fund_initial_direct_share_fraction"],
+            dtype=float,
+        )
+        if aggregate_ifa.shape != direct_share_fraction.shape:
+            raise ValueError("IFA return base and direct-share fraction must contain one value per household.")
+        if not np.all(np.isfinite(aggregate_ifa)) or not np.all(np.isfinite(direct_share_fraction)):
+            raise ValueError("IFA return base and direct-share fraction must be finite.")
+        if np.any(direct_share_fraction < 0.0) or np.any(direct_share_fraction > 1.0):
+            raise ValueError("Initial direct-share fractions must lie between zero and one.")
+        return np.maximum(aggregate_ifa, 0.0) * (1.0 - direct_share_fraction)
 
     def current_illiquid_financial_asset_return_rate(self) -> float:
         """Return the current aggregate illiquid financial asset return rate, if available."""
@@ -2222,10 +2254,16 @@ class Households(Agent):
             }
 
         opening_tfa_scale = self.ts.prev("illiquid_financial_assets") + self.ts.prev("liquid_financial_assets")
-        current_return_amount = self.current_illiquid_financial_asset_return_amount()
+        current_ifa = self.ts.current("illiquid_financial_assets")
+        return_base = self.residual_illiquid_return_base(current_ifa)
+        current_return_amount = self.current_illiquid_financial_asset_return_amount(
+            current_wealth_in_other_financial_assets=return_base,
+        )
         if not np.all(np.isfinite(current_return_amount)):
-            current_return_amount = self.compute_income_from_financial_assets()
-        post_return_ifa = self.ts.current("illiquid_financial_assets") + current_return_amount
+            current_return_amount = self.stage_illiquid_valuation_return(
+                current_wealth_in_other_financial_assets=return_base,
+            )
+        post_return_ifa = current_ifa + current_return_amount
         investable_surplus = (
             self.ts.current("expected_income")
             - np.asarray(target_consumption_total, dtype=float)
@@ -3309,6 +3347,10 @@ class Households(Agent):
             }
             if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
                 use_up_wealth_kwargs["period_index"] = period_index
+            if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+                use_up_wealth_kwargs["illiquid_return_base"] = self.residual_illiquid_return_base(
+                    self.ts.current("illiquid_financial_assets")
+                )
             (
                 used_up_wealth_in_deposits,
                 used_up_wealth_in_other_financial_assets,
@@ -3370,9 +3412,11 @@ class Households(Agent):
                 )
             if not settlement_matches_reservation:
                 raise RuntimeError("Reserved Stage 5 liquidation was not settled in full.")
+            return_base = None
             if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+                return_base = self.residual_illiquid_return_base(post_liquidation_ifa)
                 illiquid_financial_asset_capital_gains = self.current_illiquid_financial_asset_return_amount(
-                    current_wealth_in_other_financial_assets=post_liquidation_ifa,
+                    current_wealth_in_other_financial_assets=return_base,
                     period_index=period_index,
                 )
                 if not np.all(np.isfinite(illiquid_financial_asset_capital_gains)):
@@ -3382,12 +3426,15 @@ class Households(Agent):
                 new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
                 used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
                 period_index=period_index,
+                illiquid_return_base=return_base,
             )
         else:
             wealth_base_lfa = base_lfa
+            return_base = None
             if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+                return_base = self.residual_illiquid_return_base(self.ts.current("illiquid_financial_assets"))
                 illiquid_financial_asset_capital_gains = self.current_illiquid_financial_asset_return_amount(
-                    current_wealth_in_other_financial_assets=self.ts.current("illiquid_financial_assets"),
+                    current_wealth_in_other_financial_assets=return_base,
                     period_index=period_index,
                 )
                 if not np.all(np.isfinite(illiquid_financial_asset_capital_gains)):
@@ -3396,6 +3443,7 @@ class Households(Agent):
                 new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
                 used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
                 period_index=period_index,
+                illiquid_return_base=return_base,
             )
 
         settlement = None
@@ -3692,6 +3740,7 @@ class Households(Agent):
         used_up_wealth_in_other_financial_assets: float,
         period_index: int | None = None,
         current_wealth_in_other_financial_assets: np.ndarray | None = None,
+        illiquid_return_base: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate other financial asset wealth.
 
@@ -3719,6 +3768,10 @@ class Households(Agent):
         }
         if getattr(self.functions["wealth"], "uses_periodic_illiquid_returns", False):
             kwargs["period_index"] = period_index
+        if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+            kwargs["illiquid_return_base"] = (
+                current_wealth if illiquid_return_base is None else np.asarray(illiquid_return_base, dtype=float)
+            )
         return self.functions["wealth"].compute_wealth_in_other_financial_assets(**kwargs)
 
     def compute_wealth_in_deposits(

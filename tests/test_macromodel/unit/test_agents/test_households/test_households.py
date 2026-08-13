@@ -997,6 +997,14 @@ class TestHouseholds:
             prior_settled_income,
         )
 
+    def test__residual_illiquid_return_base_excludes_fixed_direct_share_proxy(self, test_households):
+        direct_share_fraction = np.array([0.0, 0.25, 1.0])
+        test_households.states["dividend_fund_initial_direct_share_fraction"] = direct_share_fraction
+
+        return_base = test_households.residual_illiquid_return_base(np.array([100.0, 80.0, -10.0]))
+
+        np.testing.assert_allclose(return_base, [100.0, 60.0, 0.0])
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",
@@ -3501,9 +3509,9 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.functions["wealth"].compute_income_from_financial_assets(
             current_wealth_in_other_financial_assets=test_households.ts.current("illiquid_financial_assets"),
         )
-        expected_post_return_ifa = (
-            test_households.ts.current("illiquid_financial_assets")
-            + test_households.current_illiquid_financial_asset_return_amount()
+        current_ifa = test_households.ts.current("illiquid_financial_assets")
+        expected_post_return_ifa = current_ifa + test_households.current_illiquid_financial_asset_return_amount(
+            current_wealth_in_other_financial_assets=test_households.residual_illiquid_return_base(current_ifa),
         )
         captured = {}
 
@@ -3574,7 +3582,9 @@ class TestComputeAndRecordBorrowVsSellChoice:
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
+        current_ifa = test_households.ts.current("illiquid_financial_assets")
+        expected_post_return_ifa = current_ifa + 0.2 * test_households.residual_illiquid_return_base(current_ifa)
+        np.testing.assert_allclose(handoff["post_return_ifa"], expected_post_return_ifa)
         np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
 
 

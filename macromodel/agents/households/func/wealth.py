@@ -570,6 +570,18 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> np.ndarray:
+        """Backward-compatible alias for staging an illiquid valuation return."""
+        return self.stage_illiquid_valuation_return(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
+
+    def stage_illiquid_valuation_return(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        """Draw the current paper IFA valuation return exactly once per period."""
         if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
             if period_index is not None:
                 if self._current_illiquid_return_period is None:

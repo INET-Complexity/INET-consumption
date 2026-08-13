@@ -917,6 +917,35 @@ class TestHouseholds:
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 16.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 23.0))
 
+    def test__paper_asset_dividends_enter_expected_and_realised_income(self, test_households):
+        from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
+
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.10,
+            mu_bond=0.02,
+            sigma_eq=0.20,
+            sigma_bond=0.10,
+            rho=0.25,
+            equity_weight=0.75,
+        )
+        components = {
+            "expected_income_employee": 2.0,
+            "expected_income_social_transfers": 3.0,
+            "income_employee": 5.0,
+            "income_social_transfers": 7.0,
+            "income_rental": 11.0,
+            "expected_income_dividend_distributions": 13.0,
+            "income_dividend_distributions": 17.0,
+            "income_financial_assets": 19.0,
+        }
+        for field, value in components.items():
+            test_households.ts.override_current(field, np.full(n_households, value))
+
+        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
+        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

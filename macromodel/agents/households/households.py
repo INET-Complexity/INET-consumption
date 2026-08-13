@@ -1580,6 +1580,19 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
+    def compute_expected_dividend_income(self) -> np.ndarray:
+        """Forecast only dividends realised before the current planning period.
+
+        Current declarations settle after the planning and goods-market phases,
+        so they cannot finance the current period's Stage 5 feasibility.
+        """
+        distribution = np.asarray(self.ts.current("income_dividend_distributions"), dtype=float)
+        if distribution.shape != self.ts.current("illiquid_financial_assets").shape:
+            raise ValueError("Expected dividend income must contain one value per household.")
+        if not np.all(np.isfinite(distribution)) or np.any(distribution < -1e-9):
+            raise ValueError("Dividend income must be finite and non-negative.")
+        return np.maximum(distribution, 0.0)
+
     def compute_income_from_financial_assets(self, period_index: int | None = None) -> np.ndarray:
         """Calculate current income from financial assets.
 
@@ -1606,6 +1619,19 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
+    def stage_illiquid_valuation_return(self, period_index: int | None = None) -> np.ndarray:
+        """Stage the return that later changes only the illiquid asset stock."""
+        wealth_function = self.functions["wealth"]
+        stage_return = getattr(wealth_function, "stage_illiquid_valuation_return", None)
+        if stage_return is None:
+            return self.compute_income_from_financial_assets(period_index=period_index)
+        kwargs = {
+            "current_wealth_in_other_financial_assets": self.ts.current("illiquid_financial_assets"),
+        }
+        if getattr(wealth_function, "uses_periodic_illiquid_returns", False):
+            kwargs["period_index"] = period_index
+        return stage_return(**kwargs)
+
     def current_illiquid_financial_asset_return_rate(self) -> float:
         """Return the current aggregate illiquid financial asset return rate, if available."""
         current_rate = getattr(self.functions["wealth"], "current_illiquid_return_rate", None)
@@ -1613,14 +1639,25 @@ class Households(Agent):
             return np.nan
         return current_rate()
 
-    def current_illiquid_financial_asset_return_amount(self) -> np.ndarray:
+    def current_illiquid_financial_asset_return_amount(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray | None = None,
+        period_index: int | None = None,
+    ) -> np.ndarray:
         """Return the current-period illiquid return amount vector, if available."""
         current_amount = getattr(self.functions["wealth"], "current_illiquid_return_amount", None)
-        current_wealth = self.ts.current("illiquid_financial_assets")
+        current_wealth = (
+            self.ts.current("illiquid_financial_assets")
+            if current_wealth_in_other_financial_assets is None
+            else np.asarray(current_wealth_in_other_financial_assets, dtype=float)
+        )
         if current_amount is None:
             return np.full(current_wealth.shape, np.nan)
         try:
-            return current_amount(current_wealth_in_other_financial_assets=current_wealth)
+            return current_amount(
+                current_wealth_in_other_financial_assets=current_wealth,
+                period_index=period_index,
+            )
         except ValueError:
             return np.full(current_wealth.shape, np.nan)
 
@@ -1641,7 +1678,9 @@ class Households(Agent):
             + self.ts.current("expected_income_social_transfers")
             + self.ts.current("income_rental")
         )
-        if not getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+        if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+            expected_income = expected_income + self.ts.current("expected_income_dividend_distributions")
+        else:
             expected_income = expected_income + self.ts.current("expected_income_financial_assets")
         return expected_income
 
@@ -1662,7 +1701,9 @@ class Households(Agent):
             + self.ts.current("income_social_transfers")
             + self.ts.current("income_rental")
         )
-        if not getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+        if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+            income = income + self.ts.current("income_dividend_distributions")
+        else:
             income = income + self.ts.current("income_financial_assets")
         return income
 
@@ -3290,6 +3331,7 @@ class Households(Agent):
             base_lfa = base_lfa + realised_cash_flow_adjustment
 
         reserved_liquidation = np.zeros_like(self.ts.current("illiquid_financial_assets"))
+        illiquid_financial_asset_capital_gains = np.zeros_like(reserved_liquidation)
         if self.uses_feasibility_resolver:
             plan = self.post_grant_feasible_plan
             if plan is None:
@@ -3328,6 +3370,13 @@ class Households(Agent):
                 )
             if not settlement_matches_reservation:
                 raise RuntimeError("Reserved Stage 5 liquidation was not settled in full.")
+            if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+                illiquid_financial_asset_capital_gains = self.current_illiquid_financial_asset_return_amount(
+                    current_wealth_in_other_financial_assets=post_liquidation_ifa,
+                    period_index=period_index,
+                )
+                if not np.all(np.isfinite(illiquid_financial_asset_capital_gains)):
+                    raise RuntimeError("Paper IFA valuation return must be staged before the wealth update.")
             wealth_base_ifa = self.compute_wealth_of_other_financial_assets(
                 current_wealth_in_other_financial_assets=post_liquidation_ifa,
                 new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
@@ -3336,6 +3385,13 @@ class Households(Agent):
             )
         else:
             wealth_base_lfa = base_lfa
+            if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
+                illiquid_financial_asset_capital_gains = self.current_illiquid_financial_asset_return_amount(
+                    current_wealth_in_other_financial_assets=self.ts.current("illiquid_financial_assets"),
+                    period_index=period_index,
+                )
+                if not np.all(np.isfinite(illiquid_financial_asset_capital_gains)):
+                    raise RuntimeError("Paper IFA valuation return must be staged before the wealth update.")
             wealth_base_ifa = self.compute_wealth_of_other_financial_assets(
                 new_wealth_in_other_financial_assets=new_wealth_in_other_financial_assets,
                 used_up_wealth_in_other_financial_assets=used_up_wealth_in_other_financial_assets,
@@ -3406,6 +3462,8 @@ class Households(Agent):
         self.ts.liquid_financial_assets.append(wealth_base_lfa)
         self.ts.total_illiquid_financial_assets.append([wealth_base_ifa.sum()])
         self.ts.total_liquid_financial_assets.append([wealth_base_lfa.sum()])
+        self.ts.illiquid_financial_asset_capital_gains.append(illiquid_financial_asset_capital_gains)
+        self.ts.total_illiquid_financial_asset_capital_gains.append([illiquid_financial_asset_capital_gains.sum()])
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
         self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)
 

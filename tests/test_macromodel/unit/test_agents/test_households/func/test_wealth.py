@@ -39,6 +39,25 @@ def test__paper_asset_return_wealth_setter_uses_common_illiquid_return():
     )
 
 
+def test__paper_asset_return_is_valued_on_post_liquidation_ifa() -> None:
+    setter = _paper_setter(mu_eq=np.log(1.1), mu_bond=np.log(1.1), equity_weight=0.5)
+
+    setter.stage_illiquid_valuation_return(np.array([100.0]), period_index=1)
+    capital_gain = setter.current_illiquid_return_amount(
+        current_wealth_in_other_financial_assets=np.array([80.0]),
+        period_index=1,
+    )
+    closing_ifa = setter.compute_wealth_in_other_financial_assets(
+        current_wealth_in_other_financial_assets=np.array([80.0]),
+        new_wealth_in_other_financial_assets=np.array([0.0]),
+        used_up_wealth_in_other_financial_assets=np.array([0.0]),
+        period_index=1,
+    )
+
+    np.testing.assert_allclose(capital_gain, [8.0])
+    np.testing.assert_allclose(closing_ifa, [88.0])
+
+
 def test__paper_asset_return_wealth_setter_seeded_draw_is_reproducible():
     opening_ifa = np.array([100.0, 200.0])
     setter = _paper_setter(sigma_eq=0.0935, sigma_bond=0.0316, rho=-0.2585)

@@ -1140,7 +1140,17 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
-        expected_income_financial_assets = self.households.compute_expected_income_from_financial_assets()
+        paper_returns_are_capital_gains = getattr(
+            self.households.functions["wealth"],
+            "illiquid_returns_are_capital_gains",
+            False,
+        )
+        expected_dividend_income = self.households.compute_expected_dividend_income()
+        expected_income_financial_assets = (
+            expected_dividend_income
+            if paper_returns_are_capital_gains
+            else self.households.compute_expected_income_from_financial_assets()
+        )
 
         if replace_current:
             self.households.ts.override_current("expected_income_employee", expected_income_employee)
@@ -1151,12 +1161,24 @@ class Country:
                 "expected_income_financial_assets",
                 expected_income_financial_assets,
             )
+            self.households.ts.override_current(
+                "expected_income_dividend_distributions",
+                expected_dividend_income,
+            )
+            self.households.ts.override_current(
+                "total_expected_income_dividend_distributions",
+                [expected_dividend_income.sum()],
+            )
         else:
             self.households.ts.expected_income_employee.append(expected_income_employee)
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
             self.households.ts.income_rental.append(income_rental)
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
+            self.households.ts.expected_income_dividend_distributions.append(expected_dividend_income)
+            self.households.ts.total_expected_income_dividend_distributions.append(
+                [expected_dividend_income.sum()]
+            )
 
         expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
@@ -2945,9 +2967,23 @@ class Country:
         )
         self.households.ts.total_income_employee.append([self.households.ts.current("income_employee").sum()])
         self.settle_household_social_transfers()
-        self.households.ts.income_financial_assets.append(
-            self.households.compute_income_from_financial_assets(period_index=period_index)
+        paper_returns_are_capital_gains = getattr(
+            self.households.functions["wealth"],
+            "illiquid_returns_are_capital_gains",
+            False,
         )
+        dividend_income = (
+            self.households.ts.current("dividend_fund_settled_firm_distribution")
+            + self.households.ts.current("dividend_fund_settled_bank_distribution")
+        )
+        self.households.ts.income_dividend_distributions.append(dividend_income)
+        self.households.ts.total_income_dividend_distributions.append([dividend_income.sum()])
+        if paper_returns_are_capital_gains:
+            self.households.stage_illiquid_valuation_return(period_index=period_index)
+            financial_asset_income = dividend_income
+        else:
+            financial_asset_income = self.households.compute_income_from_financial_assets(period_index=period_index)
+        self.households.ts.income_financial_assets.append(financial_asset_income)
         self.households.ts.total_income_financial_assets.append(
             [self.households.ts.current("income_financial_assets").sum()]
         )
@@ -3118,12 +3154,17 @@ class Country:
 
         # G5. GOVERNMENT REVENUE
         # General government fields
+        taxable_household_financial_income = (
+            self.households.ts.current("income_dividend_distributions")
+            if getattr(self.households.functions["wealth"], "illiquid_returns_are_capital_gains", False)
+            else self.households.ts.current("income_financial_assets")
+        )
         self.central_government.compute_taxes(
             current_ind_employee_income=self.individuals.ts.current("employee_income"),
             current_total_rent_paid=self.households.ts.current("rent")[
                 self.households.states["Tenure Status of the Main Residence"] == 3
             ].sum(),
-            current_income_financial_assets=self.households.ts.current("income_financial_assets"),
+            current_income_financial_assets=taxable_household_financial_income,
             current_ind_activity=self.individuals.states["Activity Status"],
             current_ind_realised_cons=self.households.ts.current("consumption"),
             current_bank_profits=self.banks.ts.current("cash_distributable_profits"),

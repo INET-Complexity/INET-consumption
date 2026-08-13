@@ -424,6 +424,37 @@ class Households(Agent):
         # field, not a separate synthetic-population column.
         states["portfolio_participates"] = hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float) > 0.0
 
+        wealth_function = functions.get("wealth")
+        legacy_payout_ratio = float(getattr(wealth_function, "dividend_fund_payout_ratio", 0.0))
+        payout_enabled = any(
+            float(getattr(wealth_function, field, legacy_payout_ratio)) > 0.0
+            for field in ("dividend_fund_firm_payout_ratio", "dividend_fund_bank_payout_ratio")
+        )
+        if "Initial Direct Share Fraction" not in hh_data:
+            if payout_enabled:
+                raise ValueError(
+                    "Initial Direct Share Fraction is required when ownership-based profit payouts are enabled."
+                )
+            initial_direct_share_fraction = np.zeros(len(hh_data), dtype=float)
+        else:
+            initial_direct_share_fraction = hh_data["Initial Direct Share Fraction"].to_numpy(dtype=float)
+        initial_ifa = hh_data["Wealth in Other Financial Assets"].to_numpy(dtype=float)
+        if not np.all(np.isfinite(initial_direct_share_fraction)) or not np.all(np.isfinite(initial_ifa)):
+            raise ValueError("Initial direct-share fractions and IFA must be finite.")
+        initial_direct_share_fraction = np.clip(initial_direct_share_fraction, 0.0, 1.0)
+        initial_direct_share_proxy = initial_direct_share_fraction * np.maximum(initial_ifa, 0.0)
+        aggregate_direct_share_proxy = float(initial_direct_share_proxy.sum())
+        ownership_quota = np.divide(
+            initial_direct_share_proxy,
+            aggregate_direct_share_proxy,
+            out=np.zeros_like(initial_direct_share_proxy),
+            where=aggregate_direct_share_proxy > 0.0,
+        )
+        initial_direct_share_fraction.setflags(write=False)
+        ownership_quota.setflags(write=False)
+        states["dividend_fund_initial_direct_share_fraction"] = initial_direct_share_fraction
+        states["dividend_fund_ownership_quota"] = ownership_quota
+
         # Stage 4 (portfolio choice) Increment 5: household-head age and employed-
         # member count, required by the opt-in target_share_source="frm_magnitude"
         # path (compute_frm_magnitude_target_share). Frozen at init like
@@ -585,6 +616,8 @@ class Households(Agent):
         # same value the call site would produce anyway when uses_portfolio_choice
         # is False, so the t=0 row is consistent with every later disabled period.
         n_households_at_init = ts.current("n_households")
+        ts["dividend_fund_initial_direct_share_fraction"] = initial_direct_share_fraction.copy()
+        ts["dividend_fund_ownership_quota"] = ownership_quota.copy()
         for _field_name, _zero_value in _STAGE4_DIAGNOSTIC_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 

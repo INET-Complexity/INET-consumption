@@ -509,7 +509,12 @@ class Banks(Agent):
         """
         if taxable_profits is None:
             taxable_profits = self.ts.current("profits")
-        return self.ts.current("equity") + self.ts.current("profits") - profit_taxes * np.maximum(0.0, taxable_profits)
+        return (
+            self.ts.current("equity")
+            + self.ts.current("profits")
+            - profit_taxes * np.maximum(0.0, taxable_profits)
+            - self.ts.current("dividend_fund_settlement_debit")
+        )
 
     def compute_liability(self) -> np.ndarray:
         """Calculate total bank liabilities.

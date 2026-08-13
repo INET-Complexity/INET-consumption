@@ -79,6 +79,9 @@ asset_returns:
     rho: -0.2585
     equity_weight: 0.5
     draw_scope: country_period
+    dividend_fund_payout_ratio: 0.10
+    dividend_fund_firm_payout_ratio: 0.10
+    dividend_fund_bank_payout_ratio: 0.10
 
 desired_consumption:
   credit_augmented_v1:

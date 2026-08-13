@@ -2413,6 +2413,112 @@ class Country:
             raise
         return exclusion_mask, pending_events
 
+    def record_dividend_fund_settlement_receipts(self) -> None:
+        """Record actual payer-funded dividend receipts without crediting deposits.
+
+        Declarations are settled one period later. This method only records the
+        source-specific household receipt carriers; Step 3 owns their income
+        treatment. The fixed quota is therefore the sole allocation authority.
+        """
+        quota = np.asarray(self.households.states["dividend_fund_ownership_quota"], dtype=float)
+        if quota.ndim != 1 or not np.all(np.isfinite(quota)) or np.any(quota < -1e-9):
+            raise ValueError("Household dividend-fund ownership quotas must be finite and non-negative.")
+        quota = np.maximum(quota, 0.0)
+        quota_sum = float(quota.sum())
+        if quota_sum > 0.0 and not np.isclose(quota_sum, 1.0, atol=1e-10, rtol=0.0):
+            raise ValueError("Positive household dividend-fund ownership quotas must sum to one.")
+
+        firm_debit = np.asarray(self.firms.ts.current("dividend_fund_settlement_debit"), dtype=float)
+        bank_debit = np.asarray(self.banks.ts.current("dividend_fund_settlement_debit"), dtype=float)
+        if not np.all(np.isfinite(firm_debit)) or not np.all(np.isfinite(bank_debit)):
+            raise ValueError("Dividend-fund settlement debits must be finite.")
+        firm_receipts = quota * float(np.maximum(firm_debit, 0.0).sum())
+        bank_receipts = quota * float(np.maximum(bank_debit, 0.0).sum())
+        ts = self.households.ts
+        ts.dividend_fund_settled_firm_distribution.append(firm_receipts)
+        ts.dividend_fund_settled_bank_distribution.append(bank_receipts)
+        ts.dividend_fund_total_settled_distribution.append([float(firm_receipts.sum() + bank_receipts.sum())])
+        ts.dividend_fund_quota_sum.append([quota_sum])
+        ts.dividend_fund_firm_settlement_identity_error.append([float(firm_receipts.sum() - firm_debit.sum())])
+        ts.dividend_fund_bank_settlement_identity_error.append([float(bank_receipts.sum() - bank_debit.sum())])
+        ts.dividend_fund_settlement_identity_error.append(
+            [float(firm_receipts.sum() + bank_receipts.sum() - firm_debit.sum() - bank_debit.sum())]
+        )
+
+    def record_diagnostic_dividend_fund(self) -> None:
+        """Declare next-period profit payouts from current eligible capacity."""
+        from macromodel.country.diagnostic_dividend_fund import compute_diagnostic_dividend_fund
+
+        firm_cash_profit_after_settlement = (
+            self.firms.ts.current("nominal_amount_sold_in_lcu")
+            - self.firms.ts.current("total_wage")
+            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - self.firms.direct_tfp_investment_cash_expense()
+            - self.firms.ts.current("taxes_paid_on_production")
+            - self.firms.ts.current("corporate_taxes_paid")
+            - self.firms.ts.current("interest_paid")
+            - self.firms.ts.current("debt_installments")
+            - self.firms.ts.current("operating_revolving_repayment")
+        )
+        result = compute_diagnostic_dividend_fund(
+            beginning_ifa=self.households.ts.prev("illiquid_financial_assets"),
+            firm_cash_profit_after_settlement=firm_cash_profit_after_settlement,
+            firm_closing_deposits=self.firms.ts.current("deposits"),
+            firm_unpaid_interest=self.firms.ts.current("firm_settlement_unpaid_interest"),
+            firm_closing_principal_arrears=self.firms.ts.current("firm_settlement_closing_principal_arrears"),
+            firm_residual_overdraft_exposure=self.firms.ts.current("firm_settlement_residual_overdraft_exposure"),
+            firm_default_flag=self.firms.ts.current("firm_settlement_default_flag"),
+            bank_cash_distributable_profits=self.banks.ts.current("cash_distributable_profits"),
+            ownership_quota=self.households.states["dividend_fund_ownership_quota"],
+        )
+        wealth_function = self.households.functions["wealth"]
+        firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", 0.0))
+        bank_payout_ratio = float(getattr(wealth_function, "dividend_fund_bank_payout_ratio", 0.0))
+        has_owners = float(result.ownership_quota.sum()) > 0.0
+        firm_declared = (
+            result.firm_distributable_profit_candidate * firm_payout_ratio
+            if has_owners
+            else np.zeros_like(result.firm_distributable_profit_candidate)
+        )
+        bank_declared = (
+            result.bank_distributable_profit_candidate * bank_payout_ratio
+            if has_owners
+            else np.zeros_like(result.bank_distributable_profit_candidate)
+        )
+        firm_retained = result.firm_distributable_profit_candidate - firm_declared
+        bank_retained = result.bank_distributable_profit_candidate - bank_declared
+        ts = self.households.ts
+        ts.dividend_fund_declared_firm_distribution.append(result.ownership_quota * float(firm_declared.sum()))
+        ts.dividend_fund_declared_bank_distribution.append(result.ownership_quota * float(bank_declared.sum()))
+        ts.dividend_fund_total_firm_distributable_profit_candidate.append(
+            [float(result.firm_distributable_profit_candidate.sum())]
+        )
+        ts.dividend_fund_total_bank_distributable_profit_candidate.append(
+            [float(result.bank_distributable_profit_candidate.sum())]
+        )
+        ts.dividend_fund_total_firm_declared_distribution.append([float(firm_declared.sum())])
+        ts.dividend_fund_total_bank_declared_distribution.append([float(bank_declared.sum())])
+        ts.dividend_fund_total_firm_retained_capacity.append([float(firm_retained.sum())])
+        ts.dividend_fund_total_bank_retained_capacity.append([float(bank_retained.sum())])
+        ts.dividend_fund_firm_retained_capacity_identity_error.append(
+            [float((firm_declared + firm_retained - result.firm_distributable_profit_candidate).sum())]
+        )
+        ts.dividend_fund_bank_retained_capacity_identity_error.append(
+            [float((bank_declared + bank_retained - result.bank_distributable_profit_candidate).sum())]
+        )
+        ts.dividend_fund_fund_identity_error.append([result.fund_identity_error])
+        self.firms.ts.dividend_fund_cash_distributable_profit_candidate.append(
+            result.firm_distributable_profit_candidate
+        )
+        self.firms.ts.dividend_fund_distress_gate_passed.append(result.firm_distress_gate_passed)
+        self.firms.ts.dividend_fund_declared_distribution.append(firm_declared)
+        self.firms.ts.dividend_fund_retained_capacity.append(firm_retained)
+        self.banks.ts.dividend_fund_cash_distributable_profit_candidate.append(
+            result.bank_distributable_profit_candidate
+        )
+        self.banks.ts.dividend_fund_declared_distribution.append(bank_declared)
+        self.banks.ts.dividend_fund_retained_capacity.append(bank_retained)
+
     def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.
 
@@ -2683,6 +2789,15 @@ class Country:
         self.firms.settle_operating_revolving_facility(
             cash_available_after_debt_service=cash_available_after_debt_service,
         )
+        from macromodel.country.diagnostic_dividend_fund import compute_cash_feasible_firm_distribution_settlement
+
+        firm_settlement_debit, firm_settlement_shortfall = compute_cash_feasible_firm_distribution_settlement(
+            declared_distribution=self.firms.ts.current("dividend_fund_declared_distribution"),
+            cash_available_after_debt_service=cash_available_after_debt_service,
+            operating_revolving_repayment=self.firms.ts.current("operating_revolving_repayment"),
+        )
+        self.firms.ts.dividend_fund_settlement_debit.append(firm_settlement_debit)
+        self.firms.ts.dividend_fund_settlement_shortfall.append(firm_settlement_shortfall)
         self.firms.ts.debt_installments.append(
             self.credit_market.settle_firm_installments(
                 payable_principal_by_firm=firm_debt_settlement["payable_principal"],
@@ -2794,6 +2909,11 @@ class Country:
 
         self.firms.ts.total_debt.append([self.firms.compute_total_debt()])
         self.firms.ts.total_deposits.append([self.firms.compute_total_deposits()])
+
+        self.banks.ts.dividend_fund_settlement_debit.append(
+            np.maximum(self.banks.ts.current("dividend_fund_declared_distribution"), 0.0).copy()
+        )
+        self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
         # Update individual income components
@@ -2994,6 +3114,7 @@ class Country:
             [self.banks.handle_insolvency(credit_market=self.credit_market)]
         )
         self.economy.ts.bank_insolvency_rate.append([self.banks.compute_insolvency_rate()])
+        self.record_diagnostic_dividend_fund()
 
         # G5. GOVERNMENT REVENUE
         # General government fields

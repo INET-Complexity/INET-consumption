@@ -946,6 +946,24 @@ class TestHouseholds:
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
 
+    def test__expected_dividend_income_ignores_current_unsettled_receipts(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        prior_settled_income = np.full(n_households, 7.0)
+        test_households.ts.override_current("income_dividend_distributions", prior_settled_income)
+        test_households.ts.override_current(
+            "dividend_fund_settled_firm_distribution",
+            np.full(n_households, 100.0),
+        )
+        test_households.ts.override_current(
+            "dividend_fund_settled_bank_distribution",
+            np.full(n_households, 50.0),
+        )
+
+        np.testing.assert_allclose(
+            test_households.compute_expected_dividend_income(),
+            prior_settled_income,
+        )
+
     # def test__households_ts(self, test_households):
     #     for ts_key in [
     #         "n_households",

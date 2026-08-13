@@ -63,6 +63,7 @@ def test_settlement_receipts_reconcile_separately_without_deposit_credit() -> No
         ts=TimeSeries(
             dividend_fund_settled_firm_distribution=np.zeros(2),
             dividend_fund_settled_bank_distribution=np.zeros(2),
+            dividend_fund_ownership_quota=np.array([0.25, 0.75]),
             dividend_fund_total_settled_distribution=[0.0],
             dividend_fund_quota_sum=[0.0],
             dividend_fund_firm_settlement_identity_error=[0.0],
@@ -77,4 +78,16 @@ def test_settlement_receipts_reconcile_separately_without_deposit_credit() -> No
 
     np.testing.assert_allclose(country.households.ts.current("dividend_fund_settled_firm_distribution"), [3.0, 9.0])
     np.testing.assert_allclose(country.households.ts.current("dividend_fund_settled_bank_distribution"), [1.5, 4.5])
+    np.testing.assert_allclose(country.households.ts.current("dividend_fund_ownership_quota"), [0.25, 0.75])
     assert country.households.ts.current("dividend_fund_settlement_identity_error")[0] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("quota", (np.array([0.20, 0.70]), np.array([0.20, -0.20])))
+def test_settlement_receipts_reject_invalid_ownership_quota(quota: np.ndarray) -> None:
+    country = Country.__new__(Country)
+    country.households = SimpleNamespace(states={"dividend_fund_ownership_quota": quota})
+    country.firms = SimpleNamespace(ts=TimeSeries(dividend_fund_settlement_debit=np.array([1.0])))
+    country.banks = SimpleNamespace(ts=TimeSeries(dividend_fund_settlement_debit=np.array([0.0])))
+
+    with pytest.raises(ValueError, match="ownership quotas"):
+        country.record_dividend_fund_settlement_receipts()

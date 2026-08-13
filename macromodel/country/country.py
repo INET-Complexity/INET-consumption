@@ -2459,6 +2459,7 @@ class Country:
         ts = self.households.ts
         ts.dividend_fund_settled_firm_distribution.append(firm_receipts)
         ts.dividend_fund_settled_bank_distribution.append(bank_receipts)
+        ts.dividend_fund_ownership_quota.append(quota.copy())
         ts.dividend_fund_total_settled_distribution.append([float(firm_receipts.sum() + bank_receipts.sum())])
         ts.dividend_fund_quota_sum.append([quota_sum])
         ts.dividend_fund_firm_settlement_identity_error.append([float(firm_receipts.sum() - firm_debit.sum())])

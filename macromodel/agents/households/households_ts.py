@@ -204,6 +204,8 @@ def create_households_timeseries(
         expected_income_financial_assets=data["Income from Financial Assets"].values,
         income_dividend_distributions=np.zeros(len(data)),
         total_income_dividend_distributions=[0.0],
+        dividend_fund_income_tax_withheld=np.zeros(len(data)),
+        total_dividend_fund_income_tax_withheld=[0.0],
         expected_income_dividend_distributions=np.zeros(len(data)),
         total_expected_income_dividend_distributions=[0.0],
         illiquid_financial_asset_capital_gains=np.zeros(len(data)),

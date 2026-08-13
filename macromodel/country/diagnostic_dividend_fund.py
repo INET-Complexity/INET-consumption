@@ -49,6 +49,28 @@ def _non_negative_state_1d(name: str, values: np.ndarray) -> np.ndarray:
     return np.maximum(array, 0.0)
 
 
+def compute_dividend_income_after_withholding(
+    *,
+    gross_distribution: np.ndarray,
+    income_tax_rate: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return household net dividend income and tax withheld at source.
+
+    The payer-side settlement debit is the gross distribution.  The household
+    receives the net amount as disposable income, while the difference is
+    remitted to government as income tax.
+    """
+    gross = _non_negative_state_1d("gross_distribution", gross_distribution)
+    try:
+        tax_rate = float(income_tax_rate)
+    except (TypeError, ValueError) as error:
+        raise ValueError("income_tax_rate must be a finite scalar between zero and one.") from error
+    if not np.isfinite(tax_rate) or not 0.0 <= tax_rate <= 1.0:
+        raise ValueError("income_tax_rate must be a finite scalar between zero and one.")
+    income_tax_withheld = gross * tax_rate
+    return gross - income_tax_withheld, income_tax_withheld
+
+
 def compute_cash_feasible_firm_distribution_settlement(
     *,
     declared_distribution: np.ndarray,

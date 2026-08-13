@@ -68,6 +68,7 @@ from macromodel.agents.households.households import Households
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
 from macromodel.configurations import CountryConfiguration
+from macromodel.country.diagnostic_dividend_fund import compute_dividend_income_after_withholding
 from macromodel.economy.economy import Economy
 from macromodel.exchange_rates import ExchangeRates
 from macromodel.exogenous.exogenous import Exogenous
@@ -1176,9 +1177,7 @@ class Country:
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
             self.households.ts.expected_income_dividend_distributions.append(expected_dividend_income)
-            self.households.ts.total_expected_income_dividend_distributions.append(
-                [expected_dividend_income.sum()]
-            )
+            self.households.ts.total_expected_income_dividend_distributions.append([expected_dividend_income.sum()])
 
         expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
@@ -2973,10 +2972,15 @@ class Country:
             "illiquid_returns_are_capital_gains",
             False,
         )
-        dividend_income = (
-            self.households.ts.current("dividend_fund_settled_firm_distribution")
-            + self.households.ts.current("dividend_fund_settled_bank_distribution")
+        gross_dividend_income = self.households.ts.current(
+            "dividend_fund_settled_firm_distribution"
+        ) + self.households.ts.current("dividend_fund_settled_bank_distribution")
+        dividend_income, dividend_income_tax_withheld = compute_dividend_income_after_withholding(
+            gross_distribution=gross_dividend_income,
+            income_tax_rate=self.central_government.states["Income Tax"],
         )
+        self.households.ts.dividend_fund_income_tax_withheld.append(dividend_income_tax_withheld)
+        self.households.ts.total_dividend_fund_income_tax_withheld.append([dividend_income_tax_withheld.sum()])
         self.households.ts.income_dividend_distributions.append(dividend_income)
         self.households.ts.total_income_dividend_distributions.append([dividend_income.sum()])
         if paper_returns_are_capital_gains:
@@ -3156,7 +3160,7 @@ class Country:
         # G5. GOVERNMENT REVENUE
         # General government fields
         taxable_household_financial_income = (
-            self.households.ts.current("income_dividend_distributions")
+            gross_dividend_income
             if getattr(self.households.functions["wealth"], "illiquid_returns_are_capital_gains", False)
             else self.households.ts.current("income_financial_assets")
         )

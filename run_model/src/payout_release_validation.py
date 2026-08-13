@@ -76,7 +76,7 @@ def validate_payout_release_file(
     absolute_tolerance: float = 2e-5,
     relative_tolerance: float = 1e-10,
 ) -> PayoutReleaseResult:
-    """Validate payer-funded settlement, receipt, and income timing identities."""
+    """Validate payer-funded settlement, withholding, and income timing identities."""
     path = Path(path)
     with h5py.File(path) as h5_file:
         households = h5_file[f"{country}/households"]
@@ -86,6 +86,10 @@ def validate_payout_release_file(
             "household firm receipt": _read_dataset(households, "dividend_fund_settled_firm_distribution"),
             "household bank receipt": _read_dataset(households, "dividend_fund_settled_bank_distribution"),
             "household dividend income": _read_dataset(households, "income_dividend_distributions"),
+            "household dividend income tax withheld": _read_dataset(
+                households,
+                "dividend_fund_income_tax_withheld",
+            ),
             "expected household dividend income": _read_dataset(
                 households,
                 "expected_income_dividend_distributions",
@@ -121,17 +125,14 @@ def validate_payout_release_file(
     _assert_finite(seed, arrays)
     _assert_non_negative(
         seed,
-        {
-            name: values
-            for name, values in arrays.items()
-            if name != "IFA capital gain"
-        },
+        {name: values for name, values in arrays.items() if name != "IFA capital gain"},
         absolute_tolerance=absolute_tolerance,
     )
 
     firm_receipts = arrays["household firm receipt"][1:].sum(axis=1)
     bank_receipts = arrays["household bank receipt"][1:].sum(axis=1)
     dividend_income = arrays["household dividend income"][1:].sum(axis=1)
+    dividend_income_tax_withheld = arrays["household dividend income tax withheld"][1:].sum(axis=1)
     expected_dividend_income = arrays["expected household dividend income"][1:].sum(axis=1)
     previous_dividend_income = arrays["household dividend income"][:-1].sum(axis=1)
     firm_debits = arrays["firm payer settlement debit"][1:].sum(axis=1)
@@ -140,7 +141,7 @@ def validate_payout_release_file(
 
     firm_receipt_identity_error = firm_receipts - firm_debits
     bank_receipt_identity_error = bank_receipts - bank_debits
-    household_income_identity_error = dividend_income - firm_receipts - bank_receipts
+    household_income_identity_error = dividend_income + dividend_income_tax_withheld - firm_receipts - bank_receipts
     expected_dividend_timing_error = expected_dividend_income - previous_dividend_income
     payer_activity = np.abs(firm_debits) + np.abs(bank_debits)
     receipt_activity = np.abs(firm_receipts) + np.abs(bank_receipts)

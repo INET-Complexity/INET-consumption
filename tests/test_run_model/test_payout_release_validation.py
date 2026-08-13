@@ -31,7 +31,9 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
             [1.0, 0.0],
         ]
     )[: periods + 1]
-    dividend_income = household_firm_receipts + household_bank_receipts
+    gross_dividend_income = household_firm_receipts + household_bank_receipts
+    dividend_income_tax_withheld = 0.25 * gross_dividend_income
+    dividend_income = gross_dividend_income - dividend_income_tax_withheld
     expected_dividend_income = np.vstack((np.zeros(2), dividend_income[:-1]))
     firm_debits = np.array([[0.0], [4.0], [0.0], [8.0]])[: periods + 1]
     bank_debits = np.array([[0.0], [2.0], [0.0], [1.0]])[: periods + 1]
@@ -43,6 +45,7 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
         households["dividend_fund_settled_firm_distribution"] = household_firm_receipts
         households["dividend_fund_settled_bank_distribution"] = household_bank_receipts
         households["income_dividend_distributions"] = dividend_income
+        households["dividend_fund_income_tax_withheld"] = dividend_income_tax_withheld
         households["expected_income_dividend_distributions"] = expected_dividend_income
         households["dividend_fund_ownership_quota"] = quota
         households["illiquid_financial_asset_capital_gains"] = np.array(
@@ -80,6 +83,13 @@ def test__release_validator_accepts_separate_payer_receipts_and_capital_gains(tm
             lambda h5_file: h5_file["FRA/households/income_dividend_distributions"].__setitem__(
                 (1, 0),
                 9.0,
+            ),
+            "household dividend income identity",
+        ),
+        (
+            lambda h5_file: h5_file["FRA/households/dividend_fund_income_tax_withheld"].__setitem__(
+                (1, 0),
+                0.0,
             ),
             "household dividend income identity",
         ),

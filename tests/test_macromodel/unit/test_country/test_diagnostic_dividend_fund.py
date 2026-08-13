@@ -7,6 +7,7 @@ from macromodel.country.country import Country
 from macromodel.country.diagnostic_dividend_fund import (
     compute_cash_feasible_firm_distribution_settlement,
     compute_diagnostic_dividend_fund,
+    compute_dividend_income_after_withholding,
 )
 from macromodel.timeseries import TimeSeries
 
@@ -44,6 +45,26 @@ def test_cash_feasible_settlement_is_junior_to_revolving_repayment() -> None:
 
     np.testing.assert_allclose(settled, [7.0, 3.0])
     np.testing.assert_allclose(shortfall, [1.0, 3.0])
+
+
+def test_dividend_income_is_net_of_source_withholding() -> None:
+    net_income, income_tax_withheld = compute_dividend_income_after_withholding(
+        gross_distribution=np.array([10.0, 30.0]),
+        income_tax_rate=0.25,
+    )
+
+    np.testing.assert_allclose(net_income, [7.5, 22.5])
+    np.testing.assert_allclose(income_tax_withheld, [2.5, 7.5])
+    np.testing.assert_allclose(net_income + income_tax_withheld, [10.0, 30.0])
+
+
+@pytest.mark.parametrize("income_tax_rate", (-0.01, 1.01, np.nan))
+def test_dividend_income_withholding_rejects_invalid_income_tax_rate(income_tax_rate: float) -> None:
+    with pytest.raises(ValueError, match="income_tax_rate"):
+        compute_dividend_income_after_withholding(
+            gross_distribution=np.array([1.0]),
+            income_tax_rate=income_tax_rate,
+        )
 
 
 def test_diagnostic_dividend_fund_with_no_owners_declares_no_distribution() -> None:

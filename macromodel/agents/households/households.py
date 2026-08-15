@@ -2119,7 +2119,7 @@ class Households(Agent):
         self,
         residual_shortfall_after_lfa: np.ndarray,
         banks: Banks,
-        stage4_borrow_vs_sell_inputs: dict[str, np.ndarray],
+        borrow_vs_sell_inputs: dict[str, np.ndarray],
         replace_current: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute and persist the Stage 5 Increment 2 shadow branch choice."""
@@ -2141,11 +2141,11 @@ class Households(Agent):
             )
         result = compute_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float),
-            delta_tilde=stage4_borrow_vs_sell_inputs["delta_tilde"],
-            opening_tfa_scale=stage4_borrow_vs_sell_inputs["opening_tfa_scale"],
-            post_return_ifa=stage4_borrow_vs_sell_inputs["post_return_ifa"],
+            delta_tilde=borrow_vs_sell_inputs["delta_tilde"],
+            opening_tfa_scale=borrow_vs_sell_inputs["opening_tfa_scale"],
+            post_return_ifa=borrow_vs_sell_inputs["post_return_ifa"],
             r_b=bank_rates,
-            r_kappa=stage4_borrow_vs_sell_inputs["r_kappa"],
+            r_kappa=borrow_vs_sell_inputs["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
         )
@@ -2230,13 +2230,13 @@ class Households(Agent):
             self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
         return result
 
-    def build_stage4_borrow_vs_sell_inputs(
+    def build_borrow_vs_sell_inputs(
         self,
         *,
         target_consumption_total: np.ndarray,
         scheduled_debt_service: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Build current-period Stage 4 inputs for the Stage 5 branch choice.
+        """Build current-period inputs for the Stage 5 borrow-versus-sell choice.
 
         This uses the same pure Stage 4 diagnostics helper as
         ``compute_stage4_portfolio_diagnostics()`` but does not persist any

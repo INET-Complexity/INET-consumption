@@ -2636,7 +2636,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "build_stage4_borrow_vs_sell_inputs",
+            "build_borrow_vs_sell_inputs",
             lambda **_kwargs: {
                 "delta_tilde": np.zeros(n_households),
                 "opening_tfa_scale": np.full(n_households, 100.0),

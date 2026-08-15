@@ -1143,8 +1143,18 @@ class TestCountry:
         with pytest.raises(RuntimeError, match="financial wealth"):
             test_country.validate_stage5_closing_balance_sheets()
 
-    def test__stage5_refreshes_household_debt_views_after_market_side_writeoff(self, test_country):
-        test_country.credit_market.states["cons_loans"][0, 0, 0] = 17.0
+    def test__stage5_refreshes_household_debt_views_after_market_side_writeoff(self, test_country, monkeypatch):
+        n_households = int(test_country.households.ts.current("n_households"))
+        consumer_loans = np.zeros((3, 1, n_households))
+        mortgage_loans = np.zeros((3, 1, n_households))
+        consumer_loans[0, 0, 0] = 17.0
+        monkeypatch.setitem(test_country.credit_market.states, "cons_loans", consumer_loans)
+        monkeypatch.setitem(test_country.credit_market.states, "mort_loans", mortgage_loans)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "_consumer_interest_arrears_by_cell",
+            np.zeros_like(consumer_loans[0]),
+        )
         test_country.households.ts.override_current(
             "consumption_loan_debt",
             np.zeros_like(test_country.households.ts.current("consumption_loan_debt")),
@@ -2636,7 +2646,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "current_stage4_handoff_for_stage5",
+            "build_borrow_vs_sell_inputs",
             lambda **_kwargs: {
                 "delta_tilde": np.zeros(n_households),
                 "opening_tfa_scale": np.full(n_households, 100.0),
@@ -2888,7 +2898,7 @@ class TestCountry:
             first_residual,
         )
 
-    def test__set_household_target_demand_uses_real_stage4_handoff_for_borrow_vs_sell(self, test_country, monkeypatch):
+    def test__set_household_target_demand_uses_real_stage4_inputs_for_borrow_vs_sell(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(

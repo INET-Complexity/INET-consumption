@@ -454,6 +454,9 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         dynamic_shifters_enabled: bool = False,
         dynamic_shifters: dict | None = None,
         data_paths: dict | None = None,
+        dividend_fund_payout_ratio: float = 0.0,
+        dividend_fund_firm_payout_ratio: float | None = None,
+        dividend_fund_bank_payout_ratio: float | None = None,
     ):
         super().__init__(other_real_assets_depreciation_rate=other_real_assets_depreciation_rate)
         if draw_scope != "country_period":
@@ -484,6 +487,16 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
             raise ValueError(f"Unsupported participation_source: {participation_source}.")
         if liquid_return_source != "policy_rate_markup":
             raise ValueError(f"Unsupported liquid_return_source: {liquid_return_source}.")
+        if not 0.0 <= dividend_fund_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_payout_ratio must be in [0, 1].")
+        if dividend_fund_firm_payout_ratio is None:
+            dividend_fund_firm_payout_ratio = dividend_fund_payout_ratio
+        if dividend_fund_bank_payout_ratio is None:
+            dividend_fund_bank_payout_ratio = dividend_fund_payout_ratio
+        if not 0.0 <= dividend_fund_firm_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_firm_payout_ratio must be in [0, 1].")
+        if not 0.0 <= dividend_fund_bank_payout_ratio <= 1.0:
+            raise ValueError("dividend_fund_bank_payout_ratio must be in [0, 1].")
         self.mu_eq = mu_eq
         self.mu_bond = mu_bond
         self.sigma_eq = sigma_eq
@@ -491,6 +504,9 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         self.rho = rho
         self.equity_weight = equity_weight
         self.draw_scope = draw_scope
+        self.dividend_fund_payout_ratio = dividend_fund_payout_ratio
+        self.dividend_fund_firm_payout_ratio = dividend_fund_firm_payout_ratio
+        self.dividend_fund_bank_payout_ratio = dividend_fund_bank_payout_ratio
         self._current_illiquid_return_rate: float | None = None
         self._current_illiquid_return_amount: np.ndarray | None = None
         self._current_illiquid_return_period: int | None = None
@@ -554,6 +570,18 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
     ) -> np.ndarray:
+        """Backward-compatible alias for staging an illiquid valuation return."""
+        return self.stage_illiquid_valuation_return(
+            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+            period_index=period_index,
+        )
+
+    def stage_illiquid_valuation_return(
+        self,
+        current_wealth_in_other_financial_assets: np.ndarray,
+        period_index: int | None = None,
+    ) -> np.ndarray:
+        """Draw the current paper IFA valuation return exactly once per period."""
         if self._current_illiquid_return_amount is not None and not self._current_illiquid_return_consumed:
             if period_index is not None:
                 if self._current_illiquid_return_period is None:
@@ -619,12 +647,25 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         current_wealth_in_deposits: np.ndarray,
         current_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
+        illiquid_return_base: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        post_return_other_financial_assets = current_wealth_in_other_financial_assets + self._current_return_amount_for(
-            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
-            period_index=period_index,
+        """Fund shortfalls from IFA after losses but before paper gains are booked."""
+        return_base = (
+            current_wealth_in_other_financial_assets
+            if illiquid_return_base is None
+            else np.asarray(illiquid_return_base, dtype=float)
         )
-        available_other_financial_assets = np.maximum(post_return_other_financial_assets, 0.0)
+        if return_base.shape != current_wealth_in_other_financial_assets.shape:
+            raise ValueError("Illiquid return base must match household financial-asset shape.")
+        valuation_loss = np.minimum(
+            self._current_return_amount_for(
+                current_wealth_in_other_financial_assets=return_base,
+                period_index=period_index,
+            ),
+            0.0,
+        )
+
+        available_other_financial_assets = np.maximum(current_wealth_in_other_financial_assets + valuation_loss, 0.0)
         used_up_wealth_in_other_financial_assets = np.minimum(available_other_financial_assets, used_up_wealth)
         used_up_wealth_in_deposits = np.minimum(
             current_wealth_in_deposits,
@@ -641,11 +682,19 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         new_wealth_in_other_financial_assets: np.ndarray,
         used_up_wealth_in_other_financial_assets: np.ndarray,
         period_index: int | None = None,
+        illiquid_return_base: np.ndarray | None = None,
     ) -> np.ndarray:
+        return_base = (
+            current_wealth_in_other_financial_assets
+            if illiquid_return_base is None
+            else np.asarray(illiquid_return_base, dtype=float)
+        )
+        if return_base.shape != current_wealth_in_other_financial_assets.shape:
+            raise ValueError("Illiquid return base must match household financial-asset shape.")
         updated_wealth = (
             current_wealth_in_other_financial_assets
             + self._current_return_amount_for(
-                current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
+                current_wealth_in_other_financial_assets=return_base,
                 period_index=period_index,
             )
             + new_wealth_in_other_financial_assets

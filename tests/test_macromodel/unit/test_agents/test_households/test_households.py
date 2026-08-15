@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import is_dataclass, replace
 from types import SimpleNamespace
 
@@ -78,6 +79,38 @@ class TestHouseholds:
             "ficp_exclusion_remaining_periods",
         ]:
             assert field_name in test_households.ts.get_keys()
+
+    def test__from_pickled_agent_rejects_missing_direct_share_data_when_payout_is_enabled(self, datawrapper):
+        country = datawrapper.synthetic_countries["FRA"]
+        population = deepcopy(country.population)
+        population.household_data = population.household_data.drop(columns="Initial Direct Share Fraction")
+        configuration = HouseholdsConfiguration()
+        configuration.functions.wealth.name = "PaperAssetReturnWealthSetter"
+        configuration.functions.wealth.parameters = {
+            "other_real_assets_depreciation_rate": 0.05,
+            "mu_eq": 0.0029,
+            "mu_bond": 0.0081,
+            "sigma_eq": 0.0,
+            "sigma_bond": 0.0,
+            "rho": 0.0,
+            "equity_weight": 0.5,
+            "dividend_fund_payout_ratio": 0.10,
+        }
+
+        with pytest.raises(ValueError, match="Initial Direct Share Fraction is required"):
+            households_module.Households.from_pickled_agent(
+                synthetic_population=population,
+                configuration=configuration,
+                country_name="FRA",
+                all_country_names=["FRA", "ROW"],
+                industries=datawrapper.industries,
+                initial_consumption_by_industry=country.industry_data["industry_vectors"][
+                    "Household Consumption in LCU"
+                ],
+                value_added_tax=country.tax_data.value_added_tax,
+                scale=datawrapper.configuration.country_configs["FRA"].scale,
+                synthetic_country=country,
+            )
 
     def test__handle_insolvency_supports_legacy_handler_signature(self, test_households, monkeypatch):
         class LegacyHandler:
@@ -916,6 +949,61 @@ class TestHouseholds:
 
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 16.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 23.0))
+
+    def test__paper_asset_dividends_enter_expected_and_realised_income(self, test_households):
+        from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
+
+        n_households = test_households.ts.current("n_households")
+        test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
+            other_real_assets_depreciation_rate=0.05,
+            mu_eq=0.10,
+            mu_bond=0.02,
+            sigma_eq=0.20,
+            sigma_bond=0.10,
+            rho=0.25,
+            equity_weight=0.75,
+        )
+        components = {
+            "expected_income_employee": 2.0,
+            "expected_income_social_transfers": 3.0,
+            "income_employee": 5.0,
+            "income_social_transfers": 7.0,
+            "income_rental": 11.0,
+            "expected_income_dividend_distributions": 13.0,
+            "income_dividend_distributions": 17.0,
+            "income_financial_assets": 19.0,
+        }
+        for field, value in components.items():
+            test_households.ts.override_current(field, np.full(n_households, value))
+
+        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
+        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
+
+    def test__expected_dividend_income_ignores_current_unsettled_receipts(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        prior_settled_income = np.full(n_households, 7.0)
+        test_households.ts.override_current("income_dividend_distributions", prior_settled_income)
+        test_households.ts.override_current(
+            "dividend_fund_settled_firm_distribution",
+            np.full(n_households, 100.0),
+        )
+        test_households.ts.override_current(
+            "dividend_fund_settled_bank_distribution",
+            np.full(n_households, 50.0),
+        )
+
+        np.testing.assert_allclose(
+            test_households.compute_expected_dividend_income(),
+            prior_settled_income,
+        )
+
+    def test__residual_illiquid_return_base_excludes_fixed_direct_share_proxy(self, test_households):
+        direct_share_fraction = np.array([0.0, 0.25, 1.0])
+        test_households.states["dividend_fund_initial_direct_share_fraction"] = direct_share_fraction
+
+        return_base = test_households.residual_illiquid_return_base(np.array([100.0, 80.0, -10.0]))
+
+        np.testing.assert_allclose(return_base, [100.0, 60.0, 0.0])
 
     # def test__households_ts(self, test_households):
     #     for ts_key in [
@@ -3215,7 +3303,7 @@ class TestComputeTargetCreditLiveCreditRequested:
 class TestComputeAndRecordBorrowVsSellChoice:
     """Stage 5 (feasibility resolver) Increment 2: borrow-vs-sell diagnostic."""
 
-    def test__uses_stage4_handoff_and_mean_offered_rate(self, test_households, test_banks):
+    def test__uses_borrow_vs_sell_inputs_and_mean_offered_rate(self, test_households, test_banks):
         n_households = test_households.ts.current("n_households")
         residual = np.resize(np.asarray([10.0, 10.0]), n_households)
         test_households.functions["wealth"].phi_1 = 1.0
@@ -3229,7 +3317,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("portfolio_target_illiquid_assets", np.full(n_households, 10.0))
         test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3239,7 +3327,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=residual,
             banks=test_banks,
-            stage4_handoff=stage4_handoff,
+            borrow_vs_sell_inputs=borrow_vs_sell_inputs,
         )
 
         np.testing.assert_array_equal(
@@ -3259,7 +3347,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
         test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3269,7 +3357,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 10.0),
             test_banks,
-            stage4_handoff,
+            borrow_vs_sell_inputs,
         )
         before_lengths = {
             key: len(test_households.ts.dicts[key])
@@ -3286,7 +3374,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 0.0),
             test_banks,
-            stage4_handoff,
+            borrow_vs_sell_inputs,
             replace_current=True,
         )
 
@@ -3314,7 +3402,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
             ]
         }
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3324,13 +3412,13 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 10.0),
             test_banks,
-            stage4_handoff,
+            borrow_vs_sell_inputs,
         )
 
         for key, values in baseline.items():
             np.testing.assert_allclose(test_households.ts.current(key), values)
 
-    def test__current_stage4_handoff_adds_positive_surplus_before_calling_stage4_helper(
+    def test__build_borrow_vs_sell_inputs_adds_positive_surplus_before_calling_stage4_helper(
         self, test_households, monkeypatch
     ):
         n_households = test_households.ts.current("n_households")
@@ -3387,7 +3475,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
 
-        test_households.current_stage4_handoff_for_stage5(
+        test_households.build_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
@@ -3395,7 +3483,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         np.testing.assert_allclose(captured["investable_surplus"], np.full(n_households, 50.0))
         np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 50.0))
 
-    def test__current_stage4_handoff_uses_post_return_ifa_before_calling_stage4_helper(
+    def test__build_borrow_vs_sell_inputs_uses_pre_settlement_ifa_before_calling_stage4_helper(
         self, test_households, monkeypatch
     ):
         n_households = test_households.ts.current("n_households")
@@ -3421,10 +3509,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.functions["wealth"].compute_income_from_financial_assets(
             current_wealth_in_other_financial_assets=test_households.ts.current("illiquid_financial_assets"),
         )
-        expected_post_return_ifa = (
-            test_households.ts.current("illiquid_financial_assets")
-            + test_households.current_illiquid_financial_asset_return_amount()
-        )
+        expected_pre_settlement_ifa = test_households.ts.current("illiquid_financial_assets")
         captured = {}
 
         def fake_stage4_helper(**kwargs):
@@ -3459,14 +3544,14 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
 
-        test_households.current_stage4_handoff_for_stage5(
+        test_households.build_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        np.testing.assert_allclose(captured["post_return_ifa"], expected_post_return_ifa)
+        np.testing.assert_allclose(captured["post_return_ifa"], expected_pre_settlement_ifa)
 
-    def test__current_stage4_handoff_draws_current_return_when_not_pre_drawn(self, test_households, monkeypatch):
+    def test__build_borrow_vs_sell_inputs_stages_return_without_projecting_it(self, test_households, monkeypatch):
         n_households = test_households.ts.current("n_households")
         test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
             other_real_assets_depreciation_rate=0.05,
@@ -3489,13 +3574,16 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
         monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
 
-        handoff = test_households.current_stage4_handoff_for_stage5(
+        borrow_vs_sell_inputs = test_households.build_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        np.testing.assert_allclose(handoff["post_return_ifa"], np.full(n_households, 30.0))
-        np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
+        np.testing.assert_allclose(
+            borrow_vs_sell_inputs["post_return_ifa"],
+            test_households.ts.current("illiquid_financial_assets"),
+        )
+        np.testing.assert_allclose(borrow_vs_sell_inputs["r_kappa"], np.full(n_households, 0.2))
 
 
 class TestComputeAndRecordResidualCapacityFallback:

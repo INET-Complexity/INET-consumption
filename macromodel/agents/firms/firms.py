@@ -2036,6 +2036,9 @@ class Firms(Agent):
         operating_revolving_repayment = np.nan_to_num(
             np.asarray(self.ts.current("operating_revolving_repayment"), dtype=float)
         )
+        dividend_fund_settlement_debit = np.nan_to_num(
+            np.asarray(self.ts.current("dividend_fund_settlement_debit"), dtype=float)
+        )
 
         expected_closing_deposits = (
             opening_deposits
@@ -2051,6 +2054,7 @@ class Firms(Agent):
             - received_operating_refinance_credit
             - operating_revolving_repayment
             - debt_installments
+            - dividend_fund_settlement_debit
         )
         transaction_flow_residual = expected_closing_deposits - closing_deposits
 
@@ -2069,6 +2073,7 @@ class Firms(Agent):
                 np.abs(received_operating_refinance_credit),
                 np.abs(operating_revolving_repayment),
                 np.abs(debt_installments),
+                np.abs(dividend_fund_settlement_debit),
                 np.abs(closing_deposits),
             ]
         )
@@ -3582,6 +3587,7 @@ class Firms(Agent):
             - self.ts.current("received_operating_refinance_credit")
             - self.ts.current("operating_revolving_repayment")
             - self.ts.current("debt_installments")
+            - self.ts.current("dividend_fund_settlement_debit")
         )
 
     def direct_tfp_investment_cash_expense(self) -> np.ndarray:

@@ -1052,7 +1052,7 @@ def build_macro_output_df(model, country_code):
     bank_assets = None
     banks_ts = getattr(getattr(country, "banks", None), "ts", None)
     bank_deposits = add_column("bank_deposits", aggregate_agent_ts(banks_ts, "deposits"))
-    bank_equity = add_column("bank_equity", aggregate_agent_ts(banks_ts, "equity"))
+    add_column("bank_equity", aggregate_agent_ts(banks_ts, "equity"))
     bank_total_loans = add_column(
         "bank_total_outstanding_loans",
         aggregate_agent_ts(banks_ts, "total_outstanding_loans"),

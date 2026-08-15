@@ -20,6 +20,8 @@ class PayoutReleaseResult:
     max_bank_receipt_identity_error: float
     max_household_income_identity_error: float
     max_expected_dividend_timing_error: float
+    max_firm_declaration_settlement_error: float
+    max_bank_declaration_settlement_error: float
     max_absolute_capital_gain: float
 
 
@@ -48,6 +50,13 @@ def _require_same_period_count(seed: int, arrays: dict[str, np.ndarray]) -> int:
     if period_count < 0:
         raise AssertionError(f"Seed {seed} has no initial payout diagnostic row.")
     return period_count
+
+
+def _require_same_shape(seed: int, name: str, *values: np.ndarray) -> None:
+    """Require payer-level vectors to retain their entity alignment."""
+    shapes = {value.shape for value in values}
+    if len(shapes) != 1:
+        raise AssertionError(f"Seed {seed} has inconsistent {name} shapes: {sorted(shapes)}.")
 
 
 def _assert_finite(seed: int, arrays: dict[str, np.ndarray]) -> None:
@@ -95,7 +104,27 @@ def validate_payout_release_file(
                 "expected_income_dividend_distributions",
             ),
             "ownership quota": _read_dataset(households, "dividend_fund_ownership_quota"),
+            "household firm declaration": _read_dataset(
+                households,
+                "dividend_fund_declared_firm_distribution",
+            ),
+            "household bank declaration": _read_dataset(
+                households,
+                "dividend_fund_declared_bank_distribution",
+            ),
+            "firm distributable profit candidate": _read_dataset(
+                firms,
+                "dividend_fund_cash_distributable_profit_candidate",
+            ),
+            "firm payer declaration": _read_dataset(firms, "dividend_fund_declared_distribution"),
+            "firm retained capacity": _read_dataset(firms, "dividend_fund_retained_capacity"),
             "firm payer settlement debit": _read_dataset(firms, "dividend_fund_settlement_debit"),
+            "bank distributable profit candidate": _read_dataset(
+                banks,
+                "dividend_fund_cash_distributable_profit_candidate",
+            ),
+            "bank payer declaration": _read_dataset(banks, "dividend_fund_declared_distribution"),
+            "bank retained capacity": _read_dataset(banks, "dividend_fund_retained_capacity"),
             "bank payer settlement debit": _read_dataset(banks, "dividend_fund_settlement_debit"),
             "firm settlement identity": _read_dataset(
                 households,
@@ -129,6 +158,38 @@ def validate_payout_release_file(
         absolute_tolerance=absolute_tolerance,
     )
 
+    _require_same_shape(
+        seed,
+        "firm declaration ledger",
+        arrays["firm distributable profit candidate"],
+        arrays["firm payer declaration"],
+        arrays["firm retained capacity"],
+        arrays["firm payer settlement debit"],
+        arrays["firm settlement shortfall"],
+    )
+    _require_same_shape(
+        seed,
+        "bank declaration ledger",
+        arrays["bank distributable profit candidate"],
+        arrays["bank payer declaration"],
+        arrays["bank retained capacity"],
+        arrays["bank payer settlement debit"],
+    )
+    _require_same_shape(
+        seed,
+        "household firm declaration allocation",
+        arrays["ownership quota"],
+        arrays["household firm declaration"],
+        arrays["household firm receipt"],
+    )
+    _require_same_shape(
+        seed,
+        "household bank declaration allocation",
+        arrays["ownership quota"],
+        arrays["household bank declaration"],
+        arrays["household bank receipt"],
+    )
+
     firm_receipts = arrays["household firm receipt"][1:].sum(axis=1)
     bank_receipts = arrays["household bank receipt"][1:].sum(axis=1)
     dividend_income = arrays["household dividend income"][1:].sum(axis=1)
@@ -139,10 +200,44 @@ def validate_payout_release_file(
     bank_debits = arrays["bank payer settlement debit"][1:].sum(axis=1)
     quota_sums = arrays["ownership quota"][1:].sum(axis=1)
 
+    firm_declaration_capacity_error = (
+        arrays["firm distributable profit candidate"]
+        - arrays["firm payer declaration"]
+        - arrays["firm retained capacity"]
+    )
+    bank_declaration_capacity_error = (
+        arrays["bank distributable profit candidate"]
+        - arrays["bank payer declaration"]
+        - arrays["bank retained capacity"]
+    )
+    firm_declaration_allocation_error = arrays["household firm declaration"] - (
+        arrays["ownership quota"] * arrays["firm payer declaration"].sum(axis=1, keepdims=True)
+    )
+    bank_declaration_allocation_error = arrays["household bank declaration"] - (
+        arrays["ownership quota"] * arrays["bank payer declaration"].sum(axis=1, keepdims=True)
+    )
+    firm_declaration_settlement_error = (
+        arrays["firm payer declaration"][:-1]
+        - arrays["firm payer settlement debit"][1:]
+        - arrays["firm settlement shortfall"][1:]
+    )
+    bank_declaration_settlement_error = (
+        arrays["bank payer declaration"][:-1] - arrays["bank payer settlement debit"][1:]
+    )
+    firm_receipt_allocation_error = arrays["household firm receipt"] - (
+        arrays["ownership quota"] * arrays["firm payer settlement debit"].sum(axis=1, keepdims=True)
+    )
+    bank_receipt_allocation_error = arrays["household bank receipt"] - (
+        arrays["ownership quota"] * arrays["bank payer settlement debit"].sum(axis=1, keepdims=True)
+    )
+
     firm_receipt_identity_error = firm_receipts - firm_debits
     bank_receipt_identity_error = bank_receipts - bank_debits
     household_income_identity_error = dividend_income + dividend_income_tax_withheld - firm_receipts - bank_receipts
     expected_dividend_timing_error = expected_dividend_income - previous_dividend_income
+    declaration_activity = np.abs(arrays["firm payer declaration"][1:]).sum(axis=1) + np.abs(
+        arrays["bank payer declaration"][1:]
+    ).sum(axis=1)
     payer_activity = np.abs(firm_debits) + np.abs(bank_debits)
     receipt_activity = np.abs(firm_receipts) + np.abs(bank_receipts)
     invalid_quota = ~(
@@ -152,13 +247,23 @@ def validate_payout_release_file(
     if np.any(invalid_quota):
         raise AssertionError(f"Seed {seed} has invalid fixed ownership quota sums.")
     no_owner_payout = np.isclose(quota_sums, 0.0, atol=absolute_tolerance, rtol=relative_tolerance) & (
-        (payer_activity > absolute_tolerance) | (receipt_activity > absolute_tolerance)
+        (declaration_activity > absolute_tolerance)
+        | (payer_activity > absolute_tolerance)
+        | (receipt_activity > absolute_tolerance)
     )
     if np.any(no_owner_payout):
-        raise AssertionError(f"Seed {seed} pays a dividend despite having no direct-share owners.")
+        raise AssertionError(f"Seed {seed} records a dividend despite having no direct-share owners.")
     checks = {
+        "firm declaration capacity identity": firm_declaration_capacity_error,
+        "bank declaration capacity identity": bank_declaration_capacity_error,
+        "firm declaration allocation": firm_declaration_allocation_error,
+        "bank declaration allocation": bank_declaration_allocation_error,
+        "firm declaration-to-settlement identity": firm_declaration_settlement_error,
+        "bank declaration-to-settlement identity": bank_declaration_settlement_error,
         "firm payer-to-receipt identity": firm_receipt_identity_error,
         "bank payer-to-receipt identity": bank_receipt_identity_error,
+        "firm receipt allocation": firm_receipt_allocation_error,
+        "bank receipt allocation": bank_receipt_allocation_error,
         "household dividend income identity": household_income_identity_error,
         "expected dividend timing": expected_dividend_timing_error,
         "firm settlement identity diagnostic": arrays["firm settlement identity"][1:],
@@ -176,6 +281,8 @@ def validate_payout_release_file(
         max_bank_receipt_identity_error=_maximum_absolute(bank_receipt_identity_error),
         max_household_income_identity_error=_maximum_absolute(household_income_identity_error),
         max_expected_dividend_timing_error=_maximum_absolute(expected_dividend_timing_error),
+        max_firm_declaration_settlement_error=_maximum_absolute(firm_declaration_settlement_error),
+        max_bank_declaration_settlement_error=_maximum_absolute(bank_declaration_settlement_error),
         max_absolute_capital_gain=_maximum_absolute(arrays["IFA capital gain"][1:]),
     )
 

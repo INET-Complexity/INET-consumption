@@ -15,7 +15,8 @@ from src.payout_release_validation import validate_payout_release_envelope  # no
 def _write_release_file(path: Path, *, periods: int = 3) -> None:
     """Write a minimal HDF5 payout ledger with declaration/settlement lag."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    household_firm_receipts = np.array(
+    quota = np.tile(np.array([[0.25, 0.75]]), (periods + 1, 1))
+    firm_declarations = np.array(
         [
             [0.0, 0.0],
             [1.0, 3.0],
@@ -23,21 +24,67 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
             [2.0, 6.0],
         ]
     )[: periods + 1]
+    bank_declarations = np.array(
+        [
+            [0.0, 0.0],
+            [0.5, 1.5],
+            [0.0, 0.0],
+            [0.25, 0.75],
+        ]
+    )[: periods + 1]
+    firm_retained_capacity = np.array(
+        [
+            [0.0, 0.0],
+            [0.5, 1.5],
+            [0.0, 0.0],
+            [2.0, 4.0],
+        ]
+    )[: periods + 1]
+    bank_retained_capacity = np.array(
+        [
+            [0.0, 0.0],
+            [0.5, 0.5],
+            [0.0, 0.0],
+            [0.25, 0.25],
+        ]
+    )[: periods + 1]
+    firm_debits = np.array(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [1.0, 3.0],
+            [0.0, 0.0],
+        ]
+    )[: periods + 1]
+    bank_debits = np.array(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [0.5, 1.5],
+            [0.0, 0.0],
+        ]
+    )[: periods + 1]
+    firm_shortfall = np.zeros_like(firm_debits)
+    household_firm_receipts = np.array(
+        [
+            [0.0, 0.0],
+            [0.0, 0.0],
+            [1.0, 3.0],
+            [0.0, 0.0],
+        ]
+    )[: periods + 1]
     household_bank_receipts = np.array(
         [
             [0.0, 0.0],
-            [2.0, 0.0],
             [0.0, 0.0],
-            [1.0, 0.0],
+            [0.5, 1.5],
+            [0.0, 0.0],
         ]
     )[: periods + 1]
     gross_dividend_income = household_firm_receipts + household_bank_receipts
     dividend_income_tax_withheld = 0.25 * gross_dividend_income
     dividend_income = gross_dividend_income - dividend_income_tax_withheld
     expected_dividend_income = np.vstack((np.zeros(2), dividend_income[:-1]))
-    firm_debits = np.array([[0.0], [4.0], [0.0], [8.0]])[: periods + 1]
-    bank_debits = np.array([[0.0], [2.0], [0.0], [1.0]])[: periods + 1]
-    quota = np.tile(np.array([[0.25, 0.75]]), (periods + 1, 1))
     with h5py.File(path, "w") as h5_file:
         households = h5_file.create_group("FRA/households")
         firms = h5_file.create_group("FRA/firms")
@@ -48,6 +95,8 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
         households["dividend_fund_income_tax_withheld"] = dividend_income_tax_withheld
         households["expected_income_dividend_distributions"] = expected_dividend_income
         households["dividend_fund_ownership_quota"] = quota
+        households["dividend_fund_declared_firm_distribution"] = quota * firm_declarations.sum(axis=1, keepdims=True)
+        households["dividend_fund_declared_bank_distribution"] = quota * bank_declarations.sum(axis=1, keepdims=True)
         households["illiquid_financial_asset_capital_gains"] = np.array(
             [[0.0, 0.0], [8.0, -4.0], [0.0, 0.0], [6.0, 2.0]]
         )[: periods + 1]
@@ -57,8 +106,14 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
             "dividend_fund_settlement_identity_error",
         ):
             households[name] = np.zeros((periods + 1, 1))
+        firms["dividend_fund_cash_distributable_profit_candidate"] = firm_declarations + firm_retained_capacity
+        firms["dividend_fund_declared_distribution"] = firm_declarations
+        firms["dividend_fund_retained_capacity"] = firm_retained_capacity
         firms["dividend_fund_settlement_debit"] = firm_debits
-        firms["dividend_fund_settlement_shortfall"] = np.zeros_like(firm_debits)
+        firms["dividend_fund_settlement_shortfall"] = firm_shortfall
+        banks["dividend_fund_cash_distributable_profit_candidate"] = bank_declarations + bank_retained_capacity
+        banks["dividend_fund_declared_distribution"] = bank_declarations
+        banks["dividend_fund_retained_capacity"] = bank_retained_capacity
         banks["dividend_fund_settlement_debit"] = bank_debits
 
 
@@ -73,7 +128,23 @@ def test__release_validator_accepts_separate_payer_receipts_and_capital_gains(tm
     assert all(result.max_bank_receipt_identity_error == 0.0 for result in results)
     assert all(result.max_household_income_identity_error == 0.0 for result in results)
     assert all(result.max_expected_dividend_timing_error == 0.0 for result in results)
+    assert all(result.max_firm_declaration_settlement_error == 0.0 for result in results)
+    assert all(result.max_bank_declaration_settlement_error == 0.0 for result in results)
     assert all(result.max_absolute_capital_gain == pytest.approx(8.0) for result in results)
+
+
+def test__release_validator_allows_final_unsettled_declarations(tmp_path: Path) -> None:
+    path = tmp_path / "seed-13" / "multi_country_simulation.h5"
+    _write_release_file(path)
+
+    with h5py.File(path) as h5_file:
+        assert h5_file["FRA/firms/dividend_fund_declared_distribution"][-1].sum() > 0.0
+        assert h5_file["FRA/banks/dividend_fund_declared_distribution"][-1].sum() > 0.0
+
+    results = validate_payout_release_envelope(tmp_path, seeds=(13,), expected_periods=3)
+
+    assert results[0].max_firm_declaration_settlement_error == 0.0
+    assert results[0].max_bank_declaration_settlement_error == 0.0
 
 
 @pytest.mark.parametrize(
@@ -81,28 +152,28 @@ def test__release_validator_accepts_separate_payer_receipts_and_capital_gains(tm
     (
         (
             lambda h5_file: h5_file["FRA/households/income_dividend_distributions"].__setitem__(
-                (1, 0),
+                (2, 0),
                 9.0,
             ),
             "household dividend income identity",
         ),
         (
             lambda h5_file: h5_file["FRA/households/dividend_fund_income_tax_withheld"].__setitem__(
-                (1, 0),
+                (2, 0),
                 0.0,
             ),
             "household dividend income identity",
         ),
         (
             lambda h5_file: h5_file["FRA/households/dividend_fund_settled_firm_distribution"].__setitem__(
-                (1, 0),
+                (2, 0),
                 2.0,
             ),
             "firm payer-to-receipt identity",
         ),
         (
             lambda h5_file: h5_file["FRA/households/expected_income_dividend_distributions"].__setitem__(
-                (2, 0),
+                (3, 0),
                 0.0,
             ),
             "expected dividend timing",
@@ -113,6 +184,34 @@ def test__release_validator_accepts_separate_payer_receipts_and_capital_gains(tm
                 0.50,
             ),
             "invalid fixed ownership quota sums",
+        ),
+        (
+            lambda h5_file: h5_file["FRA/firms/dividend_fund_settlement_shortfall"].__setitem__(
+                (2, 0),
+                1.0,
+            ),
+            "firm declaration-to-settlement identity",
+        ),
+        (
+            lambda h5_file: h5_file["FRA/banks/dividend_fund_settlement_debit"].__setitem__(
+                (2, 0),
+                1.0,
+            ),
+            "bank declaration-to-settlement identity",
+        ),
+        (
+            lambda h5_file: h5_file["FRA/households/dividend_fund_declared_firm_distribution"].__setitem__(
+                (1, 0),
+                2.0,
+            ),
+            "firm declaration allocation",
+        ),
+        (
+            lambda h5_file: h5_file["FRA/firms/dividend_fund_retained_capacity"].__setitem__(
+                (1, 0),
+                1.0,
+            ),
+            "firm declaration capacity identity",
         ),
     ),
 )

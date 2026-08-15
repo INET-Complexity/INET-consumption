@@ -78,6 +78,30 @@ def test__paper_asset_return_adds_residual_proxy_gain_to_aggregate_ifa() -> None
     np.testing.assert_allclose(closing_ifa, [86.0])
 
 
+def test__paper_asset_return_cannot_fund_a_same_period_cash_shortfall() -> None:
+    setter = _paper_setter(mu_eq=np.log(1.1), mu_bond=np.log(1.1), equity_weight=0.5)
+
+    setter.stage_illiquid_valuation_return(np.array([100.0]), period_index=1)
+    used_deposits, used_ifa = setter.use_up_wealth(
+        used_up_wealth=np.array([105.0]),
+        current_wealth_in_deposits=np.array([0.0]),
+        current_wealth_in_other_financial_assets=np.array([100.0]),
+        period_index=1,
+        illiquid_return_base=np.array([100.0]),
+    )
+    closing_ifa = setter.compute_wealth_in_other_financial_assets(
+        current_wealth_in_other_financial_assets=np.array([100.0]),
+        new_wealth_in_other_financial_assets=np.array([0.0]),
+        used_up_wealth_in_other_financial_assets=used_ifa,
+        period_index=1,
+        illiquid_return_base=np.array([100.0]),
+    )
+
+    np.testing.assert_allclose(used_deposits, [0.0])
+    np.testing.assert_allclose(used_ifa, [100.0])
+    np.testing.assert_allclose(closing_ifa, [10.0])
+
+
 def test__paper_asset_return_wealth_setter_seeded_draw_is_reproducible():
     opening_ifa = np.array([100.0, 200.0])
     setter = _paper_setter(sigma_eq=0.0935, sigma_bond=0.0316, rho=-0.2585)

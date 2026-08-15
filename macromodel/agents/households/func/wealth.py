@@ -649,6 +649,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         period_index: int | None = None,
         illiquid_return_base: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
+        """Fund shortfalls from IFA after losses but before paper gains are booked."""
         return_base = (
             current_wealth_in_other_financial_assets
             if illiquid_return_base is None
@@ -656,11 +657,15 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
         )
         if return_base.shape != current_wealth_in_other_financial_assets.shape:
             raise ValueError("Illiquid return base must match household financial-asset shape.")
-        post_return_other_financial_assets = current_wealth_in_other_financial_assets + self._current_return_amount_for(
-            current_wealth_in_other_financial_assets=return_base,
-            period_index=period_index,
+        valuation_loss = np.minimum(
+            self._current_return_amount_for(
+                current_wealth_in_other_financial_assets=return_base,
+                period_index=period_index,
+            ),
+            0.0,
         )
-        available_other_financial_assets = np.maximum(post_return_other_financial_assets, 0.0)
+
+        available_other_financial_assets = np.maximum(current_wealth_in_other_financial_assets + valuation_loss, 0.0)
         used_up_wealth_in_other_financial_assets = np.minimum(available_other_financial_assets, used_up_wealth)
         used_up_wealth_in_deposits = np.minimum(
             current_wealth_in_deposits,

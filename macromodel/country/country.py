@@ -1321,14 +1321,14 @@ class Country:
         else:
             self.households.clear_pre_grant_feasible_plan()
             stage5_residual_shortfall = residual_shortfall_after_lfa
-        stage4_handoff = self.households.current_stage4_handoff_for_stage5(
+        stage4_borrow_vs_sell_inputs = self.households.build_stage4_borrow_vs_sell_inputs(
             target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
             scheduled_debt_service=scheduled_debt_service,
         )
         self.households.compute_and_record_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=stage5_residual_shortfall,
             banks=self.banks,
-            stage4_handoff=stage4_handoff,
+            stage4_borrow_vs_sell_inputs=stage4_borrow_vs_sell_inputs,
             replace_current=replace_current,
         )
         consumer_credit_parameters = getattr(self.configuration, "consumer_credit", {}) or {}

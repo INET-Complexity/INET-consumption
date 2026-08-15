@@ -2119,7 +2119,7 @@ class Households(Agent):
         self,
         residual_shortfall_after_lfa: np.ndarray,
         banks: Banks,
-        stage4_handoff: dict[str, np.ndarray],
+        stage4_borrow_vs_sell_inputs: dict[str, np.ndarray],
         replace_current: bool = False,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Compute and persist the Stage 5 Increment 2 shadow branch choice."""
@@ -2141,11 +2141,11 @@ class Households(Agent):
             )
         result = compute_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=np.asarray(residual_shortfall_after_lfa, dtype=float),
-            delta_tilde=stage4_handoff["delta_tilde"],
-            opening_tfa_scale=stage4_handoff["opening_tfa_scale"],
-            post_return_ifa=stage4_handoff["post_return_ifa"],
+            delta_tilde=stage4_borrow_vs_sell_inputs["delta_tilde"],
+            opening_tfa_scale=stage4_borrow_vs_sell_inputs["opening_tfa_scale"],
+            post_return_ifa=stage4_borrow_vs_sell_inputs["post_return_ifa"],
             r_b=bank_rates,
-            r_kappa=stage4_handoff["r_kappa"],
+            r_kappa=stage4_borrow_vs_sell_inputs["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
         )
@@ -2230,18 +2230,21 @@ class Households(Agent):
             self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
         return result
 
-    def current_stage4_handoff_for_stage5(
+    def build_stage4_borrow_vs_sell_inputs(
         self,
         *,
         target_consumption_total: np.ndarray,
         scheduled_debt_service: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Build the current-period Stage 4 handoff needed by Stage 5.
+        """Build current-period Stage 4 inputs for the Stage 5 branch choice.
 
         This uses the same pure Stage 4 diagnostics helper as
         ``compute_stage4_portfolio_diagnostics()`` but does not persist any
-        ``portfolio_*`` time series. When portfolio choice is disabled, the
-        returned arrays intentionally force the Increment 2 fallback path.
+        ``portfolio_*`` time series. Its IFA input is the pre-settlement stock:
+        the current paper return rate may be staged for the comparison, but its
+        cashless valuation gain is not available before Stage 5 liquidation.
+        When portfolio choice is disabled, the returned arrays intentionally
+        force the Increment 2 fallback path.
         """
         n_households = self.ts.current("n_households")
         wealth_function = self.functions["wealth"]
@@ -2256,14 +2259,10 @@ class Households(Agent):
         opening_tfa_scale = self.ts.prev("illiquid_financial_assets") + self.ts.prev("liquid_financial_assets")
         current_ifa = self.ts.current("illiquid_financial_assets")
         return_base = self.residual_illiquid_return_base(current_ifa)
-        current_return_amount = self.current_illiquid_financial_asset_return_amount(
-            current_wealth_in_other_financial_assets=return_base,
-        )
-        if not np.all(np.isfinite(current_return_amount)):
-            current_return_amount = self.stage_illiquid_valuation_return(
+        if not np.isfinite(self.current_illiquid_financial_asset_return_rate()):
+            self.stage_illiquid_valuation_return(
                 current_wealth_in_other_financial_assets=return_base,
             )
-        post_return_ifa = current_ifa + current_return_amount
         investable_surplus = (
             self.ts.current("expected_income")
             - np.asarray(target_consumption_total, dtype=float)
@@ -2293,7 +2292,7 @@ class Households(Agent):
         diagnostics = compute_stage4_household_diagnostics(
             opening_tfa_scale=opening_tfa_scale,
             post_surplus_lfa=post_surplus_lfa,
-            post_return_ifa=post_return_ifa,
+            post_return_ifa=current_ifa,
             investable_surplus=investable_surplus,
             frm_covariates=frm_covariates,
             frm_magnitude_coefficients=frm_magnitude_coefficients,

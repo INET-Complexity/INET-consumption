@@ -2636,7 +2636,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "current_stage4_handoff_for_stage5",
+            "build_stage4_borrow_vs_sell_inputs",
             lambda **_kwargs: {
                 "delta_tilde": np.zeros(n_households),
                 "opening_tfa_scale": np.full(n_households, 100.0),
@@ -2888,7 +2888,7 @@ class TestCountry:
             first_residual,
         )
 
-    def test__set_household_target_demand_uses_real_stage4_handoff_for_borrow_vs_sell(self, test_country, monkeypatch):
+    def test__set_household_target_demand_uses_real_stage4_inputs_for_borrow_vs_sell(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(

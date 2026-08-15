@@ -3303,7 +3303,7 @@ class TestComputeTargetCreditLiveCreditRequested:
 class TestComputeAndRecordBorrowVsSellChoice:
     """Stage 5 (feasibility resolver) Increment 2: borrow-vs-sell diagnostic."""
 
-    def test__uses_stage4_handoff_and_mean_offered_rate(self, test_households, test_banks):
+    def test__uses_stage4_borrow_vs_sell_inputs_and_mean_offered_rate(self, test_households, test_banks):
         n_households = test_households.ts.current("n_households")
         residual = np.resize(np.asarray([10.0, 10.0]), n_households)
         test_households.functions["wealth"].phi_1 = 1.0
@@ -3317,7 +3317,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("portfolio_target_illiquid_assets", np.full(n_households, 10.0))
         test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        stage4_borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3327,7 +3327,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
             residual_shortfall_after_lfa=residual,
             banks=test_banks,
-            stage4_handoff=stage4_handoff,
+            stage4_borrow_vs_sell_inputs=stage4_borrow_vs_sell_inputs,
         )
 
         np.testing.assert_array_equal(
@@ -3347,7 +3347,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("portfolio_post_return_ifa", np.full(n_households, 25.0))
         test_households.ts.override_current("portfolio_illiquid_return_rate", np.full(n_households, 0.02))
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        stage4_borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3357,7 +3357,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 10.0),
             test_banks,
-            stage4_handoff,
+            stage4_borrow_vs_sell_inputs,
         )
         before_lengths = {
             key: len(test_households.ts.dicts[key])
@@ -3374,7 +3374,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         preferred_margin, preferred_amount = test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 0.0),
             test_banks,
-            stage4_handoff,
+            stage4_borrow_vs_sell_inputs,
             replace_current=True,
         )
 
@@ -3402,7 +3402,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
             ]
         }
         test_banks.ts.override_current("interest_rates_on_household_consumption_loans", np.asarray([0.10, 0.14]))
-        stage4_handoff = {
+        stage4_borrow_vs_sell_inputs = {
             "delta_tilde": test_households.ts.current("portfolio_delta_tilde"),
             "opening_tfa_scale": test_households.ts.current("portfolio_opening_tfa_scale"),
             "post_return_ifa": test_households.ts.current("portfolio_post_return_ifa"),
@@ -3412,13 +3412,13 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.compute_and_record_borrow_vs_sell_choice(
             np.full(n_households, 10.0),
             test_banks,
-            stage4_handoff,
+            stage4_borrow_vs_sell_inputs,
         )
 
         for key, values in baseline.items():
             np.testing.assert_allclose(test_households.ts.current(key), values)
 
-    def test__current_stage4_handoff_adds_positive_surplus_before_calling_stage4_helper(
+    def test__build_stage4_borrow_vs_sell_inputs_adds_positive_surplus_before_calling_stage4_helper(
         self, test_households, monkeypatch
     ):
         n_households = test_households.ts.current("n_households")
@@ -3475,7 +3475,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
 
-        test_households.current_stage4_handoff_for_stage5(
+        test_households.build_stage4_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
@@ -3483,7 +3483,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         np.testing.assert_allclose(captured["investable_surplus"], np.full(n_households, 50.0))
         np.testing.assert_allclose(captured["post_surplus_lfa"], np.full(n_households, 50.0))
 
-    def test__current_stage4_handoff_uses_post_return_ifa_before_calling_stage4_helper(
+    def test__build_stage4_borrow_vs_sell_inputs_uses_pre_settlement_ifa_before_calling_stage4_helper(
         self, test_households, monkeypatch
     ):
         n_households = test_households.ts.current("n_households")
@@ -3509,10 +3509,7 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.functions["wealth"].compute_income_from_financial_assets(
             current_wealth_in_other_financial_assets=test_households.ts.current("illiquid_financial_assets"),
         )
-        current_ifa = test_households.ts.current("illiquid_financial_assets")
-        expected_post_return_ifa = current_ifa + test_households.current_illiquid_financial_asset_return_amount(
-            current_wealth_in_other_financial_assets=test_households.residual_illiquid_return_base(current_ifa),
-        )
+        expected_pre_settlement_ifa = test_households.ts.current("illiquid_financial_assets")
         captured = {}
 
         def fake_stage4_helper(**kwargs):
@@ -3547,14 +3544,16 @@ class TestComputeAndRecordBorrowVsSellChoice:
 
         monkeypatch.setattr(households_module, "compute_stage4_household_diagnostics", fake_stage4_helper)
 
-        test_households.current_stage4_handoff_for_stage5(
+        test_households.build_stage4_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        np.testing.assert_allclose(captured["post_return_ifa"], expected_post_return_ifa)
+        np.testing.assert_allclose(captured["post_return_ifa"], expected_pre_settlement_ifa)
 
-    def test__current_stage4_handoff_draws_current_return_when_not_pre_drawn(self, test_households, monkeypatch):
+    def test__build_stage4_borrow_vs_sell_inputs_stages_return_without_projecting_it(
+        self, test_households, monkeypatch
+    ):
         n_households = test_households.ts.current("n_households")
         test_households.functions["wealth"] = PaperAssetReturnWealthSetter(
             other_real_assets_depreciation_rate=0.05,
@@ -3577,15 +3576,16 @@ class TestComputeAndRecordBorrowVsSellChoice:
         test_households.ts.override_current("expected_income", np.full(n_households, 200.0))
         monkeypatch.setattr(test_households.functions["wealth"], "draw_illiquid_return_rate", lambda: 0.2)
 
-        handoff = test_households.current_stage4_handoff_for_stage5(
+        stage4_borrow_vs_sell_inputs = test_households.build_stage4_borrow_vs_sell_inputs(
             target_consumption_total=np.full(n_households, 120.0),
             scheduled_debt_service=np.full(n_households, 30.0),
         )
 
-        current_ifa = test_households.ts.current("illiquid_financial_assets")
-        expected_post_return_ifa = current_ifa + 0.2 * test_households.residual_illiquid_return_base(current_ifa)
-        np.testing.assert_allclose(handoff["post_return_ifa"], expected_post_return_ifa)
-        np.testing.assert_allclose(handoff["r_kappa"], np.full(n_households, 0.2))
+        np.testing.assert_allclose(
+            stage4_borrow_vs_sell_inputs["post_return_ifa"],
+            test_households.ts.current("illiquid_financial_assets"),
+        )
+        np.testing.assert_allclose(stage4_borrow_vs_sell_inputs["r_kappa"], np.full(n_households, 0.2))
 
 
 class TestComputeAndRecordResidualCapacityFallback:

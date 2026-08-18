@@ -27,3 +27,19 @@ def test_fisher_real_rate_supports_scalars_and_arrays():
 def test_rate_transforms_reject_invalid_gross_rates(function, args):
     with pytest.raises(ValueError):
         function(*args)
+
+
+@pytest.mark.parametrize("invalid_rate", [np.nan, np.inf, -np.inf])
+def test_compound_rate_rejects_nonfinite_inputs(invalid_rate):
+    with pytest.raises(ValueError, match="rate must be finite"):
+        compound_rate(invalid_rate, 4)
+
+
+@pytest.mark.parametrize("invalid_rate", [np.nan, np.inf, -np.inf])
+@pytest.mark.parametrize("argument", ["nominal", "inflation"])
+def test_fisher_real_rate_rejects_nonfinite_inputs(invalid_rate, argument):
+    nominal_rate = invalid_rate if argument == "nominal" else 0.05
+    inflation_rate = invalid_rate if argument == "inflation" else 0.02
+
+    with pytest.raises(ValueError, match=rf"{argument}_rate must be finite"):
+        fisher_real_rate(nominal_rate, inflation_rate)

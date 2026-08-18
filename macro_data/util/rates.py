@@ -10,6 +10,8 @@ def compound_rate(rate: float | np.ndarray, periods: int) -> float | np.ndarray:
     if periods <= 0:
         raise ValueError("periods must be positive.")
     rate_array = np.asarray(rate, dtype=float)
+    if not np.all(np.isfinite(rate_array)):
+        raise ValueError("rate must be finite.")
     if np.any(rate_array <= -1.0):
         raise ValueError("rate must be greater than -1.")
     compounded = np.expm1(float(periods) * np.log1p(rate_array))
@@ -23,6 +25,10 @@ def fisher_real_rate(
     """Return the exact Fisher real rate from same-frequency decimal rates."""
     nominal_array = np.asarray(nominal_rate, dtype=float)
     inflation_array = np.asarray(inflation_rate, dtype=float)
+    if not np.all(np.isfinite(nominal_array)):
+        raise ValueError("nominal_rate must be finite.")
+    if not np.all(np.isfinite(inflation_array)):
+        raise ValueError("inflation_rate must be finite.")
     if np.any(nominal_array <= -1.0):
         raise ValueError("nominal_rate must be greater than -1.")
     if np.any(inflation_array <= -1.0):

@@ -118,6 +118,136 @@ desired_consumption:
       paper_parameter_file: consumption_paper_parameters.yaml
       paper_parameter_ref: income_belief_learning.permanent_income_log_ratio
 
+  credit_augmented_v2:
+    # ------------------------------------------------------------------
+    # Continuous calibration v2 -- HFCS France, estimated 2026-08-15.
+    #
+    # Supersedes the PR #88 constants in credit_augmented_v1's
+    # continuous_wealth_calibration block, which were NOT fitted to micro-data:
+    # they were fitted to reproduce the discrete 8-cell lookup table, which was
+    # itself calibrated to Chauvin-Muellbauer Table 3. v2 is estimated directly
+    # on the HFCS cross-section by minimum distance on six survey-weighted
+    # moments of log(C/Y) -- mean, median, s.d., skewness, and the correlations
+    # with log(Y^p/Y) and NLA/Y.
+    #
+    # Provenance: consumption-notebooks/consumption_parameters_calibration.ipynb
+    #   estimation wave  2014 only (n = 7,393); 2017/2021 held out
+    #   pooled sample    22,371 households of 35,973 raw
+    #   optimiser        seeded 50-start L-BFGS-B, seed 20260815
+    #   objective        1.869430e-02
+    # ------------------------------------------------------------------
+    long_run_intercept: -0.4638           # alpha_0, ESTIMATED.
+    # v1 used 0.08 plus a -0.5209 hand recentring applied downstream to force
+    # median C*/y onto the HFCS anchor. v2 estimates the intercept on the data,
+    # so that recentring must NOT be reapplied on top of this value.
+    real_borrowing_rate_propensity: -0.72  # alpha_1, unchanged (paper Table 1)
+    # INERT while uses_continuous_wealth_calibration is true: alpha_2 and gamma_1 then
+    # come from the fitted mapping, household by household, and these scalars are not
+    # read. Carried at their v1 values so that turning the flag off degrades to v1
+    # behaviour rather than to the class defaults (1.0 / 0.04), which no calibration
+    # stands behind.
+    permanent_income_propensity: 0.55      # alpha_2 fallback
+    liquid_wealth_propensity: 0.14         # gamma_1 fallback
+    illiquid_wealth_propensity: 0.02       # gamma_2, FIXED in the calibration
+    housing_wealth_propensity: 0.009       # gamma_4, FIXED in the calibration
+    # gamma_2/gamma_4 are held fixed at these values by the estimator rather
+    # than estimated, so they are calibration inputs, not results. They differ
+    # from v1's 0.022/0.013, which came from the discrete-table fit.
+    rent_propensity: 1.0
+    mortgage_debt_propensity: 0.03
+    mortgage_payment_propensity: 1.0
+    house_price_propensity: 0.0
+    # gamma_3 stays disabled: the base-1.0-vs-base-100 HPI units problem
+    # (issue #90) is unchanged by this recalibration.
+    income_growth_propensity: 0.15
+    interest_rate_cashflow_propensity: -0.003
+    uncertainty_propensity: -0.005
+    partial_adjustment_speed: 0.56
+    # Two-sided wealth-drag clip. Retained as a backstop only; the continuous
+    # mapping should keep most households inside it.
+    long_run_mpc_lower_bound: 0.0
+    long_run_mpc_upper_bound: 2.0
+    # Idiosyncratic term. ESTIMATED JOINTLY with the mapping, not calibrated
+    # afterwards: it is the only parameter that raises the dispersion of
+    # log(C/Y) without touching its mean or any covariance. Adding it cut the
+    # objective 16x (0.303 -> 0.0187) and fixed both the dispersion and the
+    # permanent-income correlation.
+    #
+    # Var[x] / (Var[x] + sigma^2) = 21.5%: balance sheets plus permanent income
+    # explain about a fifth of the cross-sectional variance of log(C/Y). The
+    # remainder is idiosyncratic. Interpreted here as a FIXED HOUSEHOLD EFFECT
+    # (drawn once per household, constant thereafter) rather than i.i.d. noise
+    # -- the HFCS cross-section identifies the variance but not its
+    # persistence, so this is a modelling decision, recorded as such.
+    idiosyncratic_sd: 0.3308
+    idiosyncratic_persistence: fixed_effect
+    price_floor: 1.0e-12
+    income_floor: 1.0e-12
+    consumption_floor: 1.0e-12
+    house_price_floor: 1.0e-12
+    uses_income_belief_learning: true
+    income_belief_learning_horizon:
+      paper_parameter_file: consumption_paper_parameters.yaml
+      paper_parameter_ref: income_belief_learning.permanent_income_log_ratio
+    # Ratio denominator. The calibration divides consumption and the three
+    # balance-sheet stocks by disp_geom_avg_income -- HFCS's smoothed
+    # multi-year disposable income -- NOT by a single year's income. v1
+    # divided by current-period annualised spendable income, a materially more
+    # volatile denominator, which is the near-zero-denominator mechanism behind
+    # issue #90. "geometric_average" restores the calibration's own concept.
+    income_denominator: geometric_average
+    income_denominator_window: 20          # periods (5 years at quarterly)
+    # Warm-up: a household with fewer than `window` observed periods uses the
+    # geometric mean of whatever history it has, so the denominator converges
+    # smoothly rather than jumping at a switchover period.
+    income_denominator_min_periods: 1
+    continuous_wealth_calibration:
+      # ---- PROVISIONAL: two known boundary problems are ported as-is ----
+      # 1. c_alpha sits at its UPPER bound (1.000), so alpha_2 spans only
+      #    [0.303, 0.475] of its configured [0.25, 0.70] box.
+      # 2. k_gamma is at its estimation ceiling (148.4), i.e. gamma_1(B) is
+      #    still effectively a step function, with ~0.5% of households
+      #    interior.
+      # Both are open items in the calibration notebook. These constants are a
+      # refresh, not a settled result, and are expected to change when a fit
+      # with those bounds freed is available.
+      index_construction: raw_ratio
+      # The estimated weights multiply the RAW ratios, not per-ratio normalised
+      # ones (v1's convention). This matters: the ratios are on very different
+      # scales, so on the 2014 wave the mean contribution to B is HA/y +0.289,
+      # IFA/y +0.062, NLA/y -0.137 -- housing dominates the index despite
+      # carrying the smallest coefficient. Reading these weights as shares of
+      # the index is wrong; they are coefficients on unnormalised regressors.
+      weight_net_liquid_assets: 0.6719
+      weight_illiquid_financial_assets: 0.2486
+      weight_housing_assets: 0.0795
+      # Two INDEPENDENT logistics. v1 shared one steepness and one midpoint
+      # between alpha_2 and gamma_1; the estimator rejects that restriction
+      # decisively (k differs by two orders of magnitude).
+      alpha_2_steepness: 2.012            # k_alpha = exp(0.69931302)
+      alpha_2_midpoint: 1.000             # c_alpha -- AT ITS UPPER BOUND
+      gamma_1_steepness: 148.413          # k_gamma = exp(5.0) -- AT ITS CEILING
+      gamma_1_midpoint: 0.0532            # c_gamma
+      alpha_2_low: 0.25
+      alpha_2_high: 0.70
+      gamma_1_low: 0.05
+      gamma_1_high: 0.25                  # v1 used 0.1997
+      # Survey-weighted [p5, p95] of each ratio on the 2014 training wave.
+      # In the calibration these are TRIM thresholds (households outside are
+      # dropped); at runtime households cannot be dropped, so the same
+      # thresholds become clip bounds. That is the intended translation, but it
+      # is a translation, not an identity.
+      net_liquid_assets_ratio_bounds: [-3.4132, 1.4576]
+      illiquid_financial_assets_ratio_bounds: [0.0, 1.6898]
+      housing_assets_ratio_bounds: [0.0, 11.5486]
+      # B_raw range over the training wave AFTER clipping to the bounds above,
+      # i.e. in the runtime order of operations. Frozen, never recomputed from
+      # the live household batch -- a per-batch min/max would make a
+      # household's alpha_2/gamma_1 depend on which other households happen to
+      # be evaluated in the same call, including the income-perturbed MPC probe.
+      b_raw_min: -2.2928
+      b_raw_max: 2.3172
+
 income_belief_learning:
   observed_income_growth_lag_quarters: 4  # hardcoded as index [-5] in country.py
   common_growth_component: cross_sectional_mean_log_real_income_growth  # hardcoded in income_belief_learning.py

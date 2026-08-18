@@ -1804,6 +1804,7 @@ class Households(Agent):
         income_override: Optional[np.ndarray] = None,
         lagged_income_override: Optional[np.ndarray] = None,
         lagged_cpi: Optional[float] = None,
+        historic_deflator: Optional[np.ndarray] = None,
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
         lagged_house_price_index: Optional[float] = None,
@@ -1905,11 +1906,34 @@ class Households(Agent):
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
             if lagged_housing_wealth is None:
                 lagged_housing_wealth = self.ts.prev("wealth_main_residence") + self.ts.prev("wealth_other_properties")
+            # Income history, and the price-level path aligned to it period-for-period.
+            # The household income row for the CURRENT period already exists here, while
+            # the economy's consumer-price row for it does not yet -- which is why
+            # `current_cpi` is passed separately at all. So a deflator history that is
+            # exactly one period short is the expected case, and the current price level
+            # completes it. Anything else is a genuine misalignment and is left for the
+            # consumption rule to reject rather than silently padded.
+            income_history = np.array(self.ts.historic("expected_income"))
+            deflator_history = None
+            if historic_deflator is not None:
+                deflator_history = np.asarray(historic_deflator, dtype=float).reshape(-1)
+                if deflator_history.size == income_history.shape[0] - 1:
+                    deflator_history = np.concatenate([deflator_history, [float(current_cpi)]])
+
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
                 historic_consumption_sum=np.array(self.ts.historic("consumption")),
+                # Income history for the geometric-average ratio denominator used by
+                # the v2 continuous calibration (ignored by rules that divide by
+                # current income). Same accessor and shape convention as the
+                # consumption history above: (periods, households).
+                historic_income=income_history,
+                # One price level per period of that history. Required by the
+                # geometric-average denominator: each observation must be deflated by
+                # its OWN period's price level, not by the current one.
+                historic_deflator=deflator_history,
                 saving_rates=saving_rates,
                 income=income,
                 household_benefits=self.states["Number of Adults"] * per_capita_unemployment_benefits

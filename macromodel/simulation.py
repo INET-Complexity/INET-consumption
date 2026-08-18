@@ -288,6 +288,7 @@ class Simulation:
         if simulation_configuration.seed is not None:
             np.random.seed(simulation_configuration.seed)
             set_seed(simulation_configuration.seed)
+        seed_household_consumption_rules(countries, simulation_configuration.seed)
 
         aggregator = (
             RegionalAggregator(
@@ -338,6 +339,7 @@ class Simulation:
         if configuration.seed is not None:
             np.random.seed(configuration.seed)
             set_seed(configuration.seed)
+        seed_household_consumption_rules(self.countries, configuration.seed)
 
     @property
     def t_max(self):
@@ -735,6 +737,21 @@ def get_compatibility_mismatches(
             mismatches.append(f"{name}: data_config={data_value}, country_config={sim_value}")
 
     return mismatches
+
+
+def seed_household_consumption_rules(countries, seed: int | None) -> None:
+    """Push the run seed into any consumption rule that owns its own generator.
+
+    Consumption rules are instantiated from static configuration and so cannot see
+    the simulation seed. The credit-augmented rule's idiosyncratic term needs it:
+    without this, every replication in a multi-seed run would share one eps vector.
+    Rules that do not implement ``set_run_seed`` are skipped.
+    """
+    for country in countries.values():
+        rule = getattr(country.households, "functions", {}).get("consumption")
+        setter = getattr(rule, "set_run_seed", None)
+        if setter is not None:
+            setter(seed)
 
 
 @njit

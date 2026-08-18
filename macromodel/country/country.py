@@ -1269,6 +1269,12 @@ class Country:
             house_price_index=self.economy.ts.current("hpi")[0],
             house_price_growth=self.economy.ts.current("hpi_inflation")[0],
             lagged_cpi=self.economy.ts.prev(self.economy.consumer_price_level_series_name())[0],
+            # Full consumer-price history, aligned period-for-period with the income
+            # history households reads, so the geometric-average income denominator can
+            # deflate each observation at its own price level.
+            historic_deflator=np.asarray(
+                self.economy.ts.historic(self.economy.consumer_price_level_series_name())
+            ).reshape(-1),
             lagged_house_price_index=self.economy.ts.prev("hpi")[0],
             real_borrowing_rate=0.0,
             consumer_debt_rate_delta=0.0,

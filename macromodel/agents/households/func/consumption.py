@@ -106,6 +106,8 @@ class HouseholdConsumption(ABC):
         population_scale_factor: float | None = None,
         time_unit: int = 12,
         lagged_real_consumption_budget: np.ndarray = None,
+        historic_income: np.ndarray = None,
+        historic_deflator: np.ndarray = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -214,6 +216,8 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         population_scale_factor: float | None = None,  # Ignored in default consumption
         time_unit: int = 12,  # Ignored in default consumption
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in default consumption
+        historic_income: np.ndarray = None,  # Ignored in default consumption
+        historic_deflator: np.ndarray = None,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
 
@@ -402,6 +406,8 @@ class CESHouseholdConsumption(HouseholdConsumption):
         population_scale_factor: float | None = None,  # Ignored in CES consumption
         time_unit: int = 12,  # Ignored in CES consumption
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in CES consumption
+        historic_income: np.ndarray = None,  # Ignored in CES consumption
+        historic_deflator: np.ndarray = None,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
 
@@ -649,6 +655,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         long_run_mpc_upper_bound: float = 1.0,
         uses_continuous_wealth_calibration: bool = False,
         continuous_wealth_calibration: dict | None = None,
+        idiosyncratic_sd: float = 0.0,
+        idiosyncratic_persistence: str = "fixed_effect",
+        idiosyncratic_seed: int | None = None,
+        income_denominator: str = "current",
+        income_denominator_window: int = 20,
+        income_denominator_min_periods: int = 1,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -687,7 +699,32 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("weight_illiquid_financial_assets", 0.502),
             calibration.get("weight_housing_assets", 0.287),
         )
+        # v1 shared ONE steepness and ONE midpoint between alpha_2 and gamma_1. v2
+        # estimates them separately and the restriction is rejected decisively
+        # (k_alpha = 2.01 against k_gamma = 148.4). The legacy `steepness`/`b0` keys
+        # remain the fallback so a v1 config keeps its exact behaviour.
         self.continuous_wealth_calibration_steepness = calibration.get("steepness", 34.3)
+        self.continuous_wealth_calibration_alpha_2_steepness = calibration.get(
+            "alpha_2_steepness", self.continuous_wealth_calibration_steepness
+        )
+        self.continuous_wealth_calibration_gamma_1_steepness = calibration.get(
+            "gamma_1_steepness", self.continuous_wealth_calibration_steepness
+        )
+        # How the index weights combine with the ratios:
+        #   "normalised_ratio" (v1) -- min-max each ratio to [0,1] first, then weight.
+        #   "raw_ratio"        (v2) -- weight the clipped ratios directly, which is how
+        #                              the HFCS calibration fits them. The two are NOT
+        #                              interchangeable: the ratios differ by an order of
+        #                              magnitude in scale, so under "raw_ratio" housing
+        #                              dominates B despite the smallest weight.
+        self.continuous_wealth_calibration_index_construction = calibration.get(
+            "index_construction", "normalised_ratio"
+        )
+        if self.continuous_wealth_calibration_index_construction not in ("normalised_ratio", "raw_ratio"):
+            raise ValueError(
+                "index_construction must be 'normalised_ratio' or 'raw_ratio', got "
+                f"{self.continuous_wealth_calibration_index_construction!r}."
+            )
         self.continuous_wealth_calibration_alpha_2_range = (
             calibration.get("alpha_2_low", 0.2497),
             calibration.get("alpha_2_high", 0.6997),
@@ -720,6 +757,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("b_raw_max", 1.789),
         )
         self.continuous_wealth_calibration_b0 = calibration.get("b0", 0.428)
+        self.continuous_wealth_calibration_alpha_2_midpoint = calibration.get(
+            "alpha_2_midpoint", self.continuous_wealth_calibration_b0
+        )
+        self.continuous_wealth_calibration_gamma_1_midpoint = calibration.get(
+            "gamma_1_midpoint", self.continuous_wealth_calibration_b0
+        )
         # Fail fast on degenerate calibration bounds rather than letting them silently
         # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration
         # (ratio/b_raw bounds), or silently invert the accessibility-to-coefficient
@@ -737,6 +780,57 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
         if gamma_1_hi <= gamma_1_lo:
             raise ValueError(f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi}).")
+        # Idiosyncratic term eps in log(C/Y). The HFCS calibration estimates its
+        # standard deviation jointly with the mapping; it accounts for 78.5% of the
+        # cross-sectional variance of log(C/Y), the structural part for 21.5%.
+        #
+        # PERSISTENCE IS A MODELLING DECISION, NOT AN ESTIMATE. A single cross-section
+        # identifies the variance of eps but says nothing about whether it is drawn
+        # afresh each period or is a permanent household characteristic. Implemented as
+        # a fixed household effect: i.i.d.-per-period noise would very nearly average
+        # out of aggregate consumption, making sigma_eps a nuisance term, whereas a
+        # fixed effect is persistent taste heterogeneity that survives aggregation and
+        # interacts with the wealth distribution.
+        if idiosyncratic_sd < 0.0:
+            raise ValueError(f"idiosyncratic_sd must be non-negative, got {idiosyncratic_sd}.")
+        if idiosyncratic_persistence not in ("fixed_effect", "iid"):
+            raise ValueError(
+                f"idiosyncratic_persistence must be 'fixed_effect' or 'iid', got {idiosyncratic_persistence!r}."
+            )
+        self.idiosyncratic_sd = idiosyncratic_sd
+        self.idiosyncratic_persistence = idiosyncratic_persistence
+        # Dedicated generator, NOT numpy's global stream. Drawing from the global
+        # stream would shift every downstream draw in the model and invalidate all
+        # existing seeded baselines for a reason unrelated to consumption.
+        self.idiosyncratic_seed = idiosyncratic_seed
+        self._idiosyncratic_rng = np.random.default_rng(
+            0x00C0FFEE if idiosyncratic_seed is None else int(idiosyncratic_seed)
+        )
+        self._household_epsilon: np.ndarray | None = None
+
+        # Denominator of the three balance-sheet ratios and of C/y.
+        #   "current"           (v1) -- current-period income, annualised.
+        #   "geometric_average" (v2) -- trailing geometric mean of real income over
+        #                               `income_denominator_window` periods, which is
+        #                               the concept the HFCS calibration divides by
+        #                               (disp_geom_avg_income, a smoothed multi-year
+        #                               income). The single-period denominator is the
+        #                               near-zero-income mechanism behind issue #90.
+        if income_denominator not in ("current", "geometric_average"):
+            raise ValueError(
+                f"income_denominator must be 'current' or 'geometric_average', got {income_denominator!r}."
+            )
+        if income_denominator_window < 1:
+            raise ValueError(f"income_denominator_window must be >= 1, got {income_denominator_window}.")
+        if not 1 <= income_denominator_min_periods <= income_denominator_window:
+            raise ValueError(
+                "income_denominator_min_periods must lie in [1, income_denominator_window], got "
+                f"{income_denominator_min_periods}."
+            )
+        self.income_denominator = income_denominator
+        self.income_denominator_window = int(income_denominator_window)
+        self.income_denominator_min_periods = int(income_denominator_min_periods)
+
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
         self.mortgage_debt_propensity = mortgage_debt_propensity
@@ -801,19 +895,167 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         ha_norm = (ha_clipped - ha_bounds[0]) / (ha_bounds[1] - ha_bounds[0])
 
         weight_nla, weight_ifa, weight_ha = self.continuous_wealth_calibration_weights
-        b_raw = weight_nla * nla_norm + weight_ifa * ifa_norm + weight_ha * ha_norm
+        if self.continuous_wealth_calibration_index_construction == "raw_ratio":
+            # The HFCS estimator fits the weights against the raw ratios, so the
+            # per-ratio normalisation above must NOT be applied before weighting --
+            # doing so silently changes which ratio drives the index.
+            b_raw = weight_nla * nla_clipped + weight_ifa * ifa_clipped + weight_ha * ha_clipped
+        else:
+            b_raw = weight_nla * nla_norm + weight_ifa * ifa_norm + weight_ha * ha_norm
         b_min, b_max = self.continuous_wealth_calibration_b_raw_bounds
-        b_tilde = (b_raw - b_min) / (b_max - b_min)
-        b0 = self.continuous_wealth_calibration_b0
+        # Clipped to [0,1]: b_raw_min/max are frozen calibration constants, so a
+        # simulated household outside the HFCS range would otherwise extrapolate the
+        # logistic beyond the domain the mapping was fitted on.
+        b_tilde = np.clip((b_raw - b_min) / (b_max - b_min), 0.0, 1.0)
 
-        steepness = self.continuous_wealth_calibration_steepness
-        logistic = 1.0 / (1.0 + np.exp(-steepness * (b_tilde - b0)))
+        # Two INDEPENDENT logistics: alpha_2 rises in B, gamma_1 falls in B, and they
+        # have their own slopes and midpoints. Under a v1 config both slopes and both
+        # midpoints collapse to the shared legacy values, reproducing v1 exactly.
         alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
-        alpha_2 = alpha_2_lo + (alpha_2_hi - alpha_2_lo) * logistic
+        logistic_alpha = 1.0 / (
+            1.0
+            + np.exp(
+                np.clip(
+                    -self.continuous_wealth_calibration_alpha_2_steepness
+                    * (b_tilde - self.continuous_wealth_calibration_alpha_2_midpoint),
+                    -700.0,
+                    700.0,
+                )
+            )
+        )
+        logistic_gamma = 1.0 / (
+            1.0
+            + np.exp(
+                np.clip(
+                    -self.continuous_wealth_calibration_gamma_1_steepness
+                    * (b_tilde - self.continuous_wealth_calibration_gamma_1_midpoint),
+                    -700.0,
+                    700.0,
+                )
+            )
+        )
+        alpha_2 = alpha_2_lo + (alpha_2_hi - alpha_2_lo) * logistic_alpha
         # gamma_1 falls (not rises) as B rises, mirroring alpha_2's increase.
-        gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic
+        gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic_gamma
         return alpha_2, gamma_1
+
+    def set_run_seed(self, seed: int | None) -> None:
+        """Re-seed the idiosyncratic generator for a new run, and drop cached draws.
+
+        The rule is built from static config, which has no access to the simulation
+        seed, so without this every seed in a Monte Carlo would draw the SAME eps
+        vector -- household i would get an identical taste shock in every replication
+        and cross-seed dispersion would be understated. The simulation calls this
+        wherever it sets its own seed.
+
+        An explicit ``idiosyncratic_seed`` in config wins, so a run can be pinned
+        independently of the simulation seed when that is what is wanted. ``None``
+        (no simulation seed) falls back to the fixed salt, keeping unseeded runs
+        reproducible.
+        """
+        if self.idiosyncratic_seed is not None:
+            return
+        self._idiosyncratic_rng = np.random.default_rng(0x00C0FFEE if seed is None else int(seed))
+        self._household_epsilon = None
+
+    def _epsilon(self, n_households: int) -> np.ndarray:
+        """Idiosyncratic term in log(C/Y), as a fixed household effect.
+
+        Drawn once per household from a DEDICATED generator and cached, so that:
+
+        * the two ``_evaluate_target`` calls inside ``compute_target_consumption``
+          (base and income-perturbed) see the SAME eps. They must: the MPC is their
+          finite difference over a perturbation of order ``1e-4 * income``, so an
+          independent redraw would swamp the derivative with noise of order sigma
+          and turn ``last_formula_implied_mpc`` into pure noise;
+        * the global numpy stream is untouched, so enabling this does not shift any
+          other seeded draw in the model;
+        * a household keeps its eps for the whole run.
+
+        Households appended mid-run extend the cache; existing entries are never
+        redrawn. ``persistence='iid'`` redraws every call and is provided only for
+        comparison -- it breaks the MPC probe by construction and is not a
+        supported production setting.
+        """
+        if self.idiosyncratic_sd <= 0.0:
+            return np.zeros(n_households, dtype=float)
+        if self.idiosyncratic_persistence == "iid":
+            return self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, n_households)
+        if self._household_epsilon is None:
+            self._household_epsilon = self._idiosyncratic_rng.normal(
+                0.0, self.idiosyncratic_sd, n_households
+            )
+        elif self._household_epsilon.size < n_households:
+            extra = n_households - self._household_epsilon.size
+            self._household_epsilon = np.concatenate(
+                [self._household_epsilon, self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, extra)]
+            )
+        return self._household_epsilon[:n_households]
+
+    def _geometric_average_income(
+        self,
+        historic_income: np.ndarray,
+        deflator: float,
+        historic_deflator: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Trailing geometric mean of real income over the configured window.
+
+        The HFCS calibration divides consumption and the three balance-sheet stocks
+        by ``disp_geom_avg_income`` -- a smoothed multi-year income -- not by a
+        single period's income. Reproducing that here is what makes the fitted
+        coefficients applicable to the simulated ratios at all.
+
+        Computed in logs on positive observations only. A household with fewer than
+        ``income_denominator_window`` periods of history uses whatever it has (down
+        to ``income_denominator_min_periods``), so the denominator converges smoothly
+        instead of jumping when the window first fills.
+
+        EACH observation is deflated by the price level of ITS OWN period. Deflating
+        the whole window by the current price level instead -- which an earlier
+        version of this method did -- counts inflation twice for every lagged
+        observation: a nominal income earned when the CPI was 1.0 was being divided
+        by today's CPI. That biases the average downward by the cumulative inflation
+        over the window, so the bias GROWS with the price level, inflating every
+        wealth ratio and driving the wealth-drag clip. ``historic_deflator`` is
+        therefore required whenever the window reaches back more than one period.
+        """
+        history = np.asarray(historic_income, dtype=float)
+        if history.ndim != 2:
+            raise ValueError(f"historic_income must be 2-D (periods, households), got shape {history.shape}.")
+        window_nominal = history[-self.income_denominator_window :]
+        if historic_deflator is None:
+            if window_nominal.shape[0] > 1:
+                raise ValueError(
+                    "income_denominator='geometric_average' over more than one period requires "
+                    "historic_deflator (one price level per period of historic_income); deflating a "
+                    "multi-period window by the current price level double-counts inflation."
+                )
+            deflators = np.array([max(float(deflator), self.price_floor)])
+        else:
+            deflators = np.asarray(historic_deflator, dtype=float).reshape(-1)[
+                -self.income_denominator_window :
+            ]
+            if deflators.shape[0] != window_nominal.shape[0]:
+                raise ValueError(
+                    f"historic_deflator has {deflators.shape[0]} periods but historic_income window has "
+                    f"{window_nominal.shape[0]}; they must align period-for-period."
+                )
+            deflators = np.maximum(deflators, self.price_floor)
+        window = window_nominal / deflators[:, None]
+        usable = np.isfinite(window) & (window > 0.0)
+        n_usable = usable.sum(axis=0)
+        log_sum = np.where(usable, np.log(np.maximum(window, self.income_floor)), 0.0).sum(axis=0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            geometric = np.exp(log_sum / np.maximum(n_usable, 1))
+        # Below the minimum-periods threshold there is not enough history to form the
+        # average; fall back to the most recent positive observation rather than
+        # inventing one.
+        insufficient = n_usable < self.income_denominator_min_periods
+        if insufficient.any():
+            latest = np.where(usable[-1], window[-1], self.income_floor)
+            geometric = np.where(insufficient, latest, geometric)
+        return np.maximum(geometric, self.income_floor)
 
     def _clip_wealth_drag(
         self,
@@ -869,6 +1111,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         population_scale_factor: float | None,
         time_unit: int,
         lagged_real_consumption_budget: np.ndarray | None = None,
+        ratio_denominator: np.ndarray | None = None,
+        epsilon: np.ndarray | None = None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
         lagged_income = np.asarray(lagged_income, dtype=float)
@@ -985,12 +1229,24 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         ) / current_deflator
         current_period_illiquid_financial_assets = lagged_illiquid_wealth / current_deflator
         current_period_lagged_housing_wealth = lagged_housing_wealth / current_deflator
-        net_liquid_assets_ratio = current_period_net_liquid_assets / annual_spendable_income
-        illiquid_assets_ratio = current_period_illiquid_financial_assets / annual_spendable_income
+        # Denominator of the balance-sheet ratios. Under "geometric_average" this is
+        # the trailing geometric mean supplied by the caller, matching the calibration's
+        # smoothed-income concept; under "current" it is this period's annualised
+        # income, as in v1. It is deliberately NOT recomputed from the perturbed income
+        # inside the MPC probe: a five-year average moves by ~1/window of the
+        # perturbation, and holding it fixed keeps the probe a clean derivative of the
+        # numerator channels.
+        ratio_denominator_arr = (
+            annual_spendable_income
+            if ratio_denominator is None
+            else np.maximum(np.asarray(ratio_denominator, dtype=float), self.income_floor)
+        )
+        net_liquid_assets_ratio = current_period_net_liquid_assets / ratio_denominator_arr
+        illiquid_assets_ratio = current_period_illiquid_financial_assets / ratio_denominator_arr
         # Lagged (t-1), not current-period, housing wealth: main fixed a stale
         # current/lagged mixup here (see test_consumption.py's split between
         # target_consumption_real_housing_wealth and _real_lagged_housing_wealth).
-        housing_wealth_ratio = current_period_lagged_housing_wealth / annual_spendable_income
+        housing_wealth_ratio = current_period_lagged_housing_wealth / ratio_denominator_arr
         # house_price_term combines both unit fixes: per-household descaling (population
         # scale factor, GH issue #90) and annualization (main), since house prices are
         # quoted per household, not per the model's scaled synthetic population.
@@ -1022,7 +1278,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             # this way to make the matching-y reasoning auditable rather than relying
             # on an algebraic cancellation a future edit could silently break).
             annual_lagged_consumption = real_lagged_consumption * annualization_factor
-            income_to_consumption_ratio = annual_spendable_income / annual_lagged_consumption
+            income_to_consumption_ratio = ratio_denominator_arr / annual_lagged_consumption
             wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
                 wealth_drag, alpha_2, income_to_consumption_ratio
             )
@@ -1056,6 +1312,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 + house_price_term
                 + housing_wealth_term
             )
+        # log(C/Y) = x + eps. The estimator's model moments are those of x + eps, so
+        # the runtime rule must carry eps too or it is a different specification --
+        # the deterministic one, whose dispersion is roughly half its HFCS target.
+        if epsilon is not None:
+            long_run_log_consumption_to_income = long_run_log_consumption_to_income + epsilon
         log_long_run_target = np.log(real_spendable_income) + long_run_log_consumption_to_income
         long_run_target_real = np.exp(np.clip(log_long_run_target, -50.0, 50.0))
 
@@ -1184,6 +1445,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         population_scale_factor: float | None = None,
         time_unit: int = 12,
         lagged_real_consumption_budget: np.ndarray = None,
+        historic_income: np.ndarray = None,
+        historic_deflator: np.ndarray = None,
     ) -> np.ndarray:
         if lagged_consumption is None:
             lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
@@ -1217,6 +1480,25 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         owner_occupied = self._as_array(income, owner_occupied)
         mortgagor = self._as_array(income, mortgagor)
 
+        # Both computed once here and passed to BOTH evaluations below. The second
+        # evaluation perturbs income to difference out the MPC; anything that is
+        # redrawn or recomputed between the two calls contaminates that derivative.
+        epsilon = self._epsilon(income.size)
+        if self.income_denominator == "geometric_average":
+            if historic_income is None:
+                # No silent fallback: the fitted coefficients are only interpretable
+                # against the smoothed denominator they were estimated with, so a
+                # missing history is a wiring error, not a default.
+                raise ValueError(
+                    "income_denominator='geometric_average' requires historic_income "
+                    "(periods x households); none was supplied by the caller."
+                )
+            ratio_denominator = self._geometric_average_income(
+                historic_income, current_cpi, historic_deflator
+            )
+        else:
+            ratio_denominator = None
+
         components, target_total = self._evaluate_target(
             income=income,
             lagged_income=lagged_income,
@@ -1247,6 +1529,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,
+            ratio_denominator=ratio_denominator,
+            epsilon=epsilon,
         )
 
         current_deflator = max(
@@ -1284,6 +1568,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,
+            ratio_denominator=ratio_denominator,
+            epsilon=epsilon,
         )
 
         # ``target_total`` is the calibrated consumption concept, which includes
@@ -1417,6 +1703,8 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         population_scale_factor: float | None = None,  # Ignored in exogenous consumption
         time_unit: int = 12,  # Ignored in exogenous consumption
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in exogenous consumption
+        historic_income: np.ndarray = None,  # Ignored in exogenous consumption
+        historic_deflator: np.ndarray = None,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.
 

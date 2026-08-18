@@ -58,7 +58,13 @@ FRA:
           # from consumption_paper_parameters.yaml instead of the conservative
           # diagnostic placeholders previously hardcoded below.
           paper_parameter_file: consumption_paper_parameters.yaml
-          paper_parameter_ref: desired_consumption.credit_augmented_v1
+          # v2: continuous calibration estimated directly on HFCS France
+          # (2026-08-15), replacing the PR #88 constants that were fitted to the
+          # discrete 8-cell table rather than to micro-data. Brings the estimated
+          # intercept, the decoupled alpha_2/gamma_1 logistics, the idiosyncratic
+          # term, the calibration's own smoothed income denominator, and refreshed
+          # ratio-clip bounds. See consumption_paper_parameters.yaml.
+          paper_parameter_ref: desired_consumption.credit_augmented_v2
           # Local override: house_price_propensity (gamma_4 per the paper-symbol
           # comment in consumption_paper_parameters.yaml's credit_augmented_v1
           # block) disabled until CACF's house-price term is fully fixed. The

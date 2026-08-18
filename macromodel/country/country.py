@@ -58,7 +58,8 @@ from macro_data.readers.permanent_income_mapping import (
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
-from macro_data.util.rates import compound_rate, fisher_real_rate
+from macro_data.util.frequency import periods_per_year
+from macro_data.util.rates import annualized_fisher_real_rate
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -1252,19 +1253,19 @@ class Country:
             )
 
         expected_consumer_inflation = self.economy.current_expected_consumer_period_inflation()
-        if self.economy.time_unit <= 0 or 12 % self.economy.time_unit != 0:
-            raise ValueError("Household borrowing-rate inputs require time_unit to be a positive divisor of 12.")
-        periods_per_year = 12 // self.economy.time_unit
+        n_periods_per_year = periods_per_year(self.economy.time_unit)
         current_consumer_rate = float(np.mean(self.banks.ts.current("interest_rates_on_household_consumption_loans")))
         lagged_consumer_rate = float(np.mean(self.banks.ts.prev("interest_rates_on_household_consumption_loans")))
-        annual_consumer_rate = compound_rate(current_consumer_rate, periods_per_year)
-        annual_lagged_consumer_rate = compound_rate(lagged_consumer_rate, periods_per_year)
-        annual_expected_consumer_inflation = compound_rate(expected_consumer_inflation, periods_per_year)
-        real_consumer_borrowing_rate = fisher_real_rate(
-            annual_consumer_rate,
-            annual_expected_consumer_inflation,
+        real_consumer_borrowing_rate = annualized_fisher_real_rate(
+            current_consumer_rate,
+            expected_consumer_inflation,
+            n_periods_per_year,
         )
-        consumer_debt_rate_delta = annual_consumer_rate - annual_lagged_consumer_rate
+        # Bank loan rates are stored as quoted annual rates divided by periods
+        # per year. Recover the quoted annual change linearly for the CACF
+        # cashflow coefficient; this is distinct from effective annual Fisher
+        # conversion, which compounds gross real returns above.
+        consumer_debt_rate_delta = n_periods_per_year * (current_consumer_rate - lagged_consumer_rate)
 
         target_consumption = self.households.compute_target_consumption(
             expected_inflation=expected_consumer_inflation,

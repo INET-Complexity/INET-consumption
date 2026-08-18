@@ -35,3 +35,17 @@ def fisher_real_rate(
         raise ValueError("inflation_rate must be greater than -1.")
     real_rate = (1.0 + nominal_array) / (1.0 + inflation_array) - 1.0
     return float(real_rate) if real_rate.shape == () else real_rate
+
+
+def annualized_fisher_real_rate(
+    nominal_period_rate: float | np.ndarray,
+    inflation_period_rate: float | np.ndarray,
+    periods_per_year: int,
+) -> float | np.ndarray:
+    """Return an effective annual real rate from same-period rates.
+
+    Fisher conversion is performed at the model period frequency. The resulting
+    real gross return is then geometrically compounded over one year.
+    """
+    period_real_rate = fisher_real_rate(nominal_period_rate, inflation_period_rate)
+    return compound_rate(period_real_rate, periods_per_year)

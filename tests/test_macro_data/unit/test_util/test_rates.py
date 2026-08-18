@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from macro_data.util.rates import compound_rate, fisher_real_rate
+from macro_data.util.rates import annualized_fisher_real_rate, compound_rate, fisher_real_rate
 
 
 def test_compound_rate_uses_exact_geometric_conversion():
@@ -13,6 +13,17 @@ def test_fisher_real_rate_supports_scalars_and_arrays():
     np.testing.assert_allclose(
         fisher_real_rate(np.array([0.05, 0.03]), np.array([0.02, 0.01])),
         np.array([1.05 / 1.02 - 1.0, 1.03 / 1.01 - 1.0]),
+    )
+
+
+def test_annualized_fisher_rate_converts_at_period_frequency_then_compounds():
+    nominal_period_rate = 0.03
+    inflation_period_rate = 0.01
+    periods_per_year = 4
+
+    expected = (1.0 + fisher_real_rate(nominal_period_rate, inflation_period_rate)) ** periods_per_year - 1.0
+    assert annualized_fisher_real_rate(nominal_period_rate, inflation_period_rate, periods_per_year) == pytest.approx(
+        expected
     )
 
 

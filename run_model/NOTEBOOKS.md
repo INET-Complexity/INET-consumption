@@ -2,8 +2,7 @@
 
 The notebook workflow is split by responsibility:
 
-- `run_model.ipynb` — thin single-simulation runner and optional Monte Carlo call.
-- `run_model_diagnostics.ipynb` — standard macro, benchmark, sector, and firm-credit diagnostics.
+- `run_model.ipynb` — single-simulation runner, standard diagnostics, and optional Monte Carlo call.
 - `run_model_exploration.ipynb` — exploratory firm, household, reader, income, and balance-sheet analysis.
 - `run_sensitivity.ipynb` — parameter sensitivity experiments.
 - `run_mpc.ipynb` — household MPC experiments.
@@ -13,4 +12,5 @@ The notebook workflow is split by responsibility:
 clearly marked inside the notebook and must not be used for new work.
 
 Reusable calculations and experiment implementations belong under `src/`.
+Runtime, notebook, and scenario configuration is exposed from `config/`.
 Top-level Python files in this directory are compatibility commands only.

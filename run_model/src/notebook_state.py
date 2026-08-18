@@ -46,7 +46,7 @@ class NotebookRunState:
         return self.simulation.model
 
     @property
-    def df_base(self) -> pd.DataFrame:
+    def df_scenario(self) -> pd.DataFrame:
         return self.simulation.df_base
 
     @property
@@ -58,7 +58,7 @@ def validate_notebook_state(state: NotebookRunState) -> None:
     """Fail early when notebook cells are using inconsistent or stale run state."""
     if state.country_code not in state.model.countries:
         raise ValueError(f"Country {state.country_code!r} is missing from the simulation model.")
-    if state.df_base is None or state.df_base.empty:
+    if state.df_scenario is None or state.df_scenario.empty:
         raise ValueError("The simulation macro dataframe is empty.")
     if not state.simulation.model_h5_path.exists():
         raise FileNotFoundError(f"Simulation output is missing: {state.simulation.model_h5_path}")

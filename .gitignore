@@ -78,7 +78,6 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
-!run_model/run_model_diagnostics.ipynb
 !run_model/run_model_exploration.ipynb
 !run_model/run_sensitivity.ipynb
 !run_model/run_mpc.ipynb

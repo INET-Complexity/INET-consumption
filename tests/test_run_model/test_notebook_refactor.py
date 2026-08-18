@@ -16,7 +16,7 @@ from src.diagnostics.firm_finance import (  # noqa: E402
     summarize_firm_balance_sheet_ratios,
 )
 from src.diagnostics.income import permanent_income_by_decile  # noqa: E402
-from src.notebook_config import CALIBRATED_CONSUMPTION_OVERRIDES, SCENARIO_PRESETS  # noqa: E402
+from config import CALIBRATED_CONSUMPTION_OVERRIDES, SCENARIO_PRESETS  # noqa: E402
 from src.notebook_state import (  # noqa: E402
     NotebookRunState,
     validate_notebook_state,
@@ -28,7 +28,6 @@ from src.notebook_workflow import NotebookRunConfig  # noqa: E402
 def test_refactored_notebook_suite_and_legacy_banner_are_present():
     expected = {
         "run_model.ipynb",
-        "run_model_diagnostics.ipynb",
         "run_model_exploration.ipynb",
         "run_sensitivity.ipynb",
         "run_mpc.ipynb",
@@ -42,12 +41,15 @@ def test_refactored_notebook_suite_and_legacy_banner_are_present():
     assert "DO NOT USE FOR NEW WORK" in legacy.cells[0].source
 
     runner = nbformat.read(RUN_MODEL_PATH / "run_model.ipynb", as_version=4)
-    assert len(runner.cells) < 20
+    assert len(runner.cells) < 25
     runner_source = "\n".join(cell.source for cell in runner.cells)
     assert "run_notebook_workflow" in runner_source
+    assert "plot_cumulative_insolvent_firms_by_sector" in runner_source
+    assert "plot_permanent_income_log_ratio_decomposition" in runner_source
     assert "run_parameter_sensitivity" not in runner_source
     assert "run_mpc_experiment" not in runner_source
     assert "run_irf_experiment" not in runner_source
+    assert not (RUN_MODEL_PATH / "run_model_diagnostics.ipynb").exists()
 
 
 def test_calibrated_override_preset_retains_notebook_values():

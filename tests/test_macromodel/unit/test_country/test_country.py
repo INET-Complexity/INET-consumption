@@ -20,6 +20,7 @@ from macro_data.readers.permanent_income_mapping import (
     design_matrix_to_forecast_reader_names,
     load_permanent_income_design_matrix,
 )
+from macro_data.util.rates import compound_rate, fisher_real_rate
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.households import PostGrantFeasiblePlan
@@ -702,6 +703,15 @@ class TestCountry:
         captured = {}
         original = test_country.households.functions["consumption"].compute_target_consumption
         mortgage_payment = np.full(test_country.households.ts.current("n_households"), 123.0)
+        n_banks = test_country.banks.ts.current("n_banks")
+        test_country.banks.ts.interest_rates_on_household_consumption_loans.append(np.full(n_banks, 0.01))
+        test_country.banks.ts.interest_rates_on_household_consumption_loans.append(np.full(n_banks, 0.02))
+        expected_period_inflation = 0.005
+        monkeypatch.setattr(
+            test_country.economy,
+            "current_expected_consumer_period_inflation",
+            lambda: expected_period_inflation,
+        )
 
         def capture(**kwargs):
             captured.update(kwargs)
@@ -762,6 +772,14 @@ class TestCountry:
             + test_country.households.ts.prev("wealth_other_properties"),
         )
         assert np.allclose(captured["mortgage_payment"], mortgage_payment)
+        periods_per_year = 12 // test_country.economy.time_unit
+        annual_consumer_rate = compound_rate(0.02, periods_per_year)
+        annual_lagged_consumer_rate = compound_rate(0.01, periods_per_year)
+        annual_expected_inflation = compound_rate(expected_period_inflation, periods_per_year)
+        assert captured["real_borrowing_rate"] == pytest.approx(
+            fisher_real_rate(annual_consumer_rate, annual_expected_inflation)
+        )
+        assert captured["consumer_debt_rate_delta"] == pytest.approx(annual_consumer_rate - annual_lagged_consumer_rate)
         assert np.allclose(
             captured["owner_occupied"],
             np.isin(test_country.households.states["Tenure Status of the Main Residence"], [1, 2, 4]),

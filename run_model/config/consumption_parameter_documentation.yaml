@@ -106,14 +106,16 @@ stage_2:
         source: households.ts.prev.consumption_loan_debt
         excludes_mortgage_debt: true
       real_borrowing_rate:
-        source: placeholder
-        default: 0.0
+        source: annual_average_consumer_loan_rate_and_expected_cpi_inflation
+        formula: exact_fisher
+        frequency: annual_decimal
       permanent_income_log_ratio:
         source: stage_3.income_belief_learning
         default_when_unavailable: 0.0
       consumer_debt_rate_delta:
-        source: placeholder
-        default: 0.0
+        source: annual_average_consumer_loan_rate
+        formula: current_rate_minus_lagged_rate
+        frequency: annual_decimal
       uncertainty_delta:
         source: stage_3.income_belief_learning
         default_when_unavailable: 0.0

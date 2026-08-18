@@ -58,6 +58,7 @@ from macro_data.readers.permanent_income_mapping import (
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
+from macro_data.util.rates import compound_rate, fisher_real_rate
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
@@ -1250,8 +1251,23 @@ class Country:
                 self.credit_market.compute_scheduled_consumption_loan_payments_by_household()
             )
 
+        expected_consumer_inflation = self.economy.current_expected_consumer_period_inflation()
+        if self.economy.time_unit <= 0 or 12 % self.economy.time_unit != 0:
+            raise ValueError("Household borrowing-rate inputs require time_unit to be a positive divisor of 12.")
+        periods_per_year = 12 // self.economy.time_unit
+        current_consumer_rate = float(np.mean(self.banks.ts.current("interest_rates_on_household_consumption_loans")))
+        lagged_consumer_rate = float(np.mean(self.banks.ts.prev("interest_rates_on_household_consumption_loans")))
+        annual_consumer_rate = compound_rate(current_consumer_rate, periods_per_year)
+        annual_lagged_consumer_rate = compound_rate(lagged_consumer_rate, periods_per_year)
+        annual_expected_consumer_inflation = compound_rate(expected_consumer_inflation, periods_per_year)
+        real_consumer_borrowing_rate = fisher_real_rate(
+            annual_consumer_rate,
+            annual_expected_consumer_inflation,
+        )
+        consumer_debt_rate_delta = annual_consumer_rate - annual_lagged_consumer_rate
+
         target_consumption = self.households.compute_target_consumption(
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            expected_inflation=expected_consumer_inflation,
             current_cpi=self.economy.current_consumer_price_level(),
             initial_cpi=self.economy.initial_consumer_price_level(),
             exogenous_total_consumption=self.exogenous.national_accounts_during[
@@ -1270,8 +1286,8 @@ class Country:
             house_price_growth=self.economy.ts.current("hpi_inflation")[0],
             lagged_cpi=self.economy.ts.prev(self.economy.consumer_price_level_series_name())[0],
             lagged_house_price_index=self.economy.ts.prev("hpi")[0],
-            real_borrowing_rate=0.0,
-            consumer_debt_rate_delta=0.0,
+            real_borrowing_rate=real_consumer_borrowing_rate,
+            consumer_debt_rate_delta=consumer_debt_rate_delta,
             mortgage_payment=scheduled_mortgage_payment,
             permanent_income_log_ratio=permanent_income_log_ratio,
             permanent_income_log_ratio_individual=permanent_income_log_ratio_individual,

@@ -108,6 +108,7 @@ class HouseholdConsumption(ABC):
         lagged_real_consumption_budget: np.ndarray = None,
         historic_income: np.ndarray = None,
         historic_deflator: np.ndarray = None,
+        subsistence_income: np.ndarray | float | None = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -218,6 +219,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in default consumption
         historic_income: np.ndarray = None,  # Ignored in default consumption
         historic_deflator: np.ndarray = None,  # Ignored in default consumption
+        subsistence_income: np.ndarray | float | None = None,  # Ignored in default consumption
     ) -> np.ndarray:
         """Calculate target consumption using default behavior.
 
@@ -408,6 +410,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in CES consumption
         historic_income: np.ndarray = None,  # Ignored in CES consumption
         historic_deflator: np.ndarray = None,  # Ignored in CES consumption
+        subsistence_income: np.ndarray | float | None = None,  # Ignored in CES consumption
     ) -> np.ndarray:
         """Calculate target consumption using CES substitution within bundles.
 
@@ -1747,6 +1750,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         lagged_real_consumption_budget: np.ndarray = None,  # Ignored in exogenous consumption
         historic_income: np.ndarray = None,  # Ignored in exogenous consumption
         historic_deflator: np.ndarray = None,  # Ignored in exogenous consumption
+        subsistence_income: np.ndarray | float | None = None,  # Ignored in exogenous consumption
     ) -> np.ndarray:
         """Calculate target consumption using exogenous targets.
 

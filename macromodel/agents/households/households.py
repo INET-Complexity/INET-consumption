@@ -355,9 +355,7 @@ class Households(Agent):
         # these four arrays exist only to make an already-computed intermediate
         # inspectable after a run, and do not need TimeSeries's per-period
         # override/append/aggregate API.
-        self._ratio_diagnostics_history: dict[str, list[np.ndarray]] = {
-            key: [] for key in self._RATIO_DIAGNOSTIC_KEYS
-        }
+        self._ratio_diagnostics_history: dict[str, list[np.ndarray]] = {key: [] for key in self._RATIO_DIAGNOSTIC_KEYS}
 
     @classmethod
     def from_pickled_agent(

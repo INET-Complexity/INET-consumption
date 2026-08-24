@@ -760,7 +760,16 @@ class Country:
     ) -> np.ndarray:
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
         net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
-        net_smic_period_t = net_smic_monthly_t * (float(time_unit) / 12.0)
+        # net_smic_base (and therefore net_smic_monthly_t) is a MONTHLY level
+        # (macro_data/readers/insee_smic.py's net_monthly_smic), and time_unit is
+        # months per model period -- so a period's worth is time_unit MONTHS summed,
+        # i.e. net_smic_monthly_t * time_unit. The previous `* (time_unit / 12.0)`
+        # applied the annual-RATE-to-period conversion used elsewhere in this file
+        # to a monthly LEVEL, undershooting by a factor of 12 for a quarterly model
+        # (0.25x instead of 3x). Verified against the design doc's worked example
+        # (consumption_micro_macro.pdf footnote 3, p.8): monthly SMIC EUR1,128.70,
+        # CU=1.8 -> quarterly subsistence EUR3,047.49 = 0.5 * 1128.70 * 1.8 * 3.
+        net_smic_period_t = net_smic_monthly_t * float(time_unit)
         return 0.5 * net_smic_period_t * np.asarray(consumption_units, dtype=float)
 
     def _update_subsistence_consumption(self, *, replace_current: bool) -> None:

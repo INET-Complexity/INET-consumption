@@ -994,7 +994,8 @@ class TestCountry:
             == 99.0
         )
 
-    def test__subsistence_consumption_updates_with_quarterly_cpi(self):
+    def test__subsistence_consumption_updates_with_annual_cpi(self):
+        """time_unit=12: an annual period sums twelve months of net SMIC."""
         consumption_units = np.array([1.0, 1.5, 2.0])
 
         subsistence_consumption = country_module.Country._compute_subsistence_consumption_from_units(
@@ -1005,21 +1006,27 @@ class TestCountry:
             time_unit=12,
         )
 
-        np.testing.assert_allclose(subsistence_consumption, [55.0, 82.5, 110.0])
+        # 0.5 * (100 * 1.1) * 12 months * CU
+        np.testing.assert_allclose(subsistence_consumption, [660.0, 990.0, 1320.0])
 
     def test__subsistence_consumption_scales_with_time_unit(self):
-        consumption_units = np.array([1.0])
+        """time_unit=3 (quarterly): a period sums three months of net SMIC.
+
+        Locks in the design doc's own worked example (consumption_micro_macro.pdf
+        footnote 3, p.8): monthly net SMIC EUR1,128.70, CU=1.8 -> quarterly
+        subsistence EUR3,047.49 = 0.5 * 1128.70 * 1.8 * 3.
+        """
+        consumption_units = np.array([1.8])
 
         subsistence_consumption = country_module.Country._compute_subsistence_consumption_from_units(
-            net_smic_base=100.0,
+            net_smic_base=1128.70,
             current_cpi=1.0,
             initial_cpi=1.0,
             consumption_units=consumption_units,
             time_unit=3,
         )
 
-        # Monthly net SMIC of 100 scaled to a quarterly period (time_unit=3 months)
-        np.testing.assert_allclose(subsistence_consumption, [0.5 * 100.0 * (3 / 12)])
+        np.testing.assert_allclose(subsistence_consumption, [3047.49], rtol=1e-6)
 
     def test__prepare_post_credit_feasible_activity_plan_revises_labour_and_tax_previews(
         self, test_country, monkeypatch

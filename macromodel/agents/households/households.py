@@ -256,6 +256,17 @@ class Households(Agent):
         use_consumption_weights_by_income (bool): Whether to use income-based weights
     """
 
+    # Wealth-ratio diagnostics from CreditAugmentedConsumption (PR #138 review
+    # finding 2): kept out of _target_consumption_diagnostic_keys deliberately,
+    # so they never enter households_ts.py's TimeSeries zero-init/append/
+    # override machinery. See _ratio_diagnostics_history / save_ratio_diagnostics.
+    _RATIO_DIAGNOSTIC_KEYS = (
+        "target_consumption_ratio_denominator",
+        "target_consumption_net_liquid_assets_ratio",
+        "target_consumption_illiquid_assets_ratio",
+        "target_consumption_housing_wealth_ratio",
+    )
+
     def __init__(
         self,
         country_name: str,
@@ -337,6 +348,14 @@ class Households(Agent):
         self.emission_fractions = emission_fractions
         self._consumption_units_dirty = True
         self._consumption_unit_composition_signature: tuple[tuple[int, int], ...] | None = None
+
+        # Wealth-ratio diagnostics (PR #138 review finding 2): buffered here, not
+        # via self.ts / households_ts.py, and written to HDF5 directly in
+        # save_ratio_diagnostics. Deliberately outside the TimeSeries machinery --
+        # these four arrays exist only to make an already-computed intermediate
+        # inspectable after a run, and do not need TimeSeries's per-period
+        # override/append/aggregate API.
+        self._ratio_diagnostics_history: dict[str, list[np.ndarray]] = {key: [] for key in self._RATIO_DIAGNOSTIC_KEYS}
 
     @classmethod
     def from_pickled_agent(
@@ -1804,6 +1823,7 @@ class Households(Agent):
         income_override: Optional[np.ndarray] = None,
         lagged_income_override: Optional[np.ndarray] = None,
         lagged_cpi: Optional[float] = None,
+        historic_deflator: Optional[np.ndarray] = None,
         house_price_index: Optional[float] = None,
         house_price_growth: Optional[float] = None,
         lagged_house_price_index: Optional[float] = None,
@@ -1818,6 +1838,7 @@ class Households(Agent):
         mortgage_payment: Optional[np.ndarray] = None,
         replace_current_diagnostics: bool = False,
         time_unit: int = 12,
+        subsistence_income: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -1862,6 +1883,10 @@ class Households(Agent):
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
             time_unit (int): Model period length in months, used by credit-augmented consumption
                 to annualize income in its calibrated wealth/income and price/income ratios
+            subsistence_income (Optional[np.ndarray]): CU-adjusted subsistence consumption
+                (Stage 5's ``subsistence_consumption``, half net SMIC per consumption unit).
+                Used only as the geometric-average income denominator's floor when a household
+                has no positive income anywhere in its history window; ignored otherwise
 
         Returns:
             np.ndarray: Target consumption by household
@@ -1905,11 +1930,35 @@ class Households(Agent):
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
             if lagged_housing_wealth is None:
                 lagged_housing_wealth = self.ts.prev("wealth_main_residence") + self.ts.prev("wealth_other_properties")
+            # Income history, and the price-level path aligned to it period-for-period.
+            # The household income row for the CURRENT period already exists here, while
+            # the economy's consumer-price row for it does not yet -- which is why
+            # `current_cpi` is passed separately at all. So a deflator history that is
+            # exactly one period short is the expected case, and the current price level
+            # completes it. Anything else is a genuine misalignment and is left for the
+            # consumption rule to reject rather than silently padded.
+            income_history = np.array(self.ts.historic("expected_income"))
+            deflator_history = None
+            if historic_deflator is not None:
+                deflator_history = np.asarray(historic_deflator, dtype=float).reshape(-1)
+                if deflator_history.size == income_history.shape[0] - 1:
+                    deflator_history = np.concatenate([deflator_history, [float(current_cpi)]])
+
             target_consumption = self.functions["consumption"].compute_target_consumption(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
                 historic_consumption_sum=np.array(self.ts.historic("consumption")),
+                # Income history for the geometric-average ratio denominator used by
+                # the v2 continuous calibration (ignored by rules that divide by
+                # current income). Same accessor and shape convention as the
+                # consumption history above: (periods, households).
+                historic_income=income_history,
+                # One price level per period of that history. Required by the
+                # geometric-average denominator: each observation must be deflated by
+                # its OWN period's price level, not by the current one.
+                historic_deflator=deflator_history,
+                subsistence_income=subsistence_income,
                 saving_rates=saving_rates,
                 income=income,
                 household_benefits=self.states["Number of Adults"] * per_capita_unemployment_benefits
@@ -2520,6 +2569,7 @@ class Households(Agent):
                 self.ts.override_current("formula_implied_mpc", np.zeros(n_households))
             else:
                 self.ts.formula_implied_mpc.append(np.zeros(n_households))
+            self._buffer_ratio_diagnostics({}, n_households, replace_current=replace_current)
             return
 
         components = consumption_function.last_target_consumption_components
@@ -2534,6 +2584,28 @@ class Households(Agent):
             self.ts.override_current("formula_implied_mpc", formula_implied_mpc)
         else:
             self.ts.formula_implied_mpc.append(formula_implied_mpc)
+        self._buffer_ratio_diagnostics(components, n_households, replace_current=replace_current)
+
+    def _buffer_ratio_diagnostics(
+        self,
+        components: dict[str, np.ndarray],
+        n_households: int,
+        *,
+        replace_current: bool,
+    ) -> None:
+        """Buffer the wealth-ratio diagnostics (finding 2) outside self.ts.
+
+        Mirrors ts.override_current/.append's replace-vs-append semantics for the
+        history list itself, since compute_target_consumption runs twice per period
+        (planning pass, then authoritative pass) under replace_current_diagnostics.
+        """
+        for key in self._RATIO_DIAGNOSTIC_KEYS:
+            value = np.asarray(components.get(key, np.zeros(n_households)), dtype=float)
+            history = self._ratio_diagnostics_history[key]
+            if replace_current and history:
+                history[-1] = value
+            else:
+                history.append(value)
 
     @staticmethod
     def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
@@ -3896,6 +3968,24 @@ class Households(Agent):
         """
         group.create_dataset("household_consumption_weights_by_income", data=self.consumption_weights.T)
         group["household_consumption_weights_by_income"].attrs["columns"] = list(range(self.n_industries))
+
+    def save_ratio_diagnostics(self, group: h5py.Group):
+        """Save the wealth-ratio diagnostics buffered outside self.ts (PR #138 finding 2).
+
+        Written as (periods, households) datasets alongside, but independent of,
+        the TimeSeries-derived datasets under the "households" subgroup -- see
+        _RATIO_DIAGNOSTIC_KEYS / _buffer_ratio_diagnostics for why these bypass
+        households_ts.py.
+
+        Args:
+            group (h5py.Group): HDF5 storage group (must already contain "households",
+                i.e. called after save_to_h5)
+        """
+        households_group = group["households"]
+        for key in self._RATIO_DIAGNOSTIC_KEYS:
+            history = self._ratio_diagnostics_history[key]
+            if history:
+                households_group.create_dataset(key, data=np.asarray(history, dtype=float))
 
     def total_consumption(self) -> np.ndarray:
         """Get total consumption time series.

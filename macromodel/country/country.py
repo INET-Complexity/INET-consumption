@@ -762,7 +762,16 @@ class Country:
     ) -> np.ndarray:
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
         net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
-        net_smic_period_t = net_smic_monthly_t * (float(time_unit) / 12.0)
+        # net_smic_base (and therefore net_smic_monthly_t) is a MONTHLY level
+        # (macro_data/readers/insee_smic.py's net_monthly_smic), and time_unit is
+        # months per model period -- so a period's worth is time_unit MONTHS summed,
+        # i.e. net_smic_monthly_t * time_unit. The previous `* (time_unit / 12.0)`
+        # applied the annual-RATE-to-period conversion used elsewhere in this file
+        # to a monthly LEVEL, undershooting by a factor of 12 for a quarterly model
+        # (0.25x instead of 3x). Verified against the design doc's worked example
+        # (consumption_micro_macro.pdf footnote 3, p.8): monthly SMIC EUR1,128.70,
+        # CU=1.8 -> quarterly subsistence EUR3,047.49 = 0.5 * 1128.70 * 1.8 * 3.
+        net_smic_period_t = net_smic_monthly_t * float(time_unit)
         return 0.5 * net_smic_period_t * np.asarray(consumption_units, dtype=float)
 
     def _update_subsistence_consumption(self, *, replace_current: bool) -> None:
@@ -1342,6 +1351,12 @@ class Country:
             house_price_index=self.economy.ts.current("hpi")[0],
             house_price_growth=self.economy.ts.current("hpi_inflation")[0],
             lagged_cpi=self.economy.ts.prev(self.economy.consumer_price_level_series_name())[0],
+            # Full consumer-price history, aligned period-for-period with the income
+            # history households reads, so the geometric-average income denominator can
+            # deflate each observation at its own price level.
+            historic_deflator=np.asarray(
+                self.economy.ts.historic(self.economy.consumer_price_level_series_name())
+            ).reshape(-1),
             lagged_house_price_index=self.economy.ts.prev("hpi")[0],
             real_borrowing_rate=real_borrowing_rate,
             consumer_debt_rate_delta=consumer_debt_rate_delta,
@@ -1352,6 +1367,12 @@ class Country:
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
             time_unit=self.economy.time_unit,
+            # CU-adjusted subsistence consumption (half net SMIC per consumption
+            # unit), already refreshed above by _update_subsistence_consumption
+            # (line 1189). Used only as the geometric-average income denominator's
+            # floor for a household with no positive income anywhere in its
+            # history window (PR #138 review finding 1); ignored otherwise.
+            subsistence_income=self.economy.ts.current("subsistence_consumption"),
         )
 
         if replace_current:
@@ -3360,6 +3381,7 @@ class Country:
         self.individuals.save_to_h5(group)
         self.households.save_to_h5(group)
         self.households.save_consumption_weights(group)
+        self.households.save_ratio_diagnostics(group)
         self.government_entities.save_to_h5(group)
         self.central_government.save_to_h5(group)
         self.banks.save_to_h5(group)

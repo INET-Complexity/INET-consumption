@@ -10,13 +10,13 @@ RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
+from config import CALIBRATED_CONSUMPTION_OVERRIDES, SCENARIO_PRESETS  # noqa: E402
 from src.diagnostics.firm_finance import (  # noqa: E402
     FIRM_FINANCE_SERIES,
     build_firm_balance_sheet_ratios,
     summarize_firm_balance_sheet_ratios,
 )
 from src.diagnostics.income import permanent_income_by_decile  # noqa: E402
-from config import CALIBRATED_CONSUMPTION_OVERRIDES, SCENARIO_PRESETS  # noqa: E402
 from src.notebook_state import (  # noqa: E402
     NotebookRunState,
     validate_notebook_state,

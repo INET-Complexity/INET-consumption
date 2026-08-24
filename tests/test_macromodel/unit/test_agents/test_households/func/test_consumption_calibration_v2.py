@@ -167,6 +167,22 @@ class TestGeometricAverageIncome:
         history = np.array([[4.0], [9.0]])
         np.testing.assert_allclose(rule._geometric_average_income(history, 2.0, np.full(2, 2.0)), [3.0])
 
+    def test_no_positive_income_requires_subsistence_income(self):
+        """No silent fallback (finding 1): flooring at income_floor here reintroduces
+        the issue #90 near-zero-denominator blow-up this method exists to prevent."""
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=2)
+        history = np.array([[0.0, 4.0], [-5.0, 9.0]])
+        with pytest.raises(ValueError, match="subsistence_income"):
+            rule._geometric_average_income(history, 1.0, np.ones(2))
+
+    def test_no_positive_income_floors_at_subsistence_income(self):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=2)
+        history = np.array([[0.0, 4.0], [-5.0, 9.0]])
+        got = rule._geometric_average_income(history, 1.0, np.ones(2), subsistence_income=np.array([777.0, 1.0]))
+        # Household 0 has no positive observation -> floors at its subsistence_income.
+        # Household 1 is unaffected -> ordinary geometric mean of [4, 9].
+        np.testing.assert_allclose(got, [777.0, 6.0])
+
     def test_rejects_one_dimensional_history(self):
         rule = _rule(income_denominator="geometric_average")
         with pytest.raises(ValueError, match="2-D"):
@@ -179,7 +195,6 @@ class TestConfigValidation:
         [
             ({"income_denominator": "mean"}, "income_denominator"),
             ({"income_denominator_window": 0}, "window"),
-            ({"income_denominator_min_periods": 0}, "min_periods"),
             ({"idiosyncratic_persistence": "ar1"}, "persistence"),
             ({"continuous_wealth_calibration": dict(V2, index_construction="pca")}, "index_construction"),
         ],

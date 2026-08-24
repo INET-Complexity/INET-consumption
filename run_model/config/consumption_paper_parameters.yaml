@@ -198,9 +198,8 @@ desired_consumption:
     income_denominator: geometric_average
     income_denominator_window: 20          # periods (5 years at quarterly)
     # Warm-up: a household with fewer than `window` observed periods uses the
-    # geometric mean of whatever history it has, so the denominator converges
-    # smoothly rather than jumping at a switchover period.
-    income_denominator_min_periods: 1
+    # geometric mean of whatever positive history it has, so the denominator
+    # converges smoothly rather than jumping at a switchover period.
     continuous_wealth_calibration:
       # ---- PROVISIONAL: two known boundary problems are ported as-is ----
       # 1. c_alpha sits at its UPPER bound (1.000), so alpha_2 spans only

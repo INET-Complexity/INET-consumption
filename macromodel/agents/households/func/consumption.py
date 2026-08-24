@@ -660,7 +660,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         idiosyncratic_seed: int | None = None,
         income_denominator: str = "current",
         income_denominator_window: int = 20,
-        income_denominator_min_periods: int = 1,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -822,14 +821,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             )
         if income_denominator_window < 1:
             raise ValueError(f"income_denominator_window must be >= 1, got {income_denominator_window}.")
-        if not 1 <= income_denominator_min_periods <= income_denominator_window:
-            raise ValueError(
-                "income_denominator_min_periods must lie in [1, income_denominator_window], got "
-                f"{income_denominator_min_periods}."
-            )
         self.income_denominator = income_denominator
         self.income_denominator_window = int(income_denominator_window)
-        self.income_denominator_min_periods = int(income_denominator_min_periods)
 
         # Retained for config compatibility only; these do not enter Stage 2 target.
         self.rent_propensity = rent_propensity
@@ -977,6 +970,17 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         redrawn. ``persistence='iid'`` redraws every call and is provided only for
         comparison -- it breaks the MPC probe by construction and is not a
         supported production setting.
+
+        The cache is indexed by array position, not household identity -- there is
+        no household-id concept anywhere in this codebase to do otherwise. That is
+        safe only because position IS identity today: nothing in the current
+        demography (``NoAging``) ever shrinks the population. If a future
+        demography does, a household later re-occupying a freed position would
+        silently inherit the departed household's shock. Rather than build unused
+        identity-tracking machinery for a scenario that cannot occur yet, a
+        shrink is refused outright below, so that if this assumption is ever
+        violated it fails loudly at the point of violation instead of silently
+        misattributing a taste shock.
         """
         if self.idiosyncratic_sd <= 0.0:
             return np.zeros(n_households, dtype=float)
@@ -989,6 +993,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             self._household_epsilon = np.concatenate(
                 [self._household_epsilon, self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, extra)]
             )
+        elif self._household_epsilon.size > n_households:
+            raise ValueError(
+                f"Household count shrank from {self._household_epsilon.size} to {n_households}. "
+                "The cached idiosyncratic effect is indexed by array position, not household "
+                "identity, so a later regrowth could silently hand a new household the departed "
+                "household's shock at that position. Refusing rather than handling this "
+                "silently; call set_run_seed() to reset the cache if the shrink is intentional."
+            )
         return self._household_epsilon[:n_households]
 
     def _geometric_average_income(
@@ -996,6 +1008,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         historic_income: np.ndarray,
         deflator: float,
         historic_deflator: np.ndarray | None = None,
+        subsistence_income: np.ndarray | float | None = None,
     ) -> np.ndarray:
         """Trailing geometric mean of real income over the configured window.
 
@@ -1005,9 +1018,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         coefficients applicable to the simulated ratios at all.
 
         Computed in logs on positive observations only. A household with fewer than
-        ``income_denominator_window`` periods of history uses whatever it has (down
-        to ``income_denominator_min_periods``), so the denominator converges smoothly
-        instead of jumping when the window first fills.
+        ``income_denominator_window`` periods of history uses whatever positive
+        observations it has, so the denominator converges smoothly instead of
+        jumping when the window first fills.
 
         EACH observation is deflated by the price level of ITS OWN period. Deflating
         the whole window by the current price level instead -- which an earlier
@@ -1017,6 +1030,15 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         over the window, so the bias GROWS with the price level, inflating every
         wealth ratio and driving the wealth-drag clip. ``historic_deflator`` is
         therefore required whenever the window reaches back more than one period.
+
+        A household with NO positive income anywhere in the window floors at
+        ``subsistence_income`` (CU-adjusted subsistence consumption -- half net SMIC
+        per consumption unit, the same concept Stage 5 uses as its floor), not at
+        ``income_floor``. Flooring at ``income_floor`` (1e-12) here is exactly the
+        near-zero-denominator blow-up mechanism behind issue #90 that this method
+        exists to prevent -- every wealth ratio divides by this value. No silent
+        fallback: if this case can occur for the caller's inputs, it must supply
+        ``subsistence_income``.
         """
         history = np.asarray(historic_income, dtype=float)
         if history.ndim != 2:
@@ -1044,13 +1066,26 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         log_sum = np.where(usable, np.log(np.maximum(window, self.income_floor)), 0.0).sum(axis=0)
         with np.errstate(invalid="ignore", divide="ignore"):
             geometric = np.exp(log_sum / np.maximum(n_usable, 1))
-        # Below the minimum-periods threshold there is not enough history to form the
-        # average; fall back to the most recent positive observation rather than
-        # inventing one.
-        insufficient = n_usable < self.income_denominator_min_periods
+        # No positive observation anywhere in the window: there is nothing to average.
+        # Floor at subsistence_income (see docstring), not income_floor -- that was
+        # the issue #90 blow-up this method exists to prevent.
+        # (`income_denominator_min_periods` used to make this threshold configurable;
+        # removed as dead code -- every shipped config set it to 1, its minimum legal
+        # value, which is exactly this n_usable == 0 condition.)
+        insufficient = n_usable == 0
         if insufficient.any():
-            latest = np.where(usable[-1], window[-1], self.income_floor)
-            geometric = np.where(insufficient, latest, geometric)
+            if subsistence_income is None:
+                raise ValueError(
+                    f"{int(insufficient.sum())} household(s) have no positive income anywhere in the "
+                    "geometric-average income window, and no subsistence_income floor was supplied. "
+                    "Flooring at income_floor here would reintroduce the near-zero-denominator blow-up "
+                    "(issue #90) this method exists to prevent; pass subsistence_income explicitly."
+                )
+            floor = np.maximum(
+                np.broadcast_to(np.asarray(subsistence_income, dtype=float), geometric.shape),
+                self.income_floor,
+            )
+            geometric = np.where(insufficient, floor, geometric)
         return np.maximum(geometric, self.income_floor)
 
     def _clip_wealth_drag(
@@ -1365,6 +1400,16 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_real_housing_wealth": real_housing_wealth,
             "target_consumption_real_lagged_housing_wealth": real_lagged_housing_wealth,
             "target_consumption_real_consumer_debt": real_consumer_debt,
+            # The wealth-ratio denominator actually divided by (finding 2, PR #138
+            # review): under "geometric_average" this is the smoothed multi-year
+            # income from _geometric_average_income; under "current" it is
+            # annual_spendable_income. Persisted so the value driving the
+            # wealth-drag clip is inspectable after a run instead of only
+            # reconstructible by approximation.
+            "target_consumption_ratio_denominator": ratio_denominator_arr,
+            "target_consumption_net_liquid_assets_ratio": net_liquid_assets_ratio,
+            "target_consumption_illiquid_assets_ratio": illiquid_assets_ratio,
+            "target_consumption_housing_wealth_ratio": housing_wealth_ratio,
             "target_consumption_rent": np.zeros_like(real_spendable_income),
             "target_consumption_mortgage_debt": np.zeros_like(real_spendable_income),
             "target_consumption_mortgage_payment": np.zeros_like(real_spendable_income),
@@ -1443,6 +1488,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_real_consumption_budget: np.ndarray = None,
         historic_income: np.ndarray = None,
         historic_deflator: np.ndarray = None,
+        subsistence_income: np.ndarray | float | None = None,
     ) -> np.ndarray:
         if lagged_consumption is None:
             lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
@@ -1489,7 +1535,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     "income_denominator='geometric_average' requires historic_income "
                     "(periods x households); none was supplied by the caller."
                 )
-            ratio_denominator = self._geometric_average_income(historic_income, current_cpi, historic_deflator)
+            ratio_denominator = self._geometric_average_income(
+                historic_income, current_cpi, historic_deflator, subsistence_income
+            )
         else:
             ratio_denominator = None
 

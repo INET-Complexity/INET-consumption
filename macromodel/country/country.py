@@ -1285,6 +1285,12 @@ class Country:
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
             time_unit=self.economy.time_unit,
+            # CU-adjusted subsistence consumption (half net SMIC per consumption
+            # unit), already refreshed above by _update_subsistence_consumption
+            # (line 1189). Used only as the geometric-average income denominator's
+            # floor for a household with no positive income anywhere in its
+            # history window (PR #138 review finding 1); ignored otherwise.
+            subsistence_income=self.economy.ts.current("subsistence_consumption"),
         )
 
         if replace_current:
@@ -3299,6 +3305,7 @@ class Country:
         self.individuals.save_to_h5(group)
         self.households.save_to_h5(group)
         self.households.save_consumption_weights(group)
+        self.households.save_ratio_diagnostics(group)
         self.government_entities.save_to_h5(group)
         self.central_government.save_to_h5(group)
         self.banks.save_to_h5(group)

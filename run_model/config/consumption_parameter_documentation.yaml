@@ -106,15 +106,16 @@ stage_2:
         source: households.ts.prev.consumption_loan_debt
         excludes_mortgage_debt: true
       real_borrowing_rate:
-        source: annual_average_consumer_loan_rate_and_expected_cpi_inflation
+        source: credit_market.current_household_contractual_consumer_and_mortgage_rates_and_expected_cpi_inflation
         formula: exact_period_fisher_then_geometric_annualization
         frequency: effective_annual_decimal
+        weights: household_outstanding_contractual_consumer_and_mortgage_principal
       permanent_income_log_ratio:
         source: stage_3.income_belief_learning
         default_when_unavailable: 0.0
       consumer_debt_rate_delta:
-        source: annual_average_consumer_loan_rate
-        formula: periods_per_year_times_current_period_rate_minus_lagged_period_rate
+        source: credit_market.latest_ordinary_consumer_debt_refinancing
+        formula: periods_per_year_times_(new_contractual_period_rate_minus_old_contractual_period_rate)
         frequency: quoted_annual_decimal
       uncertainty_delta:
         source: stage_3.income_belief_learning

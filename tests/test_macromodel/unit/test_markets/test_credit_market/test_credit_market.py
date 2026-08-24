@@ -484,6 +484,126 @@ def test_household_service_snapshot_excludes_current_consumer_originations():
         snapshot.consumer_total_due[0] = 0.0
 
 
+def test_consumer_refinancing_records_only_realized_contractual_repricing_for_cacf():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
+    cons_loans[0, 0, 0] = 100.0
+    cons_loans[1, 0, 0] = 0.02
+    cons_loans[2, 0, 0] = 100.0 * _annuity_payment_factor(0.02, 8)
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(2, 2),
+    )
+    new_loans = _empty_loan_state(2, 2)
+    new_loans[0, 0, 0] = 30.0
+    new_loans[1, 0, 0] = 0.03
+    new_loans[2, 0, 0] = 30.0 * _annuity_payment_factor(0.03, 8)
+    new_loans[0, 1, 0] = 20.0
+    new_loans[1, 1, 0] = 0.05
+    new_loans[2, 1, 0] = 20.0 * _annuity_payment_factor(0.05, 8)
+    new_loans[0, 1, 1] = 25.0
+    new_loans[1, 1, 1] = 0.04
+    new_loans[2, 1, 1] = 25.0 * _annuity_payment_factor(0.04, 8)
+    market._pending_consumer_loans_this_period = new_loans
+
+    market.settle_granted_consumption_loans(
+        credit_granted=new_loans[0].sum(axis=0),
+        granted_consumer_credit_by_bank_and_household=new_loans[0],
+        consumer_loan_maturity=8,
+    )
+    snapshot = market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(snapshot.consumer_total_due)
+    market.finalize_household_consumer_schedule()
+
+    # Household 0 refinances an existing fixed-rate balance; household 1 is a
+    # first-time borrower and has no prior contractual rate to reprice.
+    refinanced_rate = (30.0 * 0.03 + 20.0 * 0.05) / 50.0
+    np.testing.assert_allclose(market.consumer_debt_rate_delta_for_cacf(), np.array([refinanced_rate - 0.02, 0.0]))
+    expected_payment = 150.0 * _annuity_payment_factor(refinanced_rate, 8)
+    np.testing.assert_allclose(market.states["cons_loans"][2, :, 0].sum(), expected_payment)
+
+
+def test_no_consumer_refinancing_leaves_cacf_rate_delta_at_zero():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[0, 0, 0] = 100.0
+    cons_loans[1, 0, 0] = 0.02
+    cons_loans[2, 0, 0] = 20.0
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+
+    market._consumer_debt_rate_delta_for_cacf[:] = 0.03
+    snapshot = market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(snapshot.consumer_total_due)
+    market.finalize_household_consumer_schedule()
+
+    np.testing.assert_allclose(market.consumer_debt_rate_delta_for_cacf(), np.zeros(1))
+
+
+def test_household_borrowing_rates_weight_contractual_consumer_and_mortgage_debt():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
+    mort_loans = _empty_loan_state(n_banks=2, n_borrowers=2)
+    cons_loans[:, :, 0] = np.array([[100.0, 50.0], [0.02, 0.06], [0.0, 0.0]])
+    mort_loans[:, :, 0] = np.array([[300.0, 0.0], [0.03, 0.0], [0.0, 0.0]])
+    mort_loans[:, :, 1] = np.array([[0.0, 200.0], [0.0, 0.04], [0.0, 0.0]])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=mort_loans,
+    )
+
+    rates = market.household_debt_weighted_period_borrowing_rates()
+
+    np.testing.assert_allclose(rates, np.array([(100.0 * 0.02 + 50.0 * 0.06 + 300.0 * 0.03) / 450.0, 0.04]))
+
+
+def test_distress_rescheduling_clears_ordinary_cacf_repricing_shock():
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[:, 0, 0] = np.array([100.0, 0.02, 100.0 * _annuity_payment_factor(0.02, 8)])
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    new_loans = _empty_loan_state(1, 1)
+    new_loans[:, 0, 0] = np.array([30.0, 0.06, 30.0 * _annuity_payment_factor(0.06, 8)])
+    market._pending_consumer_loans_this_period = new_loans
+    market.settle_granted_consumption_loans(
+        credit_granted=np.array([30.0]),
+        granted_consumer_credit_by_bank_and_household=new_loans[0],
+        consumer_loan_maturity=8,
+    )
+    market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(np.zeros(1))
+    # The ordinary refinance is staged first, then a distress schedule takes
+    # precedence before the next-period contract is finalized.
+    market._first_miss_rescheduling_households[:] = True
+    market._first_miss_rescheduling_rates[:] = 0.04
+    market._first_miss_rescheduling_maturity[:] = 9
+    market.finalize_household_consumer_schedule()
+
+    np.testing.assert_allclose(market.consumer_debt_rate_delta_for_cacf(), np.zeros(1))
+    np.testing.assert_allclose(market.states["cons_loans"][1, 0], np.array([0.04]))
+
+    market._consumer_debt_rate_delta_for_cacf[:] = 0.01
+    market.remodulate_ficp_consumer_loan_schedule(
+        active_ficp=np.array([True]),
+        remaining_periods=np.array([4.0]),
+        prevailing_consumer_loan_rates_by_bank=np.array([0.05]),
+    )
+    np.testing.assert_allclose(market.consumer_debt_rate_delta_for_cacf(), np.zeros(1))
+
+
 def test_partial_consumer_payment_respects_interest_before_principal():
     cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
     cons_loans[0, :, 0] = 100.0

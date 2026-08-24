@@ -538,6 +538,13 @@ class CreditMarket:
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period: np.ndarray | None = None
         self._consumer_loan_remodulation_maturity: int | None = None
+        n_households = self.states["cons_loans"].shape[2]
+        # Lean state carried into the next CACF target calculation. It is not a
+        # household time series: the cashflow channel needs only the latest
+        # realized refinancing repricing.
+        self._consumer_debt_rate_delta_for_cacf = np.zeros(n_households)
+        self._consumer_refinancing_opening_principal = np.zeros(n_households)
+        self._consumer_refinancing_opening_rate = np.zeros(n_households)
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
@@ -763,6 +770,10 @@ class CreditMarket:
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period = None
         self._consumer_loan_remodulation_maturity = None
+        n_households = self.states["cons_loans"].shape[2]
+        self._consumer_debt_rate_delta_for_cacf = np.zeros(n_households)
+        self._consumer_refinancing_opening_principal = np.zeros(n_households)
+        self._consumer_refinancing_opening_rate = np.zeros(n_households)
         self._firm_interest_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._firm_principal_arrears_by_cell = _zero_like_firm_service_schedule(self.states)
         self._consumer_interest_arrears_by_cell = np.zeros_like(self.states["cons_loans"][0])
@@ -1185,6 +1196,13 @@ class CreditMarket:
         if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit principal was mutated before Stage 6 settlement.")
         self._add_new_loans("cons_loans", pending_loans)
+        self._consumer_refinancing_opening_principal = opening_principal.sum(axis=0)
+        self._consumer_refinancing_opening_rate = np.divide(
+            (opening_principal * self._serviceable_loans_this_period["cons_loans"][1]).sum(axis=0),
+            self._consumer_refinancing_opening_principal,
+            out=np.zeros_like(self._consumer_refinancing_opening_principal),
+            where=self._consumer_refinancing_opening_principal > 0.0,
+        )
         self._consumer_loan_remodulation_maturity = consumer_loan_maturity
         booked_principal = self.states["cons_loans"][0] - opening_principal
         if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
@@ -1404,6 +1422,7 @@ class CreditMarket:
         snapshot = self.current_household_service_snapshot()
         if self._consumer_payment_settlement is None:
             raise RuntimeError("Consumer service must be settled before schedule remodulation.")
+        self._consumer_debt_rate_delta_for_cacf.fill(0.0)
         if self._consumer_loan_remodulation_maturity is not None:
             self._remodulate_settled_consumer_loan_schedule(
                 settled_loans=snapshot.newly_granted_consumer_loans,
@@ -1468,6 +1487,10 @@ class CreditMarket:
             )
         aggregate_payment = aggregate_principal * annuity_factor
         remodulated = active & (aggregate_principal > 0.0)
+        # FICP terms supersede any ordinary refinancing written earlier in the
+        # period.  The CACF cashflow channel must describe the final ordinary
+        # contractual schedule only, so do not retain a stale repricing shock.
+        self._consumer_debt_rate_delta_for_cacf[remodulated] = 0.0
         loans[1][:, remodulated] = prevailing_rate[None, remodulated]
         loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
 
@@ -1562,6 +1585,10 @@ class CreditMarket:
         remodulated = self._first_miss_rescheduling_households
         if not np.any(remodulated):
             return
+        # First-miss terms overwrite the ordinary refinancing schedule.  They
+        # are excluded from the CACF cashflow mechanism, so clear any shock
+        # recorded before this distress rescheduling step.
+        self._consumer_debt_rate_delta_for_cacf[remodulated] = 0.0
         loans = self.states["cons_loans"]
         aggregate_principal = loans[0].sum(axis=0)
         payment_shares = np.divide(
@@ -1605,6 +1632,10 @@ class CreditMarket:
             out=np.zeros_like(settled_principal),
             where=remodulated,
         )
+        refinanced_existing_debt = remodulated & (self._consumer_refinancing_opening_principal > 0.0)
+        self._consumer_debt_rate_delta_for_cacf[refinanced_existing_debt] = (
+            settled_rate[refinanced_existing_debt] - self._consumer_refinancing_opening_rate[refinanced_existing_debt]
+        )
         aggregate_principal = loans[0].sum(axis=0)
         aggregate_payment = aggregate_principal * _annuity_payment_factor(
             settled_rate,
@@ -1623,6 +1654,51 @@ class CreditMarket:
             0.0,
         )
         loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
+
+    def consumer_debt_rate_delta_for_cacf(self) -> np.ndarray:
+        """Return realized period-rate repricing from the latest ordinary refinancing.
+
+        Existing consumer debt is fixed-rate until a household receives new
+        consumer credit. That event remodulates the entire balance at the
+        prevailing rate and resets its maturity to the configured full term.
+        First-time borrowing, missed-payment rescheduling, and FICP
+        restructuring do not enter this CACF cashflow input.
+        """
+        return self._consumer_debt_rate_delta_for_cacf.copy()
+
+    def household_debt_weighted_period_borrowing_rates(self) -> np.ndarray:
+        """Return household contractual borrowing rates weighted by debt principal.
+
+        The paper's long-run rate uses each household's consumer-loan and
+        mortgage rates weighted by their respective outstanding principal.
+        Consumer arrears are deliberately excluded: they have no independent
+        contractual rate in the lean state representation.
+        """
+        consumer_principal = self.states["cons_loans"][0]
+        mortgage_principal = self.states["mort_loans"][0]
+        consumer_rate = self.states["cons_loans"][1]
+        mortgage_rate = self.states["mort_loans"][1]
+
+        active_consumer = consumer_principal > 0.0
+        active_mortgage = mortgage_principal > 0.0
+        if (
+            not np.all(np.isfinite(consumer_rate[active_consumer]))
+            or np.any(consumer_rate[active_consumer] < 0.0)
+            or not np.all(np.isfinite(mortgage_rate[active_mortgage]))
+            or np.any(mortgage_rate[active_mortgage] < 0.0)
+        ):
+            raise RuntimeError("Active household loans must have finite, non-negative contractual rates.")
+
+        debt_principal = consumer_principal.sum(axis=0) + mortgage_principal.sum(axis=0)
+        rate_weighted_principal = np.where(active_consumer, consumer_principal * consumer_rate, 0.0).sum(
+            axis=0
+        ) + np.where(active_mortgage, mortgage_principal * mortgage_rate, 0.0).sum(axis=0)
+        return np.divide(
+            rate_weighted_principal,
+            debt_principal,
+            out=np.zeros_like(debt_principal),
+            where=debt_principal > 0.0,
+        )
 
     def _service_loans(self, loan_keys: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Service loans that existed before current-quarter origination."""
@@ -2083,6 +2159,7 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit settlement must be booked before household loan servicing.")
         new_consumer_loans = self._new_loans_this_period["cons_loans"].copy()
         principal_paid, interest_paid, interest_by_bank = self._service_loans(("cons_loans", "mort_loans"))
+        self._consumer_debt_rate_delta_for_cacf.fill(0.0)
         if self._consumer_loan_remodulation_maturity is not None:
             self._remodulate_settled_consumer_loan_schedule(
                 settled_loans=new_consumer_loans,

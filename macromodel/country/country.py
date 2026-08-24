@@ -1254,18 +1254,47 @@ class Country:
 
         expected_consumer_inflation = self.economy.current_expected_consumer_period_inflation()
         n_periods_per_year = periods_per_year(self.economy.time_unit)
-        current_consumer_rate = float(np.mean(self.banks.ts.current("interest_rates_on_household_consumption_loans")))
-        lagged_consumer_rate = float(np.mean(self.banks.ts.prev("interest_rates_on_household_consumption_loans")))
+        contractual_borrowing_rates = self.credit_market.household_debt_weighted_period_borrowing_rates()
+        expected_household_shape = (self.households.ts.current("n_households"),)
+        if contractual_borrowing_rates.shape != expected_household_shape:
+            # Some lightweight fixtures intentionally use a placeholder credit
+            # market with no one-to-one household loan state.  They can
+            # represent only the no-debt case; applying its rate state to a
+            # different household population would violate the paper weights.
+            if np.any(contractual_borrowing_rates != 0.0):
+                raise ValueError(
+                    "Household borrowing rates must have one value per household when debt is outstanding."
+                )
+            contractual_borrowing_rates = np.zeros(expected_household_shape)
         real_consumer_borrowing_rate = annualized_fisher_real_rate(
-            current_consumer_rate,
+            contractual_borrowing_rates,
             expected_consumer_inflation,
             n_periods_per_year,
         )
-        # Bank loan rates are stored as quoted annual rates divided by periods
-        # per year. Recover the quoted annual change linearly for the CACF
-        # cashflow coefficient; this is distinct from effective annual Fisher
-        # conversion, which compounds gross real returns above.
-        consumer_debt_rate_delta = n_periods_per_year * (current_consumer_rate - lagged_consumer_rate)
+        # The paper's debt-weighted rate is undefined for households with no
+        # contractual debt. Keep their long-run-rate input neutral rather than
+        # turning expected inflation into a spurious negative borrowing rate.
+        real_consumer_borrowing_rate = np.where(
+            contractual_borrowing_rates > 0.0,
+            real_consumer_borrowing_rate,
+            0.0,
+        )
+        # Existing consumer debt is fixed-rate until new borrowing remodulates
+        # the aggregate balance. The CACF cashflow input therefore uses only
+        # the realized contractual repricing from that event, not an
+        # unconditional movement in currently offered bank rates.
+        consumer_debt_rate_delta = self.credit_market.consumer_debt_rate_delta_for_cacf()
+        if consumer_debt_rate_delta.shape != expected_household_shape:
+            # Some lightweight fixtures intentionally use a placeholder credit
+            # market with no one-to-one household loan state. It can represent
+            # the no-refinancing case only; a non-zero cashflow input without a
+            # household mapping would be economically meaningless.
+            if np.any(consumer_debt_rate_delta != 0.0):
+                raise ValueError(
+                    "Consumer-debt refinancing rates must have one value per household when they are non-zero."
+                )
+            consumer_debt_rate_delta = np.zeros(expected_household_shape)
+        consumer_debt_rate_delta = n_periods_per_year * consumer_debt_rate_delta
 
         target_consumption = self.households.compute_target_consumption(
             expected_inflation=expected_consumer_inflation,

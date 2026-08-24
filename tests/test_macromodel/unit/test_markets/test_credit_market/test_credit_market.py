@@ -357,6 +357,28 @@ def test_ficp_schedule_remodulation_uses_remaining_horizon(test_credit_market):
     np.testing.assert_allclose(market.states["cons_loans"][2, 0], expected_payment)
 
 
+def test_ficp_rescheduling_ignores_nan_rates_on_inactive_loans():
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
+    cons_loans[:, 0, 0] = np.array([100.0, 0.02, 20.0])
+    cons_loans[1, 1, 0] = np.nan
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(2, 1),
+    )
+
+    market.remodulate_ficp_consumer_loan_schedule(
+        active_ficp=np.array([True]),
+        remaining_periods=np.array([20.0]),
+    )
+
+    expected_payment = 100.0 * _annuity_payment_factor(0.02, 20)
+    np.testing.assert_allclose(market.states["cons_loans"][1, 0, 0], 0.02)
+    np.testing.assert_allclose(market.states["cons_loans"][2, 0, 0], expected_payment)
+
+
 def test_granted_consumption_loan_settlement_reconciles_both_balance_sheet_sides(test_credit_market):
     test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])
@@ -908,14 +930,15 @@ def test_consumer_arrears_carry_collect_once_and_remodulate_new_credit_next_peri
 
 
 def test_first_missed_consumer_payment_records_one_rescheduling_event_and_extends_schedule():
-    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
     cons_loans[:, 0, 0] = np.array([100.0, 0.10, 30.0])
-    mort_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[1, 1, 0] = np.nan
+    mort_loans = _empty_loan_state(n_banks=2, n_borrowers=1)
     mort_loans[:, 0, 0] = np.array([250.0, 0.03, 20.0])
     market = CreditMarket.from_data(
         country_name="TST",
-        st_loans=_empty_loan_state(1, 1),
-        lt_loans=_empty_loan_state(1, 1),
+        st_loans=_empty_loan_state(2, 1),
+        lt_loans=_empty_loan_state(2, 1),
         cons_loans=cons_loans,
         mort_loans=mort_loans,
     )

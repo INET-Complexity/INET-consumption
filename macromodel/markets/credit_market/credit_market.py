@@ -163,7 +163,11 @@ def _scheduled_service_components(
         np.zeros_like(loans[0]) if opening_principal_arrears is None else np.maximum(opening_principal_arrears, 0.0)
     )
     interest_base = loans[0] if principal_arrears_accrue_interest else np.maximum(loans[0] - principal_arrears, 0.0)
-    interest_due = interest_base * loans[1]
+    active_interest = interest_base > 0.0
+    if not np.all(np.isfinite(loans[1][active_interest])):
+        raise RuntimeError("Active household loans must have finite contractual rates.")
+    interest_due = np.zeros_like(interest_base)
+    np.multiply(interest_base, loans[1], out=interest_due, where=active_interest)
     raw_principal_due = np.minimum(
         loans[0],
         np.maximum(loans[2] - interest_due, 0.0),
@@ -1498,8 +1502,11 @@ class CreditMarket:
             out=np.zeros_like(loans[0]),
             where=aggregate_principal[None, :] > 0.0,
         )
+        active_loans = loans[0] > 0.0
+        weighted_principal = np.zeros_like(loans[0])
+        np.multiply(loans[0], loans[1], out=weighted_principal, where=active_loans)
         contractual_rate = np.divide(
-            (loans[0] * loans[1]).sum(axis=0),
+            weighted_principal.sum(axis=0),
             aggregate_principal,
             out=np.zeros_like(aggregate_principal),
             where=aggregate_principal > 0.0,
@@ -1566,8 +1573,11 @@ class CreditMarket:
         closing_principal_arrears = settlement.arrears.closing_principal.sum(axis=0)
         contractual_principal = np.maximum(aggregate_principal - closing_principal_arrears, 0.0)
         principal_base = contractual_principal + closing_principal_arrears
+        active_loans = loans[0] > 0.0
+        weighted_principal = np.zeros_like(loans[0])
+        np.multiply(loans[0], loans[1], out=weighted_principal, where=active_loans)
         contractual_rate = np.divide(
-            (loans[0] * loans[1]).sum(axis=0),
+            weighted_principal.sum(axis=0),
             aggregate_principal,
             out=np.zeros_like(aggregate_principal),
             where=aggregate_principal > 0.0,

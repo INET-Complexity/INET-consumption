@@ -61,35 +61,27 @@ def build_firm_balance_sheet_ratios(model, country_code: str) -> pd.DataFrame:
 
     frame["positive_deposits"] = frame["deposits"].clip(lower=0)
     frame["assets_proxy"] = (
-        frame["capital_inputs_stock_value"]
-        + frame["inventory"] * frame["price"]
-        + frame["positive_deposits"]
+        frame["capital_inputs_stock_value"] + frame["inventory"] * frame["price"] + frame["positive_deposits"]
     )
     residual = frame["credit_budget_remaining_internal_finance_after_working_capital"].clip(lower=0)
     capital_internal = np.minimum(residual, frame["credit_budget_capital_costs"])
     residual_after_capital = residual - capital_internal
-    productivity_costs = (
-        frame["credit_budget_technical_investment_costs"] + frame["credit_budget_tfp_costs"]
-    )
+    productivity_costs = frame["credit_budget_technical_investment_costs"] + frame["credit_budget_tfp_costs"]
     frame["capital_funding_gap"] = (frame["credit_budget_capital_costs"] - capital_internal).clip(lower=0)
     frame["productivity_funding_gap"] = (
         productivity_costs - np.minimum(residual_after_capital, productivity_costs)
     ).clip(lower=0)
-    frame["cash_to_hard_obligations"] = frame["positive_deposits"] / frame[
-        "credit_budget_hard_obligations"
-    ].replace(0, np.nan)
-    frame["internal_capital_coverage"] = capital_internal / frame["credit_budget_capital_costs"].replace(
+    frame["cash_to_hard_obligations"] = frame["positive_deposits"] / frame["credit_budget_hard_obligations"].replace(
         0, np.nan
     )
+    frame["internal_capital_coverage"] = capital_internal / frame["credit_budget_capital_costs"].replace(0, np.nan)
     frame["internal_investment_coverage"] = residual / (
         frame["credit_budget_capital_costs"] + productivity_costs
     ).replace(0, np.nan)
     frame["debt_to_equity"] = frame["debt"] / frame["equity"].replace(0, np.nan)
     frame["roe"] = frame["profits"] / frame["equity"].where(frame["equity"].abs() > 1e-9)
     frame["roa"] = frame["profits"] / frame["assets_proxy"].where(frame["assets_proxy"] > 1e-9)
-    frame["cash_to_assets"] = frame["positive_deposits"] / frame["assets_proxy"].where(
-        frame["assets_proxy"] > 1e-9
-    )
+    frame["cash_to_assets"] = frame["positive_deposits"] / frame["assets_proxy"].where(frame["assets_proxy"] > 1e-9)
     return frame
 
 

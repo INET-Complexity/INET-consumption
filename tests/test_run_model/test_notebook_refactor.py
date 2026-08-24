@@ -54,15 +54,17 @@ def test_refactored_notebook_suite_and_legacy_banner_are_present():
 
 def test_calibrated_override_preset_retains_notebook_values():
     assert SCENARIO_PRESETS["calibrated_consumption"] is CALIBRATED_CONSUMPTION_OVERRIDES
-    assert CALIBRATED_CONSUMPTION_OVERRIDES[
-        "households.functions.consumption.parameters.['long_run_intercept']"
-    ] == -0.6
-    assert CALIBRATED_CONSUMPTION_OVERRIDES[
-        "households.functions.consumption.parameters.['partial_adjustment_speed']"
-    ] == 0.56
-    assert CALIBRATED_CONSUMPTION_OVERRIDES[
-        "households.functions.consumption.parameters.['long_run_mpc_upper_bound']"
-    ] == 2
+    assert (
+        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['long_run_intercept']"] == -0.6
+    )
+    assert (
+        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['partial_adjustment_speed']"]
+        == 0.56
+    )
+    assert (
+        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['long_run_mpc_upper_bound']"]
+        == 2
+    )
 
 
 def test_permanent_income_by_decile_handles_tied_income_deterministically():
@@ -87,10 +89,7 @@ def test_permanent_income_by_decile_handles_tied_income_deterministically():
 
 
 def test_firm_finance_diagnostic_builds_ratios_and_summary():
-    arrays = {
-        name: [np.array([2.0, -1.0]), np.array([4.0, 2.0])]
-        for name in FIRM_FINANCE_SERIES
-    }
+    arrays = {name: [np.array([2.0, -1.0]), np.array([4.0, 2.0])] for name in FIRM_FINANCE_SERIES}
     arrays.update(
         {
             "equity": [np.array([4.0, 2.0]), np.array([8.0, 4.0])],
@@ -110,9 +109,7 @@ def test_firm_finance_diagnostic_builds_ratios_and_summary():
             "target_long_term_credit": [np.array([0.0, 2.0]), np.array([2.0, 0.0])],
         }
     )
-    model = SimpleNamespace(
-        countries={"FRA": SimpleNamespace(firms=SimpleNamespace(ts=SimpleNamespace(dicts=arrays)))}
-    )
+    model = SimpleNamespace(countries={"FRA": SimpleNamespace(firms=SimpleNamespace(ts=SimpleNamespace(dicts=arrays)))})
 
     panel = build_firm_balance_sheet_ratios(model, "FRA")
     summary = summarize_firm_balance_sheet_ratios(panel, periods=[0, 1], money_scale=1.0)

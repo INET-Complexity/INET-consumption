@@ -160,7 +160,12 @@ def build_initial_policy_rate_comparison(
                 policy_period,
                 float(central_bank_data["policy_rate"].iloc[0]) if "policy_rate" in central_bank_data else None,
             ],
-            ["firm deposit rate", None, policy_period, float(banks.bank_data["Interest Rates on Firm Deposits"].iloc[0])],
+            [
+                "firm deposit rate",
+                None,
+                policy_period,
+                float(banks.bank_data["Interest Rates on Firm Deposits"].iloc[0]),
+            ],
             [
                 "household deposit rate",
                 None,

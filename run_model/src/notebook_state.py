@@ -78,9 +78,7 @@ def _jsonable(value: Any) -> Any:
 
 def _git_revision(repo_root: Path) -> dict[str, Any]:
     def run(*args: str) -> str | None:
-        result = subprocess.run(
-            ["git", *args], cwd=repo_root, check=False, capture_output=True, text=True
-        )
+        result = subprocess.run(["git", *args], cwd=repo_root, check=False, capture_output=True, text=True)
         return result.stdout.strip() if result.returncode == 0 else None
 
     return {
@@ -135,12 +133,8 @@ def run_notebook_workflow(
     """Prepare data, configure, run, benchmark, validate, and record one notebook run."""
     overrides = dict(scenario_overrides or {})
     prepared = prepare_data(config)
-    country_configurations = build_country_config(
-        data=prepared.data, config=config, overrides=overrides
-    )
-    simulation = run_single_simulation(
-        data=prepared.data, country_configurations=country_configurations, config=config
-    )
+    country_configurations = build_country_config(data=prepared.data, config=config, overrides=overrides)
+    simulation = run_single_simulation(data=prepared.data, country_configurations=country_configurations, config=config)
     benchmark = run_benchmark(config) if config.run_benchmark else None
     state = NotebookRunState(
         config=config,

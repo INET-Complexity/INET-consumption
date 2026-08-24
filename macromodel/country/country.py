@@ -1254,36 +1254,63 @@ class Country:
 
         expected_consumer_inflation = self.economy.current_expected_consumer_period_inflation()
         n_periods_per_year = periods_per_year(self.economy.time_unit)
-        contractual_borrowing_rates = self.credit_market.household_debt_weighted_period_borrowing_rates()
+        (
+            consumer_contractual_rate,
+            consumer_debt,
+            mortgage_contractual_rate,
+            mortgage_debt,
+        ) = self.credit_market.household_contractual_debt_rate_components(
+            use_opening_schedule=replace_current,
+        )
         expected_household_shape = (self.households.ts.current("n_households"),)
-        if contractual_borrowing_rates.shape != expected_household_shape:
+        rate_components = (
+            consumer_contractual_rate,
+            consumer_debt,
+            mortgage_contractual_rate,
+            mortgage_debt,
+        )
+        if any(component.shape != expected_household_shape for component in rate_components):
             # Some lightweight fixtures intentionally use a placeholder credit
             # market with no one-to-one household loan state.  They can
             # represent only the no-debt case; applying its rate state to a
             # different household population would violate the paper weights.
-            if np.any(contractual_borrowing_rates != 0.0):
-                raise ValueError(
-                    "Household borrowing rates must have one value per household when debt is outstanding."
-                )
-            contractual_borrowing_rates = np.zeros(expected_household_shape)
-        real_consumer_borrowing_rate = annualized_fisher_real_rate(
-            contractual_borrowing_rates,
+            if np.any(consumer_debt > 0.0) or np.any(mortgage_debt > 0.0):
+                raise ValueError("Household borrowing-rate components must have one value per household.")
+            consumer_contractual_rate = np.zeros(expected_household_shape)
+            consumer_debt = np.zeros(expected_household_shape)
+            mortgage_contractual_rate = np.zeros(expected_household_shape)
+            mortgage_debt = np.zeros(expected_household_shape)
+        real_consumer_rate = annualized_fisher_real_rate(
+            consumer_contractual_rate,
             expected_consumer_inflation,
             n_periods_per_year,
         )
-        # The paper's debt-weighted rate is undefined for households with no
-        # contractual debt. Keep their long-run-rate input neutral rather than
-        # turning expected inflation into a spurious negative borrowing rate.
-        real_consumer_borrowing_rate = np.where(
-            contractual_borrowing_rates > 0.0,
-            real_consumer_borrowing_rate,
-            0.0,
+        real_mortgage_rate = annualized_fisher_real_rate(
+            mortgage_contractual_rate,
+            expected_consumer_inflation,
+            n_periods_per_year,
+        )
+        annual_spendable_income = np.maximum(
+            n_periods_per_year * np.asarray(self.households.ts.current("expected_income"), dtype=float),
+            1e-12,
+        )
+        real_borrowing_rate = np.divide(
+            real_consumer_rate * consumer_debt + real_mortgage_rate * mortgage_debt,
+            annual_spendable_income,
+            out=np.zeros(expected_household_shape),
+            where=np.isfinite(annual_spendable_income) & (annual_spendable_income > 0.0),
         )
         # Existing consumer debt is fixed-rate until new borrowing remodulates
         # the aggregate balance. The CACF cashflow input therefore uses only
         # the realized contractual repricing from that event, not an
         # unconditional movement in currently offered bank rates.
-        consumer_debt_rate_delta = self.credit_market.consumer_debt_rate_delta_for_cacf()
+        if replace_current:
+            consumer_debt_rate_delta = getattr(self, "_planning_consumer_debt_rate_delta_for_cacf", None)
+            if consumer_debt_rate_delta is None:
+                consumer_debt_rate_delta = self.credit_market.consumer_debt_rate_delta_for_cacf()
+        else:
+            consumer_debt_rate_delta = self.credit_market.consumer_debt_rate_delta_for_cacf()
+            self._planning_consumer_debt_rate_delta_for_cacf = consumer_debt_rate_delta.copy()
         if consumer_debt_rate_delta.shape != expected_household_shape:
             # Some lightweight fixtures intentionally use a placeholder credit
             # market with no one-to-one household loan state. It can represent
@@ -1316,7 +1343,7 @@ class Country:
             house_price_growth=self.economy.ts.current("hpi_inflation")[0],
             lagged_cpi=self.economy.ts.prev(self.economy.consumer_price_level_series_name())[0],
             lagged_house_price_index=self.economy.ts.prev("hpi")[0],
-            real_borrowing_rate=real_consumer_borrowing_rate,
+            real_borrowing_rate=real_borrowing_rate,
             consumer_debt_rate_delta=consumer_debt_rate_delta,
             mortgage_payment=scheduled_mortgage_payment,
             permanent_income_log_ratio=permanent_income_log_ratio,
@@ -1701,9 +1728,6 @@ class Country:
             prior_missed_payment_count_consumer=self.households.ts.current("missed_payment_count_consumer"),
             prior_ficp_episode_missed_payment_count=self.households.ts.current("ficp_episode_missed_payment_count"),
             prior_ficp_episode_status=self.households.ts.current("ficp_episode_status"),
-            prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(
-                "interest_rates_on_household_consumption_loans"
-            ),
             consumer_loan_maturity=self.banks.parameters.household_consumption_loan_maturity,
             period=len(self.households.ts.dicts["scheduled_consumer_payment"]) - 1,
         )
@@ -1727,9 +1751,6 @@ class Country:
         self.credit_market.remodulate_ficp_consumer_loan_schedule(
             active_ficp=self.households.current_ficp_active(),
             remaining_periods=self.households.ts.current("ficp_exclusion_remaining_periods"),
-            prevailing_consumer_loan_rates_by_bank=self.banks.ts.current(
-                "interest_rates_on_household_consumption_loans"
-            ),
         )
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
         self.households.ts.consumption_loan_debt.append(

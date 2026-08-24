@@ -960,6 +960,7 @@ class CreditMarket:
             current_npl_hh_cons_loans=current_npl_hh_cons_loans,
             current_npl_mortgages=current_npl_mortgages,
         )
+        self._validate_new_consumer_loans(new_cons_loans)
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
@@ -976,7 +977,9 @@ class CreditMarket:
         if households.uses_feasibility_resolver:
             self._pending_consumer_loans_this_period = new_cons_loans.copy()
         else:
+            self._capture_consumer_refinancing_opening_terms()
             self._add_new_loans("cons_loans", new_cons_loans)
+            self._consumer_loan_remodulation_maturity = banks.parameters.household_consumption_loan_maturity
         self._add_new_loans("mort_loans", new_mort_loans)
 
         # Calculate aggregates for firms
@@ -1134,6 +1137,40 @@ class CreditMarket:
         )
         loans[2] += new_loans[2]
 
+    def _validate_new_consumer_loans(self, new_loans: np.ndarray) -> None:
+        """Reject malformed consumer-credit clearing output before it changes state."""
+        new_loans = np.asarray(new_loans, dtype=float)
+        expected_shape = self.states["cons_loans"].shape
+        if new_loans.shape != expected_shape:
+            raise ValueError(
+                "Cleared consumer loans must match the consumer-loan state shape; "
+                f"expected {expected_shape}, got {new_loans.shape}."
+            )
+        principal = new_loans[0]
+        rates = new_loans[1]
+        payments = new_loans[2]
+        if not np.all(np.isfinite(principal)) or np.any(principal < 0.0):
+            raise RuntimeError("Cleared consumer-loan principal must be finite and non-negative.")
+        active = principal > 0.0
+        if not np.all(np.isfinite(rates)) or np.any(rates < 0.0):
+            raise RuntimeError("Cleared consumer-loan rates must be finite and non-negative.")
+        if not np.all(np.isfinite(payments)) or np.any(payments < 0.0):
+            raise RuntimeError("Cleared consumer-loan payments must be finite and non-negative.")
+        if np.any(payments[~active] != 0.0):
+            raise RuntimeError("Zero-principal consumer-loan cells must have zero payments.")
+
+    def _capture_consumer_refinancing_opening_terms(self) -> None:
+        """Record the opening contract used to measure ordinary refinancing."""
+        opening_loans = self._serviceable_loans_this_period["cons_loans"]
+        opening_principal = opening_loans[0]
+        self._consumer_refinancing_opening_principal = opening_principal.sum(axis=0)
+        self._consumer_refinancing_opening_rate = np.divide(
+            (opening_principal * opening_loans[1]).sum(axis=0),
+            self._consumer_refinancing_opening_principal,
+            out=np.zeros_like(self._consumer_refinancing_opening_principal),
+            where=self._consumer_refinancing_opening_principal > 0.0,
+        )
+
     def pending_granted_consumption_loans(self) -> np.ndarray:
         """Return the unbooked bank-by-household consumer-credit grant matrix."""
         if self._pending_consumer_loans_this_period is None:
@@ -1185,6 +1222,7 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit settlement differs from the cleared bank-by-household grant.")
         if not np.allclose(settlement.sum(axis=0), granted, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit settlement does not reconcile with received_consumption_loans.")
+        self._validate_new_consumer_loans(pending_loans)
         if (
             isinstance(consumer_loan_maturity, bool)
             or not isinstance(consumer_loan_maturity, (int, np.integer))
@@ -1196,13 +1234,7 @@ class CreditMarket:
         if not np.allclose(self.states["cons_loans"][0], opening_principal, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit principal was mutated before Stage 6 settlement.")
         self._add_new_loans("cons_loans", pending_loans)
-        self._consumer_refinancing_opening_principal = opening_principal.sum(axis=0)
-        self._consumer_refinancing_opening_rate = np.divide(
-            (opening_principal * self._serviceable_loans_this_period["cons_loans"][1]).sum(axis=0),
-            self._consumer_refinancing_opening_principal,
-            out=np.zeros_like(self._consumer_refinancing_opening_principal),
-            where=self._consumer_refinancing_opening_principal > 0.0,
-        )
+        self._capture_consumer_refinancing_opening_terms()
         self._consumer_loan_remodulation_maturity = consumer_loan_maturity
         booked_principal = self.states["cons_loans"][0] - opening_principal
         if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
@@ -1438,12 +1470,13 @@ class CreditMarket:
         *,
         active_ficp: np.ndarray,
         remaining_periods: np.ndarray,
-        prevailing_consumer_loan_rates_by_bank: np.ndarray,
     ) -> None:
-        """Remodulate active FICP debt over the remaining exclusion horizon."""
+        """Remodulate active FICP debt over the remaining exclusion horizon.
+
+        FICP changes maturity, not the fixed contractual interest rate.
+        """
         active = np.asarray(active_ficp, dtype=bool)
         remaining = np.asarray(remaining_periods, dtype=float)
-        n_banks = self.states["cons_loans"].shape[1]
         n_households = self.states["cons_loans"].shape[2]
         if active.ndim == 0:
             active = np.full(n_households, bool(active))
@@ -1453,11 +1486,6 @@ class CreditMarket:
             remaining = np.full(n_households, float(remaining))
         if active.shape != (n_households,) or remaining.shape != (n_households,):
             raise ValueError("FICP schedule inputs must contain exactly one value per household.")
-        rates_by_bank = np.asarray(prevailing_consumer_loan_rates_by_bank, dtype=float)
-        if rates_by_bank.shape != (n_banks,):
-            raise ValueError("prevailing_consumer_loan_rates_by_bank must contain one value per bank.")
-        if not np.all(np.isfinite(rates_by_bank)) or np.any(rates_by_bank < 0.0):
-            raise ValueError("prevailing_consumer_loan_rates_by_bank must be finite and non-negative.")
         valid_remaining = np.isfinite(remaining) & (remaining > 0.0) & (remaining == np.floor(remaining))
         if np.any(active & ~valid_remaining):
             raise ValueError("Active FICP remaining periods must be positive integers.")
@@ -1470,8 +1498,8 @@ class CreditMarket:
             out=np.zeros_like(loans[0]),
             where=aggregate_principal[None, :] > 0.0,
         )
-        prevailing_rate = np.divide(
-            (loans[0] * rates_by_bank[:, None]).sum(axis=0),
+        contractual_rate = np.divide(
+            (loans[0] * loans[1]).sum(axis=0),
             aggregate_principal,
             out=np.zeros_like(aggregate_principal),
             where=aggregate_principal > 0.0,
@@ -1482,7 +1510,7 @@ class CreditMarket:
         for maturity in np.unique(remaining[active]).astype(int):
             maturity_mask = active & (remaining == maturity)
             annuity_factor[maturity_mask] = _annuity_payment_factor(
-                prevailing_rate[maturity_mask],
+                contractual_rate[maturity_mask],
                 int(maturity),
             )
         aggregate_payment = aggregate_principal * annuity_factor
@@ -1491,7 +1519,7 @@ class CreditMarket:
         # period.  The CACF cashflow channel must describe the final ordinary
         # contractual schedule only, so do not retain a stale repricing shock.
         self._consumer_debt_rate_delta_for_cacf[remodulated] = 0.0
-        loans[1][:, remodulated] = prevailing_rate[None, remodulated]
+        loans[1][:, remodulated] = contractual_rate[None, remodulated]
         loans[2][:, remodulated] = payment_shares[:, remodulated] * aggregate_payment[None, remodulated]
 
     def prepare_first_miss_consumer_loan_rescheduling(
@@ -1500,7 +1528,6 @@ class CreditMarket:
         prior_missed_payment_count_consumer: np.ndarray,
         prior_ficp_episode_missed_payment_count: np.ndarray | None = None,
         prior_ficp_episode_status: np.ndarray | None = None,
-        prevailing_consumer_loan_rates_by_bank: np.ndarray,
         consumer_loan_maturity: int,
         period: int,
     ) -> tuple[ConsumerLoanReschedulingEvent, ...]:
@@ -1513,11 +1540,6 @@ class CreditMarket:
         n_households = self.states["cons_loans"].shape[2]
         if prior_count.shape != (n_households,):
             raise ValueError("prior_missed_payment_count_consumer must contain exactly one value per household.")
-        rates_by_bank = np.asarray(prevailing_consumer_loan_rates_by_bank, dtype=float)
-        if rates_by_bank.shape != (self.states["cons_loans"].shape[1],):
-            raise ValueError("prevailing_consumer_loan_rates_by_bank must contain exactly one value per bank.")
-        if not np.all(np.isfinite(rates_by_bank)) or np.any(rates_by_bank < 0.0):
-            raise ValueError("prevailing_consumer_loan_rates_by_bank must be finite and non-negative.")
         if not isinstance(consumer_loan_maturity, (int, np.integer)) or consumer_loan_maturity <= 0:
             raise ValueError("consumer_loan_maturity must be a positive integer.")
         if period < 0:
@@ -1544,18 +1566,28 @@ class CreditMarket:
         closing_principal_arrears = settlement.arrears.closing_principal.sum(axis=0)
         contractual_principal = np.maximum(aggregate_principal - closing_principal_arrears, 0.0)
         principal_base = contractual_principal + closing_principal_arrears
-        prevailing_rate = np.divide(
-            (loans[0] * rates_by_bank[:, None]).sum(axis=0),
+        contractual_rate = np.divide(
+            (loans[0] * loans[1]).sum(axis=0),
             aggregate_principal,
             out=np.zeros_like(aggregate_principal),
             where=aggregate_principal > 0.0,
         )
+        newly_granted = self._new_loans_this_period["cons_loans"]
+        newly_granted_principal = newly_granted[0].sum(axis=0)
+        ordinary_refinance = (newly_granted_principal > 0.0) & (self._consumer_refinancing_opening_principal > 0.0)
+        newly_granted_rate = np.divide(
+            (newly_granted[0] * newly_granted[1]).sum(axis=0),
+            newly_granted_principal,
+            out=np.zeros_like(newly_granted_principal),
+            where=newly_granted_principal > 0.0,
+        )
+        contractual_rate = np.where(ordinary_refinance, newly_granted_rate, contractual_rate)
         new_maturity = int(consumer_loan_maturity) + 1
         from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
 
-        resulting_payment = principal_base * _annuity_payment_factor(prevailing_rate, new_maturity)
+        resulting_payment = principal_base * _annuity_payment_factor(contractual_rate, new_maturity)
         self._first_miss_rescheduling_households = first_miss
-        self._first_miss_rescheduling_rates = prevailing_rate
+        self._first_miss_rescheduling_rates = contractual_rate
         self._first_miss_rescheduling_maturity = np.where(first_miss, new_maturity, 0)
         for household_id in np.flatnonzero(first_miss):
             event = ConsumerLoanReschedulingEvent(
@@ -1666,18 +1698,35 @@ class CreditMarket:
         """
         return self._consumer_debt_rate_delta_for_cacf.copy()
 
-    def household_debt_weighted_period_borrowing_rates(self) -> np.ndarray:
-        """Return household contractual borrowing rates weighted by debt principal.
+    def household_contractual_debt_rate_components(
+        self,
+        *,
+        use_opening_schedule: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return the separate consumer and mortgage rate/debt components.
 
-        The paper's long-run rate uses each household's consumer-loan and
-        mortgage rates weighted by their respective outstanding principal.
-        Consumer arrears are deliberately excluded: they have no independent
-        contractual rate in the lean state representation.
+        The CACF paper defines the long-run borrowing input as
+        ``r_b * DB / y + r_m * MR / y``. The post-credit planning refresh
+        requests the opening schedule, avoiding a partly booked refinancing.
         """
-        consumer_principal = self.states["cons_loans"][0]
-        mortgage_principal = self.states["mort_loans"][0]
-        consumer_rate = self.states["cons_loans"][1]
-        mortgage_rate = self.states["mort_loans"][1]
+        consumer_loans = (
+            self._serviceable_loans_this_period["cons_loans"] if use_opening_schedule else self.states["cons_loans"]
+        )
+        mortgage_loans = (
+            self._serviceable_loans_this_period["mort_loans"] if use_opening_schedule else self.states["mort_loans"]
+        )
+        consumer_principal = consumer_loans[0]
+        mortgage_principal = mortgage_loans[0]
+        consumer_rate = consumer_loans[1]
+        mortgage_rate = mortgage_loans[1]
+
+        if (
+            not np.all(np.isfinite(consumer_principal))
+            or np.any(consumer_principal < 0.0)
+            or not np.all(np.isfinite(mortgage_principal))
+            or np.any(mortgage_principal < 0.0)
+        ):
+            raise RuntimeError("Household loan principals must be finite and non-negative.")
 
         active_consumer = consumer_principal > 0.0
         active_mortgage = mortgage_principal > 0.0
@@ -1689,16 +1738,21 @@ class CreditMarket:
         ):
             raise RuntimeError("Active household loans must have finite, non-negative contractual rates.")
 
-        debt_principal = consumer_principal.sum(axis=0) + mortgage_principal.sum(axis=0)
-        rate_weighted_principal = np.where(active_consumer, consumer_principal * consumer_rate, 0.0).sum(
-            axis=0
-        ) + np.where(active_mortgage, mortgage_principal * mortgage_rate, 0.0).sum(axis=0)
-        return np.divide(
-            rate_weighted_principal,
-            debt_principal,
-            out=np.zeros_like(debt_principal),
-            where=debt_principal > 0.0,
+        consumer_debt = consumer_principal.sum(axis=0)
+        mortgage_debt = mortgage_principal.sum(axis=0)
+        consumer_contractual_rate = np.divide(
+            np.where(active_consumer, consumer_principal * consumer_rate, 0.0).sum(axis=0),
+            consumer_debt,
+            out=np.zeros_like(consumer_debt),
+            where=consumer_debt > 0.0,
         )
+        mortgage_contractual_rate = np.divide(
+            np.where(active_mortgage, mortgage_principal * mortgage_rate, 0.0).sum(axis=0),
+            mortgage_debt,
+            out=np.zeros_like(mortgage_debt),
+            where=mortgage_debt > 0.0,
+        )
+        return consumer_contractual_rate, consumer_debt, mortgage_contractual_rate, mortgage_debt
 
     def _service_loans(self, loan_keys: tuple[str, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Service loans that existed before current-quarter origination."""

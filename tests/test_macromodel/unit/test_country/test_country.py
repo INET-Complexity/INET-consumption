@@ -728,10 +728,22 @@ class TestCountry:
             "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(test_country.households.ts.current("n_households")),
         )
+        component_calls = []
+
+        def contractual_components(*, use_opening_schedule):
+            component_calls.append(use_opening_schedule)
+            n_households = test_country.households.ts.current("n_households")
+            return (
+                np.zeros(n_households),
+                np.full(n_households, 200.0),
+                np.full(n_households, 0.04),
+                np.full(n_households, 100.0),
+            )
+
         monkeypatch.setattr(
             test_country.credit_market,
-            "household_debt_weighted_period_borrowing_rates",
-            lambda: np.full(test_country.households.ts.current("n_households"), 0.02),
+            "household_contractual_debt_rate_components",
+            contractual_components,
         )
 
         test_country._set_household_target_demand(replace_current=False)
@@ -746,6 +758,7 @@ class TestCountry:
         assert "lagged_illiquid_wealth" in captured
         assert "lagged_mortgage_debt" in captured
         assert "lagged_consumption_loan_debt" in captured
+        assert "cashflow_consumer_debt" in captured
         assert "lagged_housing_wealth" in captured
         assert "lagged_house_price_index" in captured
         assert "real_borrowing_rate" in captured
@@ -767,6 +780,10 @@ class TestCountry:
             test_country.households.ts.prev("consumption_loan_debt"),
         )
         assert np.allclose(
+            captured["cashflow_consumer_debt"],
+            test_country.households.ts.current("consumption_loan_debt"),
+        )
+        assert np.allclose(
             captured["housing_wealth"],
             test_country.households.ts.current("wealth_main_residence")
             + test_country.households.ts.current("wealth_other_properties"),
@@ -778,9 +795,14 @@ class TestCountry:
         )
         assert np.allclose(captured["mortgage_payment"], mortgage_payment)
         n_periods_per_year = 12 // test_country.economy.time_unit
+        expected_annual_income = n_periods_per_year * test_country.households.ts.current("expected_income")
         np.testing.assert_allclose(
             captured["real_borrowing_rate"],
-            annualized_fisher_real_rate(0.02, expected_period_inflation, n_periods_per_year),
+            (
+                annualized_fisher_real_rate(0.0, expected_period_inflation, n_periods_per_year) * 200.0
+                + annualized_fisher_real_rate(0.04, expected_period_inflation, n_periods_per_year) * 100.0
+            )
+            / expected_annual_income,
         )
         np.testing.assert_allclose(
             captured["consumer_debt_rate_delta"],
@@ -796,6 +818,7 @@ class TestCountry:
         target_len = len(test_country.households.ts.historic("target_consumption"))
         subsistence_len = len(test_country.economy.ts.historic("subsistence_consumption"))
         test_country._set_household_target_demand(replace_current=True)
+        assert component_calls == [False, True]
         assert len(test_country.households.ts.historic("formula_implied_mpc")) == diagnostic_len
         assert len(test_country.households.ts.historic("target_consumption_permanent_income")) == diagnostic_len
         assert (
@@ -875,8 +898,13 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.credit_market,
-            "household_debt_weighted_period_borrowing_rates",
-            lambda: np.zeros(n_households),
+            "household_contractual_debt_rate_components",
+            lambda **_kwargs: (
+                np.zeros(n_households),
+                np.zeros(n_households),
+                np.zeros(n_households),
+                np.zeros(n_households),
+            ),
         )
         monkeypatch.setattr(
             test_country.credit_market,
@@ -893,6 +921,10 @@ class TestCountry:
 
         expected_delta = np.zeros(n_households)
         expected_delta[0] = (12 // test_country.economy.time_unit) * realized_rate_delta
+        np.testing.assert_allclose(captured["consumer_debt_rate_delta"], expected_delta)
+
+        country_delta[0] = 0.99
+        test_country._set_household_target_demand(replace_current=True)
         np.testing.assert_allclose(captured["consumer_debt_rate_delta"], expected_delta)
 
     def test__select_net_smic_base_uses_insee_annual_table(self, monkeypatch):

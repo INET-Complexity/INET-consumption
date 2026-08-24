@@ -1945,6 +1945,10 @@ class Households(Agent):
                 lagged_illiquid_wealth=self.ts.prev("illiquid_financial_assets"),
                 lagged_mortgage_debt=self.ts.prev("mortgage_debt"),
                 lagged_consumption_loan_debt=self.ts.prev("consumption_loan_debt"),
+                # On the planning pass, ``current`` is the completed t-1
+                # balance. CACF's cashflow term is Δnr_t * DB_(t-1) / y_t,
+                # while the established wealth terms deliberately stay at t-2.
+                cashflow_consumer_debt=self.ts.current("consumption_loan_debt"),
                 lagged_house_price_index=lagged_house_price_index,
                 real_borrowing_rate=real_borrowing_rate,
                 permanent_income_log_ratio=permanent_income_log_ratio,

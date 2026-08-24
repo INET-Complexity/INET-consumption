@@ -776,9 +776,7 @@ class TestCountry:
         assert captured["real_borrowing_rate"] == pytest.approx(
             annualized_fisher_real_rate(0.02, expected_period_inflation, n_periods_per_year)
         )
-        assert captured["consumer_debt_rate_delta"] == pytest.approx(
-            n_periods_per_year * (0.02 - 0.01)
-        )
+        assert captured["consumer_debt_rate_delta"] == pytest.approx(n_periods_per_year * (0.02 - 0.01))
         assert np.allclose(
             captured["owner_occupied"],
             np.isin(test_country.households.states["Tenure Status of the Main Residence"], [1, 2, 4]),

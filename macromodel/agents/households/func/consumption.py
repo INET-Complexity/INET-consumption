@@ -983,9 +983,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         if self.idiosyncratic_persistence == "iid":
             return self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, n_households)
         if self._household_epsilon is None:
-            self._household_epsilon = self._idiosyncratic_rng.normal(
-                0.0, self.idiosyncratic_sd, n_households
-            )
+            self._household_epsilon = self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, n_households)
         elif self._household_epsilon.size < n_households:
             extra = n_households - self._household_epsilon.size
             self._household_epsilon = np.concatenate(
@@ -1033,9 +1031,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 )
             deflators = np.array([max(float(deflator), self.price_floor)])
         else:
-            deflators = np.asarray(historic_deflator, dtype=float).reshape(-1)[
-                -self.income_denominator_window :
-            ]
+            deflators = np.asarray(historic_deflator, dtype=float).reshape(-1)[-self.income_denominator_window :]
             if deflators.shape[0] != window_nominal.shape[0]:
                 raise ValueError(
                     f"historic_deflator has {deflators.shape[0]} periods but historic_income window has "
@@ -1493,9 +1489,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     "income_denominator='geometric_average' requires historic_income "
                     "(periods x households); none was supplied by the caller."
                 )
-            ratio_denominator = self._geometric_average_income(
-                historic_income, current_cpi, historic_deflator
-            )
+            ratio_denominator = self._geometric_average_income(historic_income, current_cpi, historic_deflator)
         else:
             ratio_denominator = None
 

@@ -79,9 +79,7 @@ class TestDecoupledLogistics:
         nla, ifa, ha = _ratios()
         raw = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)[0]
         norm_cfg = dict(V2, index_construction="normalised_ratio")
-        norm = _rule(continuous_wealth_calibration=norm_cfg)._compute_continuous_wealth_calibration(
-            nla, ifa, ha
-        )[0]
+        norm = _rule(continuous_wealth_calibration=norm_cfg)._compute_continuous_wealth_calibration(nla, ifa, ha)[0]
         assert not np.allclose(raw, norm)
 
     def test_v1_config_reproduces_v1_mapping(self):
@@ -167,9 +165,7 @@ class TestGeometricAverageIncome:
     def test_deflator_is_applied(self):
         rule = _rule(income_denominator="geometric_average", income_denominator_window=2)
         history = np.array([[4.0], [9.0]])
-        np.testing.assert_allclose(
-            rule._geometric_average_income(history, 2.0, np.full(2, 2.0)), [3.0]
-        )
+        np.testing.assert_allclose(rule._geometric_average_income(history, 2.0, np.full(2, 2.0)), [3.0])
 
     def test_rejects_one_dimensional_history(self):
         rule = _rule(income_denominator="geometric_average")
@@ -197,12 +193,19 @@ class TestConfigValidation:
         rule = _rule(income_denominator="geometric_average")
         with pytest.raises(ValueError, match="requires historic_income"):
             rule.compute_target_consumption(
-                expected_inflation=0.0, current_cpi=1.0, initial_cpi=1.0,
-                historic_consumption_sum=np.ones((2, 3)), saving_rates=np.zeros(3),
-                income=np.full(3, 100.0), household_benefits=np.zeros(3),
-                consumption_weights=np.array([1.0]), consumption_weights_by_income=np.array([[1.0]]),
-                exogenous_total_consumption=np.zeros(3), current_time=1,
-                take_consumption_weights_by_income_quantile=False, tau_vat=0.0,
+                expected_inflation=0.0,
+                current_cpi=1.0,
+                initial_cpi=1.0,
+                historic_consumption_sum=np.ones((2, 3)),
+                saving_rates=np.zeros(3),
+                income=np.full(3, 100.0),
+                household_benefits=np.zeros(3),
+                consumption_weights=np.array([1.0]),
+                consumption_weights_by_income=np.array([[1.0]]),
+                exogenous_total_consumption=np.zeros(3),
+                current_time=1,
+                take_consumption_weights_by_income_quantile=False,
+                tau_vat=0.0,
                 lagged_real_consumption_budget=np.full(3, 50.0),
             )
 

@@ -14,8 +14,8 @@ PAPER_ACCOUNT_COLUMNS = ("lfa", "ifa", "ha", "mr", "db", "nw")
 RUNTIME_HOUSEHOLD_FIELDS = (
     "income",
     "consumption",
-    "liquid_financial_assets",
-    "illiquid_financial_assets",
+    "wealth_deposits",
+    "wealth_other_financial_assets",
     "wealth_main_residence",
     "wealth_other_properties",
     "mortgage_debt",
@@ -332,8 +332,8 @@ def build_household_account_panel(
         raise ValueError("Household account join lost rows; household_id values must match HDF5 household order.")
 
     runtime_assets = (
-        panel["runtime_liquid_financial_assets"]
-        + panel["runtime_illiquid_financial_assets"]
+        panel["runtime_wealth_deposits"]
+        + panel["runtime_wealth_other_financial_assets"]
         + panel["runtime_wealth_main_residence"]
         + panel["runtime_wealth_other_properties"]
     )
@@ -346,8 +346,8 @@ def build_household_account_panel(
     nominal_columns = list(PAPER_ACCOUNT_COLUMNS) + [
         income_label,
         "runtime_consumption",
-        "runtime_liquid_financial_assets",
-        "runtime_illiquid_financial_assets",
+        "runtime_wealth_deposits",
+        "runtime_wealth_other_financial_assets",
         "runtime_wealth_main_residence",
         "runtime_wealth_other_properties",
         "runtime_mortgage_debt",
@@ -512,8 +512,8 @@ def build_like_for_like_reconciliation(
         ),
         _row(
             "initial_runtime_minus_paper_non_housing_financial_assets_mean",
-            initial_panel["runtime_liquid_financial_assets"]
-            + initial_panel["runtime_illiquid_financial_assets"]
+            initial_panel["runtime_wealth_deposits"]
+            + initial_panel["runtime_wealth_other_financial_assets"]
             - initial_panel["lfa"]
             - initial_panel["ifa"],
         ),
@@ -526,8 +526,8 @@ def build_like_for_like_reconciliation(
         ),
     ]
     component_mapping = {
-        "lfa": "runtime_liquid_financial_assets",
-        "ifa": "runtime_illiquid_financial_assets",
+        "lfa": "runtime_wealth_deposits",
+        "ifa": "runtime_wealth_other_financial_assets",
         "mr": "runtime_mortgage_debt",
         "db": "runtime_consumption_loan_debt",
     }

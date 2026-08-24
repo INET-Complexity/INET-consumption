@@ -79,8 +79,8 @@ def _write_h5(path, *, n_households=3, cpi_fixed=None, cpi_transaction=None, inc
     values = {
         "income": income,
         "consumption": np.array([[50.0, 60.0, 70.0], [55.0, 66.0, 77.0]])[:, :n_households],
-        "liquid_financial_assets": np.array([[9.0, 19.0, 29.0], [10.0, 20.0, 30.0]])[:, :n_households],
-        "illiquid_financial_assets": np.array([[6.0, 12.0, 18.0], [7.0, 14.0, 21.0]])[:, :n_households],
+        "wealth_deposits": np.array([[9.0, 19.0, 29.0], [10.0, 20.0, 30.0]])[:, :n_households],
+        "wealth_other_financial_assets": np.array([[6.0, 12.0, 18.0], [7.0, 14.0, 21.0]])[:, :n_households],
         "wealth_main_residence": np.array([[90.0, 190.0, 290.0], [100.0, 200.0, 300.0]])[:, :n_households],
         "wealth_other_properties": np.array([[9.0, 19.0, 29.0], [10.0, 20.0, 30.0]])[:, :n_households],
         "wealth_other_real_assets": np.array([[4.0, 5.0, 6.0], [8.0, 9.0, 10.0]])[:, :n_households],

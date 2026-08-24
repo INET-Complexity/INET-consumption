@@ -12,7 +12,7 @@ Increment 3's remaining (non-pure) scope, implemented separately in
 See ``knowledge-vault/wiki/architecture/consumption-stage-4-portfolio-choice.md``
 (Increment 3 section) for the full call-site design. ``post_surplus_lfa`` is
 the household's actual, already-updated current liquid balance sheet
-(``self.ts.current("liquid_financial_assets")``) — the real entry point for the
+(``self.ts.current("wealth_deposits")``) — the real entry point for the
 portfolio decision, not a parallel shadow quantity re-derived from
 ``investable_surplus``. The model's deposit update already embeds the
 period's positive-surplus acquisition (new savings, withdrawals, interest,

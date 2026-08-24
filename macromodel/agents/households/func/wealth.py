@@ -425,9 +425,7 @@ class DefaultWealthSetter(WealthSetter):
 class PaperAssetReturnWealthSetter(DefaultWealthSetter):
     """Default wealth update plus paper-style illiquid financial asset returns."""
 
-    # Illiquid returns are capital gains retained in IFA, not household cash income.
-    illiquid_returns_are_capital_gains = True
-    exclude_financial_asset_income_from_saving = False
+    exclude_financial_asset_income_from_saving = True
     uses_periodic_illiquid_returns = True
 
     def __init__(
@@ -604,14 +602,7 @@ class PaperAssetReturnWealthSetter(DefaultWealthSetter):
                 raise ValueError("Previous illiquid financial asset return has not been applied.")
         if self._current_illiquid_return_amount.shape != current_wealth_in_other_financial_assets.shape:
             raise ValueError("Stored illiquid return amount does not match household financial-asset shape.")
-        # The rate is drawn once per period, but the applicable IFA base can
-        # change before settlement. In resolver mode, sanctioned Stage 5
-        # liquidation is executed before the capital gain/loss, so only the
-        # remaining IFA receives this already-drawn return.
-        return self._return_amount(
-            current_wealth_in_other_financial_assets=current_wealth_in_other_financial_assets,
-            return_rate=self._current_illiquid_return_rate,
-        )
+        return self._current_illiquid_return_amount
 
     def use_up_wealth(
         self,

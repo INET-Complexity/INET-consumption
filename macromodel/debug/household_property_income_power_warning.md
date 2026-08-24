@@ -81,7 +81,7 @@ expected_income_employee
 ```
 
 One possible route to negative household expected income is negative
-`illiquid_financial_assets`, because expected financial-asset income is
+`wealth_other_financial_assets`, because expected financial-asset income is
 currently linear in current other financial assets:
 
 ```python
@@ -89,7 +89,7 @@ return income_coefficient * current_other_financial_assets
 ```
 
 However, the saved FRA diagnostic that motivated this note did **not** show
-negative `illiquid_financial_assets` or negative
+negative `wealth_other_financial_assets` or negative
 `expected_income_financial_assets`. It showed negative `expected_income` for
 household `5169` in periods `35-50`, driven by large negative `income_rental`.
 That source is tracked separately as a `compute_rental_income` diagnostic bug.
@@ -124,7 +124,7 @@ expected_income_employee
 expected_income_social_transfers
 income_rental
 expected_income_financial_assets
-illiquid_financial_assets
+wealth_other_financial_assets
 ```
 
 ## Model Decision

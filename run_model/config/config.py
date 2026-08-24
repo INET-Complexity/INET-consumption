@@ -58,7 +58,7 @@ class Config:
 
 
 CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
-    "households.functions.consumption.parameters.['long_run_intercept']": -0.6,
+    # "households.functions.consumption.parameters.['long_run_intercept']": -0.1,
     "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
     "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
     "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,

@@ -98,6 +98,7 @@ class HouseholdConsumption(ABC):
         lagged_illiquid_wealth: np.ndarray = None,
         lagged_mortgage_debt: np.ndarray = None,
         lagged_consumption_loan_debt: np.ndarray = None,
+        cashflow_consumer_debt: np.ndarray = None,
         lagged_house_price_index: float | np.ndarray = None,
         real_borrowing_rate: float | np.ndarray = None,
         permanent_income_log_ratio: float | np.ndarray = None,
@@ -206,6 +207,7 @@ class DefaultHouseholdConsumption(HouseholdConsumption):
         lagged_illiquid_wealth: np.ndarray = None,  # Ignored in default consumption
         lagged_mortgage_debt: np.ndarray = None,  # Ignored in default consumption
         lagged_consumption_loan_debt: np.ndarray = None,  # Ignored in default consumption
+        cashflow_consumer_debt: np.ndarray = None,  # Ignored in default consumption
         lagged_house_price_index: float | np.ndarray = None,  # Ignored in default consumption
         real_borrowing_rate: float | np.ndarray = None,  # Ignored in default consumption
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in default consumption
@@ -394,6 +396,7 @@ class CESHouseholdConsumption(HouseholdConsumption):
         lagged_illiquid_wealth: np.ndarray = None,  # Ignored in CES consumption
         lagged_mortgage_debt: np.ndarray = None,  # Ignored in CES consumption
         lagged_consumption_loan_debt: np.ndarray = None,  # Ignored in CES consumption
+        cashflow_consumer_debt: np.ndarray = None,  # Ignored in CES consumption
         lagged_house_price_index: float | np.ndarray = None,  # Ignored in CES consumption
         real_borrowing_rate: float | np.ndarray = None,  # Ignored in CES consumption
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in CES consumption
@@ -854,6 +857,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_illiquid_wealth: np.ndarray,
         lagged_mortgage_debt: np.ndarray,
         lagged_consumption_loan_debt: np.ndarray,
+        cashflow_consumer_debt: np.ndarray,
         owner_occupied: np.ndarray,
         mortgagor: np.ndarray,
         house_price_index: float | np.ndarray | None,
@@ -884,6 +888,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_illiquid_wealth = np.asarray(lagged_illiquid_wealth, dtype=float)
         lagged_mortgage_debt = np.asarray(lagged_mortgage_debt, dtype=float)
         lagged_consumption_loan_debt = np.asarray(lagged_consumption_loan_debt, dtype=float)
+        cashflow_consumer_debt = np.asarray(cashflow_consumer_debt, dtype=float)
         owner_occupied = np.asarray(owner_occupied, dtype=float)
         mortgagor = np.asarray(mortgagor, dtype=float)
 
@@ -939,7 +944,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_illiquid_financial_assets = lagged_illiquid_wealth / lagged_deflator
         real_housing_wealth = housing_wealth / current_deflator
         real_lagged_housing_wealth = lagged_housing_wealth / lagged_deflator
-        real_consumer_debt = lagged_consumption_loan_debt / lagged_deflator
+        real_consumer_debt = cashflow_consumer_debt / lagged_deflator
         real_lagged_house_price = np.maximum(lagged_house_price_index_arr / lagged_deflator, self.house_price_floor)
         # house_price_propensity is estimated on hp/y with y at per-household
         # (unscaled) income; real_lagged_income carries the model's synthetic
@@ -1176,6 +1181,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_illiquid_wealth: np.ndarray = None,
         lagged_mortgage_debt: np.ndarray = None,
         lagged_consumption_loan_debt: np.ndarray = None,
+        cashflow_consumer_debt: np.ndarray = None,
         lagged_house_price_index: float | np.ndarray = None,
         real_borrowing_rate: float | np.ndarray = None,
         permanent_income_log_ratio: float | np.ndarray = None,
@@ -1214,6 +1220,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_mortgage_debt if lagged_mortgage_debt is not None else mortgage_debt,
         )
         lagged_consumption_loan_debt = self._as_array(income, lagged_consumption_loan_debt)
+        cashflow_consumer_debt = self._as_array(
+            income,
+            cashflow_consumer_debt if cashflow_consumer_debt is not None else lagged_consumption_loan_debt,
+        )
         owner_occupied = self._as_array(income, owner_occupied)
         mortgagor = self._as_array(income, mortgagor)
 
@@ -1232,6 +1242,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_illiquid_wealth=lagged_illiquid_wealth,
             lagged_mortgage_debt=lagged_mortgage_debt,
             lagged_consumption_loan_debt=lagged_consumption_loan_debt,
+            cashflow_consumer_debt=cashflow_consumer_debt,
             owner_occupied=owner_occupied,
             mortgagor=mortgagor,
             house_price_index=house_price_index,
@@ -1269,6 +1280,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_illiquid_wealth=lagged_illiquid_wealth,
             lagged_mortgage_debt=lagged_mortgage_debt,
             lagged_consumption_loan_debt=lagged_consumption_loan_debt,
+            cashflow_consumer_debt=cashflow_consumer_debt,
             owner_occupied=owner_occupied,
             mortgagor=mortgagor,
             house_price_index=house_price_index,
@@ -1409,6 +1421,7 @@ class ExogenousHouseholdConsumption(HouseholdConsumption):
         lagged_illiquid_wealth: np.ndarray = None,  # Ignored in exogenous consumption
         lagged_mortgage_debt: np.ndarray = None,  # Ignored in exogenous consumption
         lagged_consumption_loan_debt: np.ndarray = None,  # Ignored in exogenous consumption
+        cashflow_consumer_debt: np.ndarray = None,  # Ignored in exogenous consumption
         lagged_house_price_index: float | np.ndarray = None,  # Ignored in exogenous consumption
         real_borrowing_rate: float | np.ndarray = None,  # Ignored in exogenous consumption
         permanent_income_log_ratio: float | np.ndarray = None,  # Ignored in exogenous consumption

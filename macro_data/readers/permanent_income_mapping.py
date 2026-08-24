@@ -13,6 +13,7 @@ from macro_data.readers.permanent_income_forecast import (
     RAW_VARIABLE_ORDER,
     SIMULATION_VARIABLE_NAME_MAP,
 )
+from macro_data.util.rates import fisher_real_rate
 
 NOTEBOOK_EXPORT_TO_FORECAST_READER_NAME = SIMULATION_VARIABLE_NAME_MAP
 FORECAST_READER_TO_NOTEBOOK_EXPORT_NAME = {
@@ -170,7 +171,7 @@ def _fisher_real_short_rate_percent(
 
     annual_nominal_rate = policy_rate[4:] * float(policy_rate_periods_per_year)
     yoy_inflation = cpi_fixed_basket[4:] / cpi_fixed_basket[:-4] - 1.0
-    return 100.0 * ((1.0 + annual_nominal_rate) / (1.0 + yoy_inflation) - 1.0)
+    return 100.0 * fisher_real_rate(annual_nominal_rate, yoy_inflation)
 
 
 def _ma4_lag_from_history(values: np.ndarray, lag: int) -> float | None:

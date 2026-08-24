@@ -106,14 +106,22 @@ stage_2:
         source: households.ts.prev.consumption_loan_debt
         excludes_mortgage_debt: true
       real_borrowing_rate:
-        source: placeholder
-        default: 0.0
+        source: credit_market.current_household_contractual_consumer_and_mortgage_rates_and_expected_cpi_inflation
+        formula: >-
+          real_consumer_rate * consumer_debt / annual_income +
+          real_mortgage_rate * mortgage_debt / annual_income, where each
+          component rate uses exact_period_fisher_then_geometric_annualization
+        frequency: effective_annual_decimal
+        weights: household_lagged_contractual_consumer_and_mortgage_debt_to_income
+        no_contractual_debt: neutral_rate_of_0.0
       permanent_income_log_ratio:
         source: stage_3.income_belief_learning
         default_when_unavailable: 0.0
       consumer_debt_rate_delta:
-        source: placeholder
-        default: 0.0
+        source: credit_market.latest_ordinary_consumer_debt_refinancing
+        formula: periods_per_year_times_(new_contractual_period_rate_minus_old_contractual_period_rate)
+        frequency: quoted_annual_decimal
+        timing: cached_before_credit_and_applied_on_the_next_planning_period
       uncertainty_delta:
         source: stage_3.income_belief_learning
         default_when_unavailable: 0.0

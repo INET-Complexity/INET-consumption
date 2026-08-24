@@ -399,7 +399,7 @@ def test_country(
     test_housing_market,
     test_exogenous,
 ):
-    return Country(
+    country = Country(
         country_name="FRA",
         scale=1,
         individuals=test_individuals,
@@ -416,6 +416,10 @@ def test_country(
         exogenous=test_exogenous,
         running_multiple_countries=False,
     )
+    # Country planning requires a finite period CPI-inflation expectation for
+    # the Fisher real borrowing-rate channel. Individual tests can override it.
+    country.economy.ts.override_current("estimated_cpi_inflation", np.array([0.0]))
+    return country
 
 
 @pytest.fixture(scope="module", name="datawrapper")

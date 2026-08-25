@@ -424,6 +424,30 @@ class CentralGovernment(Agent):
         )
         self.ts.override_current("revenue", [self.ts.current("revenue")[0] + capital_tax_delta])
 
+    def reconcile_initial_vat(
+        self,
+        current_household_consumption_before_vat: float,
+        current_household_investment: np.ndarray,
+    ) -> None:
+        """Align seeded VAT, product taxes, and revenue with configured rates.
+
+        Initial household aggregates are seeded from reader tax rates.  When a
+        country override changes VAT, replace that seeded VAT with the
+        configured rate on the seeded consumption base and optional household
+        investment proxy, then carry the same delta into the product-tax and
+        revenue aggregates used by initial GDP accounting.
+        """
+        previous_vat = self.ts.current("taxes_vat")[0]
+        household_investment_vat_rate = self.states["Household Investment VAT Rate"]
+        current_vat = self.states["Value-added Tax"] * max(0.0, current_household_consumption_before_vat)
+        if household_investment_vat_rate is not None:
+            current_vat += household_investment_vat_rate * np.sum(np.maximum(0.0, current_household_investment))
+
+        vat_delta = current_vat - previous_vat
+        self.ts.override_current("taxes_vat", [current_vat])
+        self.ts.override_current("taxes_on_products", [self.ts.current("taxes_on_products")[0] + vat_delta])
+        self.ts.override_current("revenue", [self.ts.current("revenue")[0] + vat_delta])
+
     def compute_revenue(
         self,
         household_rent_paid_to_government: float,

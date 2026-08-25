@@ -302,6 +302,23 @@ class TestCentralGovernment:
         assert np.isclose(test_central_government.ts.current("taxes_on_products")[0], initial_products + delta)
         assert np.isclose(test_central_government.ts.current("revenue")[0], initial_revenue + delta)
 
+    def test__reconcile_initial_vat_updates_product_tax_and_revenue(self, test_central_government):
+        test_central_government.states["Value-added Tax"] = 0.13
+        test_central_government.states["Household Investment VAT Rate"] = 0.13
+        initial_products = test_central_government.ts.current("taxes_on_products")[0]
+        initial_revenue = test_central_government.ts.current("revenue")[0]
+        initial_vat = test_central_government.ts.current("taxes_vat")[0]
+
+        test_central_government.reconcile_initial_vat(
+            current_household_consumption_before_vat=100.0,
+            current_household_investment=np.array([40.0]),
+        )
+
+        delta = 18.2 - initial_vat
+        assert np.isclose(test_central_government.ts.current("taxes_vat")[0], 18.2)
+        assert np.isclose(test_central_government.ts.current("taxes_on_products")[0], initial_products + delta)
+        assert np.isclose(test_central_government.ts.current("revenue")[0], initial_revenue + delta)
+
     def test__current_policy_rate_debt_interest_preserves_legacy_rule(self):
         rule = CurrentPolicyRateDebtInterest()
         assert (

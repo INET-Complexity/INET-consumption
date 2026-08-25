@@ -545,6 +545,29 @@ class Country:
             n_industries=n_industries,
         )
         tax_overrides = country_configuration.central_government.tax_overrides
+        if tax_overrides.value_added_tax_rate is not None or tax_overrides.household_investment_vat_rate is not None:
+            central_government.reconcile_initial_vat(
+                current_household_consumption_before_vat=households.ts.current("total_consumption_before_vat")[0],
+                current_household_investment=households.ts.current("investment"),
+            )
+            households.ts.override_current(
+                "total_consumption",
+                [
+                    (1 + central_government.states["Value-added Tax"])
+                    * households.ts.current("total_consumption_before_vat")[0]
+                ],
+            )
+            households.ts.override_current(
+                "total_investment",
+                [
+                    (
+                        1
+                        + central_government.states["Household Capital Formation Tax"]
+                        + (central_government.states["Household Investment VAT Rate"] or 0.0)
+                    )
+                    * households.ts.current("total_investment_before_vat")[0]
+                ],
+            )
         if (
             tax_overrides.household_capital_formation_rate is not None
             or tax_overrides.firm_capital_formation_rate is not None

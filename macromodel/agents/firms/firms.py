@@ -1275,9 +1275,17 @@ class Firms(Agent):
                 cpi=cpi,
             )
         )
-        self.ts.real_wage_per_capita.append(
-            self.ts.current("total_wage") / cpi / self.ts.current("number_of_employees")
+        total_wage = np.asarray(self.ts.current("total_wage"), dtype=float)
+        denominator = cpi * np.asarray(
+            self.ts.current("number_of_employees"), dtype=float
         )
+        real_wage_per_capita = np.divide(
+            total_wage,
+            denominator,
+            out=np.zeros_like(total_wage, dtype=float),
+            where=denominator != 0,
+        )
+        self.ts.real_wage_per_capita.append(real_wage_per_capita)
 
     def compute_total_wage_obligation(
         self,

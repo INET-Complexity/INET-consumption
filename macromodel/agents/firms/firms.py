@@ -1276,9 +1276,7 @@ class Firms(Agent):
             )
         )
         total_wage = np.asarray(self.ts.current("total_wage"), dtype=float)
-        denominator = cpi * np.asarray(
-            self.ts.current("number_of_employees"), dtype=float
-        )
+        denominator = cpi * np.asarray(self.ts.current("number_of_employees"), dtype=float)
         real_wage_per_capita = np.divide(
             total_wage,
             denominator,

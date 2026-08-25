@@ -135,9 +135,7 @@ class CentralGovernment(Agent):
             else tax_data.capital_formation_tax
         )
         firm_capital_formation_rate = (
-            tax_overrides.firm_capital_formation_rate
-            if tax_overrides.firm_capital_formation_rate is not None
-            else 0.0
+            tax_overrides.firm_capital_formation_rate if tax_overrides.firm_capital_formation_rate is not None else 0.0
         )
         taxes_less_subsidies_rates = np.asarray(taxes_net_subsidies, dtype=float)
 
@@ -316,9 +314,7 @@ class CentralGovernment(Agent):
         product_production_tax_rate = self.states["Other Product Production Tax Rate"]
         if product_production_tax_rate is None:
             production_tax = np.sum(
-                taxes_less_subsidies_rates[current_firm_industries]
-                * current_firm_production
-                * current_firm_price
+                taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
             )
         else:
             production_tax = product_production_tax_rate * np.sum(current_firm_production * current_firm_price)
@@ -417,11 +413,9 @@ class CentralGovernment(Agent):
         Subsequent periods are calculated by :meth:`compute_taxes`.
         """
         previous_capital_tax = self.ts.current("taxes_cf")[0]
-        current_capital_tax = (
-            self.states["Household Capital Formation Tax"]
-            * np.sum(np.maximum(0.0, current_household_investment))
-            + self.states["Firm Capital Formation Tax"] * max(0.0, current_firm_capital_formation)
-        )
+        current_capital_tax = self.states["Household Capital Formation Tax"] * np.sum(
+            np.maximum(0.0, current_household_investment)
+        ) + self.states["Firm Capital Formation Tax"] * max(0.0, current_firm_capital_formation)
         capital_tax_delta = current_capital_tax - previous_capital_tax
         self.ts.override_current("taxes_cf", [current_capital_tax])
         self.ts.override_current(

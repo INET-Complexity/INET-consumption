@@ -105,10 +105,8 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
         "households.functions.consumption.parameters.['income_growth_propensity']": 0.5,
     },
     "change_sectoral_weights": {
-        "government_entities.functions.consumption.parameters['sectoral_weights']": "initial_price_normalized", 
-
-
-    }
+        "government_entities.functions.consumption.parameters['sectoral_weights']": "initial_price_normalized",
+    },
 }
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {

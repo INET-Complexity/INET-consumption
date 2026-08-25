@@ -169,9 +169,7 @@ class DefaultHousingMarketClearer(HousingMarketClearer):
         )
 
         # Combine both
-        transaction_frames = [
-            frame for frame in (matching_sales, matching_rental) if not frame.empty
-        ]
+        transaction_frames = [frame for frame in (matching_sales, matching_rental) if not frame.empty]
         if transaction_frames:
             all_transactions = pd.concat(transaction_frames, axis=0)
         else:
@@ -331,9 +329,7 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
         )
 
         # Combine both
-        transaction_frames = [
-            frame for frame in (matching_sales, matching_rental) if not frame.empty
-        ]
+        transaction_frames = [frame for frame in (matching_sales, matching_rental) if not frame.empty]
         if transaction_frames:
             all_transactions = pd.concat(transaction_frames, axis=0)
         else:

@@ -3313,9 +3313,7 @@ class Households(Agent):
             self.ts.oil_investment_emissions.append(disaggregated_emissions[:, 1])
             self.ts.gas_investment_emissions.append(disaggregated_emissions[:, 2])
             self.ts.refined_products_investment_emissions.append(disaggregated_emissions[:, 3])
-        self.ts.total_investment.append(
-            [(1 + tau_cf + tau_vat_on_investment) * self.ts.current("investment").sum()]
-        )
+        self.ts.total_investment.append([(1 + tau_cf + tau_vat_on_investment) * self.ts.current("investment").sum()])
         self.ts.total_investment_before_vat.append([self.ts.current("investment").sum()])
         self.ts.industry_investment.append(self.ts.current("investment").sum(axis=0))
 
@@ -3396,8 +3394,7 @@ class Households(Agent):
                 - optional_cash_flow("interest_paid")
                 - optional_cash_flow("price_paid_for_property")
                 - optional_cash_flow("debt_installments")
-                - (tau_cf + tau_vat_on_investment)
-                * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
+                - (tau_cf + tau_vat_on_investment) * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
             )
             new_wealth = np.maximum(cash_saving_before_financing, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)

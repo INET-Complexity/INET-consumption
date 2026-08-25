@@ -230,6 +230,7 @@ class SyntheticCountry:
             year,
             year_range=year_range,
             yearly_factor=yearly_factor,
+            cash_social_benefits_gdp_ratio=country_configuration.cash_social_benefits_gdp_ratio,
         )
 
         total_unemployment_benefits = central_government.central_gov_data["Total Unemployment Benefits"].values[0]
@@ -452,6 +453,7 @@ class SyntheticCountry:
             year,
             year_range=year_range,
             yearly_factor=yearly_factor,
+            cash_social_benefits_gdp_ratio=country_configuration.cash_social_benefits_gdp_ratio,
         )
 
         total_unemployment_benefits = central_government.central_gov_data["Total Unemployment Benefits"].values[0]

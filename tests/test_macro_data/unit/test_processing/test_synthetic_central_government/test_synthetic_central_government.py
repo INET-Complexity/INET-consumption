@@ -27,6 +27,21 @@ class TestSyntheticCentralGovernment:
         # Check if there are any missing values
         assert not np.any(pd.isna(central_gov.central_gov_data))
 
+    def test__cash_social_benefit_override_preserves_unemployment_and_sets_envelope(self, readers):
+        ratio = 0.20
+        central_gov = DefaultSyntheticCGovernment.from_readers(
+            readers=readers,
+            country_name=Country("FRA"),
+            year=2014,
+            cash_social_benefits_gdp_ratio=ratio,
+        )
+        quarterly_gdp = readers.world_bank.get_current_scaled_gdp(Country("FRA"), 2014)
+        total_cash_benefits = central_gov.central_gov_data[
+            ["Total Unemployment Benefits", "Other Social Benefits"]
+        ].sum(axis=1).iloc[0]
+
+        assert np.isclose(total_cash_benefits, ratio * quarterly_gdp)
+
     def test__update_fields_grosses_up_net_employee_income_for_labour_taxes(self):
         central_gov = DefaultSyntheticCGovernment(
             country_name="FRA",

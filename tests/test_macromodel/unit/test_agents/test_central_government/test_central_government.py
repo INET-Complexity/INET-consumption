@@ -99,6 +99,7 @@ class TestCentralGovernment:
         unemployment_benefit = test_central_government.ts.current("unemployment_benefits_by_individual")[0]
         realised_transfers = 42.0
         test_central_government.ts.total_household_social_transfers.append([realised_transfers])
+        test_central_government.ts.total_unemployment_benefits.append([2 * current_cpi * unemployment_benefit])
         current_government_spending = np.array([10.0, 20.0])
         interest_payments = 5.0
         revenue = test_central_government.ts.current("revenue")[0]
@@ -122,6 +123,7 @@ class TestCentralGovernment:
         revenue = test_central_government.ts.current("revenue")[0]
         realised_transfers = 42.0
         test_central_government.ts.total_household_social_transfers.append([realised_transfers])
+        test_central_government.ts.total_unemployment_benefits.append([0.0])
 
         deficit = test_central_government.compute_deficit(
             current_ind_activity=current_ind_activity,

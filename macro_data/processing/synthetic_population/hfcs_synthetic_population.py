@@ -42,6 +42,13 @@ RESTRICT_COLS = [
     "Investment",
     "Employee Income",
     "Regular Social Transfers",
+    "Pension Income",
+    "Public Pension Income",
+    "Occupational and Private Pension Income",
+    "Unemployment Benefits",
+    "Social Transfer Income",
+    "Allocated Public Pension Benefits",
+    "Allocated Other Social Transfers",
     "Rental Income from Real Estate",
     "Income from Financial Assets",
     "Saving Rate",
@@ -77,6 +84,11 @@ CONVERT_HH_COLS = [
     "Income from Financial Assets",
     "Income from Pensions",
     "Regular Social Transfers",
+    "Pension Income",
+    "Public Pension Income",
+    "Occupational and Private Pension Income",
+    "Unemployment Benefits",
+    "Social Transfer Income",
     "Income",
     "Value of the Main Residence",
     "Value of other Properties",
@@ -673,7 +685,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         """
         if independents is None:
             independents = ["Income", "Debt"]
-        # Household regular social transfers and pensions, impute missing values
+        # Household regular social transfers and pensions, impute missing values.
         self.household_data = apply_iterative_imputer(
             self.household_data,
             [
@@ -685,26 +697,65 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             min_value=0,
         )
 
-        # Aggregate
-        self.household_data["Regular Social Transfers"] += self.household_data["Income from Pensions"].values
+        public_pension_source = pd.to_numeric(
+            self.household_data.get(
+                "Public Pension Income", pd.Series(0.0, index=self.household_data.index)
+            ),
+            errors="coerce",
+        ).fillna(0.0)
+        if public_pension_source.sum() <= 0.0:
+            public_pension_source = pd.to_numeric(
+                self.household_data.get("Pension Income", self.household_data["Income from Pensions"]),
+                errors="coerce",
+            ).fillna(0.0)
+        other_transfer_source = pd.to_numeric(
+            self.household_data.get("Social Transfer Income", self.household_data["Regular Social Transfers"]),
+            errors="coerce",
+        ).fillna(0.0)
 
+        def allocate(source: pd.Series, budget: float) -> np.ndarray:
+            weights = np.maximum(source.to_numpy(dtype=float), 0.0)
+            weight_sum = weights.sum()
+            if budget <= 0.0:
+                return np.zeros(len(weights), dtype=float)
+            if weight_sum <= 0.0:
+                return np.full(len(weights), budget / len(weights), dtype=float)
+            return budget * weights / weight_sum
+
+        # HFCS income is annual and each sampled household represents `scale`
+        # actual households. Convert the expanded public-pension total to the
+        # model period, cap it at the aggregate cash-transfer envelope, and use
+        # the residual for non-pension cash transfers.
+        hfcs_public_pension_budget = (
+            public_pension_source.sum() * self.scale / self.yearly_factor
+        )
+        public_pension_budget = min(max(hfcs_public_pension_budget, 0.0), total_social_transfers)
+        other_transfer_budget = max(total_social_transfers - public_pension_budget, 0.0)
+
+        self.household_data["Allocated Public Pension Benefits"] = allocate(
+            public_pension_source, public_pension_budget
+        )
+        self.household_data["Allocated Other Social Transfers"] = allocate(
+            other_transfer_source, other_transfer_budget
+        )
+        self.household_data["Regular Social Transfers"] = (
+            self.household_data["Allocated Public Pension Benefits"]
+            + self.household_data["Allocated Other Social Transfers"]
+        )
         self.household_data["Income from Pensions"] = 0.0
 
-        # Social transfers for each household group
-        self.household_data["Regular Social Transfers"] /= self.household_data["Regular Social Transfers"].sum()
-        social_transfers = fit_linear(
+        # Fit the runtime transfer model to the HFCS-based combined allocation,
+        # but retain the direct allocation at initialization.
+        transfer_total = self.household_data["Regular Social Transfers"].sum()
+        if transfer_total > 0.0:
+            self.household_data["Regular Social Transfers"] /= transfer_total
+        fit_linear(
             data=self.household_data,
             independents=independents,
             dependent="Regular Social Transfers",
             model=self.social_transfers_model,
         )
-        social_transfers[social_transfers < 0] = 0.0
-        self.household_data["Regular Social Transfers"] = social_transfers
-
-        # Rescale them
-        self.household_data["Regular Social Transfers"] *= (
-            total_social_transfers / self.household_data["Regular Social Transfers"].sum()
-        )
+        self.household_data["Regular Social Transfers"] *= total_social_transfers
 
     def set_household_income_from_financial_assets(self) -> None:
         """

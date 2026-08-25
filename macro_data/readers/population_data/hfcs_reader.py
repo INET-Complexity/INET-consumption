@@ -70,7 +70,9 @@ var_mapping = {
     "PG0210": "Self-Employment Income",  # Income from self-employment
     "DI1300": "Rental Income from Real Estate",  # Income from property
     "DI1400": "Income from Financial Assets",  # Investment income
-    "DI1500": "Income from Pensions",  # Pension income
+    "DI1500": "Income from Pensions",  # Legacy aggregate pension income
+    "DI1510": "Public Pension Income",  # Public pension income
+    "DI1520": "Occupational and Private Pension Income",  # Occupational/private pension income
     "DI1620": "Regular Social Transfers",  # Social benefits
     "DI2000": "Income",  # Total income
     "PG0510": "Income from Unemployment Benefits",  # Unemployment benefits
@@ -139,6 +141,8 @@ var_numerical = [
     "Rental Income from Real Estate",  # Property income
     "Income from Financial Assets",  # Investment returns
     "Income from Pensions",  # Pension payments
+    "Public Pension Income",  # Public pension payments
+    "Occupational and Private Pension Income",  # Occupational/private pension payments
     "Regular Social Transfers",  # Social benefits
     "Income from Unemployment Benefits",  # Unemployment support
     "Value of the Main Residence",  # Home value
@@ -332,6 +336,7 @@ class HFCSReader:
 
         # Join the derived data with the household data
         households_df = households_df.join(derived_df)
+        households_df = cls._add_household_income_diagnostics(households_df, individuals_df)
         households_df = cls._compute_windfall_income(
             households_df, windfall_threshold=windfall_threshold, default_year=year
         )
@@ -341,6 +346,60 @@ class HFCSReader:
             individuals_df=individuals_df,
             households_df=households_df,
         )
+
+    @staticmethod
+    def _add_household_income_diagnostics(
+        households_df: pd.DataFrame,
+        individuals_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Preserve HFCS income components before model-side aggregation.
+
+        Pension and regular social-transfer income are household fields in HFCS;
+        unemployment income is reported on individuals and is aggregated here so
+        all three diagnostics have the household index used by the model.
+        """
+        households_df = households_df.copy()
+        legacy_pension = households_df.get(
+            "Income from Pensions", pd.Series(0.0, index=households_df.index)
+        ).fillna(0.0)
+        public_pension = households_df.get(
+            "Public Pension Income", pd.Series(0.0, index=households_df.index)
+        ).fillna(0.0)
+        private_pension = households_df.get(
+            "Occupational and Private Pension Income",
+            pd.Series(0.0, index=households_df.index),
+        ).fillna(0.0)
+        # DI1510 and DI1520 are the authoritative HFCS split. Keep DI1500 as
+        # a fallback for older extracts that only contain the aggregate field.
+        if {"Public Pension Income", "Occupational and Private Pension Income"}.issubset(
+            households_df.columns
+        ):
+            pension_total = public_pension + private_pension
+        else:
+            pension_total = legacy_pension
+        households_df["Public Pension Income"] = public_pension
+        households_df["Occupational and Private Pension Income"] = private_pension
+        households_df["Pension Income"] = pension_total
+        households_df["Social Transfer Income"] = households_df.get(
+            "Regular Social Transfers", pd.Series(0.0, index=households_df.index)
+        ).fillna(0.0)
+
+        if {
+            "Corresponding Household ID",
+            "Income from Unemployment Benefits",
+        }.issubset(individuals_df.columns):
+            unemployment = (
+                individuals_df["Income from Unemployment Benefits"]
+                .fillna(0.0)
+                .groupby(individuals_df["Corresponding Household ID"])
+                .sum()
+            )
+            households_df["Unemployment Benefits"] = unemployment.reindex(
+                households_df.index, fill_value=0.0
+            )
+        else:
+            households_df["Unemployment Benefits"] = 0.0
+        return households_df
 
     @staticmethod
     def _compute_windfall_income(

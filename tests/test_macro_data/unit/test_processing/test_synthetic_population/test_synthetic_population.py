@@ -156,6 +156,25 @@ def test__hfcs_reader_preserves_notebook_account_source_columns():
     assert "Outstanding Balance of Non-Mortgage Debt" in var_numerical
 
 
+def test__hfcs_reader_preserves_public_and_private_pension_components():
+    households = pd.DataFrame(
+        {
+            "Income from Pensions": [999.0, 999.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Occupational and Private Pension Income": [3.0, 4.0],
+            "Regular Social Transfers": [5.0, 6.0],
+        },
+        index=[1, 2],
+    )
+    individuals = pd.DataFrame(index=[])
+
+    data = HFCSReader._add_household_income_diagnostics(households, individuals)
+
+    assert data["Public Pension Income"].tolist() == [10.0, 20.0]
+    assert data["Occupational and Private Pension Income"].tolist() == [3.0, 4.0]
+    assert data["Pension Income"].tolist() == [13.0, 24.0]
+
+
 def test__hfcs_reader_converts_notebook_account_source_columns(tmp_path):
     class ExchangeRates:
         def from_eur_to_lcu(self, country, year):
@@ -249,6 +268,38 @@ def test__normalise_household_consumption_caps_saving_rates_at_one(monkeypatch):
     assert np.all(population.household_data["Saving Rate"] <= 1.0)
     assert np.all(population.household_data["Consumption"] >= 0.0)
     assert population.household_data.loc[2, "Consumption"] > 0.0
+
+
+def test__social_transfer_initialisation_uses_hfcs_public_pension_and_other_weights(monkeypatch):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 10
+    population.yearly_factor = 4.0
+    population.social_transfers_model = object()
+    population.household_data = pd.DataFrame(
+        {
+            "Type": [1, 1],
+            "Net Wealth": [0.0, 0.0],
+            "Income": [1.0, 1.0],
+            "Debt": [0.0, 0.0],
+            "Income from Pensions": [13.0, 24.0],
+            "Pension Income": [13.0, 24.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Regular Social Transfers": [1.0, 3.0],
+            "Social Transfer Income": [1.0, 3.0],
+        }
+    )
+    monkeypatch.setattr(
+        hfcs_population_module,
+        "apply_iterative_imputer",
+        lambda data, *_args, **_kwargs: data,
+    )
+    monkeypatch.setattr(hfcs_population_module, "fit_linear", lambda **_kwargs: None)
+
+    population.set_household_social_transfers(total_social_transfers=100.0)
+
+    assert np.allclose(population.household_data["Allocated Public Pension Benefits"], [25.0, 50.0])
+    assert np.allclose(population.household_data["Allocated Other Social Transfers"], [6.25, 18.75])
+    assert np.isclose(population.household_data["Regular Social Transfers"].sum(), 100.0)
 
 
 class TestSyntheticPopulation:

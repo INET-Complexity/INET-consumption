@@ -3058,6 +3058,15 @@ class Country:
         self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
+        # Benefits were needed during planning for reservation-wage decisions,
+        # but realised payments must follow the activity status after labour
+        # market clearing. Replace the planning vector before computing income.
+        self.individuals.ts.override_current(
+            "income_from_unemployment_benefits",
+            self.central_government.distribute_unemployment_benefits_to_individuals(
+                current_individual_activity_status=self.individuals.states["Activity Status"],
+            ),
+        )
         # Update individual income components
         self.individuals.ts.income.append(
             self.individuals.compute_income(
@@ -3316,8 +3325,8 @@ class Country:
         )
         self.central_government.ts.total_unemployment_benefits.append(
             [
-                np.sum(self.individuals.states["Activity Status"] == ActivityStatus.UNEMPLOYED)
-                * self.central_government.ts.current("unemployment_benefits_by_individual")[0]
+                self.economy.current_consumer_price_level()
+                * self.individuals.ts.current("income_from_unemployment_benefits").sum()
             ]
         )
         self.central_government.ts.total_household_social_transfers.append(

@@ -505,10 +505,10 @@ class CentralGovernment(Agent):
         Returns:
             np.ndarray: Government deficit (positive = deficit)
         """
-        total_unemployment_benefits = current_cpi * (
-            np.sum(current_ind_activity == ActivityStatus.UNEMPLOYED)
-            * self.ts.current("unemployment_benefits_by_individual")[0]
-        )
+        # Use the settled benefit vector that was assigned to individuals during
+        # planning. Recounting the current activity status here can disagree with
+        # household income after labour-market clearing changes eligibility.
+        total_unemployment_benefits = self.ts.current("total_unemployment_benefits")[0]
         # `total_household_social_transfers` is updated after authoritative
         # household payment settlement and is already nominal. It is the single
         # fiscal benefit total, including settled Stage 5 support.

@@ -78,6 +78,11 @@ target/
 # Jupyter Notebook
 .ipynb_checkpoints
 *.ipynb
+!run_model/run_model_exploration.ipynb
+!run_model/run_sensitivity.ipynb
+!run_model/run_mpc.ipynb
+!run_model/run_irf.ipynb
+!run_model/run_model_legacy_2026-08-18.ipynb
 
 # IPython
 profile_default/

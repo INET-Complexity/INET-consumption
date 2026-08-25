@@ -453,15 +453,25 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         Returns:
             np.ndarray: Ordered array of worker IDs to fire
         """
+        # A firm can temporarily have positive excess labour while its
+        # employment array is empty (for example after a shock-driven
+        # transition).  Do not pass the empty Python/list value into the
+        # numba-compiled sorter: numba cannot fingerprint it reliably.
+        current_firm_employments = np.asarray(
+            firm_employments[firm_id], dtype=np.int64
+        )
+        if current_firm_employments.size == 0:
+            return current_firm_employments
+
         if self.sorted_firing:
             return sort_employees_by_productivity(
-                current_firm_employments=firm_employments[firm_id],
+                current_firm_employments=current_firm_employments,
                 prev_individuals_productivity=prev_individuals_productivity,
             )
         else:
             return np.random.choice(
-                firm_employments[firm_id],
-                len(firm_employments[firm_id]),
+                current_firm_employments,
+                len(current_firm_employments),
                 replace=False,
             )
 

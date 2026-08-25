@@ -169,7 +169,16 @@ class DefaultHousingMarketClearer(HousingMarketClearer):
         )
 
         # Combine both
-        all_transactions = pd.concat((matching_sales, matching_rental), axis=0).reset_index(drop=True)
+        transaction_frames = [
+            frame for frame in (matching_sales, matching_rental) if not frame.empty
+        ]
+        if transaction_frames:
+            all_transactions = pd.concat(transaction_frames, axis=0)
+        else:
+            # Preserve the transaction schema without concatenating empty
+            # frames, which triggers pandas' dtype inference warning.
+            all_transactions = matching_sales.iloc[0:0].copy()
+        all_transactions = all_transactions.reset_index(drop=True)
         all_transactions["property_id"] = all_transactions["property_id"].astype(int)
         all_transactions["seller_id"] = all_transactions["seller_id"].astype(int)
         all_transactions["buyer_id"] = all_transactions["buyer_id"].astype(int)
@@ -322,7 +331,16 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
         )
 
         # Combine both
-        all_transactions = pd.concat((matching_sales, matching_rental), axis=0).reset_index(drop=True)
+        transaction_frames = [
+            frame for frame in (matching_sales, matching_rental) if not frame.empty
+        ]
+        if transaction_frames:
+            all_transactions = pd.concat(transaction_frames, axis=0)
+        else:
+            # Preserve the transaction schema without concatenating empty
+            # frames, which triggers pandas' dtype inference warning.
+            all_transactions = matching_sales.iloc[0:0].copy()
+        all_transactions = all_transactions.reset_index(drop=True)
         all_transactions["property_id"] = all_transactions["property_id"].astype(int)
         all_transactions["seller_id"] = all_transactions["seller_id"].astype(int)
         all_transactions["buyer_id"] = all_transactions["buyer_id"].astype(int)

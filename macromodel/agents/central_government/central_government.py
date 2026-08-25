@@ -117,15 +117,43 @@ class CentralGovernment(Agent):
         """
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.central_government")
 
+        tax_overrides = configuration.tax_overrides
+        employer_social_insurance_rate = (
+            tax_overrides.employer_social_insurance_rate
+            if tax_overrides.employer_social_insurance_rate is not None
+            else tax_data.employer_social_insurance_tax
+        )
+        value_added_tax_rate = (
+            tax_overrides.value_added_tax_rate
+            if tax_overrides.value_added_tax_rate is not None
+            else tax_data.value_added_tax
+        )
+        household_investment_vat_rate = tax_overrides.household_investment_vat_rate
+        household_capital_formation_rate = (
+            tax_overrides.household_capital_formation_rate
+            if tax_overrides.household_capital_formation_rate is not None
+            else tax_data.capital_formation_tax
+        )
+        firm_capital_formation_rate = (
+            tax_overrides.firm_capital_formation_rate
+            if tax_overrides.firm_capital_formation_rate is not None
+            else 0.0
+        )
+        taxes_less_subsidies_rates = np.asarray(taxes_net_subsidies, dtype=float)
+
         states = {
-            "Value-added Tax": tax_data.value_added_tax,
+            "Value-added Tax": value_added_tax_rate,
+            "Household Investment VAT Rate": household_investment_vat_rate,
             "Export Tax": tax_data.export_tax,
-            "Employer Social Insurance Tax": tax_data.employer_social_insurance_tax,
+            "Employer Social Insurance Tax": employer_social_insurance_rate,
             "Employee Social Insurance Tax": tax_data.employee_social_insurance_tax,
             "Profit Tax": tax_data.profit_tax,
             "Income Tax": tax_data.income_tax,
-            "Capital Formation Tax": tax_data.capital_formation_tax,
-            "Taxes Less Subsidies Rates": taxes_net_subsidies,
+            "Capital Formation Tax": household_capital_formation_rate,
+            "Household Capital Formation Tax": household_capital_formation_rate,
+            "Firm Capital Formation Tax": firm_capital_formation_rate,
+            "Taxes Less Subsidies Rates": taxes_less_subsidies_rates,
+            "Other Product Production Tax Rate": tax_overrides.other_product_production_tax_rate,
             "unemployment_benefits_model": synthetic_central_government.unemployment_benefits_model,
             "other_benefits_model": synthetic_central_government.other_benefits_model,
         }
@@ -255,6 +283,7 @@ class CentralGovernment(Agent):
         current_household_new_real_wealth: np.ndarray,
         taxes_less_subsidies_rates: np.ndarray,
         current_total_exports: float,
+        current_firm_capital_formation: float = 0.0,
     ) -> None:
         """Calculate all tax revenues for the current period.
 
@@ -275,21 +304,46 @@ class CentralGovernment(Agent):
             current_firm_price (np.ndarray): Product prices
             current_firm_profits (np.ndarray): Firm profits
             current_firm_industries (np.ndarray): Industry classifications
-            current_household_new_real_wealth (np.ndarray): New wealth
+            current_household_new_real_wealth (np.ndarray): Household investment base
             taxes_less_subsidies_rates (np.ndarray): Net tax rates
             current_total_exports (float): Total exports
+            current_firm_capital_formation (float): Realised firm capital-goods
+                purchases before the capital-formation tax
         """
-        # Taxes on production
-        self.ts.taxes_production.append(
-            [np.sum(taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price)]
-        )
+        # Taxes on production. France can replace the imported ICIO vector with
+        # a transparent flat reduced-form rate; other countries retain the
+        # historical industry-vector mechanism.
+        product_production_tax_rate = self.states["Other Product Production Tax Rate"]
+        if product_production_tax_rate is None:
+            production_tax = np.sum(
+                taxes_less_subsidies_rates[current_firm_industries]
+                * current_firm_production
+                * current_firm_price
+            )
+        else:
+            production_tax = product_production_tax_rate * np.sum(current_firm_production * current_firm_price)
+        self.ts.taxes_production.append([production_tax])
 
-        # Value-added taxes
-        self.ts.taxes_vat.append([self.states["Value-added Tax"] * np.sum(current_ind_realised_cons)])
+        # Value-added taxes. A France override may classify the realised
+        # household fixed-capital-formation vector as a taxable housing-
+        # investment proxy. Keep this separate from capital-formation tax so
+        # the same flow is not taxed twice.
+        household_consumption_vat = self.states["Value-added Tax"] * np.sum(current_ind_realised_cons)
+        household_investment_vat_rate = self.states["Household Investment VAT Rate"]
+        household_investment_vat = (
+            household_investment_vat_rate * np.sum(np.maximum(0.0, current_household_new_real_wealth))
+            if household_investment_vat_rate is not None
+            else 0.0
+        )
+        self.ts.taxes_vat.append([household_consumption_vat + household_investment_vat])
 
         # Taxes on capital formation
         self.ts.taxes_cf.append(
-            [self.states["Capital Formation Tax"] * np.sum(np.maximum(0.0, current_household_new_real_wealth))]
+            [
+                self.states["Household Capital Formation Tax"]
+                * np.sum(np.maximum(0.0, current_household_new_real_wealth))
+                + self.states["Firm Capital Formation Tax"] * max(0.0, current_firm_capital_formation)
+            ]
         )
 
         # Corporate income taxes
@@ -349,6 +403,33 @@ class CentralGovernment(Agent):
             + self.ts.current("taxes_exports")[0]
         )
 
+    def reconcile_initial_capital_formation_tax(
+        self,
+        current_household_investment: np.ndarray,
+        current_firm_capital_formation: float,
+    ) -> None:
+        """Align the seeded capital-tax flows with an explicit base override.
+
+        The historical seed already contains a product-tax aggregate and a
+        capital-formation tax.  When a country configuration changes the
+        capital-tax base, update only the capital-tax delta in those seeded
+        aggregates so initial expenditure GDP and output GDP continue to agree.
+        Subsequent periods are calculated by :meth:`compute_taxes`.
+        """
+        previous_capital_tax = self.ts.current("taxes_cf")[0]
+        current_capital_tax = (
+            self.states["Household Capital Formation Tax"]
+            * np.sum(np.maximum(0.0, current_household_investment))
+            + self.states["Firm Capital Formation Tax"] * max(0.0, current_firm_capital_formation)
+        )
+        capital_tax_delta = current_capital_tax - previous_capital_tax
+        self.ts.override_current("taxes_cf", [current_capital_tax])
+        self.ts.override_current(
+            "taxes_on_products",
+            [self.ts.current("taxes_on_products")[0] + capital_tax_delta],
+        )
+        self.ts.override_current("revenue", [self.ts.current("revenue")[0] + capital_tax_delta])
+
     def compute_revenue(
         self,
         household_rent_paid_to_government: float,
@@ -385,7 +466,6 @@ class CentralGovernment(Agent):
         current_cpi: float,
         current_government_nominal_amount_spent: np.ndarray,
         interest_payments_on_debt: float,
-        stage5_subsistence_support_total: float = 0.0,
     ) -> np.ndarray:
         """Calculate the government deficit.
 
@@ -403,23 +483,18 @@ class CentralGovernment(Agent):
             current_cpi (float): Current consumer price index
             current_government_nominal_amount_spent (np.ndarray): Spending
             interest_payments_on_debt (float): Interest payments on public debt
-            stage5_subsistence_support_total (float): Nominal settled Stage 5 support
-                already merged into realised household transfers
 
         Returns:
             np.ndarray: Government deficit (positive = deficit)
         """
-        # Legacy benefit stocks are stored in real units and are nominalised once
-        # here. Settled Stage 5 support is already persisted in nominal terms on
-        # the household late-settlement path, so it must be added after that
-        # nominalisation to avoid double counting CPI.
         total_unemployment_benefits = current_cpi * (
             np.sum(current_ind_activity == ActivityStatus.UNEMPLOYED)
             * self.ts.current("unemployment_benefits_by_individual")[0]
         )
-        total_household_social_transfers = (
-            current_cpi * self.ts.current("total_other_benefits")[0] + stage5_subsistence_support_total
-        )
+        # `total_household_social_transfers` is updated after authoritative
+        # household payment settlement and is already nominal. It is the single
+        # fiscal benefit total, including settled Stage 5 support.
+        total_household_social_transfers = self.ts.current("total_household_social_transfers")[0]
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(
             [

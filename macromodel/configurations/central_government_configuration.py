@@ -31,5 +31,23 @@ class CentralGovernmentFunctions(BaseModel):
     debt_interest: DebtInterest = DebtInterest()
 
 
+class CentralGovernmentTaxOverrides(BaseModel):
+    """Optional country-level overrides for fiscal rates and tax vectors.
+
+    The defaults keep the historical reader values and the generic model
+    accounting unchanged.  Country configuration files can opt into a
+    separate household/firm capital-formation tax base and a documented
+    reduced-form product/production-tax envelope.
+    """
+
+    employer_social_insurance_rate: float | None = None
+    value_added_tax_rate: float | None = None
+    household_investment_vat_rate: float | None = None
+    household_capital_formation_rate: float | None = None
+    firm_capital_formation_rate: float | None = None
+    other_product_production_tax_rate: float | None = None
+
+
 class CentralGovernmentConfiguration(BaseModel):
     functions: CentralGovernmentFunctions = CentralGovernmentFunctions()
+    tax_overrides: CentralGovernmentTaxOverrides = Field(default_factory=CentralGovernmentTaxOverrides)

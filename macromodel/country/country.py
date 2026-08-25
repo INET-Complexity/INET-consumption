@@ -544,6 +544,15 @@ class Country:
             tax_data=synthetic_country.tax_data,
             n_industries=n_industries,
         )
+        tax_overrides = country_configuration.central_government.tax_overrides
+        if (
+            tax_overrides.household_capital_formation_rate is not None
+            or tax_overrides.firm_capital_formation_rate is not None
+        ):
+            central_government.reconcile_initial_capital_formation_tax(
+                current_household_investment=households.ts.current("investment"),
+                current_firm_capital_formation=firms.ts.current("total_capital_inputs_bought_costs").sum(),
+            )
 
         government_entities = GovernmentEntities.from_pickled_agent(
             synthetic_government_entities=synthetic_country.government_entities,
@@ -1483,7 +1492,7 @@ class Country:
             exogenous_total_investment=self.exogenous.national_accounts_during[
                 "Real Household Investment (Value)"
             ].values.flatten(),
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
             assume_zero_growth=self.assume_zero_growth,
         )
 
@@ -3134,7 +3143,8 @@ class Country:
 
         self.households.update_consumption_and_investment(
             tau_vat=self.central_government.states["Value-added Tax"],
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
+            tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             readjusted_factors=readjusted_factors,
             emitting_indices=self.emitting_indices,
             add_emissions=self.add_emissions,
@@ -3144,8 +3154,9 @@ class Country:
         )
         illiquid_financial_asset_return_rate = self.households.update_wealth(
             housing_data=self.housing_market.states["properties"],
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
             period_index=period_index,
+            tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))
@@ -3268,6 +3279,7 @@ class Country:
             taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
             current_household_new_real_wealth=self.households.ts.current("investment"),
             current_total_exports=self.economy.ts.current("exports_before_taxes").sum(),
+            current_firm_capital_formation=self.firms.ts.current("total_capital_inputs_bought_costs").sum(),
         )
 
         # General government fields
@@ -3311,7 +3323,6 @@ class Country:
                     "nominal_amount_spent_in_lcu"
                 ),
                 interest_payments_on_debt=self.central_government.ts.current("interest_payments_on_debt")[0],
-                stage5_subsistence_support_total=self.current_stage5_subsistence_support_fiscal_increment(),
             )
         )
         self.central_government.ts.debt.append(self.central_government.compute_debt())
@@ -3334,8 +3345,13 @@ class Country:
             change_in_inventories=self.firms.ts.current("total_inventory_change").sum()
             + self.firms.ts.current("total_intermediate_inputs_bought_costs").sum()
             - self.firms.ts.current("used_intermediate_inputs_costs").sum(),
-            gross_fixed_capital_formation=self.firms.ts.current("total_capital_inputs_bought_costs").sum()
-            + (1 + self.central_government.states["Capital Formation Tax"])
+            gross_fixed_capital_formation=(1 + self.central_government.states["Firm Capital Formation Tax"])
+            * self.firms.ts.current("total_capital_inputs_bought_costs").sum()
+            + (
+                1
+                + self.central_government.states["Household Capital Formation Tax"]
+                + (self.central_government.states["Household Investment VAT Rate"] or 0.0)
+            )
             * self.households.ts.current("investment").sum(),
             exports=self.economy.ts.current("exports").sum(),
             imports=self.economy.ts.current("imports").sum(),

@@ -422,6 +422,18 @@ def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
     assert params["frm_coefficients_path"] == "data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
 
 
+def test__load_country_configuration_resolves_real_fra_tax_overrides():
+    config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+
+    overrides = config.central_government.tax_overrides
+    assert overrides.employer_social_insurance_rate == pytest.approx(0.30552085148943465)
+    assert overrides.value_added_tax_rate == pytest.approx(0.13)
+    assert overrides.household_investment_vat_rate == pytest.approx(0.13)
+    assert overrides.household_capital_formation_rate == 0.0
+    assert overrides.firm_capital_formation_rate == pytest.approx(0.24856698371134814)
+    assert overrides.other_product_production_tax_rate == pytest.approx(0.0664)
+
+
 def test__load_country_configuration_rejects_missing_paper_parameter_ref(tmp_path):
     (tmp_path / "paper.yaml").write_text(yaml.safe_dump({"stage_1": {}}))
     country_path = tmp_path / "country.yaml"

@@ -260,8 +260,10 @@ class Economy:
             # + firms.ts.current("total_capital_inputs_bought_costs").sum()  # TODO: NB -> Removed in Sam's code
         )
         initial_gross_fixed_capital_formation = (
-            firms.ts.current("total_capital_inputs_bought_costs").sum()
-            + (1 + central_government.states["Capital Formation Tax"]) * households.ts.current("investment").sum()
+            (1 + central_government.states["Firm Capital Formation Tax"])
+            * firms.ts.current("total_capital_inputs_bought_costs").sum()
+            + (1 + central_government.states["Household Capital Formation Tax"])
+            * households.ts.current("investment").sum()
         )
         initial_total_operating_surplus = firms.ts.current("gross_operating_surplus_mixed_income").sum()
         initial_total_wages = firms.ts.current("total_wage").sum()

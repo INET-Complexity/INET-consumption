@@ -3182,6 +3182,7 @@ class Households(Agent):
         self,
         tau_vat: float,
         tau_cf: float,
+        tau_vat_on_investment: float = 0.0,
         add_emissions: bool = False,
         readjusted_factors: Optional[np.ndarray] = None,
         emitting_indices: Optional[np.ndarray] = None,
@@ -3200,6 +3201,7 @@ class Households(Agent):
         Args:
             tau_vat (float): Value added tax rate
             tau_cf (float): Capital formation tax rate
+            tau_vat_on_investment (float): VAT rate applied to household investment
             add_emissions (bool): Whether to track emissions
             readjusted_factors (Optional[np.ndarray]): CO2 emission factors
             emitting_indices (Optional[np.ndarray]): CO2 emitting sector indices
@@ -3311,11 +3313,19 @@ class Households(Agent):
             self.ts.oil_investment_emissions.append(disaggregated_emissions[:, 1])
             self.ts.gas_investment_emissions.append(disaggregated_emissions[:, 2])
             self.ts.refined_products_investment_emissions.append(disaggregated_emissions[:, 3])
-        self.ts.total_investment.append([(1 + tau_cf) * self.ts.current("investment").sum()])
+        self.ts.total_investment.append(
+            [(1 + tau_cf + tau_vat_on_investment) * self.ts.current("investment").sum()]
+        )
         self.ts.total_investment_before_vat.append([self.ts.current("investment").sum()])
         self.ts.industry_investment.append(self.ts.current("investment").sum(axis=0))
 
-    def update_wealth(self, housing_data: pd.DataFrame, tau_cf: float, period_index: int | None = None) -> float:
+    def update_wealth(
+        self,
+        housing_data: pd.DataFrame,
+        tau_cf: float,
+        period_index: int | None = None,
+        tau_vat_on_investment: float = 0.0,
+    ) -> float:
         """Update household wealth positions.
 
         Updates:
@@ -3386,7 +3396,8 @@ class Households(Agent):
                 - optional_cash_flow("interest_paid")
                 - optional_cash_flow("price_paid_for_property")
                 - optional_cash_flow("debt_installments")
-                - tau_cf * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
+                - (tau_cf + tau_vat_on_investment)
+                * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
             )
             new_wealth = np.maximum(cash_saving_before_financing, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)

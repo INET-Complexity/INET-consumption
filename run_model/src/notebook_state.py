@@ -128,11 +128,19 @@ def run_notebook_workflow(
     *,
     scenario_name: str,
     scenario_overrides: Mapping[str, Any] | None = None,
+    previous_state: NotebookRunState | None = None,
     write_manifest: bool = True,
 ) -> NotebookRunState:
     """Prepare data, configure, run, benchmark, validate, and record one notebook run."""
+
     overrides = dict(scenario_overrides or {})
-    prepared = prepare_data(config)
+
+    prepared = (
+        previous_state.prepared
+        if previous_state is not None and previous_state.config == config
+        else prepare_data(config)
+    )
+    # prepared = prepare_data(config)
     country_configurations = build_country_config(data=prepared.data, config=config, overrides=overrides)
     simulation = run_single_simulation(data=prepared.data, country_configurations=country_configurations, config=config)
     benchmark = run_benchmark(config) if config.run_benchmark else None

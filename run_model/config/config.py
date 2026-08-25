@@ -59,17 +59,18 @@ class Config:
 
 
 CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
+    "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
     # "households.functions.consumption.parameters.['long_run_intercept']": -0.1,
-    "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
-    "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
-    "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
-    "households.functions.consumption.parameters.['housing_wealth_propensity']": 0.013,
-    "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
-    "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
-    "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.56,
-    "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
-    "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
+    # "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
+    # "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
+    # "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
+    # "households.functions.consumption.parameters.['housing_wealth_propensity']": 0.013,
+    # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
+    # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
+    # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
+    # "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.56,
+    # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
+    # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain

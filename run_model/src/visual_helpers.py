@@ -883,6 +883,8 @@ def build_macro_output_df(model, country_code):
             add_column(output_name, df_gov_ts[source_name])
 
     fiscal_expenditure = get_column("fiscal_expenditure")
+    for component_name in fiscal_revenue_components.values():
+        add_ratio(f"{component_name}_to_gdp", get_column(component_name), gdp)
     add_ratio("fiscal_revenue_to_gdp", get_column("fiscal_revenue"), gdp)
     add_ratio("fiscal_expenditure_to_gdp", fiscal_expenditure, gdp)
     add_ratio("deficit_to_gdp", get_column("deficit"), gdp)
@@ -890,8 +892,10 @@ def build_macro_output_df(model, country_code):
     if debt is not None and gdp is not None:
         add_column("debt_to_gdp", debt / (periods_per_year * gdp))
     add_ratio("unemployment_benefits_to_expenditure", get_column("unemployment_benefits"), fiscal_expenditure)
+    add_ratio("unemployment_benefits_to_gdp", get_column("unemployment_benefits"), gdp)
     add_ratio("government_consumption_to_expenditure", government_consumption, fiscal_expenditure)
     add_ratio("interest_payments_on_debt_to_expenditure", get_column("interest_payments_on_debt"), fiscal_expenditure)
+    add_ratio("interest_payments_on_debt_to_gdp", get_column("interest_payments_on_debt"), gdp)
     for component in [
         "public_pension_benefits",
         "other_social_transfers",

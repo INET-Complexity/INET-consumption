@@ -481,11 +481,21 @@ class TestCountry:
             "distribute_unemployment_benefits_to_individuals",
             lambda **_kwargs: np.zeros(n_individuals),
         )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(n_individuals),
+        )
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
         monkeypatch.setattr(
             test_country.households,
             "compute_social_transfer_income",
             lambda **_kwargs: ordinary_transfers,
+        )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(len(test_country.individuals.states["Activity Status"])),
         )
 
         test_country._update_benefit_planning_metrics()
@@ -795,7 +805,10 @@ class TestCountry:
         )
         assert np.allclose(captured["mortgage_payment"], mortgage_payment)
         n_periods_per_year = 12 // test_country.economy.time_unit
-        expected_annual_income = n_periods_per_year * test_country.households.ts.current("expected_income")
+        expected_annual_income = np.maximum(
+            n_periods_per_year * test_country.households.ts.current("expected_income"),
+            1e-12,
+        )
         np.testing.assert_allclose(
             captured["real_borrowing_rate"],
             (
@@ -1924,6 +1937,11 @@ class TestCountry:
             "compute_social_transfer_income",
             lambda **_kwargs: ordinary_transfers,
         )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
             credit_granted=np.zeros(n_households),
             credit_rationing_gap=np.zeros(n_households),
@@ -1964,6 +1982,11 @@ class TestCountry:
             "compute_social_transfer_income",
             lambda **_kwargs: ordinary_transfers,
         )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         test_country.set_stage5_subsistence_support_by_household(real_support)
 
         realised_transfers = test_country.compute_realised_household_social_transfers()
@@ -1985,6 +2008,11 @@ class TestCountry:
             "compute_social_transfer_income",
             lambda **_kwargs: ordinary_transfers,
         )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         test_country.set_stage5_subsistence_support_by_household(targeted_support)
 
         test_country.settle_household_social_transfers()
@@ -1998,6 +2026,41 @@ class TestCountry:
             ordinary_transfers + settled_support,
         )
         assert test_country.current_settled_stage5_subsistence_support_total() == float(settled_support.sum())
+
+    def test__settled_social_income_keeps_public_other_and_stage5_components_separate(
+        self, test_country, monkeypatch
+    ):
+        n_households = test_country.households.ts.current("n_households")
+        n_individuals = len(test_country.individuals.states["Activity Status"])
+        public_by_individual = np.linspace(1.0, 2.0, n_individuals)
+        other_transfers = np.full(n_households, 5.0)
+        stage5_support = np.full(n_households, 3.0)
+        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
+            lambda **_kwargs: public_by_individual,
+        )
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_social_transfer_income",
+            lambda **_kwargs: other_transfers,
+        )
+        test_country.set_stage5_subsistence_support_by_household(stage5_support)
+
+        test_country.settle_household_social_transfers()
+
+        expected_public = 2.0 * test_country.households.aggregate_individual_amount(
+            individual_amount=public_by_individual,
+            corr_households=test_country.individuals.states["Corresponding Household ID"],
+        )
+        np.testing.assert_allclose(test_country.households.ts.current("income_public_pension"), expected_public)
+        np.testing.assert_allclose(test_country.households.ts.current("income_other_social_transfers"), other_transfers)
+        np.testing.assert_allclose(test_country.households.ts.current("stage5_subsistence_support"), 2.0 * stage5_support)
+        np.testing.assert_allclose(
+            test_country.households.ts.current("income_social_transfers"),
+            expected_public + other_transfers + 2.0 * stage5_support,
+        )
 
     def test__settled_stage5_support_total_reads_persisted_series_not_transient_carrier(
         self, test_country, monkeypatch
@@ -2219,6 +2282,11 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.central_government,
             "distribute_unemployment_benefits_to_individuals",
+            lambda **kwargs: np.zeros(n_individuals),
+        )
+        monkeypatch.setattr(
+            test_country.central_government,
+            "distribute_public_pension_benefits_to_individuals",
             lambda **kwargs: np.zeros(n_individuals),
         )
         monkeypatch.setattr(

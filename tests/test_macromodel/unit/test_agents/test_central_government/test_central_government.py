@@ -97,7 +97,13 @@ class TestCentralGovernment:
             ]
         )
         unemployment_benefit = test_central_government.ts.current("unemployment_benefits_by_individual")[0]
-        realised_transfers = 42.0
+        realised_public_pensions = 10.0
+        realised_other_transfers = 20.0
+        realised_necessity_support = 12.0
+        realised_transfers = realised_public_pensions + realised_other_transfers + realised_necessity_support
+        test_central_government.ts.total_public_pension_benefits.append([realised_public_pensions])
+        test_central_government.ts.total_other_social_transfers.append([realised_other_transfers])
+        test_central_government.ts.total_necessity_support.append([realised_necessity_support])
         test_central_government.ts.total_household_social_transfers.append([realised_transfers])
         test_central_government.ts.total_unemployment_benefits.append([2 * current_cpi * unemployment_benefit])
         current_government_spending = np.array([10.0, 20.0])
@@ -121,7 +127,13 @@ class TestCentralGovernment:
         current_government_spending = np.array([10.0])
         interest_payments = 5.0
         revenue = test_central_government.ts.current("revenue")[0]
-        realised_transfers = 42.0
+        realised_public_pensions = 0.0
+        realised_other_transfers = 30.0
+        realised_necessity_support = 12.0
+        realised_transfers = realised_public_pensions + realised_other_transfers + realised_necessity_support
+        test_central_government.ts.total_public_pension_benefits.append([realised_public_pensions])
+        test_central_government.ts.total_other_social_transfers.append([realised_other_transfers])
+        test_central_government.ts.total_necessity_support.append([realised_necessity_support])
         test_central_government.ts.total_household_social_transfers.append([realised_transfers])
         test_central_government.ts.total_unemployment_benefits.append([0.0])
 
@@ -135,6 +147,17 @@ class TestCentralGovernment:
         expected_benefits = realised_transfers
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
+
+    def test__public_pensions_only_pay_eligible_weighted_recipients(self, test_central_government):
+        test_central_government.ts.public_pension_benefits.append([90.0])
+
+        payments = test_central_government.distribute_public_pension_benefits_to_individuals(
+            retirement_eligibility=np.array([True, False, True]),
+            public_pension_weights=np.array([2.0, 100.0, 1.0]),
+        )
+
+        np.testing.assert_allclose(payments, [60.0, 0.0, 30.0])
+        assert np.isclose(payments.sum(), 90.0)
 
     # def test__compute_taxes_revenue_deficit_debt(self, test_central_government):
     #     test_central_government.compute_taxes(

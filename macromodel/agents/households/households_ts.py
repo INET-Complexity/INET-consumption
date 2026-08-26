@@ -207,9 +207,21 @@ def create_households_timeseries(
         income_employee=data["Employee Income"].values,
         total_income_employee=[data["Employee Income"].values.sum()],
         expected_income_employee=data["Employee Income"].values,
+        income_public_pension=data.get(
+            "Allocated Public Pension Benefits", pd.Series(0.0, index=data.index)
+        ).values,
+        income_other_social_transfers=data.get(
+            "Allocated Other Social Transfers", pd.Series(0.0, index=data.index)
+        ).values,
         income_social_transfers=data["Regular Social Transfers"].values,
         total_income_social_transfers=[data["Regular Social Transfers"].values.sum()],
         stage5_subsistence_support=np.zeros(len(data)),
+        expected_income_public_pension=data.get(
+            "Allocated Public Pension Benefits", pd.Series(0.0, index=data.index)
+        ).values,
+        expected_income_other_social_transfers=data.get(
+            "Allocated Other Social Transfers", pd.Series(0.0, index=data.index)
+        ).values,
         expected_income_social_transfers=data["Regular Social Transfers"].values,
         income_rental=data["Rental Income from Real Estate"].values,
         total_income_rental=[data["Rental Income from Real Estate"].values.sum()],

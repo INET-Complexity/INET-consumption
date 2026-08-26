@@ -49,6 +49,11 @@ def process_individual_data(
     individual_data = fill_individual_education(individual_data)
     individual_data["college"] = (individual_data["Education"] > 3).astype(int)
     individual_data = fill_individual_labour_status(individual_data)
+    # HFCS has a retirement labour-status category but the simulation has no
+    # ageing transition.  Preserve it as a static eligibility state, separate
+    # from the simulated employment/unemployment activity status.
+    individual_data["HFCS Labour Status"] = individual_data["Labour Status"].astype(int)
+    individual_data["Is Retired"] = individual_data["HFCS Labour Status"] == 5
     individual_data = set_individual_activity_status(
         individual_data=individual_data,
         unemployment_rate=unemployment_rate,
@@ -82,6 +87,8 @@ def process_individual_data(
             "Age",
             "Education",
             "college",
+            "HFCS Labour Status",
+            "Is Retired",
             "Activity Status",
             "Employment Industry",
             "Employee Income",

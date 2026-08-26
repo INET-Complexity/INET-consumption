@@ -1446,9 +1446,17 @@ class Households(Agent):
         Returns:
             np.ndarray: Employment income by household
         """
+        return self.aggregate_individual_amount(individual_income, corr_households)
+
+    def aggregate_individual_amount(
+        self,
+        individual_amount: np.ndarray,
+        corr_households: np.ndarray,
+    ) -> np.ndarray:
+        """Aggregate an individual payment component to its household recipient."""
         return np.bincount(
             corr_households,
-            weights=individual_income,
+            weights=individual_amount,
             minlength=self.ts.current("n_households"),
         )
 

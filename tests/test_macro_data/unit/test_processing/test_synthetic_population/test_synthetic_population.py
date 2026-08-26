@@ -297,9 +297,54 @@ def test__social_transfer_initialisation_uses_hfcs_public_pension_and_other_weig
 
     population.set_household_social_transfers(total_social_transfers=100.0)
 
-    assert np.allclose(population.household_data["Allocated Public Pension Benefits"], [25.0, 50.0])
-    assert np.allclose(population.household_data["Allocated Other Social Transfers"], [6.25, 18.75])
+    assert np.allclose(
+        population.household_data["Allocated Public Pension Benefits"],
+        [100.0 * 10.0 / 34.0, 100.0 * 20.0 / 34.0],
+    )
+    assert np.allclose(
+        population.household_data["Allocated Other Social Transfers"],
+        [100.0 * 1.0 / 34.0, 100.0 * 3.0 / 34.0],
+    )
     assert np.isclose(population.household_data["Regular Social Transfers"].sum(), 100.0)
+
+
+def test__public_pension_household_source_is_mapped_to_retired_individuals(monkeypatch):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.social_transfers_model = object()
+    population.household_data = pd.DataFrame(
+        {
+            "Type": [1, 1],
+            "Net Wealth": [0.0, 0.0],
+            "Income": [1.0, 1.0],
+            "Debt": [0.0, 0.0],
+            "Income from Pensions": [10.0, 20.0],
+            "Pension Income": [10.0, 20.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Regular Social Transfers": [1.0, 3.0],
+            "Social Transfer Income": [1.0, 3.0],
+            "Corresponding Individuals ID": [[0, 1], [2]],
+        }
+    )
+    population.individual_data = pd.DataFrame(
+        {
+            "Corresponding Household ID": [0, 0, 1],
+            "Is Retired": [True, False, True],
+        }
+    )
+    monkeypatch.setattr(hfcs_population_module, "apply_iterative_imputer", lambda data, *_args, **_kwargs: data)
+    monkeypatch.setattr(hfcs_population_module, "fit_linear", lambda **_kwargs: None)
+
+    population.set_household_social_transfers(total_social_transfers=100.0)
+
+    np.testing.assert_allclose(population.individual_data["Public Pension Weight"], [1.0 / 3.0, 0.0, 2.0 / 3.0])
+    np.testing.assert_allclose(
+        population.individual_data["Public Pension Benefits"],
+        [500.0 / 17.0, 0.0, 1000.0 / 17.0],
+    )
+    np.testing.assert_allclose(
+        population.household_data["Allocated Public Pension Benefits"],
+        [500.0 / 17.0, 1000.0 / 17.0],
+    )
 
 
 class TestSyntheticPopulation:

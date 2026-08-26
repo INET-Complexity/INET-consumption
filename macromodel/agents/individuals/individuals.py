@@ -137,6 +137,14 @@ class Individuals(Agent):
             Individuals: Initialized individuals agent
         """
         data = (synthetic_population.individual_data.astype(float)).rename_axis("Individual ID")
+        for column, default in {
+            "HFCS Labour Status": 0.0,
+            "Is Retired": 0.0,
+            "Public Pension Weight": 0.0,
+            "Public Pension Benefits": 0.0,
+        }.items():
+            if column not in data:
+                data[column] = default
 
         functions = functions_from_model(model=configuration.functions, loc="macromodel.agents.individuals")
 
@@ -150,6 +158,10 @@ class Individuals(Agent):
             "Age",
             "Education",
             "college",
+            "HFCS Labour Status",
+            "Is Retired",
+            "Public Pension Weight",
+            "Public Pension Benefits",
             "Activity Status",
             "Employment Industry",
             "Income",
@@ -173,6 +185,7 @@ class Individuals(Agent):
 
         # Level of education
         states["Education"] = np.array(map_to_enum(states["Education"], Education))
+        states["Is Retired"] = states["Is Retired"].astype(bool)
 
         states["Started New Job"] = np.full(len(states["Activity Status"]), False)
         states["Offered Wage of Accepted Job"] = np.zeros(len(states["Activity Status"]))

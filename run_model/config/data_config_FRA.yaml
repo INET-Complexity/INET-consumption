@@ -42,9 +42,6 @@ country_configs:
     single_firm_per_industry: false
     single_government_entity: false
     scale: 5000
-    # France 2014 general-government cash social benefits (Eurostat/INSEE):
-    # 20.0% of annual GDP. The reader converts this envelope to model-quarter units.
-    cash_social_benefits_gdp_ratio: 0.20
     eu_proxy_country: null
     carbon_price: 0.0
 

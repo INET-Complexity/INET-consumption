@@ -184,7 +184,6 @@ class CountryDataConfiguration(BaseModel):
     scale: int
     eu_proxy_country: Optional[Country] = None
     carbon_price: float = 0.0
-    cash_social_benefits_gdp_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 
 
 class ROWDataConfiguration(BaseModel):

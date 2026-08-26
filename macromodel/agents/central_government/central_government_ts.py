@@ -42,14 +42,28 @@ def create_central_government_timeseries(
         TimeSeries: Initialized time series containing all government
             variables with their initial values
     """
+    initial_unemployment_benefit = (
+        data["Total Unemployment Benefits"].values[0] / number_of_unemployed_individuals
+        if number_of_unemployed_individuals > 0
+        else 0.0
+    )
+    public_pension_benefits = data.get("Public Pension Benefits", pd.Series([0.0])).values[0]
+    other_social_benefits = data["Other Social Benefits"].values[0]
     return TimeSeries(
         debt=np.array([float(data["Debt"].iloc[0])]),
-        unemployment_benefits_by_individual=[
-            data["Total Unemployment Benefits"].values[0] / number_of_unemployed_individuals
+        unemployment_benefits_by_individual=[initial_unemployment_benefit],
+        # Planned real component controls.
+        public_pension_benefits=[public_pension_benefits],
+        total_other_benefits=[other_social_benefits],
+        reader_non_unemployment_social_benefits=[
+            data.get("Reader Non-Unemployment Social Benefits", pd.Series([other_social_benefits])).values[0]
         ],
-        total_other_benefits=[data["Other Social Benefits"].values[0]],
+        # Settled nominal fiscal components.
         total_unemployment_benefits=[data["Total Unemployment Benefits"].values[0]],
-        total_household_social_transfers=[data["Other Social Benefits"].values[0]],
+        total_public_pension_benefits=[public_pension_benefits],
+        total_other_social_transfers=[other_social_benefits],
+        total_necessity_support=[0.0],
+        total_household_social_transfers=[public_pension_benefits + other_social_benefits],
         interest_payments_on_debt=[0.0],
         debt_interest_rate=[np.nan],
         #

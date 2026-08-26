@@ -49,6 +49,7 @@ RESTRICT_COLS = [
     "Social Transfer Income",
     "Allocated Public Pension Benefits",
     "Allocated Other Social Transfers",
+    "Social Transfer Allocation Weight",
     "Rental Income from Real Estate",
     "Income from Financial Assets",
     "Saving Rate",
@@ -720,36 +721,79 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
                 return np.full(len(weights), budget / len(weights), dtype=float)
             return budget * weights / weight_sum
 
-        # HFCS income is annual and each sampled household represents `scale`
-        # actual households. Convert the expanded public-pension total to the
-        # model period, cap it at the aggregate cash-transfer envelope, and use
-        # the residual for non-pension cash transfers.
-        hfcs_public_pension_budget = public_pension_source.sum() * self.scale / self.yearly_factor
-        public_pension_budget = min(max(hfcs_public_pension_budget, 0.0), total_social_transfers)
+        # The reader-derived non-unemployment envelope is authoritative. HFCS
+        # values supply only the composition weights, so sampling scale and the
+        # survey-weight bootstrap cannot change its total.
+        composition_total = public_pension_source.clip(lower=0.0).sum() + other_transfer_source.clip(lower=0.0).sum()
+        public_pension_share = (
+            public_pension_source.clip(lower=0.0).sum() / composition_total if composition_total > 0.0 else 0.0
+        )
+        public_pension_budget = total_social_transfers * public_pension_share
         other_transfer_budget = max(total_social_transfers - public_pension_budget, 0.0)
 
-        self.household_data["Allocated Public Pension Benefits"] = allocate(
-            public_pension_source, public_pension_budget
-        )
+        self.household_data["Allocated Public Pension Benefits"] = allocate(public_pension_source, public_pension_budget)
         self.household_data["Allocated Other Social Transfers"] = allocate(other_transfer_source, other_transfer_budget)
+        self._set_individual_public_pension_weights(public_pension_source, public_pension_budget)
+        if hasattr(self, "individual_data") and "Public Pension Benefits" in self.individual_data:
+            self.household_data["Allocated Public Pension Benefits"] = np.bincount(
+                self.individual_data["Corresponding Household ID"].to_numpy(dtype=int),
+                weights=self.individual_data["Public Pension Benefits"].to_numpy(dtype=float),
+                minlength=len(self.household_data),
+        )
         self.household_data["Regular Social Transfers"] = (
             self.household_data["Allocated Public Pension Benefits"]
             + self.household_data["Allocated Other Social Transfers"]
         )
         self.household_data["Income from Pensions"] = 0.0
 
-        # Fit the runtime transfer model to the HFCS-based combined allocation,
-        # but retain the direct allocation at initialization.
-        transfer_total = self.household_data["Regular Social Transfers"].sum()
-        if transfer_total > 0.0:
-            self.household_data["Regular Social Transfers"] /= transfer_total
+        # Fit the runtime other-transfer model to the HFCS allocation without
+        # replacing the component-level initial payment carrier.
+        self.household_data["Social Transfer Allocation Weight"] = (
+            self.household_data["Allocated Other Social Transfers"] / other_transfer_budget
+            if other_transfer_budget > 0.0
+            else 0.0
+        )
         fit_linear(
             data=self.household_data,
             independents=independents,
-            dependent="Regular Social Transfers",
+            dependent="Social Transfer Allocation Weight",
             model=self.social_transfers_model,
         )
-        self.household_data["Regular Social Transfers"] *= total_social_transfers
+        self.household_data.drop(columns=["Social Transfer Allocation Weight"], inplace=True)
+
+        if not np.isclose(self.household_data["Regular Social Transfers"].sum(), total_social_transfers):
+            raise RuntimeError("Initial social-transfer components must exhaust the reader-derived envelope.")
+
+    def _set_individual_public_pension_weights(
+        self,
+        household_public_pension_source: pd.Series,
+        public_pension_budget: float,
+    ) -> None:
+        """Map household HFCS pension source weights to eligible retirees.
+
+        The HFCS public-pension amount is household-level. It is therefore
+        split equally among that household's HFCS-retired members, then
+        normalized over the eligible population. A missing/zero source uses an
+        equal eligible-recipient fallback; a positive budget without any
+        retired individual is an invalid synthetic population.
+        """
+        if not hasattr(self, "individual_data") or "Is Retired" not in self.individual_data:
+            return
+        retired = self.individual_data["Is Retired"].to_numpy(dtype=bool)
+        weights = np.zeros(len(self.individual_data), dtype=float)
+        for household_id, individual_ids in self.household_data["Corresponding Individuals ID"].items():
+            ids = np.asarray(individual_ids, dtype=int)
+            eligible_ids = ids[retired[ids]]
+            if eligible_ids.size:
+                weights[eligible_ids] = max(float(household_public_pension_source.loc[household_id]), 0.0) / eligible_ids.size
+        if weights.sum() <= 0.0:
+            if retired.sum() == 0 and public_pension_budget > 0.0:
+                raise ValueError("Public-pension budget requires at least one HFCS-retired individual.")
+            weights[retired] = 1.0
+        if weights.sum() > 0.0:
+            weights /= weights.sum()
+        self.individual_data["Public Pension Weight"] = weights
+        self.individual_data["Public Pension Benefits"] = public_pension_budget * weights
 
     def set_household_income_from_financial_assets(self) -> None:
         """

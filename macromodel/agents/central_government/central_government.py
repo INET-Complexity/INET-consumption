@@ -243,6 +243,17 @@ class CentralGovernment(Agent):
                 )
             ]
         )
+        self.ts.public_pension_benefits.append(
+            [
+                self.functions["social_benefits"].compute_regular_transfer_to_households(
+                    prev_regular_transfer_to_households=self.ts.current("public_pension_benefits")[0],
+                    benefit_indexation_inflation=benefit_indexation_inflation,
+                    current_estimated_growth=current_estimated_growth,
+                    current_unemployment_rate=current_unemployment_rate,
+                    model=self.states["other_benefits_model"],
+                )
+            ]
+        )
 
     def distribute_unemployment_benefits_to_individuals(
         self,
@@ -265,6 +276,21 @@ class CentralGovernment(Agent):
             "unemployment_benefits_by_individual"
         )[0]
         return unemployment_benefits.astype(float)
+
+    def distribute_public_pension_benefits_to_individuals(
+        self,
+        retirement_eligibility: np.ndarray,
+        public_pension_weights: np.ndarray,
+    ) -> np.ndarray:
+        """Allocate the planned public-pension control to eligible retirees."""
+        eligibility = np.asarray(retirement_eligibility, dtype=bool)
+        weights = np.maximum(np.asarray(public_pension_weights, dtype=float), 0.0) * eligibility
+        budget = self.ts.current("public_pension_benefits")[0]
+        if budget <= 0.0:
+            return np.zeros(weights.shape, dtype=float)
+        if weights.sum() <= 0.0:
+            raise RuntimeError("Positive public-pension control has no eligible weighted recipients.")
+        return budget * weights / weights.sum()
 
     def compute_taxes(
         self,
@@ -509,10 +535,11 @@ class CentralGovernment(Agent):
         # planning. Recounting the current activity status here can disagree with
         # household income after labour-market clearing changes eligibility.
         total_unemployment_benefits = self.ts.current("total_unemployment_benefits")[0]
-        # `total_household_social_transfers` is updated after authoritative
-        # household payment settlement and is already nominal. It is the single
-        # fiscal benefit total, including settled Stage 5 support.
-        total_household_social_transfers = self.ts.current("total_household_social_transfers")[0]
+        total_household_social_transfers = (
+            self.ts.current("total_public_pension_benefits")[0]
+            + self.ts.current("total_other_social_transfers")[0]
+            + self.ts.current("total_necessity_support")[0]
+        )
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(
             [

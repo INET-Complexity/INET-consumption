@@ -101,7 +101,6 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
         regression_window: int = 48,
         equity_injection: float = 0.0,
         yearly_factor: float = 4.0,
-        cash_social_benefits_gdp_ratio: Optional[float] = None,
     ) -> SyntheticCentralGovernment:
         """Create a preprocessed central government data container using standard data sources.
 
@@ -174,16 +173,6 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
                 - current_unemployment_benefits
             )
 
-        if cash_social_benefits_gdp_ratio is not None:
-            cash_social_benefits = cash_social_benefits_gdp_ratio * readers.world_bank.get_current_scaled_gdp(
-                country_name,
-                year,
-                rescale_factor=yearly_factor,
-            )
-            if cash_social_benefits < current_unemployment_benefits:
-                raise ValueError("Cash social-benefit target cannot be lower than unemployment benefits.")
-            current_other_benefits = cash_social_benefits - current_unemployment_benefits
-
         # TODO: debt in USD or in local currency?
 
         debt = readers.world_bank.get_central_gov_debt(country_name, year)
@@ -191,6 +180,12 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
         central_gov_data = pd.DataFrame(
             data={
                 "Total Unemployment Benefits": [current_unemployment_benefits],
+                # The OECD aggregate is the portable reader-derived envelope for
+                # non-unemployment cash benefits.  Synthetic-population
+                # initialisation splits it into public pensions and other
+                # transfers using HFCS source weights.
+                "Reader Non-Unemployment Social Benefits": [current_other_benefits],
+                "Public Pension Benefits": [0.0],
                 "Other Social Benefits": [current_other_benefits],
                 "Debt": [debt],
                 "Bank Equity Injection": [equity_injection],

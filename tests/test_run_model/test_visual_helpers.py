@@ -202,6 +202,8 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "fiscal_revenue_corporate_income_taxes",
     }
     assert expected_columns.issubset(output.columns)
+    assert "other_benefits" not in output.columns
+    assert "other_benefits_to_expenditure" not in output.columns
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
     assert output["illiquid_financial_asset_return_rate"].tolist()[1:] == [0.02, -0.01]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]

@@ -92,6 +92,7 @@ class CentralGovernment(Agent):
         all_country_names: list[str],
         tax_data: TaxData,
         number_of_unemployed_individuals: int,
+        initial_unemployment_benefit: float,
         taxes_net_subsidies: np.ndarray,
     ):
         """Create a Central Government instance from pickled data.
@@ -110,6 +111,8 @@ class CentralGovernment(Agent):
             all_country_names (list[str]): All country names
             tax_data (TaxData): Historical tax rate data
             number_of_unemployed_individuals (int): Count of unemployed
+            initial_unemployment_benefit (float): Calibrated per-recipient
+                unemployment subsidy
             taxes_net_subsidies (np.ndarray): Net tax rates by sector
 
         Returns:
@@ -161,6 +164,7 @@ class CentralGovernment(Agent):
         ts = create_central_government_timeseries(
             data=data,
             number_of_unemployed_individuals=number_of_unemployed_individuals,
+            initial_unemployment_benefit=initial_unemployment_benefit,
         )
 
         return cls(

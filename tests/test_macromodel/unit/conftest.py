@@ -173,6 +173,7 @@ def test_central_government(datawrapper, test_individuals):
         tax_data=country.tax_data,
         n_industries=n_industries,
         number_of_unemployed_individuals=n_unemployed,
+        initial_unemployment_benefit=country.population.individual_data["Unemployment Benefit Entitlement"].iloc[0],
     )
 
     return central_government

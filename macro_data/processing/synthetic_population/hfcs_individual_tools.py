@@ -7,10 +7,16 @@ from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 
-def initial_unemployment_benefit_per_recipient(total_unemployment_benefits: float, n_unemployed: int) -> float:
+def initial_unemployment_benefit_per_recipient(
+    total_unemployment_benefits: float,
+    n_unemployed: int,
+    fallback_recipient_count: int = 1,
+) -> float:
     """Return a finite model benefit level, retaining a baseline with no recipients."""
     if n_unemployed < 0:
         raise ValueError("Number of unemployed individuals must be non-negative.")
+    if fallback_recipient_count <= 0:
+        raise ValueError("Fallback recipient count must be positive.")
     try:
         total = float(total_unemployment_benefits)
     except (TypeError, ValueError) as error:
@@ -18,8 +24,8 @@ def initial_unemployment_benefit_per_recipient(total_unemployment_benefits: floa
     if not np.isfinite(total) or total < 0.0:
         raise ValueError("Total unemployment benefits must be a finite non-negative number.")
     if n_unemployed == 0 and total > 0.0:
-        logging.warning("No unemployed individuals; using a one-recipient unemployment-benefit baseline.")
-    return total / max(n_unemployed, 1)
+        logging.warning("No unemployed individuals; using the macro unemployment-rate recipient baseline.")
+    return total / (n_unemployed if n_unemployed > 0 else fallback_recipient_count)
 
 
 def process_individual_data(
@@ -85,7 +91,9 @@ def process_individual_data(
     unemployment_benefits_by_individual = initial_unemployment_benefit_per_recipient(
         total_unemployment_benefits=total_unemployment_benefits,
         n_unemployed=n_unemployed,
+        fallback_recipient_count=max(1, round(len(individual_data) * unemployment_rate)),
     )
+    individual_data["Unemployment Benefit Entitlement"] = unemployment_benefits_by_individual
 
     individual_data = fill_individual_employee_income(
         individual_data,
@@ -112,6 +120,7 @@ def process_individual_data(
             "Employment Industry",
             "Employee Income",
             "Income from Unemployment Benefits",
+            "Unemployment Benefit Entitlement",
             "Income",
             "Corresponding Household ID",
             "Relation to Reference Person",

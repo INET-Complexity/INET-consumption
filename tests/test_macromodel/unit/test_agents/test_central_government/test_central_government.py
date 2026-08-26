@@ -43,9 +43,13 @@ class TestCentralGovernment:
             "Revenue": [0.0],
             "Bank Equity Injection": [0.0],
         }
-        timeseries = create_central_government_timeseries(data=pd.DataFrame(data), number_of_unemployed_individuals=0)
+        timeseries = create_central_government_timeseries(
+            data=pd.DataFrame(data),
+            number_of_unemployed_individuals=0,
+            initial_unemployment_benefit=4.0,
+        )
 
-        assert timeseries.current("unemployment_benefits_by_individual")[0] == 12.0
+        assert timeseries.current("unemployment_benefits_by_individual")[0] == 4.0
         assert timeseries.current("total_unemployment_benefits")[0] == 0.0
 
     def test__initial_social_transfer_total_reconciles_all_components(self):
@@ -68,7 +72,11 @@ class TestCentralGovernment:
             "Revenue": [0.0],
             "Bank Equity Injection": [0.0],
         }
-        timeseries = create_central_government_timeseries(data=pd.DataFrame(data), number_of_unemployed_individuals=2)
+        timeseries = create_central_government_timeseries(
+            data=pd.DataFrame(data),
+            number_of_unemployed_individuals=2,
+            initial_unemployment_benefit=6.0,
+        )
 
         assert timeseries.current("total_household_social_transfers")[0] == 19.0
 

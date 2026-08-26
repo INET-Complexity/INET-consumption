@@ -600,6 +600,9 @@ class Country:
             all_country_names=all_country_names,
             taxes_net_subsidies=taxes_less_subsidies,
             number_of_unemployed_individuals=n_unemployed,
+            initial_unemployment_benefit=synthetic_population.individual_data["Unemployment Benefit Entitlement"].iloc[
+                0
+            ],
             tax_data=synthetic_country.tax_data,
             n_industries=n_industries,
         )

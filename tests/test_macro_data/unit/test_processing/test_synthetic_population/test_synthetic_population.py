@@ -19,8 +19,15 @@ from macro_data.readers.population_data.hfcs_reader import HFCSReader, var_mappi
 PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
 
 
-def test__initial_unemployment_benefit_uses_a_baseline_without_recipients():
-    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=0) == 12.0
+def test__initial_unemployment_benefit_uses_the_macro_recipient_baseline_without_recipients():
+    assert (
+        initial_unemployment_benefit_per_recipient(
+            total_unemployment_benefits=12.0,
+            n_unemployed=0,
+            fallback_recipient_count=3,
+        )
+        == 4.0
+    )
 
 
 def test__initial_unemployment_benefit_preserves_the_recipient_budget():

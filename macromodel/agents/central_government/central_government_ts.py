@@ -23,6 +23,7 @@ from macromodel.timeseries import TimeSeries
 def create_central_government_timeseries(
     data: pd.DataFrame,
     number_of_unemployed_individuals: int,
+    initial_unemployment_benefit: float,
 ) -> TimeSeries:
     """Create time series objects for central government variables.
 
@@ -37,6 +38,8 @@ def create_central_government_timeseries(
             values for all tracked variables
         number_of_unemployed_individuals (int): Count of unemployed people
             for per-person benefit calculation
+        initial_unemployment_benefit (float): Calibrated model subsidy per
+            unemployed individual
 
     Returns:
         TimeSeries: Initialized time series containing all government
@@ -44,10 +47,9 @@ def create_central_government_timeseries(
     """
     if number_of_unemployed_individuals < 0:
         raise ValueError("Number of unemployed individuals must be non-negative.")
-    total_unemployment_benefits = float(data["Total Unemployment Benefits"].values[0])
-    if not np.isfinite(total_unemployment_benefits) or total_unemployment_benefits < 0.0:
-        raise ValueError("Total unemployment benefits must be a finite non-negative number.")
-    initial_unemployment_benefit = total_unemployment_benefits / max(number_of_unemployed_individuals, 1)
+    initial_unemployment_benefit = float(initial_unemployment_benefit)
+    if not np.isfinite(initial_unemployment_benefit) or initial_unemployment_benefit < 0.0:
+        raise ValueError("Initial unemployment benefit must be a finite non-negative number.")
     settled_initial_unemployment_benefits = initial_unemployment_benefit * number_of_unemployed_individuals
     public_pension_benefits = data.get("Public Pension Benefits", pd.Series([0.0])).values[0]
     other_social_benefits = data["Other Social Benefits"].values[0]

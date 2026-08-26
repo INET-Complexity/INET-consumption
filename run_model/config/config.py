@@ -147,14 +147,14 @@ MACRO_COLUMNS = (
 )
 FISCAL_COLUMNS = (
     "unemployment_benefits",
-    "other_benefits",
+    "household_social_transfers",
     "government_consumption",
     "interest_payments_on_debt",
     "fiscal_revenue_to_gdp",
     "fiscal_expenditure_to_gdp",
     "deficit_to_gdp",
     "unemployment_benefits_to_expenditure",
-    "other_benefits_to_expenditure",
+    "household_social_transfers_to_expenditure",
     "government_consumption_to_expenditure",
     "interest_payments_on_debt_to_expenditure",
     "unemployment_rate",

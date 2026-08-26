@@ -858,14 +858,10 @@ def build_macro_output_df(model, country_code):
         "total_public_pension_benefits": "public_pension_benefits",
         "total_other_social_transfers": "other_social_transfers",
         "total_necessity_support": "necessity_support",
-        "total_household_social_transfers": "other_benefits",
     }.items():
         if source_name in df_gov_ts.columns:
             add_column(output_name, df_gov_ts[source_name])
 
-    # `other_benefits` is retained for existing notebooks. The explicit name
-    # makes its boundary clear: public pensions + other transfers + Stage-5
-    # support, excluding state-contingent unemployment benefits.
     if "total_household_social_transfers" in df_gov_ts.columns:
         add_column("household_social_transfers", df_gov_ts["total_household_social_transfers"])
 
@@ -894,7 +890,6 @@ def build_macro_output_df(model, country_code):
     if debt is not None and gdp is not None:
         add_column("debt_to_gdp", debt / (periods_per_year * gdp))
     add_ratio("unemployment_benefits_to_expenditure", get_column("unemployment_benefits"), fiscal_expenditure)
-    add_ratio("other_benefits_to_expenditure", get_column("other_benefits"), fiscal_expenditure)
     add_ratio("government_consumption_to_expenditure", government_consumption, fiscal_expenditure)
     add_ratio("interest_payments_on_debt_to_expenditure", get_column("interest_payments_on_debt"), fiscal_expenditure)
     for component in [

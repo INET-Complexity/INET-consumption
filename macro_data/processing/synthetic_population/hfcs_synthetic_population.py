@@ -363,7 +363,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             n_firms_by_industry,
             yearly_factor=yearly_factor,
         )
-        n_unemployed = np.sum(individual_data["Activity Status"] == 2)
+        unemployment_benefits_by_capita = individual_data["Unemployment Benefit Entitlement"].iloc[0]
 
         household_data = remove_outliers(
             data=household_data,
@@ -398,7 +398,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             household_data,
             scale,
             rent_as_fraction_of_unemployment_rate,
-            unemployment_benefits_by_capita=total_unemployment_benefits / n_unemployed,
+            unemployment_benefits_by_capita=unemployment_benefits_by_capita,
             yearly_factor=yearly_factor,
         )
 
@@ -416,7 +416,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         for field in non_initialised_fields:
             household_data[field] = np.nan
 
-        social_housing_rent = rent_as_fraction_of_unemployment_rate * total_unemployment_benefits / n_unemployed
+        social_housing_rent = rent_as_fraction_of_unemployment_rate * unemployment_benefits_by_capita
         consumption_weights = industry_data["industry_vectors"]["Household Consumption Weights"].values
         consumption_weights_by_income = np.zeros((n_quantiles, len(consumption_weights)))
         for i in range(n_quantiles):

@@ -498,6 +498,37 @@ class TestSyntheticPopulation:
         # Check individual age
         assert np.all(population.individual_data["Age"] >= 0)
 
+    def test__zero_unemployed_initialisation_uses_benefit_entitlement(
+        self, monkeypatch, readers, industry_data, exogenous_data
+    ):
+        original_process_individual_data = hfcs_population_module.process_individual_data
+
+        def process_without_unemployed(*args, **kwargs):
+            individual_data = original_process_individual_data(*args, **kwargs)
+            individual_data["Activity Status"] = 1
+            individual_data["Income from Unemployment Benefits"] = 0.0
+            individual_data["Unemployment Benefit Entitlement"] = 4.0
+            return individual_data
+
+        monkeypatch.setattr(hfcs_population_module, "process_individual_data", process_without_unemployed)
+        france = Country("FRA")
+
+        population = SyntheticHFCSPopulation.from_readers(
+            readers=readers,
+            country_name=france,
+            year=2014,
+            scale=10000,
+            country_name_short=france.to_two_letter_code(),
+            industries=AGGREGATED_INDUSTRIES,
+            industry_data=industry_data[france],
+            rent_as_fraction_of_unemployment_rate=0.5,
+            total_unemployment_benefits=1000.0,
+            quarter=1,
+            exogenous_data=exogenous_data,
+        )
+
+        assert population.social_housing_rent == 2.0
+
 
 @pytest.mark.parametrize("country", [Country("CAN"), Country("USA")])
 def test__household_consumption(multic_readers, multic_industry_data, configuration, country, exogenous_data):

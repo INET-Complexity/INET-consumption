@@ -359,21 +359,19 @@ class HFCSReader:
         all three diagnostics have the household index used by the model.
         """
         households_df = households_df.copy()
-        legacy_pension = households_df.get(
-            "Income from Pensions", pd.Series(0.0, index=households_df.index)
-        ).fillna(0.0)
-        public_pension = households_df.get(
-            "Public Pension Income", pd.Series(0.0, index=households_df.index)
-        ).fillna(0.0)
+        legacy_pension = households_df.get("Income from Pensions", pd.Series(0.0, index=households_df.index)).fillna(
+            0.0
+        )
+        public_pension = households_df.get("Public Pension Income", pd.Series(0.0, index=households_df.index)).fillna(
+            0.0
+        )
         private_pension = households_df.get(
             "Occupational and Private Pension Income",
             pd.Series(0.0, index=households_df.index),
         ).fillna(0.0)
         # DI1510 and DI1520 are the authoritative HFCS split. Keep DI1500 as
         # a fallback for older extracts that only contain the aggregate field.
-        if {"Public Pension Income", "Occupational and Private Pension Income"}.issubset(
-            households_df.columns
-        ):
+        if {"Public Pension Income", "Occupational and Private Pension Income"}.issubset(households_df.columns):
             pension_total = public_pension + private_pension
         else:
             pension_total = legacy_pension
@@ -394,9 +392,7 @@ class HFCSReader:
                 .groupby(individuals_df["Corresponding Household ID"])
                 .sum()
             )
-            households_df["Unemployment Benefits"] = unemployment.reindex(
-                households_df.index, fill_value=0.0
-            )
+            households_df["Unemployment Benefits"] = unemployment.reindex(households_df.index, fill_value=0.0)
         else:
             households_df["Unemployment Benefits"] = 0.0
         return households_df

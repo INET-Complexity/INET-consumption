@@ -698,9 +698,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
 
         public_pension_source = pd.to_numeric(
-            self.household_data.get(
-                "Public Pension Income", pd.Series(0.0, index=self.household_data.index)
-            ),
+            self.household_data.get("Public Pension Income", pd.Series(0.0, index=self.household_data.index)),
             errors="coerce",
         ).fillna(0.0)
         if public_pension_source.sum() <= 0.0:
@@ -726,18 +724,14 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         # actual households. Convert the expanded public-pension total to the
         # model period, cap it at the aggregate cash-transfer envelope, and use
         # the residual for non-pension cash transfers.
-        hfcs_public_pension_budget = (
-            public_pension_source.sum() * self.scale / self.yearly_factor
-        )
+        hfcs_public_pension_budget = public_pension_source.sum() * self.scale / self.yearly_factor
         public_pension_budget = min(max(hfcs_public_pension_budget, 0.0), total_social_transfers)
         other_transfer_budget = max(total_social_transfers - public_pension_budget, 0.0)
 
         self.household_data["Allocated Public Pension Benefits"] = allocate(
             public_pension_source, public_pension_budget
         )
-        self.household_data["Allocated Other Social Transfers"] = allocate(
-            other_transfer_source, other_transfer_budget
-        )
+        self.household_data["Allocated Other Social Transfers"] = allocate(other_transfer_source, other_transfer_budget)
         self.household_data["Regular Social Transfers"] = (
             self.household_data["Allocated Public Pension Benefits"]
             + self.household_data["Allocated Other Social Transfers"]

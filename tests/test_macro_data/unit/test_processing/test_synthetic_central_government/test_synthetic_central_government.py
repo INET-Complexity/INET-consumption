@@ -36,9 +36,9 @@ class TestSyntheticCentralGovernment:
             cash_social_benefits_gdp_ratio=ratio,
         )
         quarterly_gdp = readers.world_bank.get_current_scaled_gdp(Country("FRA"), 2014)
-        total_cash_benefits = central_gov.central_gov_data[
-            ["Total Unemployment Benefits", "Other Social Benefits"]
-        ].sum(axis=1).iloc[0]
+        total_cash_benefits = (
+            central_gov.central_gov_data[["Total Unemployment Benefits", "Other Social Benefits"]].sum(axis=1).iloc[0]
+        )
 
         assert np.isclose(total_cash_benefits, ratio * quarterly_gdp)
 

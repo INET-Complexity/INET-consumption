@@ -181,9 +181,7 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
                 rescale_factor=yearly_factor,
             )
             if cash_social_benefits < current_unemployment_benefits:
-                raise ValueError(
-                    "Cash social-benefit target cannot be lower than unemployment benefits."
-                )
+                raise ValueError("Cash social-benefit target cannot be lower than unemployment benefits.")
             current_other_benefits = cash_social_benefits - current_unemployment_benefits
 
         # TODO: debt in USD or in local currency?

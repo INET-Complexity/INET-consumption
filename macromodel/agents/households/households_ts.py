@@ -186,20 +186,12 @@ def create_households_timeseries(
         #
         # HFCS source components are preserved as initialization diagnostics;
         # they are not used as an additional live income flow.
-        hfcs_pension_income=scale
-        * data.get("Pension Income", pd.Series(0.0, index=data.index)).values,
-        hfcs_public_pension_income=scale
-        * data.get("Public Pension Income", pd.Series(0.0, index=data.index)).values,
+        hfcs_pension_income=scale * data.get("Pension Income", pd.Series(0.0, index=data.index)).values,
+        hfcs_public_pension_income=scale * data.get("Public Pension Income", pd.Series(0.0, index=data.index)).values,
         hfcs_occupational_private_pension_income=scale
-        * data.get(
-            "Occupational and Private Pension Income", pd.Series(0.0, index=data.index)
-        ).values,
-        hfcs_unemployment_benefits=scale
-        * data.get("Unemployment Benefits", pd.Series(0.0, index=data.index)).values,
-        hfcs_social_transfer_income=scale
-        * data.get(
-            "Social Transfer Income", pd.Series(0.0, index=data.index)
-        ).values,
+        * data.get("Occupational and Private Pension Income", pd.Series(0.0, index=data.index)).values,
+        hfcs_unemployment_benefits=scale * data.get("Unemployment Benefits", pd.Series(0.0, index=data.index)).values,
+        hfcs_social_transfer_income=scale * data.get("Social Transfer Income", pd.Series(0.0, index=data.index)).values,
         fiscal_public_pension_benefits=data.get(
             "Allocated Public Pension Benefits", pd.Series(0.0, index=data.index)
         ).values,

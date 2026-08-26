@@ -6,6 +6,7 @@ import pytest
 
 import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
+from macro_data.processing.synthetic_population.hfcs_individual_tools import initial_unemployment_benefit_per_recipient
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     CONVERT_HH_COLS,
     SyntheticHFCSPopulation,
@@ -16,6 +17,14 @@ from macro_data.readers import AGGREGATED_INDUSTRIES
 from macro_data.readers.population_data.hfcs_reader import HFCSReader, var_mapping, var_numerical
 
 PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
+
+
+def test__initial_unemployment_benefit_is_zero_without_recipients():
+    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=0) == 0.0
+
+
+def test__initial_unemployment_benefit_preserves_the_recipient_budget():
+    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
 
 
 def test__compute_notebook_household_accounts_uses_notebook_definitions():

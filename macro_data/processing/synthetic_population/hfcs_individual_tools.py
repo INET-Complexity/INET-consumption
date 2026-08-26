@@ -7,6 +7,15 @@ from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 
+def initial_unemployment_benefit_per_recipient(total_unemployment_benefits: float, n_unemployed: int) -> float:
+    """Return a finite initial per-recipient benefit, including the no-recipient case."""
+    if n_unemployed <= 0:
+        if total_unemployment_benefits > 0.0:
+            logging.warning("No unemployed individuals; setting initial unemployment benefits to 0.0")
+        return 0.0
+    return total_unemployment_benefits / n_unemployed
+
+
 def process_individual_data(
     individual_data: pd.DataFrame,
     industries: list[str],
@@ -67,15 +76,19 @@ def process_individual_data(
     if total_unemployment_benefits is None:
         total_unemployment_benefits = 0.0
         logging.warning("Total unemployment benefits not found, setting to 0.0")
+    unemployment_benefits_by_individual = initial_unemployment_benefit_per_recipient(
+        total_unemployment_benefits=total_unemployment_benefits,
+        n_unemployed=n_unemployed,
+    )
 
     individual_data = fill_individual_employee_income(
         individual_data,
-        unemployment_benefits_by_individual=total_unemployment_benefits / n_unemployed,
+        unemployment_benefits_by_individual=unemployment_benefits_by_individual,
         scale=scale,
         yearly_factor=yearly_factor,
     )
     individual_data = set_individual_unemployed_income(
-        individual_data, unemployment_benefits_by_individual=total_unemployment_benefits / n_unemployed
+        individual_data, unemployment_benefits_by_individual=unemployment_benefits_by_individual
     )
     individual_data["Income"] = (
         individual_data["Employee Income"].fillna(0.0).values

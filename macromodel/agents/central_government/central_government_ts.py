@@ -47,6 +47,7 @@ def create_central_government_timeseries(
         if number_of_unemployed_individuals > 0
         else 0.0
     )
+    settled_initial_unemployment_benefits = initial_unemployment_benefit * number_of_unemployed_individuals
     public_pension_benefits = data.get("Public Pension Benefits", pd.Series([0.0])).values[0]
     other_social_benefits = data["Other Social Benefits"].values[0]
     return TimeSeries(
@@ -59,7 +60,7 @@ def create_central_government_timeseries(
             data.get("Reader Non-Unemployment Social Benefits", pd.Series([other_social_benefits])).values[0]
         ],
         # Settled nominal fiscal components.
-        total_unemployment_benefits=[data["Total Unemployment Benefits"].values[0]],
+        total_unemployment_benefits=[settled_initial_unemployment_benefits],
         total_public_pension_benefits=[public_pension_benefits],
         total_other_social_transfers=[other_social_benefits],
         total_necessity_support=[0.0],

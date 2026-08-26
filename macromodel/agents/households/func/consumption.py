@@ -1146,6 +1146,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_cpi: float | None,
         initial_cpi: float,
         expected_inflation: float,
+        current_time: int,
         population_scale_factor: float | None,
         time_unit: int,
         lagged_real_consumption_budget: np.ndarray | None = None,
@@ -1358,6 +1359,19 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             long_run_log_consumption_to_income = long_run_log_consumption_to_income + epsilon
         log_long_run_target = np.log(real_spendable_income) + long_run_log_consumption_to_income
         long_run_target_real = np.exp(np.clip(log_long_run_target, -50.0, 50.0))
+
+        # At initialisation only, zero observed consumption is not an economic
+        # zero: use the household's long-run target as the lagged anchor.  This
+        # avoids an artificial log gap from log(epsilon) for the small number of
+        # households with zero HFCS consumption.  Later periods retain the
+        # realised lagged-consumption state.
+        if current_time == 1:
+            zero_lagged_consumption = real_lagged_consumption <= 0.0
+            real_lagged_consumption = np.where(
+                zero_lagged_consumption,
+                long_run_target_real,
+                real_lagged_consumption,
+            )
 
         income_growth_term = self.income_growth_propensity * (
             np.log(real_spendable_income) - np.log(real_lagged_income)
@@ -1582,6 +1596,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            current_time=current_time,
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,
@@ -1622,6 +1637,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_cpi=lagged_cpi,
             initial_cpi=initial_cpi,
             expected_inflation=expected_inflation,
+            current_time=current_time,
             population_scale_factor=population_scale_factor,
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,

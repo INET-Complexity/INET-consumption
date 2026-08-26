@@ -46,6 +46,11 @@ LABOUR_MARKET_CLEARER_CHOICES = (
     "DefaultLabourMarketClearer",
     "ReservationWageBindingDefaultLabourMarketClearer",
 )
+HOUSEHOLD_INVESTMENT_RULE_CHOICES = (
+    "DefaultHouseholdInvestment",
+    "ExogenousHouseholdInvestment",
+    "NoHouseholdInvestment",
+)
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -74,6 +79,7 @@ def main(
     assume_zero_noise: bool | None = None,
     government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
     government_consumption_consistency: float | None = None,
+    household_investment_rule: str | None = None,
 ) -> dict[str, object]:
     # Optional overrides (None means use Config/default env values)
     country_override = None
@@ -156,6 +162,8 @@ def main(
         )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
+    if household_investment_rule is not None:
+        country_cfg.households.functions.investment.name = household_investment_rule
 
     print("Configuration summary")
     pprint(
@@ -175,6 +183,7 @@ def main(
                 "name": country_cfg.government_entities.functions.consumption.name,
                 "parameters": country_cfg.government_entities.functions.consumption.parameters,
             },
+            "household_investment": country_cfg.households.functions.investment.name,
             "assume_zero_noise": country_cfg.assume_zero_noise,
         },
         sort_dicts=False,
@@ -254,6 +263,12 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         help="Override AR government-consumption consistency. Default: use country configuration.",
     )
+    parser.add_argument(
+        "--household-investment-rule",
+        choices=HOUSEHOLD_INVESTMENT_RULE_CHOICES,
+        default=None,
+        help="Override the household investment rule; use NoHouseholdInvestment for the counterfactual.",
+    )
     return parser.parse_args()
 
 
@@ -267,4 +282,5 @@ if __name__ == "__main__":
         assume_zero_noise=args.assume_zero_noise,
         government_sectoral_weights=args.government_sectoral_weights,
         government_consumption_consistency=args.government_consumption_consistency,
+        household_investment_rule=args.household_investment_rule,
     )

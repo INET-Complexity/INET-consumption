@@ -82,6 +82,7 @@ def process_individual_data(
     )
     individual_data = fill_individual_nace(individual_data, industries, n_firms_by_industry, n_industries)
     n_unemployed = np.sum(individual_data["Activity Status"] == 2)
+    n_active = np.sum(individual_data["Activity Status"].isin([1, 2]))
 
     # DANGER: if we don't have total unemployment benefits
     # we set them to 0; must be checked or filled in another way
@@ -91,7 +92,7 @@ def process_individual_data(
     unemployment_benefits_by_individual = initial_unemployment_benefit_per_recipient(
         total_unemployment_benefits=total_unemployment_benefits,
         n_unemployed=n_unemployed,
-        fallback_recipient_count=max(1, round(len(individual_data) * unemployment_rate)),
+        fallback_recipient_count=max(1, int(unemployment_rate * n_active)),
     )
     individual_data["Unemployment Benefit Entitlement"] = unemployment_benefits_by_individual
 

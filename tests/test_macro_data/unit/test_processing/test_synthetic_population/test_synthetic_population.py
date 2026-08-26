@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import macro_data.processing.synthetic_population.hfcs_individual_tools as individual_tools
 import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
 from macro_data.processing.synthetic_population.hfcs_individual_tools import initial_unemployment_benefit_per_recipient
@@ -32,6 +33,53 @@ def test__initial_unemployment_benefit_uses_the_macro_recipient_baseline_without
 
 def test__initial_unemployment_benefit_preserves_the_recipient_budget():
     assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
+
+
+def test__unemployment_benefit_fallback_uses_active_labour_force(monkeypatch):
+    individual_data = pd.DataFrame(
+        {
+            "Gender": [1, 2] * 4,
+            "Age": [40] * 8,
+            "Education": [3] * 8,
+            "Labour Status": [1] * 4 + [5] * 4,
+            "Employee Income": [0.0] * 8,
+            "Corresponding Household ID": range(8),
+            "Relation to Reference Person": [1] * 8,
+        }
+    )
+    monkeypatch.setattr(individual_tools, "remove_outliers", lambda data, **_: data)
+    monkeypatch.setattr(individual_tools, "fill_missing_gender", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_age", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_education", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_labour_status", lambda data: data)
+    monkeypatch.setattr(
+        individual_tools,
+        "set_individual_activity_status",
+        lambda individual_data, **_: individual_data.assign(**{"Activity Status": [1] * 4 + [3] * 4}),
+    )
+    monkeypatch.setattr(
+        individual_tools,
+        "fill_individual_nace",
+        lambda data, *_: data.assign(**{"Employment Industry": 0}),
+    )
+    monkeypatch.setattr(individual_tools, "fill_individual_employee_income", lambda data, **_: data)
+    monkeypatch.setattr(
+        individual_tools,
+        "set_individual_unemployed_income",
+        lambda data, **_: data.assign(**{"Income from Unemployment Benefits": 0.0}),
+    )
+
+    processed = individual_tools.process_individual_data(
+        individual_data=individual_data,
+        industries=["A"],
+        scale=1,
+        total_unemployment_benefits=100.0,
+        unemployment_rate=0.2,
+        participation_rate=0.5,
+        n_firms_by_industry=[1],
+    )
+
+    np.testing.assert_allclose(processed["Unemployment Benefit Entitlement"], 100.0)
 
 
 @pytest.mark.parametrize("total_unemployment_benefits", [np.nan, np.inf, -1.0])

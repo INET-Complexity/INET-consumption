@@ -365,6 +365,32 @@ class Country:
         self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
+        self._initialize_household_unemployment_benefits()
+
+    def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
+        """Aggregate the current individual unemployment payments to households in nominal units."""
+        return self.economy.current_consumer_price_level() * self.households.aggregate_individual_amount(
+            individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
+            corr_households=self.individuals.states["Corresponding Household ID"],
+        )
+
+    def _initialize_household_unemployment_benefits(self) -> None:
+        """Include the initial individual unemployment payments in household income exactly once."""
+        unemployment_benefits = self._household_unemployment_benefits_from_individuals()
+        self.households.ts.override_current("income_unemployment_benefits", unemployment_benefits)
+        self.households.ts.override_current(
+            "income_social_transfers",
+            self.households.ts.current("income_social_transfers") + unemployment_benefits,
+        )
+        self.households.ts.override_current(
+            "total_income_social_transfers",
+            [self.households.ts.current("income_social_transfers").sum()],
+        )
+        self.households.ts.override_current("expected_income_unemployment_benefits", unemployment_benefits)
+        self.households.ts.override_current(
+            "expected_income_social_transfers",
+            self.households.ts.current("expected_income_social_transfers") + unemployment_benefits,
+        )
 
     def clear_stage5_subsistence_support(self) -> None:
         """Clear current-period Stage 5 emergency subsistence support."""
@@ -408,21 +434,25 @@ class Country:
         """Return the nominal fiscal expenditure increment implied by settled Stage 5 support."""
         return self.current_settled_stage5_subsistence_support_total()
 
-    def compute_realised_household_social_income_components(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return realised public-pension, other-transfer, and Stage 5 components."""
+    def compute_realised_household_social_income_components(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return realised pension, unemployment, other-transfer, and Stage 5 components."""
         public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
             retirement_eligibility=self.individuals.states["Is Retired"],
             public_pension_weights=self.individuals.states["Public Pension Weight"],
         )
-        public_pensions = self.economy.current_consumer_price_level() * self.households.aggregate_individual_amount(
+        current_cpi = self.economy.current_consumer_price_level()
+        public_pensions = current_cpi * self.households.aggregate_individual_amount(
             individual_amount=public_pension_by_individual,
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
+        unemployment_benefits = self._household_unemployment_benefits_from_individuals()
         other_transfers = self.households.compute_social_transfer_income(
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=current_cpi,
         )
-        return public_pensions, other_transfers, self.compute_realised_stage5_subsistence_support()
+        return public_pensions, unemployment_benefits, other_transfers, self.compute_realised_stage5_subsistence_support()
 
     def compute_realised_household_social_transfers(self) -> np.ndarray:
         """Return the authoritative sum of all realised household social-income components."""
@@ -430,8 +460,10 @@ class Country:
 
     def settle_household_social_transfers(self) -> None:
         """Persist each realised social-income component once on the late settlement path."""
-        public_pensions, other_transfers, realised_support = self.compute_realised_household_social_income_components()
-        realised_transfers = public_pensions + other_transfers + realised_support
+        public_pensions, unemployment_benefits, other_transfers, realised_support = (
+            self.compute_realised_household_social_income_components()
+        )
+        realised_transfers = public_pensions + unemployment_benefits + other_transfers + realised_support
         self.individuals.ts.override_current(
             "public_pension_benefits",
             self.central_government.distribute_public_pension_benefits_to_individuals(
@@ -440,6 +472,7 @@ class Country:
             ),
         )
         self.households.ts.income_public_pension.append(public_pensions)
+        self.households.ts.income_unemployment_benefits.append(unemployment_benefits)
         self.households.ts.income_other_social_transfers.append(other_transfers)
         self.households.ts.stage5_subsistence_support.append(realised_support)
         self.households.ts.income_social_transfers.append(realised_transfers)
@@ -1198,10 +1231,18 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
+        expected_unemployment_benefits = (
+            (1 + self.economy.current_expected_consumer_period_inflation())
+            * self.economy.current_consumer_price_level()
+            * self.households.aggregate_individual_amount(
+                individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
+                corr_households=self.individuals.states["Corresponding Household ID"],
+            )
+        )
         expected_income_employee = self.households.compute_employee_income(
             individual_income=self.individuals.ts.current("expected_income"),
             corr_households=self.individuals.states["Corresponding Household ID"],
-        )
+        ) - expected_unemployment_benefits
         expected_public_pension_by_individual = (
             self.central_government.distribute_public_pension_benefits_to_individuals(
                 retirement_eligibility=self.individuals.states["Is Retired"],
@@ -1221,7 +1262,9 @@ class Country:
             cpi=self.economy.current_consumer_price_level(),
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
         )
-        expected_income_social_transfers = expected_income_public_pension + expected_income_other_social_transfers
+        expected_income_social_transfers = (
+            expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
+        )
         income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
@@ -1240,6 +1283,9 @@ class Country:
 
         if replace_current:
             self.households.ts.override_current("expected_income_employee", expected_income_employee)
+            self.households.ts.override_current(
+                "expected_income_unemployment_benefits", expected_unemployment_benefits
+            )
             self.households.ts.override_current("expected_income_public_pension", expected_income_public_pension)
             self.households.ts.override_current(
                 "expected_income_other_social_transfers", expected_income_other_social_transfers
@@ -1261,6 +1307,7 @@ class Country:
             )
         else:
             self.households.ts.expected_income_employee.append(expected_income_employee)
+            self.households.ts.expected_income_unemployment_benefits.append(expected_unemployment_benefits)
             self.households.ts.expected_income_public_pension.append(expected_income_public_pension)
             self.households.ts.expected_income_other_social_transfers.append(expected_income_other_social_transfers)
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)

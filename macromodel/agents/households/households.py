@@ -1969,8 +1969,10 @@ class Households(Agent):
                 subsistence_income=subsistence_income,
                 saving_rates=saving_rates,
                 income=income,
-                household_benefits=self.states["Number of Adults"] * per_capita_unemployment_benefits
-                + self.ts.current("expected_income_social_transfers"),
+                # This carrier already includes state-contingent unemployment
+                # benefits, public pensions, and other transfers.  Do not add a
+                # household-size proxy for unemployment benefits here.
+                household_benefits=self.ts.current("expected_income_social_transfers"),
                 consumption_weights=self.consumption_weights,
                 consumption_weights_by_income=self.consumption_weights_by_income,
                 exogenous_total_consumption=exogenous_total_consumption,

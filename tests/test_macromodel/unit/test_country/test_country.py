@@ -468,6 +468,21 @@ class TestCountry:
             np.zeros(n_households),
         )
 
+    def test__initial_unemployment_benefits_reconcile_individual_household_and_government(self, test_country):
+        expected_unemployment = test_country.economy.current_consumer_price_level() * (
+            test_country.households.aggregate_individual_amount(
+                individual_amount=test_country.individuals.ts.current("income_from_unemployment_benefits"),
+                corr_households=test_country.individuals.states["Corresponding Household ID"],
+            )
+        )
+
+        np.testing.assert_allclose(
+            test_country.households.ts.current("income_unemployment_benefits"), expected_unemployment
+        )
+        assert test_country.central_government.ts.current("total_unemployment_benefits")[0] == pytest.approx(
+            expected_unemployment.sum()
+        )
+
     def test__benefit_planning_clears_stage5_subsistence_support_before_next_settlement(
         self, test_country, monkeypatch
     ):
@@ -1932,6 +1947,10 @@ class TestCountry:
             lambda: np.zeros(n_households),
         )
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        test_country.individuals.ts.override_current(
+            "income_from_unemployment_benefits",
+            np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         monkeypatch.setattr(
             test_country.households,
             "compute_social_transfer_income",
@@ -1977,6 +1996,10 @@ class TestCountry:
         ordinary_transfers = np.full(n_households, 5.0)
         real_support = np.full(n_households, 3.0)
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        test_country.individuals.ts.override_current(
+            "income_from_unemployment_benefits",
+            np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         monkeypatch.setattr(
             test_country.households,
             "compute_social_transfer_income",
@@ -2003,6 +2026,10 @@ class TestCountry:
         targeted_support = np.full(n_households, 3.0)
         settled_support = np.full(n_households, 6.0)
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        test_country.individuals.ts.override_current(
+            "income_from_unemployment_benefits",
+            np.zeros(len(test_country.individuals.states["Activity Status"])),
+        )
         monkeypatch.setattr(
             test_country.households,
             "compute_social_transfer_income",
@@ -2027,10 +2054,11 @@ class TestCountry:
         )
         assert test_country.current_settled_stage5_subsistence_support_total() == float(settled_support.sum())
 
-    def test__settled_social_income_keeps_public_other_and_stage5_components_separate(self, test_country, monkeypatch):
+    def test__settled_social_income_keeps_all_four_components_separate(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_individuals = len(test_country.individuals.states["Activity Status"])
         public_by_individual = np.linspace(1.0, 2.0, n_individuals)
+        unemployment_by_individual = np.linspace(2.0, 3.0, n_individuals)
         other_transfers = np.full(n_households, 5.0)
         stage5_support = np.full(n_households, 3.0)
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
@@ -2038,6 +2066,9 @@ class TestCountry:
             test_country.central_government,
             "distribute_public_pension_benefits_to_individuals",
             lambda **_kwargs: public_by_individual,
+        )
+        test_country.individuals.ts.override_current(
+            "income_from_unemployment_benefits", unemployment_by_individual
         )
         monkeypatch.setattr(
             test_country.households,
@@ -2052,14 +2083,21 @@ class TestCountry:
             individual_amount=public_by_individual,
             corr_households=test_country.individuals.states["Corresponding Household ID"],
         )
+        expected_unemployment = 2.0 * test_country.households.aggregate_individual_amount(
+            individual_amount=unemployment_by_individual,
+            corr_households=test_country.individuals.states["Corresponding Household ID"],
+        )
         np.testing.assert_allclose(test_country.households.ts.current("income_public_pension"), expected_public)
+        np.testing.assert_allclose(
+            test_country.households.ts.current("income_unemployment_benefits"), expected_unemployment
+        )
         np.testing.assert_allclose(test_country.households.ts.current("income_other_social_transfers"), other_transfers)
         np.testing.assert_allclose(
             test_country.households.ts.current("stage5_subsistence_support"), 2.0 * stage5_support
         )
         np.testing.assert_allclose(
             test_country.households.ts.current("income_social_transfers"),
-            expected_public + other_transfers + 2.0 * stage5_support,
+            expected_public + expected_unemployment + other_transfers + 2.0 * stage5_support,
         )
 
     def test__settled_stage5_support_total_reads_persisted_series_not_transient_carrier(

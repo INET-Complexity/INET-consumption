@@ -207,9 +207,7 @@ def create_households_timeseries(
         income_employee=data["Employee Income"].values,
         total_income_employee=[data["Employee Income"].values.sum()],
         expected_income_employee=data["Employee Income"].values,
-        income_public_pension=data.get(
-            "Allocated Public Pension Benefits", pd.Series(0.0, index=data.index)
-        ).values,
+        income_public_pension=data.get("Allocated Public Pension Benefits", pd.Series(0.0, index=data.index)).values,
         income_other_social_transfers=data.get(
             "Allocated Other Social Transfers", pd.Series(0.0, index=data.index)
         ).values,

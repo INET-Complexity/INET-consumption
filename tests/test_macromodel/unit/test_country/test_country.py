@@ -2027,9 +2027,7 @@ class TestCountry:
         )
         assert test_country.current_settled_stage5_subsistence_support_total() == float(settled_support.sum())
 
-    def test__settled_social_income_keeps_public_other_and_stage5_components_separate(
-        self, test_country, monkeypatch
-    ):
+    def test__settled_social_income_keeps_public_other_and_stage5_components_separate(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         n_individuals = len(test_country.individuals.states["Activity Status"])
         public_by_individual = np.linspace(1.0, 2.0, n_individuals)
@@ -2056,7 +2054,9 @@ class TestCountry:
         )
         np.testing.assert_allclose(test_country.households.ts.current("income_public_pension"), expected_public)
         np.testing.assert_allclose(test_country.households.ts.current("income_other_social_transfers"), other_transfers)
-        np.testing.assert_allclose(test_country.households.ts.current("stage5_subsistence_support"), 2.0 * stage5_support)
+        np.testing.assert_allclose(
+            test_country.households.ts.current("stage5_subsistence_support"), 2.0 * stage5_support
+        )
         np.testing.assert_allclose(
             test_country.households.ts.current("income_social_transfers"),
             expected_public + other_transfers + 2.0 * stage5_support,

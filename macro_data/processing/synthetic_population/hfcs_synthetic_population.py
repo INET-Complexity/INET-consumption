@@ -731,7 +731,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         public_pension_budget = total_social_transfers * public_pension_share
         other_transfer_budget = max(total_social_transfers - public_pension_budget, 0.0)
 
-        self.household_data["Allocated Public Pension Benefits"] = allocate(public_pension_source, public_pension_budget)
+        self.household_data["Allocated Public Pension Benefits"] = allocate(
+            public_pension_source, public_pension_budget
+        )
         self.household_data["Allocated Other Social Transfers"] = allocate(other_transfer_source, other_transfer_budget)
         self._set_individual_public_pension_weights(public_pension_source, public_pension_budget)
         if hasattr(self, "individual_data") and "Public Pension Benefits" in self.individual_data:
@@ -739,7 +741,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
                 self.individual_data["Corresponding Household ID"].to_numpy(dtype=int),
                 weights=self.individual_data["Public Pension Benefits"].to_numpy(dtype=float),
                 minlength=len(self.household_data),
-        )
+            )
         self.household_data["Regular Social Transfers"] = (
             self.household_data["Allocated Public Pension Benefits"]
             + self.household_data["Allocated Other Social Transfers"]
@@ -785,7 +787,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             ids = np.asarray(individual_ids, dtype=int)
             eligible_ids = ids[retired[ids]]
             if eligible_ids.size:
-                weights[eligible_ids] = max(float(household_public_pension_source.loc[household_id]), 0.0) / eligible_ids.size
+                weights[eligible_ids] = (
+                    max(float(household_public_pension_source.loc[household_id]), 0.0) / eligible_ids.size
+                )
         if weights.sum() <= 0.0:
             if retired.sum() == 0 and public_pension_budget > 0.0:
                 raise ValueError("Public-pension budget requires at least one HFCS-retired individual.")

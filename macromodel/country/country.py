@@ -1202,9 +1202,11 @@ class Country:
             individual_income=self.individuals.ts.current("expected_income"),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
-        expected_public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
-            retirement_eligibility=self.individuals.states["Is Retired"],
-            public_pension_weights=self.individuals.states["Public Pension Weight"],
+        expected_public_pension_by_individual = (
+            self.central_government.distribute_public_pension_benefits_to_individuals(
+                retirement_eligibility=self.individuals.states["Is Retired"],
+                public_pension_weights=self.individuals.states["Public Pension Weight"],
+            )
         )
         expected_income_public_pension = (
             (1 + self.economy.current_expected_consumer_period_inflation())

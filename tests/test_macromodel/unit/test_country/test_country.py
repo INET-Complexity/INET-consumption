@@ -2379,7 +2379,9 @@ class TestCountry:
         assert len(test_country.households.ts.target_consumption) == target_len_before + 1
         assert len(test_country.households.ts.saving_rates_histogram) == histogram_len_before + 1
         assert np.allclose(test_country.households.ts.current("target_consumption"), 1.0)
-        assert np.allclose(test_country.households.ts.current("expected_income"), 14.0)
+        assert np.allclose(test_country.households.ts.current("expected_income"), 10.0)
+        assert np.allclose(test_country.households.ts.current("income_rental"), 0.0)
+        assert np.allclose(test_country.households.ts.current("diagnostic_income_rental"), 4.0)
 
         test_country._set_household_income_expectations(replace_current=True)
         test_country._set_household_target_demand(replace_current=True)

@@ -72,6 +72,8 @@ class NoHouseholdInvestment(HouseholdInvestment):
     Used for scenarios where household investment is not modeled.
     """
 
+    disables_household_investment = True
+
     def compute_target_investment(
         self,
         expected_inflation: float,

@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from macromodel.agents.central_government.central_government_ts import create_central_government_timeseries
 from macromodel.agents.central_government.func.debt_interest import (
@@ -273,11 +274,36 @@ class TestCentralGovernment:
             current_total_exports=100.0,
         )
 
-        expected_income_tax = 0.2 * (1 - 0.1) * gross_employee_income + 0.2 * rent_paid + 0.2 * financial_income.sum()
+        expected_income_tax = 0.2 * (1 - 0.1) * gross_employee_income + 0.2 * financial_income.sum()
         assert np.isclose(test_central_government.ts.current("taxes_income")[0], expected_income_tax)
         assert np.isclose(test_central_government.ts.current("taxes_employee_si")[0], 0.1 * gross_employee_income)
         assert np.isclose(test_central_government.ts.current("taxes_employer_si")[0], 0.3 * gross_employee_income)
-        assert np.isclose(test_central_government.ts.current("taxes_rental_income")[0], 0.2 * rent_paid)
+        assert test_central_government.ts.current("taxes_rental_income")[0] == 0.0
+        assert np.isclose(
+            test_central_government.ts.current("diagnostic_taxes_rental_income")[0],
+            0.2 * rent_paid,
+        )
+
+    def test__social_rent_is_diagnostic_not_a_second_government_receipt(self, test_central_government):
+        expected_tax_revenue = sum(
+            test_central_government.ts.current(name)[0]
+            for name in (
+                "taxes_production",
+                "taxes_vat",
+                "taxes_cf",
+                "taxes_corporate_income",
+                "taxes_exports",
+                "taxes_income",
+                "taxes_employee_si",
+                "taxes_employer_si",
+            )
+        )
+
+        revenue = test_central_government.compute_revenue(household_rent_paid_to_government=123.0)
+
+        assert revenue == pytest.approx(expected_tax_revenue)
+        assert test_central_government.ts.current("total_rent_received")[0] == 0.0
+        assert test_central_government.ts.current("diagnostic_total_rent_received")[0] == 123.0
 
     def test__compute_taxes_allocates_capital_formation_tax_to_households_and_firms(self, test_central_government):
         test_central_government.states["Household Capital Formation Tax"] = 0.0

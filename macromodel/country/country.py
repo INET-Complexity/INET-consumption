@@ -1276,10 +1276,15 @@ class Country:
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
         )
-        income_rental = self.households.compute_rental_income(
+        diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
+        # Cash rent is routed to existing firms because there is no explicit
+        # housing-services sector. A consumption classification does not by
+        # itself identify the recipient; under this explicit approximation no
+        # direct landlord income is created.
+        income_rental = np.zeros_like(diagnostic_income_rental)
         paper_returns_are_capital_gains = getattr(
             self.households.functions["wealth"],
             "illiquid_returns_are_capital_gains",
@@ -1302,6 +1307,10 @@ class Country:
             self.households.ts.override_current("expected_income_social_transfers", expected_income_social_transfers)
             self.households.ts.override_current("income_rental", income_rental)
             self.households.ts.override_current("total_income_rental", [income_rental.sum()])
+            self.households.ts.override_current("diagnostic_income_rental", diagnostic_income_rental)
+            self.households.ts.override_current(
+                "total_diagnostic_income_rental", [diagnostic_income_rental.sum()]
+            )
             self.households.ts.override_current(
                 "expected_income_financial_assets",
                 expected_income_financial_assets,
@@ -1322,6 +1331,8 @@ class Country:
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
             self.households.ts.income_rental.append(income_rental)
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
+            self.households.ts.diagnostic_income_rental.append(diagnostic_income_rental)
+            self.households.ts.total_diagnostic_income_rental.append([diagnostic_income_rental.sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
             self.households.ts.expected_income_dividend_distributions.append(expected_dividend_income)
             self.households.ts.total_expected_income_dividend_distributions.append([expected_dividend_income.sum()])
@@ -1519,6 +1530,25 @@ class Country:
         else:
             self.households.ts.target_consumption.append(target_consumption)
 
+        # Investment is part of the household goods budget, so the selected
+        # intervention must be materialised before feasibility, financing, and
+        # goods-market allocation inspect household plans. In particular,
+        # NoHouseholdInvestment must be zero here even under zero-growth runs.
+        target_investment = self.households.compute_target_investment(
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            current_cpi=self.economy.current_consumer_price_level(),
+            initial_cpi=self.economy.initial_consumer_price_level(),
+            exogenous_total_investment=self.exogenous.national_accounts_during[
+                "Real Household Investment (Value)"
+            ].values.flatten(),
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
+            assume_zero_growth=self.assume_zero_growth,
+        )
+        if replace_current:
+            self.households.ts.override_current("target_investment", target_investment)
+        else:
+            self.households.ts.target_investment.append(target_investment)
+
         # Stage 5 (feasibility resolver), Increment 0: diagnostics-only liquidity-
         # shortfall computation. Must run after target_consumption is finalized
         # above (it consumes that value) and uses the same scheduled mortgage
@@ -1611,22 +1641,6 @@ class Country:
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
                 current_ifa=self.households.ts.current("illiquid_financial_assets"),
             )
-
-        target_investment = self.households.compute_target_investment(
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-            current_cpi=self.economy.current_consumer_price_level(),
-            initial_cpi=self.economy.initial_consumer_price_level(),
-            exogenous_total_investment=self.exogenous.national_accounts_during[
-                "Real Household Investment (Value)"
-            ].values.flatten(),
-            tau_cf=self.central_government.states["Household Capital Formation Tax"],
-            assume_zero_growth=self.assume_zero_growth,
-        )
-
-        if replace_current:
-            self.households.ts.override_current("target_investment", target_investment)
-        else:
-            self.households.ts.target_investment.append(target_investment)
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""
@@ -3185,12 +3199,15 @@ class Country:
 
         # E2. HOUSEHOLD INCOME COMPONENTS
         # Recalculate rental income with final housing market data and overwrite the planned value
-        final_income_rental = self.households.compute_rental_income(
+        diagnostic_final_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
+        final_income_rental = np.zeros_like(diagnostic_final_income_rental)
         self.households.ts.dicts["income_rental"][-1] = final_income_rental
         self.households.ts.dicts["total_income_rental"][-1] = [final_income_rental.sum()]
+        self.households.ts.dicts["diagnostic_income_rental"][-1] = diagnostic_final_income_rental
+        self.households.ts.dicts["total_diagnostic_income_rental"][-1] = [diagnostic_final_income_rental.sum()]
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(
@@ -3228,7 +3245,7 @@ class Country:
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()
-            # Use non-property income (employment + social transfers + rental), not the
+            # Use non-property income (employment + social transfers), not the
             # full income total used elsewhere, as the Kalman-update signal: total income
             # includes stochastic income_financial_assets, which can be large and negative
             # after a bad market draw and is unrelated to the permanent-income concept this
@@ -3243,7 +3260,6 @@ class Country:
                 lagged_non_property_income = (
                     self.households.ts.dicts["income_employee"][-5]
                     + self.households.ts.dicts["income_social_transfers"][-5]
-                    + self.households.ts.dicts["income_rental"][-5]
                 )
                 lagged_real_non_property_income = lagged_non_property_income / self.economy.ts.dicts[cpi_series][-5][0]
             self.households.update_income_belief_learning_state(

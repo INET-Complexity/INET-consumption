@@ -180,6 +180,12 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
         central_gov_data = pd.DataFrame(
             data={
                 "Total Unemployment Benefits": [current_unemployment_benefits],
+                # The OECD aggregate is the portable reader-derived envelope for
+                # non-unemployment cash benefits.  Synthetic-population
+                # initialisation splits it into public pensions and other
+                # transfers using HFCS source weights.
+                "Reader Non-Unemployment Social Benefits": [current_other_benefits],
+                "Public Pension Benefits": [0.0],
                 "Other Social Benefits": [current_other_benefits],
                 "Debt": [debt],
                 "Bank Equity Injection": [equity_injection],

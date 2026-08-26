@@ -4,8 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import macro_data.processing.synthetic_population.hfcs_individual_tools as individual_tools
 import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
+from macro_data.processing.synthetic_population.hfcs_individual_tools import initial_unemployment_benefit_per_recipient
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     CONVERT_HH_COLS,
     SyntheticHFCSPopulation,
@@ -16,6 +18,77 @@ from macro_data.readers import AGGREGATED_INDUSTRIES
 from macro_data.readers.population_data.hfcs_reader import HFCSReader, var_mapping, var_numerical
 
 PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
+
+
+def test__initial_unemployment_benefit_uses_the_macro_recipient_baseline_without_recipients():
+    assert (
+        initial_unemployment_benefit_per_recipient(
+            total_unemployment_benefits=12.0,
+            n_unemployed=0,
+            fallback_recipient_count=3,
+        )
+        == 4.0
+    )
+
+
+def test__initial_unemployment_benefit_preserves_the_recipient_budget():
+    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
+
+
+def test__unemployment_benefit_fallback_uses_active_labour_force(monkeypatch):
+    individual_data = pd.DataFrame(
+        {
+            "Gender": [1, 2] * 4,
+            "Age": [40] * 8,
+            "Education": [3] * 8,
+            "Labour Status": [1] * 4 + [5] * 4,
+            "Employee Income": [0.0] * 8,
+            "Corresponding Household ID": range(8),
+            "Relation to Reference Person": [1] * 8,
+        }
+    )
+    monkeypatch.setattr(individual_tools, "remove_outliers", lambda data, **_: data)
+    monkeypatch.setattr(individual_tools, "fill_missing_gender", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_age", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_education", lambda data: data)
+    monkeypatch.setattr(individual_tools, "fill_individual_labour_status", lambda data: data)
+    monkeypatch.setattr(
+        individual_tools,
+        "set_individual_activity_status",
+        lambda individual_data, **_: individual_data.assign(**{"Activity Status": [1] * 4 + [3] * 4}),
+    )
+    monkeypatch.setattr(
+        individual_tools,
+        "fill_individual_nace",
+        lambda data, *_: data.assign(**{"Employment Industry": 0}),
+    )
+    monkeypatch.setattr(individual_tools, "fill_individual_employee_income", lambda data, **_: data)
+    monkeypatch.setattr(
+        individual_tools,
+        "set_individual_unemployed_income",
+        lambda data, **_: data.assign(**{"Income from Unemployment Benefits": 0.0}),
+    )
+
+    processed = individual_tools.process_individual_data(
+        individual_data=individual_data,
+        industries=["A"],
+        scale=1,
+        total_unemployment_benefits=100.0,
+        unemployment_rate=0.2,
+        participation_rate=0.5,
+        n_firms_by_industry=[1],
+    )
+
+    np.testing.assert_allclose(processed["Unemployment Benefit Entitlement"], 100.0)
+
+
+@pytest.mark.parametrize("total_unemployment_benefits", [np.nan, np.inf, -1.0])
+def test__initial_unemployment_benefit_rejects_invalid_totals(total_unemployment_benefits):
+    with pytest.raises(ValueError, match="finite non-negative"):
+        initial_unemployment_benefit_per_recipient(
+            total_unemployment_benefits=total_unemployment_benefits,
+            n_unemployed=1,
+        )
 
 
 def test__compute_notebook_household_accounts_uses_notebook_definitions():
@@ -156,6 +229,25 @@ def test__hfcs_reader_preserves_notebook_account_source_columns():
     assert "Outstanding Balance of Non-Mortgage Debt" in var_numerical
 
 
+def test__hfcs_reader_preserves_public_and_private_pension_components():
+    households = pd.DataFrame(
+        {
+            "Income from Pensions": [999.0, 999.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Occupational and Private Pension Income": [3.0, 4.0],
+            "Regular Social Transfers": [5.0, 6.0],
+        },
+        index=[1, 2],
+    )
+    individuals = pd.DataFrame(index=[])
+
+    data = HFCSReader._add_household_income_diagnostics(households, individuals)
+
+    assert data["Public Pension Income"].tolist() == [10.0, 20.0]
+    assert data["Occupational and Private Pension Income"].tolist() == [3.0, 4.0]
+    assert data["Pension Income"].tolist() == [13.0, 24.0]
+
+
 def test__hfcs_reader_converts_notebook_account_source_columns(tmp_path):
     class ExchangeRates:
         def from_eur_to_lcu(self, country, year):
@@ -251,6 +343,83 @@ def test__normalise_household_consumption_caps_saving_rates_at_one(monkeypatch):
     assert population.household_data.loc[2, "Consumption"] > 0.0
 
 
+def test__social_transfer_initialisation_uses_hfcs_public_pension_and_other_weights(monkeypatch):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 10
+    population.yearly_factor = 4.0
+    population.social_transfers_model = object()
+    population.household_data = pd.DataFrame(
+        {
+            "Type": [1, 1],
+            "Net Wealth": [0.0, 0.0],
+            "Income": [1.0, 1.0],
+            "Debt": [0.0, 0.0],
+            "Income from Pensions": [13.0, 24.0],
+            "Pension Income": [13.0, 24.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Regular Social Transfers": [1.0, 3.0],
+            "Social Transfer Income": [1.0, 3.0],
+        }
+    )
+    monkeypatch.setattr(
+        hfcs_population_module,
+        "apply_iterative_imputer",
+        lambda data, *_args, **_kwargs: data,
+    )
+    monkeypatch.setattr(hfcs_population_module, "fit_linear", lambda **_kwargs: None)
+
+    population.set_household_social_transfers(total_social_transfers=100.0)
+
+    assert np.allclose(
+        population.household_data["Allocated Public Pension Benefits"],
+        [100.0 * 10.0 / 34.0, 100.0 * 20.0 / 34.0],
+    )
+    assert np.allclose(
+        population.household_data["Allocated Other Social Transfers"],
+        [100.0 * 1.0 / 34.0, 100.0 * 3.0 / 34.0],
+    )
+    assert np.isclose(population.household_data["Regular Social Transfers"].sum(), 100.0)
+
+
+def test__public_pension_household_source_is_mapped_to_retired_individuals(monkeypatch):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.social_transfers_model = object()
+    population.household_data = pd.DataFrame(
+        {
+            "Type": [1, 1],
+            "Net Wealth": [0.0, 0.0],
+            "Income": [1.0, 1.0],
+            "Debt": [0.0, 0.0],
+            "Income from Pensions": [10.0, 20.0],
+            "Pension Income": [10.0, 20.0],
+            "Public Pension Income": [10.0, 20.0],
+            "Regular Social Transfers": [1.0, 3.0],
+            "Social Transfer Income": [1.0, 3.0],
+            "Corresponding Individuals ID": [[0, 1], [2]],
+        }
+    )
+    population.individual_data = pd.DataFrame(
+        {
+            "Corresponding Household ID": [0, 0, 1],
+            "Is Retired": [True, False, True],
+        }
+    )
+    monkeypatch.setattr(hfcs_population_module, "apply_iterative_imputer", lambda data, *_args, **_kwargs: data)
+    monkeypatch.setattr(hfcs_population_module, "fit_linear", lambda **_kwargs: None)
+
+    population.set_household_social_transfers(total_social_transfers=100.0)
+
+    np.testing.assert_allclose(population.individual_data["Public Pension Weight"], [1.0 / 3.0, 0.0, 2.0 / 3.0])
+    np.testing.assert_allclose(
+        population.individual_data["Public Pension Benefits"],
+        [500.0 / 17.0, 0.0, 1000.0 / 17.0],
+    )
+    np.testing.assert_allclose(
+        population.household_data["Allocated Public Pension Benefits"],
+        [500.0 / 17.0, 1000.0 / 17.0],
+    )
+
+
 class TestSyntheticPopulation:
     def test__init(self, readers, configuration, industry_data, exogenous_data):
         france = Country("FRA")
@@ -328,6 +497,37 @@ class TestSyntheticPopulation:
 
         # Check individual age
         assert np.all(population.individual_data["Age"] >= 0)
+
+    def test__zero_unemployed_initialisation_uses_benefit_entitlement(
+        self, monkeypatch, readers, industry_data, exogenous_data
+    ):
+        original_process_individual_data = hfcs_population_module.process_individual_data
+
+        def process_without_unemployed(*args, **kwargs):
+            individual_data = original_process_individual_data(*args, **kwargs)
+            individual_data["Activity Status"] = 1
+            individual_data["Income from Unemployment Benefits"] = 0.0
+            individual_data["Unemployment Benefit Entitlement"] = 4.0
+            return individual_data
+
+        monkeypatch.setattr(hfcs_population_module, "process_individual_data", process_without_unemployed)
+        france = Country("FRA")
+
+        population = SyntheticHFCSPopulation.from_readers(
+            readers=readers,
+            country_name=france,
+            year=2014,
+            scale=10000,
+            country_name_short=france.to_two_letter_code(),
+            industries=AGGREGATED_INDUSTRIES,
+            industry_data=industry_data[france],
+            rent_as_fraction_of_unemployment_rate=0.5,
+            total_unemployment_benefits=1000.0,
+            quarter=1,
+            exogenous_data=exogenous_data,
+        )
+
+        assert population.social_housing_rent == 2.0
 
 
 @pytest.mark.parametrize("country", [Country("CAN"), Country("USA")])

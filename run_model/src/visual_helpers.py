@@ -855,8 +855,30 @@ def build_macro_output_df(model, country_code):
         "debt": "debt",
         "interest_payments_on_debt": "interest_payments_on_debt",
         "total_unemployment_benefits": "unemployment_benefits",
-        "total_household_social_transfers": "other_benefits",
+        "total_public_pension_benefits": "public_pension_benefits",
+        "total_other_social_transfers": "other_social_transfers",
+        "total_necessity_support": "necessity_support",
     }.items():
+        if source_name in df_gov_ts.columns:
+            add_column(output_name, df_gov_ts[source_name])
+
+    if "total_household_social_transfers" in df_gov_ts.columns:
+        add_column("household_social_transfers", df_gov_ts["total_household_social_transfers"])
+
+    fiscal_revenue_components = {
+        "taxes_vat": "fiscal_revenue_vat",
+        "taxes_production": "fiscal_revenue_production_taxes",
+        "taxes_cf": "fiscal_revenue_capital_formation_taxes",
+        "taxes_corporate_income": "fiscal_revenue_corporate_income_taxes",
+        "taxes_exports": "fiscal_revenue_export_taxes",
+        "taxes_income": "fiscal_revenue_income_taxes",
+        "taxes_rental_income": "fiscal_revenue_rental_income_taxes",
+        "taxes_employee_si": "fiscal_revenue_employee_social_insurance",
+        "taxes_employer_si": "fiscal_revenue_employer_social_insurance",
+        "taxes_on_products": "fiscal_revenue_taxes_on_products",
+        "total_rent_received": "fiscal_revenue_social_housing_rent",
+    }
+    for source_name, output_name in fiscal_revenue_components.items():
         if source_name in df_gov_ts.columns:
             add_column(output_name, df_gov_ts[source_name])
 
@@ -868,9 +890,17 @@ def build_macro_output_df(model, country_code):
     if debt is not None and gdp is not None:
         add_column("debt_to_gdp", debt / (periods_per_year * gdp))
     add_ratio("unemployment_benefits_to_expenditure", get_column("unemployment_benefits"), fiscal_expenditure)
-    add_ratio("other_benefits_to_expenditure", get_column("other_benefits"), fiscal_expenditure)
     add_ratio("government_consumption_to_expenditure", government_consumption, fiscal_expenditure)
     add_ratio("interest_payments_on_debt_to_expenditure", get_column("interest_payments_on_debt"), fiscal_expenditure)
+    for component in [
+        "public_pension_benefits",
+        "other_social_transfers",
+        "necessity_support",
+        "household_social_transfers",
+    ]:
+        value = get_column(component)
+        add_ratio(f"{component}_to_gdp", value, gdp)
+        add_ratio(f"{component}_to_expenditure", value, fiscal_expenditure)
 
     if "policy_rate" in df_cb_ts.columns:
         add_column("central_bank_policy_rate", periods_per_year * df_cb_ts["policy_rate"])

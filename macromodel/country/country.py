@@ -365,6 +365,32 @@ class Country:
         self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
+        self._initialize_household_unemployment_benefits()
+
+    def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
+        """Aggregate the current individual unemployment payments to households in nominal units."""
+        return self.economy.current_consumer_price_level() * self.households.aggregate_individual_amount(
+            individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
+            corr_households=self.individuals.states["Corresponding Household ID"],
+        )
+
+    def _initialize_household_unemployment_benefits(self) -> None:
+        """Include the initial individual unemployment payments in household income exactly once."""
+        unemployment_benefits = self._household_unemployment_benefits_from_individuals()
+        self.households.ts.override_current("income_unemployment_benefits", unemployment_benefits)
+        self.households.ts.override_current(
+            "income_social_transfers",
+            self.households.ts.current("income_social_transfers") + unemployment_benefits,
+        )
+        self.households.ts.override_current(
+            "total_income_social_transfers",
+            [self.households.ts.current("income_social_transfers").sum()],
+        )
+        self.households.ts.override_current("expected_income_unemployment_benefits", unemployment_benefits)
+        self.households.ts.override_current(
+            "expected_income_social_transfers",
+            self.households.ts.current("expected_income_social_transfers") + unemployment_benefits,
+        )
 
     def clear_stage5_subsistence_support(self) -> None:
         """Clear current-period Stage 5 emergency subsistence support."""
@@ -408,18 +434,51 @@ class Country:
         """Return the nominal fiscal expenditure increment implied by settled Stage 5 support."""
         return self.current_settled_stage5_subsistence_support_total()
 
-    def compute_realised_household_social_transfers(self) -> np.ndarray:
-        """Return ordinary transfers plus targeted Stage 5 support for this period."""
-        ordinary_transfers = self.households.compute_social_transfer_income(
-            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=self.economy.current_consumer_price_level(),
+    def compute_realised_household_social_income_components(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return realised pension, unemployment, other-transfer, and Stage 5 components."""
+        public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
+            retirement_eligibility=self.individuals.states["Is Retired"],
+            public_pension_weights=self.individuals.states["Public Pension Weight"],
         )
-        return ordinary_transfers + self.compute_realised_stage5_subsistence_support()
+        current_cpi = self.economy.current_consumer_price_level()
+        public_pensions = current_cpi * self.households.aggregate_individual_amount(
+            individual_amount=public_pension_by_individual,
+            corr_households=self.individuals.states["Corresponding Household ID"],
+        )
+        unemployment_benefits = self._household_unemployment_benefits_from_individuals()
+        other_transfers = self.households.compute_social_transfer_income(
+            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
+            cpi=current_cpi,
+        )
+        return (
+            public_pensions,
+            unemployment_benefits,
+            other_transfers,
+            self.compute_realised_stage5_subsistence_support(),
+        )
+
+    def compute_realised_household_social_transfers(self) -> np.ndarray:
+        """Return the authoritative sum of all realised household social-income components."""
+        return sum(self.compute_realised_household_social_income_components())
 
     def settle_household_social_transfers(self) -> None:
-        """Persist settled Stage 5 support on the same late path as realised transfers."""
-        realised_transfers = self.compute_realised_household_social_transfers()
-        realised_support = self.compute_realised_stage5_subsistence_support()
+        """Persist each realised social-income component once on the late settlement path."""
+        public_pensions, unemployment_benefits, other_transfers, realised_support = (
+            self.compute_realised_household_social_income_components()
+        )
+        realised_transfers = public_pensions + unemployment_benefits + other_transfers + realised_support
+        self.individuals.ts.override_current(
+            "public_pension_benefits",
+            self.central_government.distribute_public_pension_benefits_to_individuals(
+                retirement_eligibility=self.individuals.states["Is Retired"],
+                public_pension_weights=self.individuals.states["Public Pension Weight"],
+            ),
+        )
+        self.households.ts.income_public_pension.append(public_pensions)
+        self.households.ts.income_unemployment_benefits.append(unemployment_benefits)
+        self.households.ts.income_other_social_transfers.append(other_transfers)
         self.households.ts.stage5_subsistence_support.append(realised_support)
         self.households.ts.income_social_transfers.append(realised_transfers)
         self.households.ts.total_income_social_transfers.append([realised_transfers.sum()])
@@ -541,9 +600,44 @@ class Country:
             all_country_names=all_country_names,
             taxes_net_subsidies=taxes_less_subsidies,
             number_of_unemployed_individuals=n_unemployed,
+            initial_unemployment_benefit=synthetic_population.individual_data["Unemployment Benefit Entitlement"].iloc[
+                0
+            ],
             tax_data=synthetic_country.tax_data,
             n_industries=n_industries,
         )
+        tax_overrides = country_configuration.central_government.tax_overrides
+        if tax_overrides.value_added_tax_rate is not None or tax_overrides.household_investment_vat_rate is not None:
+            central_government.reconcile_initial_vat(
+                current_household_consumption_before_vat=households.ts.current("total_consumption_before_vat")[0],
+                current_household_investment=households.ts.current("investment"),
+            )
+            households.ts.override_current(
+                "total_consumption",
+                [
+                    (1 + central_government.states["Value-added Tax"])
+                    * households.ts.current("total_consumption_before_vat")[0]
+                ],
+            )
+            households.ts.override_current(
+                "total_investment",
+                [
+                    (
+                        1
+                        + central_government.states["Household Capital Formation Tax"]
+                        + (central_government.states["Household Investment VAT Rate"] or 0.0)
+                    )
+                    * households.ts.current("total_investment_before_vat")[0]
+                ],
+            )
+        if (
+            tax_overrides.household_capital_formation_rate is not None
+            or tax_overrides.firm_capital_formation_rate is not None
+        ):
+            central_government.reconcile_initial_capital_formation_tax(
+                current_household_investment=households.ts.current("investment"),
+                current_firm_capital_formation=firms.ts.current("total_capital_inputs_bought_costs").sum(),
+            )
 
         government_entities = GovernmentEntities.from_pickled_agent(
             synthetic_government_entities=synthetic_country.government_entities,
@@ -1122,6 +1216,12 @@ class Country:
                 current_individual_activity_status=self.individuals.states["Activity Status"],
             )
         )
+        self.individuals.ts.public_pension_benefits.append(
+            self.central_government.distribute_public_pension_benefits_to_individuals(
+                retirement_eligibility=self.individuals.states["Is Retired"],
+                public_pension_weights=self.individuals.states["Public Pension Weight"],
+            )
+        )
 
     def _set_household_income_expectations(self, *, replace_current: bool) -> None:
         # Individual income
@@ -1139,14 +1239,42 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        expected_income_employee = self.households.compute_employee_income(
-            individual_income=self.individuals.ts.current("expected_income"),
-            corr_households=self.individuals.states["Corresponding Household ID"],
+        expected_unemployment_benefits = (
+            (1 + self.economy.current_expected_consumer_period_inflation())
+            * self.economy.current_consumer_price_level()
+            * self.households.aggregate_individual_amount(
+                individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
+                corr_households=self.individuals.states["Corresponding Household ID"],
+            )
         )
-        expected_income_social_transfers = self.households.compute_expected_social_transfer_income(
+        expected_income_employee = (
+            self.households.compute_employee_income(
+                individual_income=self.individuals.ts.current("expected_income"),
+                corr_households=self.individuals.states["Corresponding Household ID"],
+            )
+            - expected_unemployment_benefits
+        )
+        expected_public_pension_by_individual = (
+            self.central_government.distribute_public_pension_benefits_to_individuals(
+                retirement_eligibility=self.individuals.states["Is Retired"],
+                public_pension_weights=self.individuals.states["Public Pension Weight"],
+            )
+        )
+        expected_income_public_pension = (
+            (1 + self.economy.current_expected_consumer_period_inflation())
+            * self.economy.current_consumer_price_level()
+            * self.households.aggregate_individual_amount(
+                individual_amount=expected_public_pension_by_individual,
+                corr_households=self.individuals.states["Corresponding Household ID"],
+            )
+        )
+        expected_income_other_social_transfers = self.households.compute_expected_social_transfer_income(
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
             cpi=self.economy.current_consumer_price_level(),
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+        )
+        expected_income_social_transfers = (
+            expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
         )
         income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
@@ -1166,6 +1294,11 @@ class Country:
 
         if replace_current:
             self.households.ts.override_current("expected_income_employee", expected_income_employee)
+            self.households.ts.override_current("expected_income_unemployment_benefits", expected_unemployment_benefits)
+            self.households.ts.override_current("expected_income_public_pension", expected_income_public_pension)
+            self.households.ts.override_current(
+                "expected_income_other_social_transfers", expected_income_other_social_transfers
+            )
             self.households.ts.override_current("expected_income_social_transfers", expected_income_social_transfers)
             self.households.ts.override_current("income_rental", income_rental)
             self.households.ts.override_current("total_income_rental", [income_rental.sum()])
@@ -1183,6 +1316,9 @@ class Country:
             )
         else:
             self.households.ts.expected_income_employee.append(expected_income_employee)
+            self.households.ts.expected_income_unemployment_benefits.append(expected_unemployment_benefits)
+            self.households.ts.expected_income_public_pension.append(expected_income_public_pension)
+            self.households.ts.expected_income_other_social_transfers.append(expected_income_other_social_transfers)
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
             self.households.ts.income_rental.append(income_rental)
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
@@ -1483,7 +1619,7 @@ class Country:
             exogenous_total_investment=self.exogenous.national_accounts_during[
                 "Real Household Investment (Value)"
             ].values.flatten(),
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
             assume_zero_growth=self.assume_zero_growth,
         )
 
@@ -3026,6 +3162,15 @@ class Country:
         self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
+        # Benefits were needed during planning for reservation-wage decisions,
+        # but realised payments must follow the activity status after labour
+        # market clearing. Replace the planning vector before computing income.
+        self.individuals.ts.override_current(
+            "income_from_unemployment_benefits",
+            self.central_government.distribute_unemployment_benefits_to_individuals(
+                current_individual_activity_status=self.individuals.states["Activity Status"],
+            ),
+        )
         # Update individual income components
         self.individuals.ts.income.append(
             self.individuals.compute_income(
@@ -3134,7 +3279,8 @@ class Country:
 
         self.households.update_consumption_and_investment(
             tau_vat=self.central_government.states["Value-added Tax"],
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
+            tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             readjusted_factors=readjusted_factors,
             emitting_indices=self.emitting_indices,
             add_emissions=self.add_emissions,
@@ -3144,8 +3290,9 @@ class Country:
         )
         illiquid_financial_asset_return_rate = self.households.update_wealth(
             housing_data=self.housing_market.states["properties"],
-            tau_cf=self.central_government.states["Capital Formation Tax"],
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
             period_index=period_index,
+            tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))
@@ -3268,6 +3415,7 @@ class Country:
             taxes_less_subsidies_rates=self.central_government.states["Taxes Less Subsidies Rates"],
             current_household_new_real_wealth=self.households.ts.current("investment"),
             current_total_exports=self.economy.ts.current("exports_before_taxes").sum(),
+            current_firm_capital_formation=self.firms.ts.current("total_capital_inputs_bought_costs").sum(),
         )
 
         # General government fields
@@ -3281,9 +3429,18 @@ class Country:
         )
         self.central_government.ts.total_unemployment_benefits.append(
             [
-                np.sum(self.individuals.states["Activity Status"] == ActivityStatus.UNEMPLOYED)
-                * self.central_government.ts.current("unemployment_benefits_by_individual")[0]
+                self.economy.current_consumer_price_level()
+                * self.individuals.ts.current("income_from_unemployment_benefits").sum()
             ]
+        )
+        self.central_government.ts.total_public_pension_benefits.append(
+            [self.households.ts.current("income_public_pension").sum()]
+        )
+        self.central_government.ts.total_other_social_transfers.append(
+            [self.households.ts.current("income_other_social_transfers").sum()]
+        )
+        self.central_government.ts.total_necessity_support.append(
+            [self.households.ts.current("stage5_subsistence_support").sum()]
         )
         self.central_government.ts.total_household_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
@@ -3311,7 +3468,6 @@ class Country:
                     "nominal_amount_spent_in_lcu"
                 ),
                 interest_payments_on_debt=self.central_government.ts.current("interest_payments_on_debt")[0],
-                stage5_subsistence_support_total=self.current_stage5_subsistence_support_fiscal_increment(),
             )
         )
         self.central_government.ts.debt.append(self.central_government.compute_debt())
@@ -3334,8 +3490,13 @@ class Country:
             change_in_inventories=self.firms.ts.current("total_inventory_change").sum()
             + self.firms.ts.current("total_intermediate_inputs_bought_costs").sum()
             - self.firms.ts.current("used_intermediate_inputs_costs").sum(),
-            gross_fixed_capital_formation=self.firms.ts.current("total_capital_inputs_bought_costs").sum()
-            + (1 + self.central_government.states["Capital Formation Tax"])
+            gross_fixed_capital_formation=(1 + self.central_government.states["Firm Capital Formation Tax"])
+            * self.firms.ts.current("total_capital_inputs_bought_costs").sum()
+            + (
+                1
+                + self.central_government.states["Household Capital Formation Tax"]
+                + (self.central_government.states["Household Investment VAT Rate"] or 0.0)
+            )
             * self.households.ts.current("investment").sum(),
             exports=self.economy.ts.current("exports").sum(),
             imports=self.economy.ts.current("imports").sum(),

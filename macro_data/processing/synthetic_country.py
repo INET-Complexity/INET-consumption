@@ -886,6 +886,10 @@ class SyntheticCountry:
             total_social_transfers=central_government.central_gov_data["Other Social Benefits"].values[0],
             independents=independents,
         )
+        public_pensions = population.household_data["Allocated Public Pension Benefits"].sum()
+        other_transfers = population.household_data["Allocated Other Social Transfers"].sum()
+        central_government.central_gov_data["Public Pension Benefits"] = [public_pensions]
+        central_government.central_gov_data["Other Social Benefits"] = [other_transfers]
         population.set_household_saving_rates(independents=independents)
 
         population.set_household_investment_rates(capital_formation_taxrate=tax_data.capital_formation_tax)

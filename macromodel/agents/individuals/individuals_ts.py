@@ -54,6 +54,10 @@ def create_individuals_timeseries(data: pd.DataFrame, scale: int) -> TimeSeries:
     return TimeSeries(
         n_individuals=len(data),
         #
+        hfcs_labour_status=data["HFCS Labour Status"].values,
+        is_retired=data["Is Retired"].values.astype(bool),
+        public_pension_weight=data["Public Pension Weight"].values,
+        public_pension_benefits=data["Public Pension Benefits"].values,
         employee_income=data["Employee Income"].values,
         employee_income_histogram=get_histogram(data["Employee Income"].values, scale),
         income_from_unemployment_benefits=data["Income from Unemployment Benefits"].values,

@@ -95,7 +95,12 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
                     "debt": [100.0, 101.0, 102.0],
                     "interest_payments_on_debt": [1.0, 1.1, 1.2],
                     "total_unemployment_benefits": [4.0, 4.1, 4.2],
+                    "total_public_pension_benefits": [3.0, 3.1, 3.2],
+                    "total_other_social_transfers": [2.0, 2.1, 2.2],
+                    "total_necessity_support": [0.1, 0.2, 0.3],
                     "total_household_social_transfers": [5.0, 5.1, 5.2],
+                    "taxes_vat": [6.0, 6.1, 6.2],
+                    "taxes_corporate_income": [7.0, 7.1, 7.2],
                 }
             )
         ),
@@ -182,8 +187,23 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "sector_tfp_investment_desired_mb_mc_ratio_agriculture",
         "sector_tfp_investment_desired_mb_mc_ratio_services",
         "avg_tfp_multiplier",
+        "fiscal_revenue",
+        "fiscal_expenditure",
+        "unemployment_benefits",
+        "public_pension_benefits",
+        "other_social_transfers",
+        "necessity_support",
+        "household_social_transfers",
+        "public_pension_benefits_to_gdp",
+        "other_social_transfers_to_gdp",
+        "necessity_support_to_gdp",
+        "household_social_transfers_to_gdp",
+        "fiscal_revenue_vat",
+        "fiscal_revenue_corporate_income_taxes",
     }
     assert expected_columns.issubset(output.columns)
+    assert "other_benefits" not in output.columns
+    assert "other_benefits_to_expenditure" not in output.columns
     assert output["sectoral_growth"].tolist() == [[0.01, 0.02], [0.03, 0.04], [0.05, 0.06]]
     assert output["illiquid_financial_asset_return_rate"].tolist()[1:] == [0.02, -0.01]
     assert output["sectoral_growth_services"].tolist() == [0.02, 0.04, 0.06]
@@ -192,6 +212,11 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
     assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
     assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
+    assert output["public_pension_benefits"].tolist() == [3.0, 3.1, 3.2]
+    assert output["other_social_transfers"].tolist() == [2.0, 2.1, 2.2]
+    assert output["necessity_support"].tolist() == [0.1, 0.2, 0.3]
+    assert output["household_social_transfers"].tolist() == [5.0, 5.1, 5.2]
+    assert output["public_pension_benefits_to_gdp"].tolist() == pytest.approx([0.03, 3.1 / 110, 3.2 / 121])
 
     clutter_columns = {
         "revenue",

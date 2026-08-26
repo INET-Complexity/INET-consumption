@@ -59,8 +59,8 @@ class Config:
 
 
 CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
-    "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
-    # "households.functions.consumption.parameters.['long_run_intercept']": -0.1,
+    # "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
+    "households.functions.consumption.parameters.['long_run_intercept']": -0.2,
     # "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
     # "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
     # "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
@@ -104,6 +104,9 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     "income_growth_propensity_0_5": {
         "households.functions.consumption.parameters.['income_growth_propensity']": 0.5,
     },
+    "change_sectoral_weights": {
+        "government_entities.functions.consumption.parameters['sectoral_weights']": "initial_price_normalized",
+    },
 }
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
@@ -144,11 +147,14 @@ MACRO_COLUMNS = (
 )
 FISCAL_COLUMNS = (
     "unemployment_benefits",
-    "other_benefits",
+    "household_social_transfers",
     "government_consumption",
     "interest_payments_on_debt",
+    "fiscal_revenue_to_gdp",
+    "fiscal_expenditure_to_gdp",
+    "deficit_to_gdp",
     "unemployment_benefits_to_expenditure",
-    "other_benefits_to_expenditure",
+    "household_social_transfers_to_expenditure",
     "government_consumption_to_expenditure",
     "interest_payments_on_debt_to_expenditure",
     "unemployment_rate",
@@ -156,7 +162,6 @@ FISCAL_COLUMNS = (
     "debt_to_gdp",
     "central_bank_policy_rate",
     "fiscal_expenditure",
-    "deficit_to_gdp",
     "gdp_growth",
     "taxes_paid_on_production",
     "taxes_on_products",

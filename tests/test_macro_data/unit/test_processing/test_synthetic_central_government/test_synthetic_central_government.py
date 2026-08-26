@@ -20,12 +20,26 @@ class TestSyntheticCentralGovernment:
         for central_gov_field in [
             "Debt",
             "Total Unemployment Benefits",
+            "Reader Non-Unemployment Social Benefits",
+            "Public Pension Benefits",
             "Other Social Benefits",
         ]:
             assert central_gov_field in central_gov.central_gov_data.columns
 
         # Check if there are any missing values
         assert not np.any(pd.isna(central_gov.central_gov_data))
+
+    def test__reader_non_unemployment_envelope_is_preserved_for_hfcs_component_split(self, readers):
+        central_gov = DefaultSyntheticCGovernment.from_readers(
+            readers=readers,
+            country_name=Country("FRA"),
+            year=2014,
+        )
+        assert np.isclose(
+            central_gov.central_gov_data["Reader Non-Unemployment Social Benefits"].iloc[0],
+            central_gov.central_gov_data["Other Social Benefits"].iloc[0],
+        )
+        assert central_gov.central_gov_data["Public Pension Benefits"].iloc[0] == 0.0
 
     def test__update_fields_grosses_up_net_employee_income_for_labour_taxes(self):
         central_gov = DefaultSyntheticCGovernment(

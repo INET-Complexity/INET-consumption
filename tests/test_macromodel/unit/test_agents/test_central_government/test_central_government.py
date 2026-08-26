@@ -1,5 +1,7 @@
 import numpy as np
+import pandas as pd
 
+from macromodel.agents.central_government.central_government_ts import create_central_government_timeseries
 from macromodel.agents.central_government.func.debt_interest import (
     CurrentPolicyRateDebtInterest,
     SmoothedPolicyRateDebtInterest,
@@ -21,6 +23,63 @@ class RecordingBenefitModel:
 
 
 class TestCentralGovernment:
+    def test__initial_unemployment_benefits_keep_a_baseline_without_recipients(self):
+        data = {
+            "Debt": [0.0],
+            "Total Unemployment Benefits": [12.0],
+            "Public Pension Benefits": [0.0],
+            "Other Social Benefits": [0.0],
+            "Taxes on Production": [0.0],
+            "VAT": [0.0],
+            "Capital Formation Taxes": [0.0],
+            "Corporate Taxes": [0.0],
+            "Export Taxes": [0.0],
+            "Income Taxes": [0.0],
+            "Rental Income Taxes": [0.0],
+            "Employee SI Tax": [0.0],
+            "Employer SI Tax": [0.0],
+            "Taxes on Products": [0.0],
+            "Total Social Housing Rent": [0.0],
+            "Revenue": [0.0],
+            "Bank Equity Injection": [0.0],
+        }
+        timeseries = create_central_government_timeseries(
+            data=pd.DataFrame(data),
+            number_of_unemployed_individuals=0,
+            initial_unemployment_benefit=4.0,
+        )
+
+        assert timeseries.current("unemployment_benefits_by_individual")[0] == 4.0
+        assert timeseries.current("total_unemployment_benefits")[0] == 0.0
+
+    def test__initial_social_transfer_total_reconciles_all_components(self):
+        data = {
+            "Debt": [0.0],
+            "Total Unemployment Benefits": [12.0],
+            "Public Pension Benefits": [3.0],
+            "Other Social Benefits": [4.0],
+            "Taxes on Production": [0.0],
+            "VAT": [0.0],
+            "Capital Formation Taxes": [0.0],
+            "Corporate Taxes": [0.0],
+            "Export Taxes": [0.0],
+            "Income Taxes": [0.0],
+            "Rental Income Taxes": [0.0],
+            "Employee SI Tax": [0.0],
+            "Employer SI Tax": [0.0],
+            "Taxes on Products": [0.0],
+            "Total Social Housing Rent": [0.0],
+            "Revenue": [0.0],
+            "Bank Equity Injection": [0.0],
+        }
+        timeseries = create_central_government_timeseries(
+            data=pd.DataFrame(data),
+            number_of_unemployed_individuals=2,
+            initial_unemployment_benefit=6.0,
+        )
+
+        assert timeseries.current("total_household_social_transfers")[0] == 19.0
+
     def test__create(self, test_central_government):
         assert test_central_government.country_name == "FRA"
 
@@ -28,11 +87,15 @@ class TestCentralGovernment:
         assert test_central_government is not None
         for state in [
             "Value-added Tax",
+            "Household Investment VAT Rate",
             "Export Tax",
             "Employer Social Insurance Tax",
             "Employee Social Insurance Tax",
             "Profit Tax",
             "Income Tax",
+            "Household Capital Formation Tax",
+            "Firm Capital Formation Tax",
+            "Other Product Production Tax Rate",
             "Taxes Less Subsidies Rates",
         ]:
             assert state in test_central_government.states.keys()
@@ -83,7 +146,7 @@ class TestCentralGovernment:
         assert unemployment_model.seen_features[-1]["Data CPI Inflation"].iloc[0] == 0.03
         assert transfers_model.seen_features[-1]["Data CPI Inflation"].iloc[0] == 0.03
 
-    def test__compute_deficit_nominalises_real_benefit_stocks_once(self, test_central_government):
+    def test__compute_deficit_uses_realised_benefit_stock_once(self, test_central_government):
         current_cpi = 2.0
         current_ind_activity = np.array(
             [
@@ -93,7 +156,15 @@ class TestCentralGovernment:
             ]
         )
         unemployment_benefit = test_central_government.ts.current("unemployment_benefits_by_individual")[0]
-        other_benefits = test_central_government.ts.current("total_other_benefits")[0]
+        realised_public_pensions = 10.0
+        realised_other_transfers = 20.0
+        realised_necessity_support = 12.0
+        realised_transfers = realised_public_pensions + realised_other_transfers + realised_necessity_support
+        test_central_government.ts.total_public_pension_benefits.append([realised_public_pensions])
+        test_central_government.ts.total_other_social_transfers.append([realised_other_transfers])
+        test_central_government.ts.total_necessity_support.append([realised_necessity_support])
+        test_central_government.ts.total_household_social_transfers.append([realised_transfers])
+        test_central_government.ts.total_unemployment_benefits.append([2 * current_cpi * unemployment_benefit])
         current_government_spending = np.array([10.0, 20.0])
         interest_payments = 5.0
         revenue = test_central_government.ts.current("revenue")[0]
@@ -105,30 +176,47 @@ class TestCentralGovernment:
             interest_payments_on_debt=interest_payments,
         )
 
-        expected_benefits = current_cpi * (2 * unemployment_benefit + other_benefits)
+        expected_benefits = 2 * current_cpi * unemployment_benefit + realised_transfers
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
 
-    def test__compute_deficit_includes_nominal_stage5_subsistence_support_once(self, test_central_government):
+    def test__compute_deficit_uses_realised_transfer_stock_including_stage5(self, test_central_government):
         current_cpi = 2.0
         current_ind_activity = np.array([ActivityStatus.EMPLOYED])
         current_government_spending = np.array([10.0])
         interest_payments = 5.0
         revenue = test_central_government.ts.current("revenue")[0]
-        other_benefits = test_central_government.ts.current("total_other_benefits")[0]
-        nominal_stage5_support = 7.0
+        realised_public_pensions = 0.0
+        realised_other_transfers = 30.0
+        realised_necessity_support = 12.0
+        realised_transfers = realised_public_pensions + realised_other_transfers + realised_necessity_support
+        test_central_government.ts.total_public_pension_benefits.append([realised_public_pensions])
+        test_central_government.ts.total_other_social_transfers.append([realised_other_transfers])
+        test_central_government.ts.total_necessity_support.append([realised_necessity_support])
+        test_central_government.ts.total_household_social_transfers.append([realised_transfers])
+        test_central_government.ts.total_unemployment_benefits.append([0.0])
 
         deficit = test_central_government.compute_deficit(
             current_ind_activity=current_ind_activity,
             current_cpi=current_cpi,
             current_government_nominal_amount_spent=current_government_spending,
             interest_payments_on_debt=interest_payments,
-            stage5_subsistence_support_total=nominal_stage5_support,
         )
 
-        expected_benefits = current_cpi * other_benefits + nominal_stage5_support
+        expected_benefits = realised_transfers
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
+
+    def test__public_pensions_only_pay_eligible_weighted_recipients(self, test_central_government):
+        test_central_government.ts.public_pension_benefits.append([90.0])
+
+        payments = test_central_government.distribute_public_pension_benefits_to_individuals(
+            retirement_eligibility=np.array([True, False, True]),
+            public_pension_weights=np.array([2.0, 100.0, 1.0]),
+        )
+
+        np.testing.assert_allclose(payments, [60.0, 0.0, 30.0])
+        assert np.isclose(payments.sum(), 90.0)
 
     # def test__compute_taxes_revenue_deficit_debt(self, test_central_government):
     #     test_central_government.compute_taxes(
@@ -190,6 +278,130 @@ class TestCentralGovernment:
         assert np.isclose(test_central_government.ts.current("taxes_employee_si")[0], 0.1 * gross_employee_income)
         assert np.isclose(test_central_government.ts.current("taxes_employer_si")[0], 0.3 * gross_employee_income)
         assert np.isclose(test_central_government.ts.current("taxes_rental_income")[0], 0.2 * rent_paid)
+
+    def test__compute_taxes_allocates_capital_formation_tax_to_households_and_firms(self, test_central_government):
+        test_central_government.states["Household Capital Formation Tax"] = 0.0
+        test_central_government.states["Firm Capital Formation Tax"] = 0.25
+        test_central_government.states["Value-added Tax"] = 0.0
+        test_central_government.states["Export Tax"] = 0.0
+        test_central_government.states["Profit Tax"] = 0.0
+        test_central_government.states["Income Tax"] = 0.0
+        test_central_government.states["Employee Social Insurance Tax"] = 0.0
+        test_central_government.states["Employer Social Insurance Tax"] = 0.0
+
+        test_central_government.compute_taxes(
+            current_ind_employee_income=np.array([0.0]),
+            current_total_rent_paid=0.0,
+            current_income_financial_assets=np.array([0.0]),
+            current_ind_activity=np.array([ActivityStatus.EMPLOYED]),
+            current_ind_realised_cons=np.array([0.0]),
+            current_bank_profits=np.array([0.0]),
+            current_firm_production=np.array([0.0]),
+            current_firm_price=np.array([1.0]),
+            current_firm_profits=np.array([0.0]),
+            current_firm_industries=np.array([0]),
+            current_household_new_real_wealth=np.array([100.0]),
+            taxes_less_subsidies_rates=np.array([0.0]),
+            current_total_exports=0.0,
+            current_firm_capital_formation=40.0,
+        )
+
+        assert np.isclose(test_central_government.ts.current("taxes_cf")[0], 10.0)
+
+    def test__compute_taxes_applies_configured_vat_to_household_investment(self, test_central_government):
+        test_central_government.states["Value-added Tax"] = 0.13
+        test_central_government.states["Household Investment VAT Rate"] = 0.13
+        for key in [
+            "Household Capital Formation Tax",
+            "Firm Capital Formation Tax",
+            "Export Tax",
+            "Profit Tax",
+            "Income Tax",
+            "Employee Social Insurance Tax",
+            "Employer Social Insurance Tax",
+        ]:
+            test_central_government.states[key] = 0.0
+
+        test_central_government.compute_taxes(
+            current_ind_employee_income=np.array([0.0]),
+            current_total_rent_paid=0.0,
+            current_income_financial_assets=np.array([0.0]),
+            current_ind_activity=np.array([ActivityStatus.EMPLOYED]),
+            current_ind_realised_cons=np.array([100.0]),
+            current_bank_profits=np.array([0.0]),
+            current_firm_production=np.array([0.0]),
+            current_firm_price=np.array([1.0]),
+            current_firm_profits=np.array([0.0]),
+            current_firm_industries=np.array([0]),
+            current_household_new_real_wealth=np.array([40.0]),
+            taxes_less_subsidies_rates=np.array([0.0]),
+            current_total_exports=0.0,
+        )
+
+        assert np.isclose(test_central_government.ts.current("taxes_vat")[0], 18.2)
+
+    def test__compute_taxes_uses_configured_flat_product_production_rate(self, test_central_government):
+        test_central_government.states["Other Product Production Tax Rate"] = 0.1
+        test_central_government.states["Value-added Tax"] = 0.0
+        test_central_government.states["Household Capital Formation Tax"] = 0.0
+        test_central_government.states["Firm Capital Formation Tax"] = 0.0
+        test_central_government.states["Export Tax"] = 0.0
+        test_central_government.states["Profit Tax"] = 0.0
+        test_central_government.states["Income Tax"] = 0.0
+        test_central_government.states["Employee Social Insurance Tax"] = 0.0
+        test_central_government.states["Employer Social Insurance Tax"] = 0.0
+
+        test_central_government.compute_taxes(
+            current_ind_employee_income=np.array([0.0]),
+            current_total_rent_paid=0.0,
+            current_income_financial_assets=np.array([0.0]),
+            current_ind_activity=np.array([ActivityStatus.EMPLOYED]),
+            current_ind_realised_cons=np.array([0.0]),
+            current_bank_profits=np.array([0.0]),
+            current_firm_production=np.array([200.0]),
+            current_firm_price=np.array([2.0]),
+            current_firm_profits=np.array([0.0]),
+            current_firm_industries=np.array([0]),
+            current_household_new_real_wealth=np.array([0.0]),
+            taxes_less_subsidies_rates=np.array([0.0]),
+            current_total_exports=0.0,
+        )
+
+        assert np.isclose(test_central_government.ts.current("taxes_production")[0], 40.0)
+
+    def test__reconcile_initial_capital_tax_updates_product_tax_and_revenue(self, test_central_government):
+        test_central_government.states["Household Capital Formation Tax"] = 0.0
+        test_central_government.states["Firm Capital Formation Tax"] = 0.25
+        initial_products = test_central_government.ts.current("taxes_on_products")[0]
+        initial_revenue = test_central_government.ts.current("revenue")[0]
+        initial_capital_tax = test_central_government.ts.current("taxes_cf")[0]
+
+        test_central_government.reconcile_initial_capital_formation_tax(
+            current_household_investment=np.array([100.0]),
+            current_firm_capital_formation=40.0,
+        )
+
+        delta = 10.0 - initial_capital_tax
+        assert np.isclose(test_central_government.ts.current("taxes_cf")[0], 10.0)
+        assert np.isclose(test_central_government.ts.current("taxes_on_products")[0], initial_products + delta)
+        assert np.isclose(test_central_government.ts.current("revenue")[0], initial_revenue + delta)
+
+    def test__reconcile_initial_vat_updates_product_tax_and_revenue(self, test_central_government):
+        test_central_government.states["Value-added Tax"] = 0.13
+        test_central_government.states["Household Investment VAT Rate"] = 0.13
+        initial_products = test_central_government.ts.current("taxes_on_products")[0]
+        initial_revenue = test_central_government.ts.current("revenue")[0]
+        initial_vat = test_central_government.ts.current("taxes_vat")[0]
+
+        test_central_government.reconcile_initial_vat(
+            current_household_consumption_before_vat=100.0,
+            current_household_investment=np.array([40.0]),
+        )
+
+        delta = 18.2 - initial_vat
+        assert np.isclose(test_central_government.ts.current("taxes_vat")[0], 18.2)
+        assert np.isclose(test_central_government.ts.current("taxes_on_products")[0], initial_products + delta)
+        assert np.isclose(test_central_government.ts.current("revenue")[0], initial_revenue + delta)
 
     def test__current_policy_rate_debt_interest_preserves_legacy_rule(self):
         rule = CurrentPolicyRateDebtInterest()

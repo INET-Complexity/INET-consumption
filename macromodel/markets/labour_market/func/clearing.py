@@ -457,9 +457,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         # employment array is empty (for example after a shock-driven
         # transition).  Do not pass the empty Python/list value into the
         # numba-compiled sorter: numba cannot fingerprint it reliably.
-        current_firm_employments = np.asarray(
-            firm_employments[firm_id], dtype=np.int64
-        )
+        current_firm_employments = np.asarray(firm_employments[firm_id], dtype=np.int64)
         if current_firm_employments.size == 0:
             return current_firm_employments
 

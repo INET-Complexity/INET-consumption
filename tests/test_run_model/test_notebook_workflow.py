@@ -158,6 +158,25 @@ def test_requires_cfc_rate_cache_rebuild_detects_stale_basis():
     assert not nw._requires_cfc_rate_cache_rebuild(current_data, data_config)
 
 
+def test_requires_population_schema_cache_rebuild_detects_social_income_fields():
+    required_columns = nw.REQUIRED_INDIVIDUAL_POPULATION_COLUMNS
+    stale_data = SimpleNamespace(
+        synthetic_countries={
+            "ESP": SimpleNamespace(
+                population=SimpleNamespace(individual_data=pd.DataFrame(columns=required_columns - {"Is Retired"}))
+            )
+        }
+    )
+    current_data = SimpleNamespace(
+        synthetic_countries={
+            "ESP": SimpleNamespace(population=SimpleNamespace(individual_data=pd.DataFrame(columns=required_columns)))
+        }
+    )
+
+    assert nw._requires_population_schema_cache_rebuild(stale_data, "ESP")
+    assert not nw._requires_population_schema_cache_rebuild(current_data, "ESP")
+
+
 def test_build_country_config_aligns_and_applies_overrides(tmp_path, monkeypatch):
     env_cfg = _fake_env_config(tmp_path)
     country_cfg = _summary_config()

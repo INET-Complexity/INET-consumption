@@ -1446,9 +1446,17 @@ class Households(Agent):
         Returns:
             np.ndarray: Employment income by household
         """
+        return self.aggregate_individual_amount(individual_income, corr_households)
+
+    def aggregate_individual_amount(
+        self,
+        individual_amount: np.ndarray,
+        corr_households: np.ndarray,
+    ) -> np.ndarray:
+        """Aggregate an individual payment component to its household recipient."""
         return np.bincount(
             corr_households,
-            weights=individual_income,
+            weights=individual_amount,
             minlength=self.ts.current("n_households"),
         )
 
@@ -1961,8 +1969,10 @@ class Households(Agent):
                 subsistence_income=subsistence_income,
                 saving_rates=saving_rates,
                 income=income,
-                household_benefits=self.states["Number of Adults"] * per_capita_unemployment_benefits
-                + self.ts.current("expected_income_social_transfers"),
+                # This carrier already includes state-contingent unemployment
+                # benefits, public pensions, and other transfers.  Do not add a
+                # household-size proxy for unemployment benefits here.
+                household_benefits=self.ts.current("expected_income_social_transfers"),
                 consumption_weights=self.consumption_weights,
                 consumption_weights_by_income=self.consumption_weights_by_income,
                 exogenous_total_consumption=exogenous_total_consumption,
@@ -3182,6 +3192,7 @@ class Households(Agent):
         self,
         tau_vat: float,
         tau_cf: float,
+        tau_vat_on_investment: float = 0.0,
         add_emissions: bool = False,
         readjusted_factors: Optional[np.ndarray] = None,
         emitting_indices: Optional[np.ndarray] = None,
@@ -3200,6 +3211,7 @@ class Households(Agent):
         Args:
             tau_vat (float): Value added tax rate
             tau_cf (float): Capital formation tax rate
+            tau_vat_on_investment (float): VAT rate applied to household investment
             add_emissions (bool): Whether to track emissions
             readjusted_factors (Optional[np.ndarray]): CO2 emission factors
             emitting_indices (Optional[np.ndarray]): CO2 emitting sector indices
@@ -3311,11 +3323,17 @@ class Households(Agent):
             self.ts.oil_investment_emissions.append(disaggregated_emissions[:, 1])
             self.ts.gas_investment_emissions.append(disaggregated_emissions[:, 2])
             self.ts.refined_products_investment_emissions.append(disaggregated_emissions[:, 3])
-        self.ts.total_investment.append([(1 + tau_cf) * self.ts.current("investment").sum()])
+        self.ts.total_investment.append([(1 + tau_cf + tau_vat_on_investment) * self.ts.current("investment").sum()])
         self.ts.total_investment_before_vat.append([self.ts.current("investment").sum()])
         self.ts.industry_investment.append(self.ts.current("investment").sum(axis=0))
 
-    def update_wealth(self, housing_data: pd.DataFrame, tau_cf: float, period_index: int | None = None) -> float:
+    def update_wealth(
+        self,
+        housing_data: pd.DataFrame,
+        tau_cf: float,
+        period_index: int | None = None,
+        tau_vat_on_investment: float = 0.0,
+    ) -> float:
         """Update household wealth positions.
 
         Updates:
@@ -3386,7 +3404,7 @@ class Households(Agent):
                 - optional_cash_flow("interest_paid")
                 - optional_cash_flow("price_paid_for_property")
                 - optional_cash_flow("debt_installments")
-                - tau_cf * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
+                - (tau_cf + tau_vat_on_investment) * np.maximum(0.0, optional_cash_flow("investment").sum(axis=1))
             )
             new_wealth = np.maximum(cash_saving_before_financing, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)

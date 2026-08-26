@@ -477,6 +477,21 @@ FRA:
           sectoral_weights: initial_fixed
 
   central_government:
+    tax_overrides:
+      # Employer SI is an effective national-accounts override for France 2014.
+      employer_social_insurance_rate: 0.30
+      # Use a configurable France VAT rate on household consumption.
+      value_added_tax_rate: 0.13
+      # Treat the full household fixed-capital-formation vector as a taxable
+      # housing-investment proxy, using the same VAT rate.
+      household_investment_vat_rate: 0.13
+      # Do not apply a second capital-formation tax to this household flow.
+      household_capital_formation_rate: 0.0
+      # Provisional firm-side rate applied once to realised capital-goods purchases.
+      firm_capital_formation_rate: 0.25
+      # Flat user-configured rate on realised firm output. This is a reduced-form
+      # product/production-tax envelope, not an ESA D29 rate.
+      other_product_production_tax_rate: 0.066
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

@@ -7,6 +7,27 @@ from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 
+def initial_unemployment_benefit_per_recipient(
+    total_unemployment_benefits: float,
+    n_unemployed: int,
+    fallback_recipient_count: int = 1,
+) -> float:
+    """Return a finite model benefit level, retaining a baseline with no recipients."""
+    if n_unemployed < 0:
+        raise ValueError("Number of unemployed individuals must be non-negative.")
+    if fallback_recipient_count <= 0:
+        raise ValueError("Fallback recipient count must be positive.")
+    try:
+        total = float(total_unemployment_benefits)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Total unemployment benefits must be a finite non-negative number.") from error
+    if not np.isfinite(total) or total < 0.0:
+        raise ValueError("Total unemployment benefits must be a finite non-negative number.")
+    if n_unemployed == 0 and total > 0.0:
+        logging.warning("No unemployed individuals; using the macro unemployment-rate recipient baseline.")
+    return total / (n_unemployed if n_unemployed > 0 else fallback_recipient_count)
+
+
 def process_individual_data(
     individual_data: pd.DataFrame,
     industries: list[str],
@@ -49,6 +70,11 @@ def process_individual_data(
     individual_data = fill_individual_education(individual_data)
     individual_data["college"] = (individual_data["Education"] > 3).astype(int)
     individual_data = fill_individual_labour_status(individual_data)
+    # HFCS has a retirement labour-status category but the simulation has no
+    # ageing transition.  Preserve it as a static eligibility state, separate
+    # from the simulated employment/unemployment activity status.
+    individual_data["HFCS Labour Status"] = individual_data["Labour Status"].astype(int)
+    individual_data["Is Retired"] = individual_data["HFCS Labour Status"] == 5
     individual_data = set_individual_activity_status(
         individual_data=individual_data,
         unemployment_rate=unemployment_rate,
@@ -56,21 +82,28 @@ def process_individual_data(
     )
     individual_data = fill_individual_nace(individual_data, industries, n_firms_by_industry, n_industries)
     n_unemployed = np.sum(individual_data["Activity Status"] == 2)
+    n_active = np.sum(individual_data["Activity Status"].isin([1, 2]))
 
     # DANGER: if we don't have total unemployment benefits
     # we set them to 0; must be checked or filled in another way
     if total_unemployment_benefits is None:
         total_unemployment_benefits = 0.0
         logging.warning("Total unemployment benefits not found, setting to 0.0")
+    unemployment_benefits_by_individual = initial_unemployment_benefit_per_recipient(
+        total_unemployment_benefits=total_unemployment_benefits,
+        n_unemployed=n_unemployed,
+        fallback_recipient_count=max(1, int(unemployment_rate * n_active)),
+    )
+    individual_data["Unemployment Benefit Entitlement"] = unemployment_benefits_by_individual
 
     individual_data = fill_individual_employee_income(
         individual_data,
-        unemployment_benefits_by_individual=total_unemployment_benefits / n_unemployed,
+        unemployment_benefits_by_individual=unemployment_benefits_by_individual,
         scale=scale,
         yearly_factor=yearly_factor,
     )
     individual_data = set_individual_unemployed_income(
-        individual_data, unemployment_benefits_by_individual=total_unemployment_benefits / n_unemployed
+        individual_data, unemployment_benefits_by_individual=unemployment_benefits_by_individual
     )
     individual_data["Income"] = (
         individual_data["Employee Income"].fillna(0.0).values
@@ -82,10 +115,13 @@ def process_individual_data(
             "Age",
             "Education",
             "college",
+            "HFCS Labour Status",
+            "Is Retired",
             "Activity Status",
             "Employment Industry",
             "Employee Income",
             "Income from Unemployment Benefits",
+            "Unemployment Benefit Entitlement",
             "Income",
             "Corresponding Household ID",
             "Relation to Reference Person",

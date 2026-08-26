@@ -43,9 +43,7 @@ class TestCentralGovernment:
             "Revenue": [0.0],
             "Bank Equity Injection": [0.0],
         }
-        timeseries = create_central_government_timeseries(
-            data=pd.DataFrame(data), number_of_unemployed_individuals=0
-        )
+        timeseries = create_central_government_timeseries(data=pd.DataFrame(data), number_of_unemployed_individuals=0)
 
         assert timeseries.current("unemployment_benefits_by_individual")[0] == 0.0
         assert timeseries.current("total_unemployment_benefits")[0] == 0.0

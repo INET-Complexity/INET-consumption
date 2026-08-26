@@ -452,7 +452,12 @@ class Country:
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
             cpi=current_cpi,
         )
-        return public_pensions, unemployment_benefits, other_transfers, self.compute_realised_stage5_subsistence_support()
+        return (
+            public_pensions,
+            unemployment_benefits,
+            other_transfers,
+            self.compute_realised_stage5_subsistence_support(),
+        )
 
     def compute_realised_household_social_transfers(self) -> np.ndarray:
         """Return the authoritative sum of all realised household social-income components."""
@@ -1239,10 +1244,13 @@ class Country:
                 corr_households=self.individuals.states["Corresponding Household ID"],
             )
         )
-        expected_income_employee = self.households.compute_employee_income(
-            individual_income=self.individuals.ts.current("expected_income"),
-            corr_households=self.individuals.states["Corresponding Household ID"],
-        ) - expected_unemployment_benefits
+        expected_income_employee = (
+            self.households.compute_employee_income(
+                individual_income=self.individuals.ts.current("expected_income"),
+                corr_households=self.individuals.states["Corresponding Household ID"],
+            )
+            - expected_unemployment_benefits
+        )
         expected_public_pension_by_individual = (
             self.central_government.distribute_public_pension_benefits_to_individuals(
                 retirement_eligibility=self.individuals.states["Is Retired"],
@@ -1283,9 +1291,7 @@ class Country:
 
         if replace_current:
             self.households.ts.override_current("expected_income_employee", expected_income_employee)
-            self.households.ts.override_current(
-                "expected_income_unemployment_benefits", expected_unemployment_benefits
-            )
+            self.households.ts.override_current("expected_income_unemployment_benefits", expected_unemployment_benefits)
             self.households.ts.override_current("expected_income_public_pension", expected_income_public_pension)
             self.households.ts.override_current(
                 "expected_income_other_social_transfers", expected_income_other_social_transfers

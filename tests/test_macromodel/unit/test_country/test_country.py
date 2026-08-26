@@ -2067,9 +2067,7 @@ class TestCountry:
             "distribute_public_pension_benefits_to_individuals",
             lambda **_kwargs: public_by_individual,
         )
-        test_country.individuals.ts.override_current(
-            "income_from_unemployment_benefits", unemployment_by_individual
-        )
+        test_country.individuals.ts.override_current("income_from_unemployment_benefits", unemployment_by_individual)
         monkeypatch.setattr(
             test_country.households,
             "compute_social_transfer_income",

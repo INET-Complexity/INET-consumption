@@ -1,6 +1,7 @@
 import numpy as np
+import pytest
 
-from macromodel.agents.households.func.social_transfers import DefaultSocialTransfersSetter
+from macromodel.agents.households.func.social_transfers import DefaultSocialTransfersSetter, EqualSocialTransfersSetter
 
 
 class ZeroPredictionModel:
@@ -38,3 +39,29 @@ def test__default_social_transfers_uses_equal_fallback_for_zero_predictions_with
 
     np.testing.assert_allclose(result, np.full(3, 4.0))
     np.testing.assert_array_equal(values, original_values)
+
+
+@pytest.mark.parametrize("budget", [np.nan, np.inf, -1.0])
+def test__default_social_transfers_rejects_invalid_budgets(budget):
+    setter = DefaultSocialTransfersSetter(independents=["income"])
+
+    with pytest.raises(ValueError, match="finite non-negative"):
+        setter.get_social_transfers(
+            n_households=2,
+            total_other_social_transfers=budget,
+            current_independents=np.ones((2, 1)),
+            initial_independents=np.ones((2, 1)),
+            model=ZeroPredictionModel(),
+        )
+
+
+def test__equal_social_transfers_handles_an_empty_household_population():
+    result = EqualSocialTransfersSetter(independents=[]).get_social_transfers(
+        n_households=0,
+        total_other_social_transfers=0.0,
+        current_independents=np.empty((0, 0)),
+        initial_independents=np.empty((0, 0)),
+        model=None,
+    )
+
+    np.testing.assert_array_equal(result, np.zeros(0))

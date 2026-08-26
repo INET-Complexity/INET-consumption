@@ -42,11 +42,12 @@ def create_central_government_timeseries(
         TimeSeries: Initialized time series containing all government
             variables with their initial values
     """
-    initial_unemployment_benefit = (
-        data["Total Unemployment Benefits"].values[0] / number_of_unemployed_individuals
-        if number_of_unemployed_individuals > 0
-        else 0.0
-    )
+    if number_of_unemployed_individuals < 0:
+        raise ValueError("Number of unemployed individuals must be non-negative.")
+    total_unemployment_benefits = float(data["Total Unemployment Benefits"].values[0])
+    if not np.isfinite(total_unemployment_benefits) or total_unemployment_benefits < 0.0:
+        raise ValueError("Total unemployment benefits must be a finite non-negative number.")
+    initial_unemployment_benefit = total_unemployment_benefits / max(number_of_unemployed_individuals, 1)
     settled_initial_unemployment_benefits = initial_unemployment_benefit * number_of_unemployed_individuals
     public_pension_benefits = data.get("Public Pension Benefits", pd.Series([0.0])).values[0]
     other_social_benefits = data["Other Social Benefits"].values[0]
@@ -64,7 +65,9 @@ def create_central_government_timeseries(
         total_public_pension_benefits=[public_pension_benefits],
         total_other_social_transfers=[other_social_benefits],
         total_necessity_support=[0.0],
-        total_household_social_transfers=[public_pension_benefits + other_social_benefits],
+        total_household_social_transfers=[
+            settled_initial_unemployment_benefits + public_pension_benefits + other_social_benefits
+        ],
         interest_payments_on_debt=[0.0],
         debt_interest_rate=[np.nan],
         #

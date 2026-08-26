@@ -19,6 +19,19 @@ from typing import Any, Optional
 import numpy as np
 
 
+def _validate_social_transfer_budget(n_households: int, total_other_social_transfers: float) -> float:
+    """Validate the household count and transfer budget before allocation."""
+    if n_households < 0:
+        raise ValueError("Number of households must be non-negative.")
+    try:
+        budget = float(total_other_social_transfers)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Social-transfer budget must be a finite non-negative number.") from error
+    if not np.isfinite(budget) or budget < 0.0:
+        raise ValueError("Social-transfer budget must be a finite non-negative number.")
+    return budget
+
+
 def _allocate_modelled_social_transfers(
     n_households: int,
     total_other_social_transfers: float,
@@ -26,12 +39,16 @@ def _allocate_modelled_social_transfers(
     model: Optional[Any],
 ) -> np.ndarray:
     """Allocate a non-negative transfer budget from model predictions with safe fallbacks."""
-    if n_households <= 0 or total_other_social_transfers <= 0.0:
+    budget = _validate_social_transfer_budget(n_households, total_other_social_transfers)
+    if n_households == 0 or budget == 0.0:
         return np.zeros(n_households, dtype=float)
     if model is None:
         raise ValueError("A social-transfer allocation model is required for a positive budget.")
 
     values = np.asarray(independents, dtype=float)
+    if values.ndim != 2 or values.shape[0] != n_households:
+        raise ValueError("Social-transfer allocation inputs must have one row per household.")
+    values = np.where(np.isfinite(values), values, 0.0)
     column_totals = values.sum(axis=0, keepdims=True)
     normalized_values = np.divide(
         values,
@@ -45,8 +62,8 @@ def _allocate_modelled_social_transfers(
     predicted_weights = np.where(np.isfinite(predicted_weights) & (predicted_weights > 0.0), predicted_weights, 0.0)
     total_weight = predicted_weights.sum()
     if total_weight <= 0.0:
-        return np.full(n_households, total_other_social_transfers / n_households, dtype=float)
-    return total_other_social_transfers * predicted_weights / total_weight
+        return np.full(n_households, budget / n_households, dtype=float)
+    return budget * predicted_weights / total_weight
 
 
 class SocialTransfersSetter(ABC):
@@ -116,7 +133,10 @@ class EqualSocialTransfersSetter(SocialTransfersSetter):
         Returns:
             np.ndarray: Uniform transfer amount array
         """
-        return np.full(n_households, total_other_social_transfers / n_households)
+        budget = _validate_social_transfer_budget(n_households, total_other_social_transfers)
+        if n_households == 0:
+            return np.zeros(0, dtype=float)
+        return np.full(n_households, budget / n_households)
 
 
 class ConstantSocialTransfersSetter(SocialTransfersSetter):

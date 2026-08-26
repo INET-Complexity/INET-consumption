@@ -8,12 +8,18 @@ from macro_data.util.imputation import apply_iterative_imputer
 
 
 def initial_unemployment_benefit_per_recipient(total_unemployment_benefits: float, n_unemployed: int) -> float:
-    """Return a finite initial per-recipient benefit, including the no-recipient case."""
-    if n_unemployed <= 0:
-        if total_unemployment_benefits > 0.0:
-            logging.warning("No unemployed individuals; setting initial unemployment benefits to 0.0")
-        return 0.0
-    return total_unemployment_benefits / n_unemployed
+    """Return a finite model benefit level, retaining a baseline with no recipients."""
+    if n_unemployed < 0:
+        raise ValueError("Number of unemployed individuals must be non-negative.")
+    try:
+        total = float(total_unemployment_benefits)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Total unemployment benefits must be a finite non-negative number.") from error
+    if not np.isfinite(total) or total < 0.0:
+        raise ValueError("Total unemployment benefits must be a finite non-negative number.")
+    if n_unemployed == 0 and total > 0.0:
+        logging.warning("No unemployed individuals; using a one-recipient unemployment-benefit baseline.")
+    return total / max(n_unemployed, 1)
 
 
 def process_individual_data(

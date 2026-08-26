@@ -19,12 +19,21 @@ from macro_data.readers.population_data.hfcs_reader import HFCSReader, var_mappi
 PARENT = pathlib.Path(__file__).parent.parent.parent.parent.resolve()
 
 
-def test__initial_unemployment_benefit_is_zero_without_recipients():
-    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=0) == 0.0
+def test__initial_unemployment_benefit_uses_a_baseline_without_recipients():
+    assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=0) == 12.0
 
 
 def test__initial_unemployment_benefit_preserves_the_recipient_budget():
     assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
+
+
+@pytest.mark.parametrize("total_unemployment_benefits", [np.nan, np.inf, -1.0])
+def test__initial_unemployment_benefit_rejects_invalid_totals(total_unemployment_benefits):
+    with pytest.raises(ValueError, match="finite non-negative"):
+        initial_unemployment_benefit_per_recipient(
+            total_unemployment_benefits=total_unemployment_benefits,
+            n_unemployed=1,
+        )
 
 
 def test__compute_notebook_household_accounts_uses_notebook_definitions():

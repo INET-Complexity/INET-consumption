@@ -23,7 +23,7 @@ class RecordingBenefitModel:
 
 
 class TestCentralGovernment:
-    def test__initial_unemployment_benefits_are_zero_without_recipients(self):
+    def test__initial_unemployment_benefits_keep_a_baseline_without_recipients(self):
         data = {
             "Debt": [0.0],
             "Total Unemployment Benefits": [12.0],
@@ -45,8 +45,32 @@ class TestCentralGovernment:
         }
         timeseries = create_central_government_timeseries(data=pd.DataFrame(data), number_of_unemployed_individuals=0)
 
-        assert timeseries.current("unemployment_benefits_by_individual")[0] == 0.0
+        assert timeseries.current("unemployment_benefits_by_individual")[0] == 12.0
         assert timeseries.current("total_unemployment_benefits")[0] == 0.0
+
+    def test__initial_social_transfer_total_reconciles_all_components(self):
+        data = {
+            "Debt": [0.0],
+            "Total Unemployment Benefits": [12.0],
+            "Public Pension Benefits": [3.0],
+            "Other Social Benefits": [4.0],
+            "Taxes on Production": [0.0],
+            "VAT": [0.0],
+            "Capital Formation Taxes": [0.0],
+            "Corporate Taxes": [0.0],
+            "Export Taxes": [0.0],
+            "Income Taxes": [0.0],
+            "Rental Income Taxes": [0.0],
+            "Employee SI Tax": [0.0],
+            "Employer SI Tax": [0.0],
+            "Taxes on Products": [0.0],
+            "Total Social Housing Rent": [0.0],
+            "Revenue": [0.0],
+            "Bank Equity Injection": [0.0],
+        }
+        timeseries = create_central_government_timeseries(data=pd.DataFrame(data), number_of_unemployed_individuals=2)
+
+        assert timeseries.current("total_household_social_transfers")[0] == 19.0
 
     def test__create(self, test_central_government):
         assert test_central_government.country_name == "FRA"

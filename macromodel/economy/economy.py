@@ -1538,13 +1538,7 @@ class Economy:
                 ]
             )
         self.ts.gdp_income.append(
-            [
-                operating_surplus
-                + wages
-                + taxes_on_products
-                + rent_received
-                + central_government_rent_received
-            ]
+            [operating_surplus + wages + taxes_on_products + rent_received + central_government_rent_received]
         )
         if self.ts.prev("gdp_income")[0] == 0.0:
             self.ts.gdp_income_growth.append([0.0])

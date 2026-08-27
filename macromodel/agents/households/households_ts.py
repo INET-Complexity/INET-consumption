@@ -205,8 +205,7 @@ def create_households_timeseries(
         income=data["Income"].values,
         income_histogram=get_histogram(data["Income"].values, scale),
         expected_income=data["Income"].values,
-        non_property_income=data["Employee Income"].values
-        + data["Regular Social Transfers"].values,
+        non_property_income=data["Employee Income"].values + data["Regular Social Transfers"].values,
         income_employee=data["Employee Income"].values,
         total_income_employee=[data["Employee Income"].values.sum()],
         expected_income_employee=data["Employee Income"].values,
@@ -267,7 +266,15 @@ def create_households_timeseries(
         rent_imputed=data["Rent Imputed"].values,
         max_price_willing_to_pay=np.full(len(data), np.nan),
         max_rent_willing_to_pay=np.full(len(data), np.nan),
-        rent_div_income_histogram=get_histogram(data["Rent Paid"].values / data["Income"].values, None),
+        rent_div_income_histogram=get_histogram(
+            np.divide(
+                data["Rent Paid"].values,
+                data["Income"].values,
+                out=np.full(len(data), np.nan),
+                where=data["Income"].values != 0,
+            ),
+            None,
+        ),
         #
         wealth=initial_wealth,
         wealth_histogram=get_histogram(initial_wealth, scale),

@@ -792,8 +792,12 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_cash_rent"], [12.0, 0.0])
         np.testing.assert_allclose(components["target_consumption_imputed_rent"], [0.0, 20.0])
         np.testing.assert_allclose(components["target_consumption_non_goods_housing"], [12.0, 20.0])
-        np.testing.assert_allclose(components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1]])
-        np.testing.assert_allclose(components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1]])
+        np.testing.assert_allclose(
+            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+        )
+        np.testing.assert_allclose(
+            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+        )
         np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1]])
 
     def test_imputed_rent_is_inert_even_if_diagnostic_tenure_data_overlap(self):

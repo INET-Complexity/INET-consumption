@@ -73,7 +73,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
     # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
     # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
-    # "central_bank.taylor_rule_overrides['rho']": 0.7,
+    # "central_bank.taylor_rule_overrides['rho']": 0.5,
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain

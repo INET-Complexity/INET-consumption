@@ -67,6 +67,7 @@ def reconcile_investment_counterfactual(
     """Derive the investment-off decomposition from the saved cash identities."""
 
     with h5py.File(baseline_path) as baseline, h5py.File(investment_off_path) as off:
+
         def base(series: str) -> float:
             return _period_total(baseline, country, series, period)
 
@@ -79,9 +80,7 @@ def reconcile_investment_counterfactual(
         forgone_pre_tax_investment = base("households/total_investment_before_vat") - counterfactual(
             "households/total_investment_before_vat"
         )
-        baseline_investment_taxes = base("households/total_investment") - base(
-            "households/total_investment_before_vat"
-        )
+        baseline_investment_taxes = base("households/total_investment") - base("households/total_investment_before_vat")
         off_investment_taxes = counterfactual("households/total_investment") - counterfactual(
             "households/total_investment_before_vat"
         )
@@ -137,12 +136,8 @@ def reconcile_investment_counterfactual(
             four_channel_residual - tracked_other_net_use + liquidation_internal_reclassification
         )
 
-        baseline_stage5_residual = _period_values(
-            baseline, country, "households/stage5_cash_ledger_residual", period
-        )
-        off_stage5_residual = _period_values(
-            off, country, "households/stage5_cash_ledger_residual", period
-        )
+        baseline_stage5_residual = _period_values(baseline, country, "households/stage5_cash_ledger_residual", period)
+        off_stage5_residual = _period_values(off, country, "households/stage5_cash_ledger_residual", period)
 
     return {
         "forgone_pre_tax_investment": forgone_pre_tax_investment,

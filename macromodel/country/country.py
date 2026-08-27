@@ -1331,9 +1331,7 @@ class Country:
             self.households.ts.override_current("income_rental", income_rental)
             self.households.ts.override_current("total_income_rental", [income_rental.sum()])
             self.households.ts.override_current("diagnostic_income_rental", diagnostic_income_rental)
-            self.households.ts.override_current(
-                "total_diagnostic_income_rental", [diagnostic_income_rental.sum()]
-            )
+            self.households.ts.override_current("total_diagnostic_income_rental", [diagnostic_income_rental.sum()])
             self.households.ts.override_current(
                 "expected_income_financial_assets",
                 expected_income_financial_assets,

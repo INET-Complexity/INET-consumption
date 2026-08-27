@@ -273,11 +273,7 @@ class TestCentralGovernment:
             current_total_exports=100.0,
         )
 
-        expected_income_tax = (
-            0.2 * (1 - 0.1) * gross_employee_income
-            + 0.2 * financial_income.sum()
-            + 0.2 * rent_paid
-        )
+        expected_income_tax = 0.2 * (1 - 0.1) * gross_employee_income + 0.2 * financial_income.sum() + 0.2 * rent_paid
         assert np.isclose(test_central_government.ts.current("taxes_income")[0], expected_income_tax)
         assert np.isclose(test_central_government.ts.current("taxes_employee_si")[0], 0.1 * gross_employee_income)
         assert np.isclose(test_central_government.ts.current("taxes_employer_si")[0], 0.3 * gross_employee_income)

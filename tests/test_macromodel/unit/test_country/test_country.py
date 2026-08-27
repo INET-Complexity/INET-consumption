@@ -62,6 +62,36 @@ def test__resolve_frm_coefficients_path_accepts_both_consumption_paper_forms(con
     assert country_module._resolve_frm_coefficients_path(configured_path, data_paths) == actual_path
 
 
+def test__apply_production_tax_vector_scale_updates_shared_initial_tax_views():
+    synthetic_country = SimpleNamespace(
+        industry_data={
+            "industry_vectors": pd.DataFrame(
+                {
+                    "Taxes Less Subsidies Rates": [0.1, 0.2],
+                    "Taxes Less Subsidies in LCU": [10.0, 20.0],
+                    "Taxes Less Subsidies in USD": [5.0, 10.0],
+                }
+            )
+        },
+        firms=SimpleNamespace(firm_data=pd.DataFrame({"Taxes paid on Production": [10.0, 20.0]})),
+        central_government=SimpleNamespace(
+            central_gov_data=pd.DataFrame(
+                {"Taxes on Production": [30.0], "Taxes on Products": [50.0], "Revenue": [100.0]}
+            )
+        ),
+    )
+
+    country_module._apply_production_tax_vector_scale(synthetic_country, 2.0)
+
+    vectors = synthetic_country.industry_data["industry_vectors"]
+    assert np.allclose(vectors["Taxes Less Subsidies Rates"], [0.2, 0.4])
+    assert np.allclose(vectors["Taxes Less Subsidies in LCU"], [20.0, 40.0])
+    assert np.allclose(synthetic_country.firms.firm_data["Taxes paid on Production"], [20.0, 40.0])
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Taxes on Production"] == 60.0
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Taxes on Products"] == 80.0
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Revenue"] == 130.0
+
+
 def _make_ficp_test_country():
     cons_loans = np.zeros((3, 2, 2))
     mort_loans = np.zeros((3, 2, 2))

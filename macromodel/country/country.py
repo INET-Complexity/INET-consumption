@@ -129,6 +129,28 @@ def _resolve_frm_coefficients_path(
     return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
 
 
+def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
+    """Apply a model-level production-tax calibration to all initial tax views."""
+    if scale <= 0.0:
+        raise ValueError("Production tax vector scale must be positive.")
+
+    industry_vectors = synthetic_country.industry_data["industry_vectors"]
+    for column in ("Taxes Less Subsidies Rates", "Taxes Less Subsidies in LCU", "Taxes Less Subsidies in USD"):
+        if column in industry_vectors:
+            industry_vectors[column] *= scale
+
+    firm_data = synthetic_country.firms.firm_data
+    firm_data["Taxes paid on Production"] *= scale
+
+    central_gov_data = synthetic_country.central_government.central_gov_data
+    previous_production_tax = float(central_gov_data["Taxes on Production"].iloc[0])
+    calibrated_production_tax = previous_production_tax * scale
+    tax_delta = calibrated_production_tax - previous_production_tax
+    central_gov_data["Taxes on Production"] = [calibrated_production_tax]
+    central_gov_data["Taxes on Products"] += tax_delta
+    central_gov_data["Revenue"] += tax_delta
+
+
 def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarray) -> np.ndarray:
     """Return cleaned real Stage 5 support implied by the post-floor shortfall."""
     shortfall = np.asarray(remaining_subsistence_shortfall, dtype=float)
@@ -521,6 +543,9 @@ class Country:
             Country: Initialized country economy
         """
         scale = synthetic_country.scale
+        production_tax_vector_scale = country_configuration.central_government.tax_overrides.production_tax_vector_scale
+        if production_tax_vector_scale is not None:
+            _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
         add_emissions = all([industry in industries for industry in emission_industries])

@@ -96,7 +96,6 @@ class TestCentralGovernment:
             "Income Tax",
             "Household Capital Formation Tax",
             "Firm Capital Formation Tax",
-            "Other Product Production Tax Rate",
             "Taxes Less Subsidies Rates",
         ]:
             assert state in test_central_government.states.keys()
@@ -370,8 +369,7 @@ class TestCentralGovernment:
 
         assert np.isclose(test_central_government.ts.current("taxes_vat")[0], 18.2)
 
-    def test__compute_taxes_uses_configured_flat_product_production_rate(self, test_central_government):
-        test_central_government.states["Other Product Production Tax Rate"] = 0.1
+    def test__compute_taxes_uses_industry_production_tax_vector(self, test_central_government):
         test_central_government.states["Value-added Tax"] = 0.0
         test_central_government.states["Household Capital Formation Tax"] = 0.0
         test_central_government.states["Firm Capital Formation Tax"] = 0.0
@@ -393,7 +391,7 @@ class TestCentralGovernment:
             current_firm_profits=np.array([0.0]),
             current_firm_industries=np.array([0]),
             current_household_new_real_wealth=np.array([0.0]),
-            taxes_less_subsidies_rates=np.array([0.0]),
+            taxes_less_subsidies_rates=np.array([0.1]),
             current_total_exports=0.0,
         )
 

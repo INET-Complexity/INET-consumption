@@ -489,9 +489,9 @@ FRA:
       household_capital_formation_rate: 0.0
       # Provisional firm-side rate applied once to realised capital-goods purchases.
       firm_capital_formation_rate: 0.24856698371134814
-      # Use the calibrated industry-specific production-tax vector; no flat
-      # central-government override is applied to realised firm output.
-      other_product_production_tax_rate: null
+      # Scale the shared production-tax vector so model taxes on products and
+      # production match France's 15.8% 2014 S13 benchmark.
+      production_tax_vector_scale: 5.683422794
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

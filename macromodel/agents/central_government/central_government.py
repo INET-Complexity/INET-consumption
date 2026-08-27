@@ -154,7 +154,6 @@ class CentralGovernment(Agent):
             "Household Capital Formation Tax": household_capital_formation_rate,
             "Firm Capital Formation Tax": firm_capital_formation_rate,
             "Taxes Less Subsidies Rates": taxes_less_subsidies_rates,
-            "Other Product Production Tax Rate": tax_overrides.other_product_production_tax_rate,
             "unemployment_benefits_model": synthetic_central_government.unemployment_benefits_model,
             "other_benefits_model": synthetic_central_government.other_benefits_model,
         }
@@ -339,16 +338,10 @@ class CentralGovernment(Agent):
             current_firm_capital_formation (float): Realised firm capital-goods
                 purchases before the capital-formation tax
         """
-        # Taxes on production. France can replace the imported ICIO vector with
-        # a transparent flat reduced-form rate; other countries retain the
-        # historical industry-vector mechanism.
-        product_production_tax_rate = self.states["Other Product Production Tax Rate"]
-        if product_production_tax_rate is None:
-            production_tax = np.sum(
-                taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
-            )
-        else:
-            production_tax = product_production_tax_rate * np.sum(current_firm_production * current_firm_price)
+        # Firms and government use the same calibrated industry tax vector.
+        production_tax = np.sum(
+            taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
+        )
         self.ts.taxes_production.append([production_tax])
 
         # Value-added taxes. A France override may classify the realised

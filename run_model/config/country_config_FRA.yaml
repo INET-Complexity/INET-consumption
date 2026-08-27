@@ -491,7 +491,7 @@ FRA:
       firm_capital_formation_rate: 0.24856698371134814
       # Scale the shared production-tax vector so model taxes on products and
       # production match France's 15.8% 2014 S13 benchmark.
-      production_tax_vector_scale: 5.683422794
+      production_tax_vector_scale: 1 #  5.683422794 would matcch 15.8% but produces recession
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

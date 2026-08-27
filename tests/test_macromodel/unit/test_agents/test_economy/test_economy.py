@@ -77,6 +77,73 @@ class TestEconomy:
         )
         assert test_economy.ts.current("gdp_expenditure")[0] == pytest.approx(350.0 + 100.0)
         assert test_economy.ts.current("gdp_income")[0] == pytest.approx(420.0 + 70.0)
+        # This scenario's expenditure and output GDP already agree (both
+        # 450.0), so the pre-adjustment residual is exactly zero.
+        assert test_economy.ts.current("gdp_expenditure_prebalancing_residual")[0] == pytest.approx(0.0)
+
+    def test__gdp_expenditure_prebalancing_residual_captures_gap_masked_by_always_adjust(self, test_economy):
+        """always_adjust must still zero out the persisted gdp_expenditure
+
+        series, but the new diagnostic must record the true pre-adjustment
+        gap it is masking.
+        """
+        sectoral_sales = np.full(test_economy.n_industries, 10.0)
+        intermediate = np.full(test_economy.n_industries, 2.0)
+
+        taxes_on_products = 20.0
+        taxes_on_production = 5.0
+        rent_paid = 100.0
+        total_output = 371.0
+        expected_gdp_output = total_output - intermediate.sum() - taxes_on_production + taxes_on_products + rent_paid
+
+        change_in_inventories = 10.0
+        gross_fixed_capital_formation = 80.0
+        hh_consumption = 200.0
+        gov_consumption = 50.0
+        imports = 30.0
+        # Pick exports so raw (pre-adjustment) expenditure GDP overshoots
+        # output GDP by a known amount, independent of the fixture's industry
+        # count.
+        expected_gap = 37.5
+        exports = (
+            expected_gdp_output
+            + expected_gap
+            - change_in_inventories
+            - gross_fixed_capital_formation
+            - hh_consumption
+            - gov_consumption
+            + imports
+            - rent_paid
+        )
+
+        test_economy.compute_gdp(
+            total_output=total_output,
+            sectoral_sales=sectoral_sales,
+            sectoral_intermediate_consumption=intermediate,
+            taxes_on_products=taxes_on_products,
+            taxes_on_production=taxes_on_production,
+            rent_paid=rent_paid,
+            rent_imputed=2e6,
+            hh_consumption=hh_consumption,
+            gov_consumption=gov_consumption,
+            change_in_inventories=change_in_inventories,
+            gross_fixed_capital_formation=gross_fixed_capital_formation,
+            exports=exports,
+            imports=imports,
+            operating_surplus=300.0,
+            wages=100.0,
+            rent_received=30.0,
+            central_government_rent_received=40.0,
+            running_multiple_countries=False,
+            always_adjust=True,
+        )
+
+        assert test_economy.ts.current("gdp_output")[0] == pytest.approx(expected_gdp_output)
+        assert test_economy.ts.current("gdp_expenditure_prebalancing_residual")[0] == pytest.approx(expected_gap)
+        # always_adjust plugs exports/imports so the persisted expenditure
+        # series still matches output exactly -- that's what the new field
+        # exists to see through.
+        assert test_economy.ts.current("gdp_expenditure")[0] == pytest.approx(expected_gdp_output)
 
     def test__consumer_price_source_config_defaults_to_fixed_basket_cpi(self):
         config = EconomyConfiguration()

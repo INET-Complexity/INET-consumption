@@ -628,6 +628,19 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     an already-calibrated total and introduces no new accounting. Scheduled
     mortgage service is unaffected: it is debt service, never part of the
     calibrated consumption aggregate, and stays a diagnostic here.
+
+    VAT convention (GH #123): ``target_total`` and the persisted ECM state
+    (``target_consumption_real_budget`` / ``lagged_real_consumption_budget``)
+    are both gross of VAT, matching the national-accounts, purchaser-price
+    basis ``credit_augmented_v1`` was calibrated against. VAT is stripped only
+    once, at the goods-market allocation step (``1 / (1 + tau_vat)``), after
+    the target/lag comparison is made. Realised ``ts.consumption`` is
+    therefore net of VAT; call sites that need a gross-comparable aggregate
+    (e.g. ``Households.update_wealth``'s ``total_consumption``) must
+    re-gross it with ``(1 + tau_vat)`` rather than compare it directly
+    against ``target_total``. This basis is a settled calibration decision,
+    not an open question: do not recalibrate ``partial_adjustment_speed`` or
+    the other propensities against it.
     """
 
     def __init__(

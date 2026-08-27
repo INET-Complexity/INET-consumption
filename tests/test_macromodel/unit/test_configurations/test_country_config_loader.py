@@ -431,7 +431,7 @@ def test__load_country_configuration_resolves_real_fra_tax_overrides():
     assert overrides.household_investment_vat_rate == pytest.approx(0.13)
     assert overrides.household_capital_formation_rate == 0.0
     assert overrides.firm_capital_formation_rate == pytest.approx(0.24856698371134814)
-    assert overrides.other_product_production_tax_rate == pytest.approx(0.0664)
+    assert overrides.other_product_production_tax_rate is None
 
 
 def test__load_country_configuration_rejects_missing_paper_parameter_ref(tmp_path):

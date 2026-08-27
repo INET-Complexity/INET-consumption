@@ -489,9 +489,9 @@ FRA:
       household_capital_formation_rate: 0.0
       # Provisional firm-side rate applied once to realised capital-goods purchases.
       firm_capital_formation_rate: 0.24856698371134814
-      # Flat user-configured rate on realised firm output. This is a reduced-form
-      # product/production-tax envelope, not an ESA D29 rate.
-      other_product_production_tax_rate: 0.0664
+      # Use the calibrated industry-specific production-tax vector; no flat
+      # central-government override is applied to realised firm output.
+      other_product_production_tax_rate: null
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

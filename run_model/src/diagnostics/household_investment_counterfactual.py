@@ -96,9 +96,14 @@ def reconcile_investment_counterfactual(
                 "households/total_received_mortgages",
             )
         )
-        reduced_liquidation = base("households/forced_liquidation_amount") - counterfactual(
-            "households/forced_liquidation_amount"
-        )
+        # `liquidation_planned` is the authoritative carrier: Stage 5 pins it to
+        # the settled post-grant liquidation total
+        # (`persist_post_grant_planned_liquidation_total`), which is what
+        # actually mutated LFA/IFA this period. `forced_liquidation_amount` is
+        # the Increment 3 shadow estimate computed before credit clearing and
+        # never touches live balances -- using it here silently compared a
+        # proposal against a proposal rather than what each arm executed.
+        reduced_liquidation = base("households/liquidation_planned") - counterfactual("households/liquidation_planned")
 
         left_hand_side = forgone_pre_tax_investment + avoided_investment_taxes
         named_channels = increased_net_financial_saving + reduced_borrowing + reduced_liquidation

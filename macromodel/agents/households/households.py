@@ -1726,6 +1726,7 @@ class Households(Agent):
         Aggregates expected income from all sources:
         - Employment
         - Social transfers
+        - Rental income
         - Financial assets
 
         Returns:
@@ -1734,6 +1735,7 @@ class Households(Agent):
         expected_income = (
             self.ts.current("expected_income_employee")
             + self.ts.current("expected_income_social_transfers")
+            + self.ts.current("income_rental")
         )
         if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
             expected_income = expected_income + self.ts.current("expected_income_dividend_distributions")
@@ -1747,6 +1749,7 @@ class Households(Agent):
         Aggregates current income from all sources:
         - Employment
         - Social transfers
+        - Rental income
         - Financial assets
 
         Returns:
@@ -1755,6 +1758,7 @@ class Households(Agent):
         income = (
             self.ts.current("income_employee")
             + self.ts.current("income_social_transfers")
+            + self.ts.current("income_rental")
         )
         if getattr(self.functions["wealth"], "illiquid_returns_are_capital_gains", False):
             income = income + self.ts.current("income_dividend_distributions")
@@ -2103,12 +2107,11 @@ class Households(Agent):
         definition and the exit criterion.
 
         Since GH #120 the array returned by ``compute_target_consumption()``
-        carries market expenditure only (the housing-flow components of the
-        calibrated target are carved out before demand reaches firms), so this
-        method supplies the period's actual cash rent to the shortfall
-        computation as its own use. Imputed rent is deliberately never passed:
-        it is measured consumption, not a liability, and must not create a
-        feasibility shortfall.
+        carries market expenditure only: cash rent is carved out before demand
+        reaches firms and is paid to landlords as its own cash use. This method
+        supplies that cash rent to the shortfall computation. Imputed rent is
+        deliberately never passed because it is diagnostic-only, not a
+        liability, and must not create a feasibility shortfall.
 
         Args:
             target_consumption (np.ndarray): This period's per-household
@@ -3381,9 +3384,10 @@ class Households(Agent):
             income_for_residual_saving = income_for_residual_saving - self.ts.current("income_financial_assets")
 
         realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-        # Cash rent is classified inside realised firm purchases. ``rent`` is
-        # retained as a diagnostic split and must not be deducted a second time.
-        realised_cash_balance = income_for_residual_saving - realised_expenditure
+        # Cash rent is paid separately to landlords rather than through firm
+        # purchases, so it is a distinct household cash use.
+        cash_rent = np.asarray(self.ts.current("rent"), dtype=float)
+        realised_cash_balance = income_for_residual_saving - realised_expenditure - cash_rent
         if self.uses_feasibility_resolver:
 
             def optional_cash_flow(name: str) -> np.ndarray:
@@ -3419,6 +3423,7 @@ class Households(Agent):
             cash_saving_before_financing = (
                 income_for_residual_saving
                 - realised_expenditure
+                - cash_rent
                 - optional_cash_flow("interest_paid")
                 - optional_cash_flow("price_paid_for_property")
                 - optional_cash_flow("debt_installments")

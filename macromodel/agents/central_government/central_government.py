@@ -323,8 +323,8 @@ class CentralGovernment(Agent):
 
         Args:
             current_ind_employee_income (np.ndarray): Employee incomes
-            current_total_rent_paid (float): Diagnostic total rent payments;
-                rent is taxed through the firm-purchase convention
+            current_total_rent_paid (float): Total cash rent payments subject to
+                rental-income tax
             current_income_financial_assets (np.ndarray): Financial income
             current_ind_activity (np.ndarray): Individual activity status
             current_ind_realised_cons (np.ndarray): Consumption levels
@@ -402,10 +402,10 @@ class CentralGovernment(Agent):
                 + self.states["Income Tax"] * current_income_financial_assets.sum(),
             ]
         )
-        self.ts.taxes_rental_income.append([0.0])
-        self.ts.diagnostic_taxes_rental_income.append(
-            [self.states["Income Tax"] * current_total_rent_paid]
-        )
+        rental_income_tax = self.states["Income Tax"] * current_total_rent_paid
+        self.ts.taxes_income[-1][0] += rental_income_tax
+        self.ts.taxes_rental_income.append([rental_income_tax])
+        self.ts.diagnostic_taxes_rental_income.append([rental_income_tax])
 
         # Taxes on employer social insurance
         self.ts.taxes_employer_si.append([self.states["Employer Social Insurance Tax"] * gross_wages_employed_ind])
@@ -490,8 +490,7 @@ class CentralGovernment(Agent):
         Aggregates all revenue sources:
         - All tax revenues
         - Social insurance contributions
-        Cash rent is routed to existing firms. Public-housing rent is retained
-        as a diagnostic input and is not added as a second government receipt.
+        Includes social-housing rent received by government once.
 
         Args:
             household_rent_paid_to_government (float): Rent from public housing
@@ -499,7 +498,7 @@ class CentralGovernment(Agent):
         Returns:
             float: Total government revenue
         """
-        self.ts.total_rent_received.append([0.0])
+        self.ts.total_rent_received.append([household_rent_paid_to_government])
         self.ts.diagnostic_total_rent_received.append([household_rent_paid_to_government])
         return (
             self.ts.current("taxes_production")[0]
@@ -510,6 +509,7 @@ class CentralGovernment(Agent):
             + self.ts.current("taxes_income")[0]
             + self.ts.current("taxes_employee_si")[0]
             + self.ts.current("taxes_employer_si")[0]
+            + household_rent_paid_to_government
         )
 
     def compute_deficit(

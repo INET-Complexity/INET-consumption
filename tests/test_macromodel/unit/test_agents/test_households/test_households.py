@@ -939,7 +939,7 @@ class TestHouseholds:
         np.testing.assert_allclose(result, 0.0)
         assert result.shape == test_households.ts.current("investment").shape
 
-    def test__target_credit_does_not_add_diagnostic_rent_twice(self):
+    def test__target_credit_adds_cash_rent_once(self):
         rule = DefaultHouseholdTargetCredit(down_payment_fraction=0.2)
         target = np.array([[80.0]])
         income = np.array([50.0])
@@ -949,7 +949,7 @@ class TestHouseholds:
         with_rent = rule.compute_target_consumption_loans(target, income, np.array([25.0]), assets)
 
         np.testing.assert_allclose(without_rent, [20.0])
-        np.testing.assert_allclose(with_rent, without_rent)
+        np.testing.assert_allclose(with_rent, without_rent + 25.0)
 
     def test__investment_off_does_not_reclassify_goods_market_roundoff(self, test_households):
         test_households.functions["investment"] = NoHouseholdInvestment()
@@ -991,10 +991,10 @@ class TestHouseholds:
         test_households.ts.override_current("expected_income_financial_assets", np.full(n_households, 13.0))
         test_households.ts.override_current("income_financial_assets", np.full(n_households, 17.0))
 
-        # Direct landlord income is outside the operative household-income
-        # boundary under the existing-firm rent-recipient approximation.
-        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 5.0))
-        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 12.0))
+        # Cash rent is paid to landlords and is therefore operative household
+        # rental income. Paper returns remain excluded from both totals.
+        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 16.0))
+        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 23.0))
 
     def test__paper_asset_dividends_enter_expected_and_realised_income(self, test_households):
         from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
@@ -1022,8 +1022,8 @@ class TestHouseholds:
         for field, value in components.items():
             test_households.ts.override_current(field, np.full(n_households, value))
 
-        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 18.0))
-        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 29.0))
+        np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
+        np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
 
     def test__expected_dividend_income_ignores_current_unsettled_receipts(self, test_households):
         n_households = test_households.ts.current("n_households")
@@ -1739,14 +1739,13 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         )
         rent_increase = 13.0
         realised = np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu"))
-        realised[:, 0] = rent_increase
         test_households.ts.override_current("rent", np.full(n_households, rent_increase))
         test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
 
         test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
-        # Rent is represented by the firm purchase. A separate rent deduction
-        # would produce 100 - 2*x; omitting the purchase would produce 100.
+        # Cash rent is paid separately from market purchases, so it is deducted
+        # exactly once from household cash.
         np.testing.assert_allclose(
             test_households.ts.current("liquid_financial_assets"),
             100.0 - rent_increase,

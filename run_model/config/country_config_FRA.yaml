@@ -515,6 +515,21 @@ FRA:
         name: SmoothTaylorRule
         path_name: policy_rate
         parameters: {}
+    # Overrides for the ARDL-estimated SmoothTaylorRule coefficients (estimated in
+    # DefaultSyntheticCentralBank._estimate_smooth_taylor_rule from historical
+    # BIS policy-rate, CPI, and output-gap data). Leave a field null to keep the
+    # estimated value. Current FRA-estimated values, for reference:
+    #   targeted_inflation_rate: 0.02
+    #   rho:                     0.9036463687149167
+    #   r_star:                  -0.0025243761196825955
+    #   phi_pi:                  1.89418342003858
+    #   phi_q:                   0.473767352034239
+    taylor_rule_overrides:
+      targeted_inflation_rate: null
+      rho: null
+      r_star: null
+      phi_pi: null
+      phi_q: null
 
   banks:
     functions:

@@ -46,17 +46,17 @@ class TestEconomy:
     def test__economy_states(self, test_economy):
         assert test_economy is not None
 
-    def test__rent_and_imputed_rent_diagnostics_do_not_create_gdp_bridges(self, test_economy):
+    def test__cash_rent_creates_gdp_bridges_but_imputed_rent_does_not(self, test_economy):
         sectoral_sales = np.full(test_economy.n_industries, 10.0)
         intermediate = np.full(test_economy.n_industries, 2.0)
 
         test_economy.compute_gdp(
-            total_output=500.0,
+            total_output=371.0,
             sectoral_sales=sectoral_sales,
             sectoral_intermediate_consumption=intermediate,
             taxes_on_products=20.0,
             taxes_on_production=5.0,
-            rent_paid=1e6,
+            rent_paid=100.0,
             rent_imputed=2e6,
             hh_consumption=200.0,
             gov_consumption=50.0,
@@ -66,17 +66,17 @@ class TestEconomy:
             imports=30.0,
             operating_surplus=300.0,
             wages=100.0,
-            rent_received=3e6,
-            central_government_rent_received=4e6,
+            rent_received=30.0,
+            central_government_rent_received=40.0,
             running_multiple_countries=False,
             always_adjust=False,
         )
 
         assert test_economy.ts.current("gdp_output")[0] == pytest.approx(
-            500.0 - intermediate.sum() - 5.0 + 20.0
+            371.0 - intermediate.sum() - 5.0 + 20.0 + 100.0
         )
-        assert test_economy.ts.current("gdp_expenditure")[0] == pytest.approx(350.0)
-        assert test_economy.ts.current("gdp_income")[0] == pytest.approx(420.0)
+        assert test_economy.ts.current("gdp_expenditure")[0] == pytest.approx(350.0 + 100.0)
+        assert test_economy.ts.current("gdp_income")[0] == pytest.approx(420.0 + 70.0)
 
     def test__consumer_price_source_config_defaults_to_fixed_basket_cpi(self):
         config = EconomyConfiguration()

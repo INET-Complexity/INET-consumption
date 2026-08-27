@@ -1307,8 +1307,8 @@ class Economy:
             sectoral_intermediate_consumption (np.ndarray): Intermediate inputs
             taxes_on_products (float): Product taxes net of subsidies
             taxes_on_production (float): Production taxes
-            rent_paid (float): Diagnostic actual rent payments already included
-                in household purchases from firms
+            rent_paid (float): Cash rent paid by households to landlords; it is
+                a separate consumption expenditure and GDP flow
             rent_imputed (float): Diagnostic imputed rent, outside model GDP
             hh_consumption (float): Household consumption
             gov_consumption (float): Government consumption
@@ -1318,8 +1318,8 @@ class Economy:
             imports (float): Import value
             operating_surplus (float): Operating surplus and mixed income
             wages (float): Compensation of employees
-            rent_received (float): Diagnostic direct rental income, inactive
-            central_government_rent_received (float): Diagnostic public rent, inactive
+            rent_received (float): Rental income received by private landlords
+            central_government_rent_received (float): Public rental income
             running_multiple_countries (bool): Multi-country simulation flag
             always_adjust (bool, optional): Force trade adjustments. Defaults to True.
         """
@@ -1329,6 +1329,7 @@ class Economy:
                 - sectoral_intermediate_consumption.sum()
                 - taxes_on_production
                 + taxes_on_products
+                + rent_paid
             ]
         )
         if self.ts.prev("gdp_output")[0] == 0.0:
@@ -1499,6 +1500,7 @@ class Economy:
             + gov_consumption
             + exports
             - imports
+            + rent_paid
         )
         self.ts.total_household_fce.append([hh_consumption])
         if self.ts.prev("total_household_fce")[0] == 0.0:
@@ -1540,6 +1542,8 @@ class Economy:
                 operating_surplus
                 + wages
                 + taxes_on_products
+                + rent_received
+                + central_government_rent_received
             ]
         )
         if self.ts.prev("gdp_income")[0] == 0.0:
@@ -1599,6 +1603,7 @@ class Economy:
                 + gov_consumption
                 + exports
                 - imports
+                + rent_paid
             ]
         )
         if self.ts.prev("gdp_expenditure")[0] == 0.0:

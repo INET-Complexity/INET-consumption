@@ -614,16 +614,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     lagged HPI. Stage 3 permanent-income, consumer-debt-rate, and uncertainty
     terms remain explicit zero placeholders unless supplied.
 
-    The resulting ``target_total`` is the market-consumption budget routed to
-    existing firms. Cash rent is classified inside that purchase flow: because
-    the model has no housing-services sector, routing it to the existing firm
-    sector is an explicit modelling approximation, not a consequence of the
-    consumption label alone. It must therefore not be subtracted here and then
-    deducted again from household cash in settlement.
-
-    Imputed rent is diagnostic-only. It affects neither this behavioural target
-    nor household cash, firm demand, or GDP. Excluding it is a deliberate model
-    boundary rather than a general claim about national-accounts treatment.
+    The resulting ``target_total`` is the calibrated consumption concept. Cash
+    rent is removed from the market-consumption demand and remains a separate
+    household cash use paid to landlords. Imputed rent is diagnostic-only and
+    is not removed from the behavioural target or introduced as a cash use.
     Scheduled mortgage service remains debt service and is only diagnostic here.
     """
 
@@ -1642,8 +1636,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             epsilon=epsilon,
         )
 
-        # ``target_total`` is the market-consumption budget routed to firms. The
-        # formula-implied MPC is computed on that same operative boundary.
+        # ``target_total`` is the calibrated consumption budget. Cash rent is
+        # removed from market purchases below; the formula-implied MPC remains
+        # computed on the calibrated behavioural target.
         full_target_consumption = np.maximum(
             0.0,
             1.0
@@ -1661,9 +1656,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             perturbed_target_consumption.sum(axis=1) - full_target_consumption.sum(axis=1)
         ) / nominal_income_perturbation
 
-        # Preserve housing observations for diagnostics only. Cash rent is
-        # already represented inside the market-consumption purchase routed to
-        # firms; imputed rent is behaviourally inert. Neither is carved out.
+        # Cash rent is a separate household cash use, so remove it from the
+        # market-consumption demand. Imputed rent is diagnostic-only and must
+        # remain behaviourally inert.
         raw_cash_rent = np.asarray(rent, dtype=float)
         raw_imputed_rent = np.asarray(rent_imputed, dtype=float)
         for name, housing_flow in (("rent", raw_cash_rent), ("rent_imputed", raw_imputed_rent)):
@@ -1675,7 +1670,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         cash_rent = np.maximum(0.0, raw_cash_rent)
         imputed_rent = np.maximum(0.0, raw_imputed_rent)
         diagnostic_housing_component = cash_rent + imputed_rent
-        market_target_total = target_total
+        market_target_total = np.maximum(0.0, target_total - cash_rent)
 
         target_consumption = np.maximum(
             0.0,
@@ -1695,8 +1690,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         components["target_consumption_imputed_rent"] = imputed_rent
         components["target_consumption_non_goods_housing"] = diagnostic_housing_component
         components["target_consumption_calibrated_total"] = target_total
-        # Keep the historical diagnostic name as a compatibility alias. It now
-        # denotes the full market target because there is no housing carve-out.
+        # Keep the historical diagnostic name as a compatibility alias for the
+        # market-consumption target after the cash-rent carve-out.
         components["target_consumption_goods_total"] = market_target_total
         components["target_consumption_market_total"] = market_target_total
         self.last_target_consumption_components = components

@@ -15,9 +15,30 @@ import h5py
 import numpy as np
 
 
+def _period_values(h5: h5py.File, country: str, series: str, period: int) -> np.ndarray:
+    """Return one finite HDF5 period, failing loudly on malformed input."""
+    path = f"{country}/{series}"
+    if path not in h5:
+        raise KeyError(f"Missing HDF5 series: {path}")
+
+    dataset = h5[path]
+    if not isinstance(dataset, h5py.Dataset):
+        raise ValueError(f"HDF5 path is not a dataset: {path}")
+    if dataset.ndim == 0:
+        raise ValueError(f"HDF5 series is scalar, expected a time dimension: {path}")
+    if period < 0 or period >= dataset.shape[0]:
+        raise IndexError(f"Period {period} is unavailable for {path}")
+
+    values = np.asarray(dataset[period], dtype=float)
+    if values.size == 0:
+        raise ValueError(f"HDF5 series has an empty household panel: {path}, period {period}")
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"Non-finite values found in {path}, period {period}")
+    return values
+
+
 def _period_total(h5: h5py.File, country: str, series: str, period: int) -> float:
-    values = np.asarray(h5[f"{country}/{series}"][period], dtype=float)
-    return float(np.nansum(values))
+    return float(_period_values(h5, country, series, period).sum())
 
 
 def _financial_saving_flow(h5: h5py.File, country: str, period: int) -> float:
@@ -116,11 +137,11 @@ def reconcile_investment_counterfactual(
             four_channel_residual - tracked_other_net_use + liquidation_internal_reclassification
         )
 
-        baseline_stage5_residual = np.asarray(
-            baseline[f"{country}/households/stage5_cash_ledger_residual"][period], dtype=float
+        baseline_stage5_residual = _period_values(
+            baseline, country, "households/stage5_cash_ledger_residual", period
         )
-        off_stage5_residual = np.asarray(
-            off[f"{country}/households/stage5_cash_ledger_residual"][period], dtype=float
+        off_stage5_residual = _period_values(
+            off, country, "households/stage5_cash_ledger_residual", period
         )
 
     return {
@@ -135,8 +156,8 @@ def reconcile_investment_counterfactual(
         "tracked_other_net_use": tracked_other_net_use,
         "liquidation_internal_reclassification": liquidation_internal_reclassification,
         "unexplained_cash_identity_residual": unexplained_cash_identity_residual,
-        "baseline_stage5_max_abs_residual": float(np.nanmax(np.abs(baseline_stage5_residual))),
-        "investment_off_stage5_max_abs_residual": float(np.nanmax(np.abs(off_stage5_residual))),
+        "baseline_stage5_max_abs_residual": float(np.max(np.abs(baseline_stage5_residual))),
+        "investment_off_stage5_max_abs_residual": float(np.max(np.abs(off_stage5_residual))),
     }
 
 

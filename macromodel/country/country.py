@@ -1280,11 +1280,9 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
-        # Cash rent is routed to existing firms because there is no explicit
-        # housing-services sector. A consumption classification does not by
-        # itself identify the recipient; under this explicit approximation no
-        # direct landlord income is created.
-        income_rental = np.zeros_like(diagnostic_income_rental)
+        # Cash rent is paid to landlords and remains operative household rental
+        # income. Imputed rent is tracked separately as a diagnostic only.
+        income_rental = diagnostic_income_rental
         paper_returns_are_capital_gains = getattr(
             self.households.functions["wealth"],
             "illiquid_returns_are_capital_gains",
@@ -3199,15 +3197,14 @@ class Country:
 
         # E2. HOUSEHOLD INCOME COMPONENTS
         # Recalculate rental income with final housing market data and overwrite the planned value
-        diagnostic_final_income_rental = self.households.compute_rental_income(
+        final_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
-        final_income_rental = np.zeros_like(diagnostic_final_income_rental)
         self.households.ts.dicts["income_rental"][-1] = final_income_rental
         self.households.ts.dicts["total_income_rental"][-1] = [final_income_rental.sum()]
-        self.households.ts.dicts["diagnostic_income_rental"][-1] = diagnostic_final_income_rental
-        self.households.ts.dicts["total_diagnostic_income_rental"][-1] = [diagnostic_final_income_rental.sum()]
+        self.households.ts.dicts["diagnostic_income_rental"][-1] = final_income_rental
+        self.households.ts.dicts["total_diagnostic_income_rental"][-1] = [final_income_rental.sum()]
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(

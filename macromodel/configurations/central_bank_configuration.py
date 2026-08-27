@@ -1,6 +1,24 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class CentralBankTaylorRuleOverrides(BaseModel):
+    """Optional overrides for the ARDL-estimated SmoothTaylorRule coefficients.
+
+    `rho`, `r_star`, `phi_pi`, and `phi_q` are estimated from historical policy-rate,
+    CPI, and output-gap data in `DefaultSyntheticCentralBank._estimate_smooth_taylor_rule`
+    and are otherwise not configurable per country. The defaults here (`None`) keep
+    those estimated values unchanged; setting any field overrides just that
+    coefficient in `SmoothTaylorRule.compute_rate`, regardless of which policy rule
+    is selected in `functions.policy_rate.name`.
+    """
+
+    targeted_inflation_rate: float | None = None
+    rho: float | None = None
+    r_star: float | None = None
+    phi_pi: float | None = None
+    phi_q: float | None = None
 
 
 class CentralBankPolicy(BaseModel):
@@ -61,6 +79,9 @@ class CentralBankConfiguration(BaseModel):
     Attributes:
         functions (CentralBankFunctions): Collection of function configurations
             that define central bank behavior
+        taylor_rule_overrides (CentralBankTaylorRuleOverrides): Optional per-country
+            overrides for the estimated SmoothTaylorRule coefficients
     """
 
     functions: CentralBankFunctions = CentralBankFunctions()
+    taylor_rule_overrides: CentralBankTaylorRuleOverrides = Field(default_factory=CentralBankTaylorRuleOverrides)

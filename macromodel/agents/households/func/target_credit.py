@@ -55,8 +55,8 @@ class HouseholdTargetCredit(ABC):
         Args:
             target_consumption (np.ndarray): Desired consumption
             income (np.ndarray): Household income
-            rent (np.ndarray): Diagnostic rental payments already included in
-                target consumption
+            rent (np.ndarray): Cash rental payments, which remain a separate
+                financing obligation
             wealth_in_financial_assets (np.ndarray): Financial assets
 
         Returns:
@@ -79,8 +79,8 @@ class HouseholdTargetCredit(ABC):
             target_house_price (np.ndarray): Property purchase prices
             target_consumption (np.ndarray): Desired consumption
             income (np.ndarray): Household income
-            rent (np.ndarray): Diagnostic rental payments already included in
-                target consumption
+            rent (np.ndarray): Cash rental payments, which remain a separate
+                financing obligation
             wealth_in_financial_assets (np.ndarray): Financial assets
 
         Returns:
@@ -112,13 +112,14 @@ class DefaultHouseholdTargetCredit(HouseholdTargetCredit):
         - Consumption targets
         - Available income
         - Asset holdings
-        Rent is already included in target consumption and is not added again.
+        Cash rent is separate from market-consumption expenditure and is added
+        once to the household financing gap.
 
         Args:
             target_consumption (np.ndarray): Desired consumption
             income (np.ndarray): Household income
-            rent (np.ndarray): Diagnostic rental payments already included in
-                target consumption
+            rent (np.ndarray): Cash rental payments, which remain a separate
+                financing obligation
             wealth_in_financial_assets (np.ndarray): Financial assets
 
         Returns:
@@ -126,7 +127,7 @@ class DefaultHouseholdTargetCredit(HouseholdTargetCredit):
         """
         return np.maximum(
             0.0,
-            target_consumption.sum(axis=1) - income - wealth_in_financial_assets,
+            target_consumption.sum(axis=1) + rent - income - wealth_in_financial_assets,
         )
 
     def compute_target_mortgage(
@@ -149,8 +150,8 @@ class DefaultHouseholdTargetCredit(HouseholdTargetCredit):
             target_house_price (np.ndarray): Property purchase prices
             target_consumption (np.ndarray): Desired consumption
             income (np.ndarray): Household income
-            rent (np.ndarray): Diagnostic rental payments already included in
-                target consumption
+            rent (np.ndarray): Cash rental payments, which remain a separate
+                financing obligation
             wealth_in_financial_assets (np.ndarray): Financial assets
 
         Returns:
@@ -162,6 +163,6 @@ class DefaultHouseholdTargetCredit(HouseholdTargetCredit):
             - self.down_payment_fraction
             * np.maximum(
                 0.0,
-                wealth_in_financial_assets - (target_consumption.sum(axis=1) - income),
+                wealth_in_financial_assets - (target_consumption.sum(axis=1) + rent - income),
             ),
         )

@@ -489,9 +489,21 @@ FRA:
       household_capital_formation_rate: 0.0
       # Provisional firm-side rate applied once to realised capital-goods purchases.
       firm_capital_formation_rate: 0.24856698371134814
-      # Scale the shared production-tax vector so model taxes on products and
-      # production match France's 15.8% 2014 S13 benchmark.
-      production_tax_vector_scale: 1 #  5.683422794 would matcch 15.8% but produces recession
+      # Scale factor on the shared production-tax vector. 5.683422794 matches
+      # France's 15.8% 2014 S13 products/production-tax benchmark at period 1,
+      # but production tax is deducted before corporate taxable profit, so
+      # that scale erodes corporate tax revenue with nothing offsetting it:
+      # a full t_max=50 run diverges to a 51%-of-GDP deficit and 4.4x annual
+      # GDP debt by period 50 (single-seed 68; see
+      # knowledge-vault/wiki/debugging/2026-08-27-fiscal-and-consumption-boundary-reconciliation.md).
+      # 2.0 is the best full-horizon candidate found in a 4-point sweep
+      # (1.0/2.0/3.5/5.683422794): deficit 24.9%->21.0% and debt 1.09x->2.84x
+      # annual GDP, both improving over the horizon rather than exploding.
+      # It only reaches a 9.82% products/production-tax share, well short of
+      # the 15.8% target -- that gap is open, not resolved, and the target is
+      # not reachable by this scale alone without offsetting the corporate-tax
+      # erosion. Not yet multi-seed validated.
+      production_tax_vector_scale: 2.0
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

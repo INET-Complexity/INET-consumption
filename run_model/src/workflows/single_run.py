@@ -80,6 +80,7 @@ def main(
     government_sectoral_weights: str = DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS,
     government_consumption_consistency: float | None = None,
     household_investment_rule: str | None = None,
+    production_tax_vector_scale: float | None = None,
 ) -> dict[str, object]:
     # Optional overrides (None means use Config/default env values)
     country_override = None
@@ -164,6 +165,8 @@ def main(
         country_cfg.assume_zero_noise = assume_zero_noise
     if household_investment_rule is not None:
         country_cfg.households.functions.investment.name = household_investment_rule
+    if production_tax_vector_scale is not None:
+        country_cfg.central_government.tax_overrides.production_tax_vector_scale = production_tax_vector_scale
 
     print("Configuration summary")
     pprint(
@@ -185,6 +188,7 @@ def main(
             },
             "household_investment": country_cfg.households.functions.investment.name,
             "assume_zero_noise": country_cfg.assume_zero_noise,
+            "production_tax_vector_scale": country_cfg.central_government.tax_overrides.production_tax_vector_scale,
         },
         sort_dicts=False,
     )
@@ -269,6 +273,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Override the household investment rule; use NoHouseholdInvestment for the counterfactual.",
     )
+    parser.add_argument(
+        "--production-tax-vector-scale",
+        type=float,
+        default=None,
+        help="Override the country configuration's production_tax_vector_scale. Default: use country configuration.",
+    )
     return parser.parse_args()
 
 
@@ -283,4 +293,5 @@ if __name__ == "__main__":
         government_sectoral_weights=args.government_sectoral_weights,
         government_consumption_consistency=args.government_consumption_consistency,
         household_investment_rule=args.household_investment_rule,
+        production_tax_vector_scale=args.production_tax_vector_scale,
     )

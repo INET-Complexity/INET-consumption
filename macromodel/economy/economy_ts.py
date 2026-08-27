@@ -312,6 +312,11 @@ def create_economy_timeseries(
             + initial_real_rent_paid.sum()
         ],
         gdp_expenditure_growth=[np.nan],
+        # Expenditure GDP minus output GDP, computed from raw exports/imports
+        # before compute_gdp()'s always_adjust trade-balance plug. Zero here by
+        # construction (see the sanity-check assertion below); compute_gdp()
+        # appends the true per-period value before it mutates exports/imports.
+        gdp_expenditure_prebalancing_residual=[0.0],
         total_household_fce=[initial_hh_consumption],
         total_household_fce_growth=[np.nan],
         total_government_fce=[initial_gov_consumption],

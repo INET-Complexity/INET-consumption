@@ -1296,6 +1296,7 @@ class Economy:
         - Sectoral value added and growth rates
         - GDP components and their growth rates
         - Trade balance adjustments
+        - The pre-adjustment output/expenditure GDP residual, diagnostic-only
         - Consistency checks between approaches
 
         The method maintains National Accounts identities and handles
@@ -1502,6 +1503,11 @@ class Economy:
             - imports
             + rent_paid
         )
+        # Persist the pre-balancing residual before always_adjust below plugs
+        # imports/exports to force expenditure GDP to equal output GDP. This is
+        # the true output/expenditure discrepancy; the adjusted series recorded
+        # further down is mechanically zero-residual and hides it.
+        self.ts.gdp_expenditure_prebalancing_residual.append([gdp_expenditure - self.ts.current("gdp_output")[0]])
         self.ts.total_household_fce.append([hh_consumption])
         if self.ts.prev("total_household_fce")[0] == 0.0:
             self.ts.total_household_fce_growth.append([0.0])

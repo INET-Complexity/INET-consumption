@@ -508,9 +508,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             **kwargs,
         )
         if initial_rate_source not in ("individual", "firm_anchor"):
-            raise ValueError(
-                f"initial_rate_source must be 'individual' or 'firm_anchor', got {initial_rate_source!r}"
-            )
+            raise ValueError(f"initial_rate_source must be 'individual' or 'firm_anchor', got {initial_rate_source!r}")
         self.initial_rate_source = initial_rate_source
         self._rates_seeded = False
         self.last_contract_rate_mean = None

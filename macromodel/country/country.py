@@ -1062,6 +1062,80 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
         )
+        self._append_wage_offer_diagnostics(replace_current=replace_current)
+
+    @staticmethod
+    def _log_ratio(current: np.ndarray, previous: np.ndarray) -> np.ndarray:
+        """Return finite log growth where both multiplicative levels are positive."""
+        current = np.asarray(current, dtype=float)
+        previous = np.asarray(previous, dtype=float)
+        result = np.zeros_like(current)
+        valid = np.isfinite(current) & (current > 0.0) & np.isfinite(previous) & (previous > 0.0)
+        result[valid] = np.log(current[valid] / previous[valid])
+        return result
+
+    def _append_wage_offer_diagnostics(self, *, replace_current: bool) -> None:
+        """Persist the multiplicative wage-offer growth decomposition."""
+        wage_setter = self.firms.functions["wage_setter"]
+        ts = self.firms.ts
+        n_firms = int(ts.current("n_firms"))
+        ones = np.ones(n_firms)
+        def diagnostic_array(value):
+            if value is None:
+                return ones.copy()
+            value = np.asarray(value, dtype=float)
+            return value.copy() if value.shape == (n_firms,) else ones.copy()
+
+        current = {
+            "wage_offer_historic_base": getattr(wage_setter, "last_wage_offer_historic_base", None),
+            "wage_offer_level": getattr(wage_setter, "last_wage_offer_level", None),
+            "wage_offer_tfp_factor": diagnostic_array(getattr(wage_setter, "last_wage_offer_tfp_ratio", None)),
+            "wage_offer_productivity_factor": diagnostic_array(
+                getattr(wage_setter, "last_wage_offer_productivity_ratio", None)
+            ),
+            "wage_offer_tightness_factor": diagnostic_array(
+                getattr(wage_setter, "last_wage_offer_tightness_factor", None)
+            ),
+            "wage_offer_historic_average_available": diagnostic_array(
+                getattr(wage_setter, "last_wage_offer_historic_average_available", None)
+            ),
+        }
+        if current["wage_offer_historic_base"] is None or current["wage_offer_level"] is None:
+            neutral_wage = np.asarray(ts.current("real_wage_per_capita"), dtype=float).copy()
+            current["wage_offer_historic_base"] = neutral_wage
+            current["wage_offer_level"] = neutral_wage.copy()
+            current["wage_offer_historic_average_available"] = np.zeros(n_firms)
+        base_history = ts.historic("wage_offer_historic_base")
+        level_history = ts.historic("wage_offer_level")
+        previous_base = base_history[-2] if replace_current and len(base_history) > 1 else base_history[-1]
+        previous_level = level_history[-2] if replace_current and len(level_history) > 1 else level_history[-1]
+        for factor_name, growth_name in (
+            ("wage_offer_tfp_factor", "wage_offer_growth_tfp"),
+            ("wage_offer_productivity_factor", "wage_offer_growth_productivity"),
+            ("wage_offer_tightness_factor", "wage_offer_growth_tightness"),
+        ):
+            history = ts.historic(factor_name)
+            previous_factor = history[-2] if replace_current and len(history) > 1 else history[-1]
+            current[growth_name] = self._log_ratio(current[factor_name], previous_factor)
+        current["wage_offer_growth_historic_wage"] = self._log_ratio(
+            current["wage_offer_historic_base"], previous_base
+        )
+        current["wage_offer_growth"] = self._log_ratio(current["wage_offer_level"], previous_level)
+        component_names = (
+            "wage_offer_growth_historic_wage",
+            "wage_offer_growth_tfp",
+            "wage_offer_growth_productivity",
+            "wage_offer_growth_tightness",
+        )
+        current["wage_offer_growth_residual"] = current["wage_offer_growth"] - sum(
+            current[name] for name in component_names
+        )
+        for field, values in current.items():
+            values = np.asarray(values, dtype=float).copy()
+            if replace_current:
+                ts.override_current(field, values)
+            else:
+                getattr(ts, field).append(values)
 
     def clear_labour_market(self) -> None:
         """Execute labor market clearing.

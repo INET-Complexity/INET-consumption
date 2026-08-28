@@ -40,6 +40,12 @@ class FirmWageSetter(ABC):
         """
         self.labour_market_tightness_markup_scale = labour_market_tightness_markup_scale
         self.markup_time_span = markup_time_span
+        self.last_wage_offer_historic_base = None
+        self.last_wage_offer_tfp_ratio = None
+        self.last_wage_offer_productivity_ratio = None
+        self.last_wage_offer_tightness_factor = None
+        self.last_wage_offer_level = None
+        self.last_wage_offer_historic_average_available = None
 
     @abstractmethod
     def compute_wage_tightness_markup(
@@ -403,6 +409,12 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             new_individual_wages,
             fallback_wages,
         )
+        self.last_wage_offer_historic_base = historic_average_wages.copy()
+        self.last_wage_offer_tfp_ratio = tfp_ratio.copy()
+        self.last_wage_offer_productivity_ratio = productivity_ratio.copy()
+        self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
+        self.last_wage_offer_level = new_individual_wages.copy()
+        self.last_wage_offer_historic_average_available = has_historic_average_wage.copy()
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
             """Calculate wage offer for given firm and labor inputs.

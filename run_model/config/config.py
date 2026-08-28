@@ -74,7 +74,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
     # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
     # "central_bank.taylor_rule_overrides['rho']": 0.25,
-    "central_government.tax_overrides['production_tax_vector_scale']": 1,
+    # "central_government.tax_overrides['production_tax_vector_scale']": 1,
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
@@ -136,7 +136,7 @@ MACRO_COLUMNS = (
     "deficit_to_gdp",
     "household_consumption_to_gdp",
     "government_consumption_to_gdp",
-    "gdp",
+    "real_gdp",
     "gdp_growth",
     "unemployment_rate",
     "central_bank_policy_rate",

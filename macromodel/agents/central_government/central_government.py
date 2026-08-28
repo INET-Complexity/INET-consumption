@@ -154,7 +154,6 @@ class CentralGovernment(Agent):
             "Household Capital Formation Tax": household_capital_formation_rate,
             "Firm Capital Formation Tax": firm_capital_formation_rate,
             "Taxes Less Subsidies Rates": taxes_less_subsidies_rates,
-            "Other Product Production Tax Rate": tax_overrides.other_product_production_tax_rate,
             "unemployment_benefits_model": synthetic_central_government.unemployment_benefits_model,
             "other_benefits_model": synthetic_central_government.other_benefits_model,
         }
@@ -323,7 +322,8 @@ class CentralGovernment(Agent):
 
         Args:
             current_ind_employee_income (np.ndarray): Employee incomes
-            current_total_rent_paid (float): Total rent payments
+            current_total_rent_paid (float): Total cash rent payments subject to
+                rental-income tax
             current_income_financial_assets (np.ndarray): Financial income
             current_ind_activity (np.ndarray): Individual activity status
             current_ind_realised_cons (np.ndarray): Consumption levels
@@ -338,16 +338,10 @@ class CentralGovernment(Agent):
             current_firm_capital_formation (float): Realised firm capital-goods
                 purchases before the capital-formation tax
         """
-        # Taxes on production. France can replace the imported ICIO vector with
-        # a transparent flat reduced-form rate; other countries retain the
-        # historical industry-vector mechanism.
-        product_production_tax_rate = self.states["Other Product Production Tax Rate"]
-        if product_production_tax_rate is None:
-            production_tax = np.sum(
-                taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
-            )
-        else:
-            production_tax = product_production_tax_rate * np.sum(current_firm_production * current_firm_price)
+        # Firms and government use the same calibrated industry tax vector.
+        production_tax = np.sum(
+            taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
+        )
         self.ts.taxes_production.append([production_tax])
 
         # Value-added taxes. A France override may classify the realised
@@ -398,11 +392,13 @@ class CentralGovernment(Agent):
                 self.states["Income Tax"]
                 * (1 - self.states["Employee Social Insurance Tax"])
                 * gross_wages_employed_ind
-                + self.states["Income Tax"] * current_total_rent_paid
                 + self.states["Income Tax"] * current_income_financial_assets.sum(),
             ]
         )
-        self.ts.taxes_rental_income.append([self.states["Income Tax"] * current_total_rent_paid])
+        rental_income_tax = self.states["Income Tax"] * current_total_rent_paid
+        self.ts.taxes_income[-1][0] += rental_income_tax
+        self.ts.taxes_rental_income.append([rental_income_tax])
+        self.ts.diagnostic_taxes_rental_income.append([rental_income_tax])
 
         # Taxes on employer social insurance
         self.ts.taxes_employer_si.append([self.states["Employer Social Insurance Tax"] * gross_wages_employed_ind])
@@ -487,7 +483,7 @@ class CentralGovernment(Agent):
         Aggregates all revenue sources:
         - All tax revenues
         - Social insurance contributions
-        - Rental income from public housing
+        Includes social-housing rent received by government once.
 
         Args:
             household_rent_paid_to_government (float): Rent from public housing
@@ -496,6 +492,7 @@ class CentralGovernment(Agent):
             float: Total government revenue
         """
         self.ts.total_rent_received.append([household_rent_paid_to_government])
+        self.ts.diagnostic_total_rent_received.append([household_rent_paid_to_government])
         return (
             self.ts.current("taxes_production")[0]
             + self.ts.current("taxes_vat")[0]

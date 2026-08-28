@@ -1269,7 +1269,11 @@ def build_macro_output_df(model, country_code):
     try:
         wage_rate_by_sector = build_wage_rate_by_sector_df(model, country_code)
         if "economy" in wage_rate_by_sector.columns:
-            add_column("economy_wage_rate", wage_rate_by_sector["economy"].reindex(out_index))
+            economy_wage_rate = add_column("economy_wage_rate", wage_rate_by_sector["economy"].reindex(out_index))
+            add_column(
+                "wage_rate_yoy_change",
+                economy_wage_rate / economy_wage_rate.shift(yoy_periods) - 1.0,
+            )
     except (AttributeError, KeyError, ValueError):
         pass
 

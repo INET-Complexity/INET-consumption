@@ -164,6 +164,7 @@ def create_households_timeseries(
         target_consumption_non_goods_housing=np.zeros(len(data)),
         target_consumption_calibrated_total=np.zeros(len(data)),
         target_consumption_goods_total=np.zeros(len(data)),
+        target_consumption_market_total=np.zeros(len(data)),
         # ECM state variable for CreditAugmentedConsumption: the real consumption
         # budget it produced. Seeded from initial consumption, which is already
         # real at t=0 since the CPI deflator is 1 there.
@@ -183,6 +184,9 @@ def create_households_timeseries(
         total_investment=[(1 + tau_cf) * initial_hh_investment.sum()],
         total_investment_before_vat=[initial_hh_investment.sum()],
         industry_investment=initial_investment_by_industry,
+        income_for_residual_saving=data["Income"].values,
+        realised_household_expenditure=data["Consumption"].values + initial_hh_investment.sum(axis=1),
+        cash_saving_before_financing=np.full(len(data), np.nan),
         #
         # HFCS source components are preserved as initialization diagnostics;
         # they are not used as an additional live income flow.
@@ -201,9 +205,7 @@ def create_households_timeseries(
         income=data["Income"].values,
         income_histogram=get_histogram(data["Income"].values, scale),
         expected_income=data["Income"].values,
-        non_property_income=data["Employee Income"].values
-        + data["Regular Social Transfers"].values
-        + data["Rental Income from Real Estate"].values,
+        non_property_income=data["Employee Income"].values + data["Regular Social Transfers"].values,
         income_employee=data["Employee Income"].values,
         total_income_employee=[data["Employee Income"].values.sum()],
         expected_income_employee=data["Employee Income"].values,
@@ -227,6 +229,8 @@ def create_households_timeseries(
         expected_income_social_transfers=data["Regular Social Transfers"].values,
         income_rental=data["Rental Income from Real Estate"].values,
         total_income_rental=[data["Rental Income from Real Estate"].values.sum()],
+        diagnostic_income_rental=data["Rental Income from Real Estate"].values,
+        total_diagnostic_income_rental=[data["Rental Income from Real Estate"].values.sum()],
         income_financial_assets=data["Income from Financial Assets"].values,
         total_income_financial_assets=[data["Income from Financial Assets"].values.sum()],
         expected_income_financial_assets=data["Income from Financial Assets"].values,
@@ -262,7 +266,15 @@ def create_households_timeseries(
         rent_imputed=data["Rent Imputed"].values,
         max_price_willing_to_pay=np.full(len(data), np.nan),
         max_rent_willing_to_pay=np.full(len(data), np.nan),
-        rent_div_income_histogram=get_histogram(data["Rent Paid"].values / data["Income"].values, None),
+        rent_div_income_histogram=get_histogram(
+            np.divide(
+                data["Rent Paid"].values,
+                data["Income"].values,
+                out=np.full(len(data), np.nan),
+                where=data["Income"].values != 0,
+            ),
+            None,
+        ),
         #
         wealth=initial_wealth,
         wealth_histogram=get_histogram(initial_wealth, scale),

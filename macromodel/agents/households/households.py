@@ -1767,7 +1767,7 @@ class Households(Agent):
         return income
 
     def compute_non_property_income(self) -> np.ndarray:
-        """Calculate non-property current income (employment + social transfers + rental).
+        """Calculate non-property current income (employment + social transfers).
 
         Excludes stochastic illiquid financial asset returns, which can be large and
         negative after bad market draws and are unrelated to the permanent-income concept
@@ -1777,11 +1777,7 @@ class Households(Agent):
         Returns:
             np.ndarray: Non-property income by household
         """
-        return (
-            self.ts.current("income_employee")
-            + self.ts.current("income_social_transfers")
-            + self.ts.current("income_rental")
-        )
+        return self.ts.current("income_employee") + self.ts.current("income_social_transfers")
 
     def get_saving_rates_by_household(self) -> np.ndarray:
         """Calculate household-specific saving rates.
@@ -2111,12 +2107,11 @@ class Households(Agent):
         definition and the exit criterion.
 
         Since GH #120 the array returned by ``compute_target_consumption()``
-        carries market expenditure only (the housing-flow components of the
-        calibrated target are carved out before demand reaches firms), so this
-        method supplies the period's actual cash rent to the shortfall
-        computation as its own use. Imputed rent is deliberately never passed:
-        it is measured consumption, not a liability, and must not create a
-        feasibility shortfall.
+        carries market expenditure only: cash rent is carved out before demand
+        reaches firms and is paid to landlords as its own cash use. This method
+        supplies that cash rent to the shortfall computation. Imputed rent is
+        deliberately never passed because it is diagnostic-only, not a
+        liability, and must not create a feasibility shortfall.
 
         Args:
             target_consumption (np.ndarray): This period's per-household
@@ -2554,6 +2549,7 @@ class Households(Agent):
             "target_consumption_non_goods_housing",
             "target_consumption_calibrated_total",
             "target_consumption_goods_total",
+            "target_consumption_market_total",
         ]
 
     def _append_target_consumption_diagnostics(
@@ -2685,10 +2681,23 @@ class Households(Agent):
         Returns:
             np.ndarray: Target investment by household
         """
+        investment_rule = self.functions["investment"]
+        if getattr(investment_rule, "disables_household_investment", False):
+            return investment_rule.compute_target_investment(
+                expected_inflation=expected_inflation,
+                current_cpi=current_cpi,
+                initial_cpi=initial_cpi,
+                income=self.ts.current("expected_income"),
+                exogenous_total_investment=exogenous_total_investment,
+                current_time=len(self.ts.historic("total_investment")),
+                investment_weights=self.investment_weights,
+                investment_rate=self.states["investment_rate"],
+                tau_cf=tau_cf,
+            )
         if assume_zero_growth:
             return self.ts.initial("investment").astype(float)
         else:
-            return self.functions["investment"].compute_target_investment(
+            return investment_rule.compute_target_investment(
                 expected_inflation=expected_inflation,
                 current_cpi=current_cpi,
                 initial_cpi=initial_cpi,
@@ -3227,6 +3236,19 @@ class Households(Agent):
             self.ts.current("nominal_amount_spent_in_lcu"),
             self.ts.current("target_consumption"),
         )
+        if getattr(self.functions["investment"], "disables_household_investment", False):
+            realised_spending = self.ts.current("nominal_amount_spent_in_lcu")
+            numerical_excess = realised_spending - consumption_by_good
+            # Goods-market arithmetic can leave sub-cent residuals above the
+            # target (LCU units). atol matches that -- rtol is meaningless
+            # here since the comparison target is the literal scalar 0.0.
+            if not np.allclose(numerical_excess, 0.0, atol=1e-2):
+                raise RuntimeError(
+                    "NoHouseholdInvestment cannot reclassify material expenditure above consumption as investment."
+                )
+            # Under an authoritative investment-off rule the residual above
+            # remains consumption; realised investment is exactly zero.
+            consumption_by_good = realised_spending.copy()
 
         if add_emissions:
             # Apply per-industry consumption fraction multipliers when enabled.
@@ -3364,7 +3386,10 @@ class Households(Agent):
             income_for_residual_saving = income_for_residual_saving - self.ts.current("income_financial_assets")
 
         realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-        realised_cash_balance = income_for_residual_saving - self.ts.current("rent") - realised_expenditure
+        # Cash rent is paid separately to landlords rather than through firm
+        # purchases, so it is a distinct household cash use.
+        cash_rent = np.asarray(self.ts.current("rent"), dtype=float)
+        realised_cash_balance = income_for_residual_saving - realised_expenditure - cash_rent
         if self.uses_feasibility_resolver:
 
             def optional_cash_flow(name: str) -> np.ndarray:
@@ -3399,8 +3424,8 @@ class Households(Agent):
             # debits/credits. Settle each realised cash source and use once.
             cash_saving_before_financing = (
                 income_for_residual_saving
-                - self.ts.current("rent")
                 - realised_expenditure
+                - cash_rent
                 - optional_cash_flow("interest_paid")
                 - optional_cash_flow("price_paid_for_property")
                 - optional_cash_flow("debt_installments")
@@ -3409,6 +3434,7 @@ class Households(Agent):
             new_wealth = np.maximum(cash_saving_before_financing, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)
         else:
+            cash_saving_before_financing = realised_cash_balance
             new_wealth = np.maximum(realised_cash_balance, 0.0)
             realised_cash_flow_adjustment = np.zeros_like(realised_cash_balance)
         (
@@ -3605,6 +3631,9 @@ class Households(Agent):
         self.ts.total_liquid_financial_assets.append([wealth_base_lfa.sum()])
         self.ts.illiquid_financial_asset_capital_gains.append(illiquid_financial_asset_capital_gains)
         self.ts.total_illiquid_financial_asset_capital_gains.append([illiquid_financial_asset_capital_gains.sum()])
+        self.ts.income_for_residual_saving.append(income_for_residual_saving)
+        self.ts.realised_household_expenditure.append(realised_expenditure)
+        self.ts.cash_saving_before_financing.append(cash_saving_before_financing)
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
         self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)
 

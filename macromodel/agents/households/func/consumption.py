@@ -614,20 +614,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     lagged HPI. Stage 3 permanent-income, consumer-debt-rate, and uncertainty
     terms remain explicit zero placeholders unless supplied.
 
-    The resulting ``target_total`` is the calibrated consumption concept, which
-    (matching the empirical calibration) covers market expenditure, actual cash
-    rent, and imputed rent. Before demand is routed to firms, the housing-flow
-    components are carved out so that only market expenditure generates goods
-    demand (GH #120):
-
-    ``goods_target = max(0, target_total - cash_rent - imputed_rent)``
-
-    Cash rent remains a real cash outflow settled once in
-    ``Households.update_wealth``; imputed rent is an accounting component only
-    and generates neither cash flow nor firm demand. The carve-out reclassifies
-    an already-calibrated total and introduces no new accounting. Scheduled
-    mortgage service is unaffected: it is debt service, never part of the
-    calibrated consumption aggregate, and stays a diagnostic here.
+    The resulting ``target_total`` is the calibrated consumption concept. Cash
+    rent is removed from the market-consumption demand and remains a separate
+    household cash use paid to landlords. Imputed rent is diagnostic-only and
+    is not removed from the behavioural target or introduced as a cash use.
+    Scheduled mortgage service remains debt service and is only diagnostic here.
 
     VAT convention (GH #123): ``target_total`` and the persisted ECM state
     (``target_consumption_real_budget`` / ``lagged_real_consumption_budget``)
@@ -1642,12 +1633,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             epsilon=epsilon,
         )
 
-        # ``target_total`` is the calibrated consumption concept, which includes
-        # market expenditure, actual (cash) rent, and imputed rent — the same
-        # aggregate the empirical CACF calibration was estimated against. The
-        # formula-implied MPC diagnostic is therefore computed on the *full*
-        # rent-inclusive target, so it stays comparable to the rent-inclusive
-        # empirical MPC benchmarks, independent of the housing carve-out below.
+        # ``target_total`` is the calibrated consumption budget. Cash rent is
+        # removed from market purchases below; the formula-implied MPC remains
+        # computed on the calibrated behavioural target.
         full_target_consumption = np.maximum(
             0.0,
             1.0
@@ -1665,19 +1653,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             perturbed_target_consumption.sum(axis=1) - full_target_consumption.sum(axis=1)
         ) / nominal_income_perturbation
 
-        # Classify the calibrated target into market expenditure and non-market
-        # housing services (GH #120). This introduces no new accounting: it only
-        # decides which part of an already-calibrated total reaches firms.
-        #   - cash_rent is a real cash outflow, paid exactly once through the
-        #     existing ``Households.update_wealth`` deduction. It must not also
-        #     generate goods demand.
-        #   - imputed_rent is an accounting component of measured consumption
-        #     only. It is neither a cash flow nor a liability, so it generates
-        #     no goods demand and never triggers feasibility support.
-        # The two are mutually exclusive per household by construction in
-        # ``Households.compute_rent`` (disjoint tenure-status masks), and are
-        # authoritative from here on: downstream code must not reconstruct
-        # either from ``target_total`` or from the returned goods target.
+        # Cash rent is a separate household cash use, so remove it from the
+        # market-consumption demand. Imputed rent is diagnostic-only and must
+        # remain behaviourally inert.
         raw_cash_rent = np.asarray(rent, dtype=float)
         raw_imputed_rent = np.asarray(rent_imputed, dtype=float)
         for name, housing_flow in (("rent", raw_cash_rent), ("rent_imputed", raw_imputed_rent)):
@@ -1688,10 +1666,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # economically meaningful split on the values actually routed onward.
         cash_rent = np.maximum(0.0, raw_cash_rent)
         imputed_rent = np.maximum(0.0, raw_imputed_rent)
-        if np.any((cash_rent > 0.0) & (imputed_rent > 0.0)):
-            raise ValueError("rent and rent_imputed must be mutually exclusive per household.")
-        non_goods_housing_component = cash_rent + imputed_rent
-        goods_target_total = np.maximum(0.0, target_total - non_goods_housing_component)
+        diagnostic_housing_component = cash_rent + imputed_rent
+        market_target_total = np.maximum(0.0, target_total - cash_rent)
 
         target_consumption = np.maximum(
             0.0,
@@ -1699,7 +1675,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             / (1 + tau_vat)
             * np.outer(
                 consumption_weights,
-                goods_target_total,
+                market_target_total,
             ).T,
         )
 
@@ -1709,9 +1685,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.last_real_consumption_budget = components["target_consumption_real_budget"]
         components["target_consumption_cash_rent"] = cash_rent
         components["target_consumption_imputed_rent"] = imputed_rent
-        components["target_consumption_non_goods_housing"] = non_goods_housing_component
+        components["target_consumption_non_goods_housing"] = diagnostic_housing_component
         components["target_consumption_calibrated_total"] = target_total
-        components["target_consumption_goods_total"] = goods_target_total
+        # Keep the historical diagnostic name as a compatibility alias for the
+        # market-consumption target after the cash-rent carve-out.
+        components["target_consumption_goods_total"] = market_target_total
+        components["target_consumption_market_total"] = market_target_total
         self.last_target_consumption_components = components
         return target_consumption
 

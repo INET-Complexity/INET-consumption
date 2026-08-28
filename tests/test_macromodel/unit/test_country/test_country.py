@@ -1,3 +1,4 @@
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,6 +61,80 @@ def test__resolve_frm_coefficients_path_accepts_both_consumption_paper_forms(con
     data_paths = SimpleNamespace(frm_coefficients_path=actual_path)
 
     assert country_module._resolve_frm_coefficients_path(configured_path, data_paths) == actual_path
+
+
+def test__apply_production_tax_vector_scale_updates_shared_initial_tax_views():
+    synthetic_country = SimpleNamespace(
+        industry_data={
+            "industry_vectors": pd.DataFrame(
+                {
+                    "Taxes Less Subsidies Rates": [0.1, 0.2],
+                    "Taxes Less Subsidies in LCU": [10.0, 20.0],
+                    "Taxes Less Subsidies in USD": [5.0, 10.0],
+                }
+            )
+        },
+        firms=SimpleNamespace(firm_data=pd.DataFrame({"Taxes paid on Production": [10.0, 20.0]})),
+        central_government=SimpleNamespace(
+            central_gov_data=pd.DataFrame(
+                {"Taxes on Production": [30.0], "Taxes on Products": [50.0], "Revenue": [100.0]}
+            )
+        ),
+    )
+
+    country_module._apply_production_tax_vector_scale(synthetic_country, 2.0)
+
+    vectors = synthetic_country.industry_data["industry_vectors"]
+    assert np.allclose(vectors["Taxes Less Subsidies Rates"], [0.2, 0.4])
+    assert np.allclose(vectors["Taxes Less Subsidies in LCU"], [20.0, 40.0])
+    assert np.allclose(synthetic_country.firms.firm_data["Taxes paid on Production"], [20.0, 40.0])
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Taxes on Production"] == 60.0
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Taxes on Products"] == 80.0
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Revenue"] == 130.0
+
+
+def test__production_tax_vector_scale_does_not_compound_across_repeated_construction():
+    """_apply_production_tax_vector_scale mutates its argument in place, so
+    Country.from_synthetic_country scales a deep copy of synthetic_country
+    rather than the caller's own object. Reproduce that pattern directly:
+    scaling two independent copies of the same pristine original must give
+    identical results both times, and must never touch the original --
+    otherwise repeated construction from one shared synthetic_country (e.g.
+    run_seeded_monte_carlo's batch_size>1 reusing one DataWrapper across
+    seeds in the same worker process) would compound the scale."""
+    synthetic_country = SimpleNamespace(
+        industry_data={
+            "industry_vectors": pd.DataFrame(
+                {
+                    "Taxes Less Subsidies Rates": [0.1, 0.2],
+                    "Taxes Less Subsidies in LCU": [10.0, 20.0],
+                    "Taxes Less Subsidies in USD": [5.0, 10.0],
+                }
+            )
+        },
+        firms=SimpleNamespace(firm_data=pd.DataFrame({"Taxes paid on Production": [10.0, 20.0]})),
+        central_government=SimpleNamespace(
+            central_gov_data=pd.DataFrame(
+                {"Taxes on Production": [30.0], "Taxes on Products": [50.0], "Revenue": [100.0]}
+            )
+        ),
+    )
+
+    # Mirror from_synthetic_country's own pattern: deep-copy, then scale.
+    first = deepcopy(synthetic_country)
+    country_module._apply_production_tax_vector_scale(first, 2.0)
+    second = deepcopy(synthetic_country)
+    country_module._apply_production_tax_vector_scale(second, 2.0)
+
+    # The shared original must remain untouched by either construction.
+    assert np.allclose(synthetic_country.industry_data["industry_vectors"]["Taxes Less Subsidies Rates"], [0.1, 0.2])
+    assert synthetic_country.central_government.central_gov_data.loc[0, "Taxes on Production"] == 30.0
+
+    # Both copies show the scale applied exactly once -- not compounded.
+    for scaled in (first, second):
+        assert np.allclose(scaled.industry_data["industry_vectors"]["Taxes Less Subsidies Rates"], [0.2, 0.4])
+        assert scaled.firms.firm_data["Taxes paid on Production"].tolist() == [20.0, 40.0]
+        assert scaled.central_government.central_gov_data.loc[0, "Taxes on Production"] == 60.0
 
 
 def _make_ficp_test_country():
@@ -2380,6 +2455,8 @@ class TestCountry:
         assert len(test_country.households.ts.saving_rates_histogram) == histogram_len_before + 1
         assert np.allclose(test_country.households.ts.current("target_consumption"), 1.0)
         assert np.allclose(test_country.households.ts.current("expected_income"), 14.0)
+        assert np.allclose(test_country.households.ts.current("income_rental"), 4.0)
+        assert np.allclose(test_country.households.ts.current("diagnostic_income_rental"), 4.0)
 
         test_country._set_household_income_expectations(replace_current=True)
         test_country._set_household_target_demand(replace_current=True)

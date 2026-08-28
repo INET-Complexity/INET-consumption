@@ -1296,6 +1296,7 @@ class Economy:
         - Sectoral value added and growth rates
         - GDP components and their growth rates
         - Trade balance adjustments
+        - The pre-adjustment output/expenditure GDP residual, diagnostic-only
         - Consistency checks between approaches
 
         The method maintains National Accounts identities and handles
@@ -1307,8 +1308,9 @@ class Economy:
             sectoral_intermediate_consumption (np.ndarray): Intermediate inputs
             taxes_on_products (float): Product taxes net of subsidies
             taxes_on_production (float): Production taxes
-            rent_paid (float): Actual rent payments
-            rent_imputed (float): Imputed rent values
+            rent_paid (float): Cash rent paid by households to landlords; it is
+                a separate consumption expenditure and GDP flow
+            rent_imputed (float): Diagnostic imputed rent, outside model GDP
             hh_consumption (float): Household consumption
             gov_consumption (float): Government consumption
             change_in_inventories (float): Inventory changes
@@ -1317,8 +1319,8 @@ class Economy:
             imports (float): Import value
             operating_surplus (float): Operating surplus and mixed income
             wages (float): Compensation of employees
-            rent_received (float): Rental income received
-            central_government_rent_received (float): Central government rental income received
+            rent_received (float): Rental income received by private landlords
+            central_government_rent_received (float): Public rental income
             running_multiple_countries (bool): Multi-country simulation flag
             always_adjust (bool, optional): Force trade adjustments. Defaults to True.
         """
@@ -1329,7 +1331,6 @@ class Economy:
                 - taxes_on_production
                 + taxes_on_products
                 + rent_paid
-                + rent_imputed
             ]
         )
         if self.ts.prev("gdp_output")[0] == 0.0:
@@ -1501,8 +1502,12 @@ class Economy:
             + exports
             - imports
             + rent_paid
-            + rent_imputed
         )
+        # Persist the pre-balancing residual before always_adjust below plugs
+        # imports/exports to force expenditure GDP to equal output GDP. This is
+        # the true output/expenditure discrepancy; the adjusted series recorded
+        # further down is mechanically zero-residual and hides it.
+        self.ts.gdp_expenditure_prebalancing_residual.append([gdp_expenditure - self.ts.current("gdp_output")[0]])
         self.ts.total_household_fce.append([hh_consumption])
         if self.ts.prev("total_household_fce")[0] == 0.0:
             self.ts.total_household_fce_growth.append([0.0])
@@ -1539,14 +1544,7 @@ class Economy:
                 ]
             )
         self.ts.gdp_income.append(
-            [
-                operating_surplus
-                + wages
-                + taxes_on_products
-                + rent_received
-                + central_government_rent_received
-                + rent_imputed
-            ]
+            [operating_surplus + wages + taxes_on_products + rent_received + central_government_rent_received]
         )
         if self.ts.prev("gdp_income")[0] == 0.0:
             self.ts.gdp_income_growth.append([0.0])
@@ -1606,7 +1604,6 @@ class Economy:
                 + exports
                 - imports
                 + rent_paid
-                + rent_imputed
             ]
         )
         if self.ts.prev("gdp_expenditure")[0] == 0.0:

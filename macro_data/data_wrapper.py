@@ -330,7 +330,6 @@ class DataWrapper:
             ].firms_configuration.capital_depreciation_accounting_mode
             for country in country_names
         }
-
         industry_data = compile_industry_data(
             year=year,
             readers=readers,

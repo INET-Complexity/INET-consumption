@@ -517,13 +517,13 @@ class TestCreditAugmentedHouseholdConsumption:
         partial_adjustment_gap = 0.4 * (np.log(100.0 * np.exp(long_run_log_consumption_to_income)) - np.log(50.0))
         calibrated_total = 50.0 * np.exp(partial_adjustment_gap)
         np.testing.assert_allclose(components["target_consumption_calibrated_total"], calibrated_total)
-        # The returned demand is the calibrated total net of the housing-flow
-        # components (GH #120). This fixture passes rent=10.0 and no imputed
-        # rent, so goods demand sits exactly 10.0 below the calibrated target.
+        # Cash rent is a separate landlord payment and is therefore removed
+        # from market-consumption demand. Imputed rent remains diagnostic-only.
         np.testing.assert_allclose(components["target_consumption_cash_rent"], 10.0)
         np.testing.assert_allclose(components["target_consumption_imputed_rent"], 0.0)
         np.testing.assert_allclose(components["target_consumption_non_goods_housing"], 10.0)
         np.testing.assert_allclose(components["target_consumption_goods_total"], calibrated_total - 10.0)
+        np.testing.assert_allclose(components["target_consumption_market_total"], calibrated_total - 10.0)
         np.testing.assert_allclose(result.sum(axis=1), calibrated_total - 10.0)
         np.testing.assert_allclose(components["target_consumption_growth_clipped"], 0.0)
         np.testing.assert_allclose(components["target_consumption_delta_log_consumption"], partial_adjustment_gap)
@@ -726,15 +726,16 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_rent_diagnostic"], 1_000.0)
         np.testing.assert_allclose(components["target_consumption_mortgage_payment_diagnostic"], 600.0)
 
-        # ... but cash rent is carved out of the calibrated total before demand
-        # is routed to firms (GH #120), so a larger rent leaves strictly less
-        # market expenditure. Scheduled mortgage service, being debt service
-        # rather than consumption, is not carved out.
+        # Cash rent is a separate cash use, while imputed rent is diagnostic
+        # only. Only the cash-rent observation changes market demand.
         np.testing.assert_allclose(
             low_cost_components["target_consumption_goods_total"],
             low_cost_components["target_consumption_calibrated_total"] - 10.0,
         )
-        assert components["target_consumption_goods_total"] < low_cost_components["target_consumption_goods_total"]
+        np.testing.assert_allclose(
+            components["target_consumption_goods_total"],
+            np.maximum(low_cost_components["target_consumption_calibrated_total"] - 1_000.0, 0.0),
+        )
         assert high_cost_result.sum() < low_cost_result.sum()
         np.testing.assert_allclose(low_cost_result.sum(), low_cost_components["target_consumption_goods_total"])
 
@@ -765,11 +766,9 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
         )
 
-    def test_housing_carve_out_removes_cash_and_imputed_rent_from_goods_demand(self):
-        # GH #120: the calibrated target covers market expenditure plus actual
-        # rent plus imputed rent. Only the market-expenditure part may reach
-        # firms, otherwise rent is double-counted (once implicitly in the
-        # calibrated level, once as the real payment in update_wealth).
+    def test_cash_rent_reduces_market_consumption_but_imputed_rent_is_inert(self):
+        # Cash rent is paid to landlords separately from market purchases;
+        # imputed rent is diagnostic-only.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -794,12 +793,14 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_imputed_rent"], [0.0, 20.0])
         np.testing.assert_allclose(components["target_consumption_non_goods_housing"], [12.0, 20.0])
         np.testing.assert_allclose(
-            components["target_consumption_goods_total"],
-            calibrated_total - np.array([12.0, 20.0]),
+            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
         )
-        np.testing.assert_allclose(result.sum(axis=1), calibrated_total - np.array([12.0, 20.0]))
+        np.testing.assert_allclose(
+            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+        )
+        np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1]])
 
-    def test_housing_carve_out_rejects_overlapping_cash_and_imputed_rent(self):
+    def test_imputed_rent_is_inert_even_if_diagnostic_tenure_data_overlap(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -808,12 +809,22 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_propensity=0.0,
         )
 
-        with pytest.raises(ValueError, match="mutually exclusive"):
-            consumption_obj.compute_target_consumption(
-                **self._housing_carve_out_args(n_households=1),
-                rent=np.array([12.0]),
-                rent_imputed=np.array([20.0]),
-            )
+        without_imputed = consumption_obj.compute_target_consumption(
+            **self._housing_carve_out_args(n_households=1),
+            rent=np.array([12.0]),
+            rent_imputed=np.array([0.0]),
+        )
+        with_imputed = consumption_obj.compute_target_consumption(
+            **self._housing_carve_out_args(n_households=1),
+            rent=np.array([12.0]),
+            rent_imputed=np.array([20.0]),
+        )
+
+        np.testing.assert_allclose(with_imputed, without_imputed)
+        np.testing.assert_allclose(
+            consumption_obj.last_target_consumption_components["target_consumption_imputed_rent"],
+            [20.0],
+        )
 
     def test_credit_augmented_consumption_requires_budget_lag(self):
         consumption_obj = CreditAugmentedConsumption(
@@ -865,21 +876,8 @@ class TestCreditAugmentedHouseholdConsumption:
             with_housing.last_formula_implied_mpc,
         )
 
-    def test_persisted_budget_lag_keeps_multi_period_path_stable_while_goods_lag_drifts(self):
-        """Dynamic guard for GH #120: the ECM lag must be the persisted budget.
-
-        Every other test in this class evaluates a single call, so none of them
-        can see the defect this one targets: it lives purely in the
-        period-to-period recursion. Feeding realised goods spending back as the
-        lag compares a rent-inclusive target against a rent-exclusive lag, which
-        drags the target down every period and compounds. A seed-15 t=10 run
-        showed GDP -17.6% and still widening, while the whole unit suite stayed
-        green.
-
-        The two loops below are identical except for which quantity is fed back.
-        The assertion is comparative on purpose: it fails on the pre-fix wiring
-        rather than merely passing on the fixed one.
-        """
+    def test_persisted_budget_and_market_lag_follow_same_multi_period_path(self):
+        """The operative market target and persisted ECM budget share a boundary."""
         n_periods = 12
 
         def _rule():
@@ -917,7 +915,7 @@ class TestCreditAugmentedHouseholdConsumption:
             return path, long_run
 
         def _goods_lag_path(housing):
-            """Pre-fix wiring: feed back realised (carved-out) goods spending."""
+            """Feed back realised market spending on the same boundary."""
             rule, path = _rule(), []
             lagged_goods = np.asarray(_base_args()["lagged_consumption"], dtype=float)
             for _ in range(n_periods):
@@ -935,27 +933,20 @@ class TestCreditAugmentedHouseholdConsumption:
         goods_small = _goods_lag_path(small_housing)
         goods_large = _goods_lag_path(large_housing)
 
-        # The defining property: the budget lag makes the ECM state independent
-        # of the housing flow, so the path converges on the same long-run target
-        # whatever rent the household pays, and settles rather than ratcheting.
+        # The defining property: the persisted CACF budget lag is independent
+        # of the housing flow. Market spending is lower by cash rent and will
+        # therefore differ when realised market spending is fed back instead.
         assert budget_small[-1] == pytest.approx(long_run, rel=0.02), (budget_small[-1], long_run)
         assert budget_large[-1] == pytest.approx(long_run_large, rel=0.02)
         assert budget_small[-1] == pytest.approx(budget_large[-1], rel=1e-9), (budget_small[-1], budget_large[-1])
         tail = budget_small[-3:]
         assert max(tail) / min(tail) < 1.01, budget_small
 
-        # The pre-fix wiring instead converges on a depressed level, and the
-        # shortfall scales with the housing flow that is leaking into the state.
-        # This is the assertion that fails before the fix.
-        assert goods_small[-1] < 0.95 * budget_small[-1], (goods_small[-1], budget_small[-1])
-        assert goods_large[-1] < goods_small[-1], (goods_large[-1], goods_small[-1])
+        np.testing.assert_allclose(goods_small[0], budget_small[0] - small_housing)
+        np.testing.assert_allclose(goods_large[0], budget_large[0] - large_housing)
+        assert goods_large[-1] < goods_small[-1]
 
-    def test_housing_carve_out_floors_goods_demand_at_zero_without_going_negative(self):
-        # When the housing flow exceeds the calibrated target, market demand
-        # floors at zero rather than turning negative and creating phantom
-        # negative firm demand. Whether the residual is a real cash gap is a
-        # feasibility question, settled on cash rent only (see the Stage 5
-        # shortfall tests), not here.
+    def test_extreme_cash_rent_floors_market_demand_at_zero(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -974,7 +965,6 @@ class TestCreditAugmentedHouseholdConsumption:
 
         np.testing.assert_allclose(components["target_consumption_goods_total"], 0.0)
         np.testing.assert_allclose(result.sum(axis=1), 0.0)
-        assert components["target_consumption_calibrated_total"] > 0.0
 
     def test_continuous_wealth_calibration_off_by_default(self):
         consumption_obj = CreditAugmentedConsumption(

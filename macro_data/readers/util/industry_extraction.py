@@ -29,7 +29,6 @@ def compile_industry_data(
         capital_replacement_matrix_sources = {}
     if capital_depreciation_accounting_modes is None:
         capital_depreciation_accounting_modes = {}
-
     for country_name in country_names:
         # Matrices
 

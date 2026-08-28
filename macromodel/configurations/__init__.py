@@ -28,7 +28,7 @@ allowing for flexible scenario analysis.
 """
 
 from .bank_configuration import BankParameters, BanksConfiguration
-from .central_bank_configuration import CentralBankConfiguration
+from .central_bank_configuration import CentralBankConfiguration, CentralBankTaylorRuleOverrides
 from .central_government_configuration import CentralGovernmentConfiguration, CentralGovernmentTaxOverrides
 from .country_config_loader import load_country_configuration
 from .country_configuration import CountryConfiguration

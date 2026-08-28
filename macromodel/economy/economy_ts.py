@@ -253,7 +253,6 @@ def create_economy_timeseries(
             + initial_total_taxes_on_products
             - initial_total_taxes_on_production
             + initial_real_rent_paid.sum()
-            + initial_imp_rent_paid.sum()
         ],
         gdp_output_growth=[np.nan],
         total_output=[initial_firm_total_sales],
@@ -311,9 +310,13 @@ def create_economy_timeseries(
             + (1 + export_taxes) * initial_exports.sum()
             - initial_imports.sum()
             + initial_real_rent_paid.sum()
-            + initial_imp_rent_paid.sum()
         ],
         gdp_expenditure_growth=[np.nan],
+        # Expenditure GDP minus output GDP, computed from raw exports/imports
+        # before compute_gdp()'s always_adjust trade-balance plug. Zero here by
+        # construction (see the sanity-check assertion below); compute_gdp()
+        # appends the true per-period value before it mutates exports/imports.
+        gdp_expenditure_prebalancing_residual=[0.0],
         total_household_fce=[initial_hh_consumption],
         total_household_fce_growth=[np.nan],
         total_government_fce=[initial_gov_consumption],
@@ -335,8 +338,7 @@ def create_economy_timeseries(
             + initial_total_taxes_on_products
             + initial_hh_rental_income.sum()
             + initial_cg_rent_received
-            + initial_cg_taxes_rental_income
-            + initial_imp_rent_paid.sum(),
+            + initial_cg_taxes_rental_income,
         ],
         gdp_income_growth=[np.nan],
         total_gross_operating_surplus_and_mixed_income=[initial_total_operating_surplus],

@@ -15,8 +15,10 @@ from macromodel.agents.households.func.borrow_vs_sell import (
 from macromodel.agents.households.func.consumer_distress import CURRENT, DELINQUENT, FICP
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.financial_feasibility import PostGrantFeasiblePlan, PreGrantFeasiblePlan
+from macromodel.agents.households.func.investment import NoHouseholdInvestment
 from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
+from macromodel.agents.households.func.target_credit import DefaultHouseholdTargetCredit
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
 from macromodel.configurations.households_configuration import HouseholdsConfiguration
@@ -922,6 +924,66 @@ class TestHouseholds:
             expected_financial_income,
         )
 
+    def test__no_household_investment_is_authoritative_under_zero_growth(self, test_households):
+        test_households.functions["investment"] = NoHouseholdInvestment()
+
+        result = test_households.compute_target_investment(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            exogenous_total_investment=np.ones(2),
+            tau_cf=0.2,
+            assume_zero_growth=True,
+        )
+
+        np.testing.assert_allclose(result, 0.0)
+        assert result.shape == test_households.ts.current("investment").shape
+
+    def test__target_credit_adds_cash_rent_once(self):
+        rule = DefaultHouseholdTargetCredit(down_payment_fraction=0.2)
+        target = np.array([[80.0]])
+        income = np.array([50.0])
+        assets = np.array([10.0])
+
+        without_rent = rule.compute_target_consumption_loans(target, income, np.array([0.0]), assets)
+        with_rent = rule.compute_target_consumption_loans(target, income, np.array([25.0]), assets)
+
+        np.testing.assert_allclose(without_rent, [20.0])
+        np.testing.assert_allclose(with_rent, without_rent + 25.0)
+
+    def test__investment_off_does_not_reclassify_goods_market_roundoff(self, test_households):
+        test_households.functions["investment"] = NoHouseholdInvestment()
+        target = np.zeros_like(test_households.ts.current("target_consumption"))
+        target[:, 0] = 10.0
+        realised = target.copy()
+        # A realistic sub-cent (LCU) goods-market rounding residual, not a
+        # floating-point-noise-scale one: this is the boundary the guard's
+        # tolerance is meant to tolerate.
+        realised[:, 0] += 0.005
+        test_households.ts.override_current("target_consumption", target)
+        test_households.ts.override_current("target_investment", np.zeros_like(target))
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
+
+        test_households.update_consumption_and_investment(tau_vat=0.13, tau_cf=0.0)
+
+        np.testing.assert_array_equal(test_households.ts.current("investment"), np.zeros_like(target))
+        np.testing.assert_allclose(test_households.ts.current("consumption"), realised.sum(axis=1))
+
+    def test__investment_off_still_raises_on_material_excess_spending(self, test_households):
+        test_households.functions["investment"] = NoHouseholdInvestment()
+        target = np.zeros_like(test_households.ts.current("target_consumption"))
+        target[:, 0] = 10.0
+        realised = target.copy()
+        # Well above the sub-cent tolerance: a genuine reclassification
+        # attempt, not goods-market rounding, and must still raise.
+        realised[:, 0] += 1.0
+        test_households.ts.override_current("target_consumption", target)
+        test_households.ts.override_current("target_investment", np.zeros_like(target))
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
+
+        with pytest.raises(RuntimeError, match="cannot reclassify material expenditure"):
+            test_households.update_consumption_and_investment(tau_vat=0.13, tau_cf=0.0)
+
     def test__paper_asset_returns_are_excluded_from_expected_and_realised_income(self, test_households):
         from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 
@@ -947,6 +1009,8 @@ class TestHouseholds:
         test_households.ts.override_current("expected_income_financial_assets", np.full(n_households, 13.0))
         test_households.ts.override_current("income_financial_assets", np.full(n_households, 17.0))
 
+        # Cash rent is paid to landlords and is therefore operative household
+        # rental income. Paper returns remain excluded from both totals.
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 16.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 23.0))
 
@@ -1682,6 +1746,29 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         np.testing.assert_allclose(test_households.ts.current("realised_cash_flow_adjustment"), 0.0)
         np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), 85.0)
         np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0)
+
+    def test__cash_rent_purchase_changes_household_cash_uses_exactly_once(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=False,
+            use_real_liquidation=True,
+        )
+        rent_increase = 13.0
+        realised = np.zeros_like(test_households.ts.current("nominal_amount_spent_in_lcu"))
+        test_households.ts.override_current("rent", np.full(n_households, rent_increase))
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        # Cash rent is paid separately from market purchases, so it is deducted
+        # exactly once from household cash.
+        np.testing.assert_allclose(
+            test_households.ts.current("liquid_financial_assets"),
+            100.0 - rent_increase,
+        )
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), 0.0)
 
     def test__resolver_books_early_committed_credit_once_in_the_cash_ledger(
         self,

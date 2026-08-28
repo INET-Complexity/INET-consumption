@@ -479,7 +479,7 @@ FRA:
   central_government:
     tax_overrides:
       # Employer SI is an effective national-accounts override for France 2014.
-      employer_social_insurance_rate: 0.30
+      employer_social_insurance_rate: 0.30552085148943465
       # Use a configurable France VAT rate on household consumption.
       value_added_tax_rate: 0.13
       # Treat the full household fixed-capital-formation vector as a taxable
@@ -488,10 +488,24 @@ FRA:
       # Do not apply a second capital-formation tax to this household flow.
       household_capital_formation_rate: 0.0
       # Provisional firm-side rate applied once to realised capital-goods purchases.
-      firm_capital_formation_rate: 0.25
-      # Flat user-configured rate on realised firm output. This is a reduced-form
-      # product/production-tax envelope, not an ESA D29 rate.
-      other_product_production_tax_rate: 0.066
+      firm_capital_formation_rate: 0.24856698371134814
+      # Scale factor on the shared production-tax vector. 5.683422794 matches
+      # France's 15.8% 2014 S13 products/production-tax benchmark at period 1,
+      # but production tax is deducted before corporate taxable profit, so
+      # that scale erodes corporate tax revenue with nothing offsetting it:
+      # a full t_max=50 run diverges to a 51%-of-GDP deficit and 4.4x annual
+      # GDP debt by period 50 (single-seed 68; see
+      # knowledge-vault/wiki/debugging/2026-08-27-fiscal-and-consumption-boundary-reconciliation.md).
+      # 2.0 is the best full-horizon candidate found in a 4-point sweep
+      # (1.0/2.0/3.5/5.683422794): deficit 24.9%->21.0% and debt 1.09x->2.84x
+      # annual GDP, both improving over the horizon rather than exploding.
+      # It only reaches a 9.82% products/production-tax share, well short of
+      # the 15.8% target -- that gap is open, not resolved, and the target is
+      # not reachable by this scale alone without offsetting the corporate-tax
+      # erosion. Multi-seed validated (seeds 15/68/232, t_max=50): deficit
+      # converges to 21.0-21.2% of GDP and debt to 2.84-2.93x annual GDP in
+      # all three, no seed-to-seed divergence.
+      production_tax_vector_scale: 2.0
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter
@@ -515,6 +529,21 @@ FRA:
         name: SmoothTaylorRule
         path_name: policy_rate
         parameters: {}
+    # Overrides for the ARDL-estimated SmoothTaylorRule coefficients (estimated in
+    # DefaultSyntheticCentralBank._estimate_smooth_taylor_rule from historical
+    # BIS policy-rate, CPI, and output-gap data). Leave a field null to keep the
+    # estimated value. Current FRA-estimated values, for reference:
+    #   targeted_inflation_rate: 0.02
+    #   rho:                     0.9036463687149167
+    #   r_star:                  -0.0025243761196825955
+    #   phi_pi:                  1.89418342003858
+    #   phi_q:                   0.473767352034239
+    taylor_rule_overrides:
+      targeted_inflation_rate: null
+      rho: null
+      r_star: null
+      phi_pi: null
+      phi_q: null
 
   banks:
     functions:

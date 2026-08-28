@@ -60,7 +60,7 @@ class Config:
 
 CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
-    "households.functions.consumption.parameters.['long_run_intercept']": -0.2,
+    "households.functions.consumption.parameters.['long_run_intercept']": -0.3,
     # "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
     # "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
     # "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
@@ -71,6 +71,10 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.56,
     # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
     # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
+    # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
+    # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
+    # "central_bank.taylor_rule_overrides['rho']": 0.25,
+    "central_government.tax_overrides['production_tax_vector_scale']": 1,
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
@@ -133,15 +137,16 @@ MACRO_COLUMNS = (
     "household_consumption_to_gdp",
     "government_consumption_to_gdp",
     "gdp",
-    "inventory",
     "gdp_growth",
     "unemployment_rate",
     "central_bank_policy_rate",
-    "wages",
+    "inventory",
     "profits",
-    "cpi_transaction",
-    "ppi",
+    "wages",
+    "wage_rate_yoy_change",
     "cpi_transaction_yoy_change",
+    # "cpi_transaction",
+    # "ppi",
     "bank_insolvency_rate",
     "avg_tfp_multiplier",
 )

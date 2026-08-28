@@ -140,15 +140,32 @@ class CentralBank(Agent):
         # Create the corresponding time series object
         ts = create_central_bank_timeseries(selected_data)
 
+        selected_phi_pi = data["phi_pi"].values[0] if "phi_pi" in data.columns else data["xi_pi"].values[0]
+        selected_phi_q = data["phi_q"].values[0] if "phi_q" in data.columns else data["xi_gamma"].values[0]
+
+        # Country configs may override any subset of the ARDL-estimated Taylor-rule
+        # coefficients (see CentralBankTaylorRuleOverrides); unset fields keep the
+        # estimated value.
+        overrides = configuration.taylor_rule_overrides
+        targeted_inflation_rate = (
+            overrides.targeted_inflation_rate
+            if overrides.targeted_inflation_rate is not None
+            else data["targeted_inflation_rate"].values[0]
+        )
+        rho = overrides.rho if overrides.rho is not None else selected_rho
+        r_star = overrides.r_star if overrides.r_star is not None else selected_r_star
+        phi_pi = overrides.phi_pi if overrides.phi_pi is not None else selected_phi_pi
+        phi_q = overrides.phi_q if overrides.phi_q is not None else selected_phi_q
+
         # Initialize monetary policy parameters
         states: dict[str, float | np.ndarray | list[np.ndarray]] = {
-            "targeted_inflation_rate": data["targeted_inflation_rate"].values[0],
-            "rho": selected_rho,
-            "r_star": selected_r_star,
+            "targeted_inflation_rate": targeted_inflation_rate,
+            "rho": rho,
+            "r_star": r_star,
             "xi_pi": data["xi_pi"].values[0],
             "xi_gamma": data["xi_gamma"].values[0],
-            "phi_pi": (data["phi_pi"].values[0] if "phi_pi" in data.columns else data["xi_pi"].values[0]),
-            "phi_q": (data["phi_q"].values[0] if "phi_q" in data.columns else data["xi_gamma"].values[0]),
+            "phi_pi": phi_pi,
+            "phi_q": phi_q,
         }
 
         return cls(

@@ -129,6 +129,28 @@ def _resolve_frm_coefficients_path(
     return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
 
 
+def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
+    """Apply a model-level production-tax calibration to all initial tax views."""
+    if scale <= 0.0:
+        raise ValueError("Production tax vector scale must be positive.")
+
+    industry_vectors = synthetic_country.industry_data["industry_vectors"]
+    for column in ("Taxes Less Subsidies Rates", "Taxes Less Subsidies in LCU", "Taxes Less Subsidies in USD"):
+        if column in industry_vectors:
+            industry_vectors[column] *= scale
+
+    firm_data = synthetic_country.firms.firm_data
+    firm_data["Taxes paid on Production"] *= scale
+
+    central_gov_data = synthetic_country.central_government.central_gov_data
+    previous_production_tax = float(central_gov_data["Taxes on Production"].iloc[0])
+    calibrated_production_tax = previous_production_tax * scale
+    tax_delta = calibrated_production_tax - previous_production_tax
+    central_gov_data["Taxes on Production"] = [calibrated_production_tax]
+    central_gov_data["Taxes on Products"] += tax_delta
+    central_gov_data["Revenue"] += tax_delta
+
+
 def compute_stage5_subsistence_support(remaining_subsistence_shortfall: np.ndarray) -> np.ndarray:
     """Return cleaned real Stage 5 support implied by the post-floor shortfall."""
     shortfall = np.asarray(remaining_subsistence_shortfall, dtype=float)
@@ -521,6 +543,17 @@ class Country:
             Country: Initialized country economy
         """
         scale = synthetic_country.scale
+        production_tax_vector_scale = country_configuration.central_government.tax_overrides.production_tax_vector_scale
+        if production_tax_vector_scale is not None:
+            # _apply_production_tax_vector_scale mutates industry/firm/government
+            # tax views in place. synthetic_country may be a shared object reused
+            # across seeds (e.g. run_seeded_monte_carlo's batch_size>1 constructs
+            # several seeds from one DataWrapper in the same worker process), so
+            # scale a private copy rather than the caller's object -- otherwise
+            # repeated construction from the same synthetic_country compounds the
+            # scale multiplicatively instead of reapplying it once each time.
+            synthetic_country = deepcopy(synthetic_country)
+            _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
         add_emissions = all([industry in industries for industry in emission_industries])
@@ -1276,10 +1309,13 @@ class Country:
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
         )
-        income_rental = self.households.compute_rental_income(
+        diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
         )
+        # Cash rent is paid to landlords and remains operative household rental
+        # income. Imputed rent is tracked separately as a diagnostic only.
+        income_rental = diagnostic_income_rental
         paper_returns_are_capital_gains = getattr(
             self.households.functions["wealth"],
             "illiquid_returns_are_capital_gains",
@@ -1302,6 +1338,8 @@ class Country:
             self.households.ts.override_current("expected_income_social_transfers", expected_income_social_transfers)
             self.households.ts.override_current("income_rental", income_rental)
             self.households.ts.override_current("total_income_rental", [income_rental.sum()])
+            self.households.ts.override_current("diagnostic_income_rental", diagnostic_income_rental)
+            self.households.ts.override_current("total_diagnostic_income_rental", [diagnostic_income_rental.sum()])
             self.households.ts.override_current(
                 "expected_income_financial_assets",
                 expected_income_financial_assets,
@@ -1322,6 +1360,8 @@ class Country:
             self.households.ts.expected_income_social_transfers.append(expected_income_social_transfers)
             self.households.ts.income_rental.append(income_rental)
             self.households.ts.total_income_rental.append([self.households.ts.current("income_rental").sum()])
+            self.households.ts.diagnostic_income_rental.append(diagnostic_income_rental)
+            self.households.ts.total_diagnostic_income_rental.append([diagnostic_income_rental.sum()])
             self.households.ts.expected_income_financial_assets.append(expected_income_financial_assets)
             self.households.ts.expected_income_dividend_distributions.append(expected_dividend_income)
             self.households.ts.total_expected_income_dividend_distributions.append([expected_dividend_income.sum()])
@@ -1519,6 +1559,25 @@ class Country:
         else:
             self.households.ts.target_consumption.append(target_consumption)
 
+        # Investment is part of the household goods budget, so the selected
+        # intervention must be materialised before feasibility, financing, and
+        # goods-market allocation inspect household plans. In particular,
+        # NoHouseholdInvestment must be zero here even under zero-growth runs.
+        target_investment = self.households.compute_target_investment(
+            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+            current_cpi=self.economy.current_consumer_price_level(),
+            initial_cpi=self.economy.initial_consumer_price_level(),
+            exogenous_total_investment=self.exogenous.national_accounts_during[
+                "Real Household Investment (Value)"
+            ].values.flatten(),
+            tau_cf=self.central_government.states["Household Capital Formation Tax"],
+            assume_zero_growth=self.assume_zero_growth,
+        )
+        if replace_current:
+            self.households.ts.override_current("target_investment", target_investment)
+        else:
+            self.households.ts.target_investment.append(target_investment)
+
         # Stage 5 (feasibility resolver), Increment 0: diagnostics-only liquidity-
         # shortfall computation. Must run after target_consumption is finalized
         # above (it consumes that value) and uses the same scheduled mortgage
@@ -1611,22 +1670,6 @@ class Country:
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
                 current_ifa=self.households.ts.current("illiquid_financial_assets"),
             )
-
-        target_investment = self.households.compute_target_investment(
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
-            current_cpi=self.economy.current_consumer_price_level(),
-            initial_cpi=self.economy.initial_consumer_price_level(),
-            exogenous_total_investment=self.exogenous.national_accounts_during[
-                "Real Household Investment (Value)"
-            ].values.flatten(),
-            tau_cf=self.central_government.states["Household Capital Formation Tax"],
-            assume_zero_growth=self.assume_zero_growth,
-        )
-
-        if replace_current:
-            self.households.ts.override_current("target_investment", target_investment)
-        else:
-            self.households.ts.target_investment.append(target_investment)
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""
@@ -3191,6 +3234,8 @@ class Country:
         )
         self.households.ts.dicts["income_rental"][-1] = final_income_rental
         self.households.ts.dicts["total_income_rental"][-1] = [final_income_rental.sum()]
+        self.households.ts.dicts["diagnostic_income_rental"][-1] = final_income_rental
+        self.households.ts.dicts["total_diagnostic_income_rental"][-1] = [final_income_rental.sum()]
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(
@@ -3228,7 +3273,7 @@ class Country:
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()
-            # Use non-property income (employment + social transfers + rental), not the
+            # Use non-property income (employment + social transfers), not the
             # full income total used elsewhere, as the Kalman-update signal: total income
             # includes stochastic income_financial_assets, which can be large and negative
             # after a bad market draw and is unrelated to the permanent-income concept this
@@ -3243,7 +3288,6 @@ class Country:
                 lagged_non_property_income = (
                     self.households.ts.dicts["income_employee"][-5]
                     + self.households.ts.dicts["income_social_transfers"][-5]
-                    + self.households.ts.dicts["income_rental"][-5]
                 )
                 lagged_real_non_property_income = lagged_non_property_income / self.economy.ts.dicts[cpi_series][-5][0]
             self.households.update_income_belief_learning_state(

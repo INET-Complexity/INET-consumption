@@ -36,8 +36,8 @@ class CentralGovernmentTaxOverrides(BaseModel):
 
     The defaults keep the historical reader values and the generic model
     accounting unchanged.  Country configuration files can opt into a
-    separate household/firm capital-formation tax base and a documented
-    reduced-form product/production-tax envelope.
+    separate household/firm capital-formation tax base or scale the shared
+    production-tax vector.
     """
 
     employer_social_insurance_rate: float | None = None
@@ -45,7 +45,7 @@ class CentralGovernmentTaxOverrides(BaseModel):
     household_investment_vat_rate: float | None = None
     household_capital_formation_rate: float | None = None
     firm_capital_formation_rate: float | None = None
-    other_product_production_tax_rate: float | None = None
+    production_tax_vector_scale: float | None = Field(default=None, gt=0.0)
 
 
 class CentralGovernmentConfiguration(BaseModel):

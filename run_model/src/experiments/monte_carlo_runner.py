@@ -198,6 +198,18 @@ WAGE_ARMS: dict[str, dict[str, object]] = {
         "wage_setter_name": "ContractWageSetter",
         "wage_setter": {"initial_rate_source": "individual"},
     },
+    # U-A2b: as contract_firm_anchor, but incumbent rates index to smoothed
+    # realised output per labour input instead of the TFP multiplier. Tests the
+    # deferred tension: the TFP parameter grows about twice as fast as realised
+    # productivity, and that wedge is the candidate cause of the acceleration.
+    "contract_realised_anchor": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {"initial_rate_source": "firm_anchor", "indexation_base": "realised_productivity"},
+    },
+    "contract_realised_individual": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {"initial_rate_source": "individual", "indexation_base": "realised_productivity"},
+    },
 }
 
 

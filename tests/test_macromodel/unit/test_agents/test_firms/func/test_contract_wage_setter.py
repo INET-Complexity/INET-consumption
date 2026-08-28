@@ -43,7 +43,7 @@ def _setter(**kwargs) -> ContractWageSetter:
     )
 
 
-def _run(setter, carried, new_job=None, offered=None, tfp=TFP, prev_tfp=PREV_TFP):
+def _run(setter, carried, new_job=None, offered=None, tfp=TFP, prev_tfp=PREV_TFP, realised=None):
     if new_job is None:
         new_job = np.zeros(5, dtype=bool)
     if offered is None:
@@ -71,6 +71,7 @@ def _run(setter, carried, new_job=None, offered=None, tfp=TFP, prev_tfp=PREV_TFP
         current_tfp_multiplier=tfp,
         prev_tfp_multiplier=prev_tfp,
         carried_wage_rate=carried,
+        realised_productivity_ratio=realised,
     )
 
 
@@ -298,3 +299,44 @@ def test__offer_is_floored_at_unemployment_benefits():
     f = _offer(_setter(), carried, benefits=42.0)
 
     assert f(0, 1.0) == 42.0
+
+
+def test__invalid_indexation_base_is_rejected():
+    with pytest.raises(ValueError, match="indexation_base"):
+        _setter(indexation_base="nonsense")
+
+
+def test__realised_base_requires_the_ratio():
+    setter = _setter(indexation_base="realised_productivity")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    with pytest.raises(ValueError, match="realised_productivity_ratio"):
+        _run(setter, carried)
+
+
+def test__realised_base_indexes_to_productivity_not_tfp():
+    """The whole point of U-A2b: TFP growth must not enter the rate."""
+    setter = _setter(indexation_base="realised_productivity")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    realised = np.array([1.01, 1.02, 1.03])
+
+    _run(setter, carried, realised=realised)
+
+    np.testing.assert_allclose(carried[:4], np.array([10.0, 20.0, 30.0, 40.0]) * realised[FIRM_OF_EMPLOYEE])
+
+
+def test__tfp_base_ignores_the_realised_ratio():
+    setter = _setter(indexation_base="tfp_multiplier")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+
+    _run(setter, carried, realised=np.array([5.0, 5.0, 5.0]))
+
+    np.testing.assert_allclose(carried[:4], np.array([10.0, 20.0, 30.0, 40.0]) * (TFP / PREV_TFP)[FIRM_OF_EMPLOYEE])
+
+
+def test__non_finite_realised_ratio_falls_back_to_no_growth():
+    setter = _setter(indexation_base="realised_productivity")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+
+    _run(setter, carried, realised=np.array([np.nan, -1.0, np.inf]))
+
+    np.testing.assert_allclose(carried[:4], np.array([10.0, 20.0, 30.0, 40.0]))

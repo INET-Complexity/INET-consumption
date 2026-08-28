@@ -500,6 +500,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         labour_market_tightness_markup_scale: float,
         markup_time_span: int,
         initial_rate_source: str = "individual",
+        indexation_base: str = "tfp_multiplier",
         **kwargs,
     ):
         super().__init__(
@@ -509,9 +510,35 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         )
         if initial_rate_source not in ("individual", "firm_anchor"):
             raise ValueError(f"initial_rate_source must be 'individual' or 'firm_anchor', got {initial_rate_source!r}")
+        if indexation_base not in ("tfp_multiplier", "realised_productivity"):
+            raise ValueError(
+                f"indexation_base must be 'tfp_multiplier' or 'realised_productivity', got {indexation_base!r}"
+            )
         self.initial_rate_source = initial_rate_source
+        self.indexation_base = indexation_base
         self._rates_seeded = False
         self.last_contract_rate_mean = None
+
+    def _indexation_ratio(
+        self,
+        tfp_ratio: np.ndarray,
+        realised_productivity_ratio: np.ndarray | None,
+    ) -> np.ndarray:
+        """Select the growth factor incumbent rates are indexed to.
+
+        ``"tfp_multiplier"`` uses the technical TFP parameter, reproducing the
+        settled specification. ``"realised_productivity"`` uses smoothed output
+        per labour input instead, which cannot outrun actual output by
+        construction. In the France calibration the two diverge roughly 2:1
+        (+4.13% against +2.04% over t=15-50), and that wedge is what pushes real
+        unit labour cost up every period.
+        """
+        if self.indexation_base == "tfp_multiplier":
+            return tfp_ratio
+        if realised_productivity_ratio is None:
+            raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
+        ratio = np.asarray(realised_productivity_ratio, dtype=float)
+        return np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
 
     def _seed_rates(
         self,
@@ -552,6 +579,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         current_tfp_multiplier: np.ndarray = None,
         prev_tfp_multiplier: np.ndarray = None,
         carried_wage_rate: np.ndarray = None,
+        realised_productivity_ratio: np.ndarray = None,
     ) -> np.ndarray:
         """Advance carried wage rates and return paid earnings.
 
@@ -587,9 +615,10 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             prev_tfp = np.asarray(prev_tfp_multiplier, dtype=float)
             tfp_ratio = np.divide(tfp, prev_tfp, out=np.ones_like(tfp), where=prev_tfp > 0)
 
-        # Incumbents: index the carried rate to firm TFP growth only.
+        # Incumbents: index the carried rate to productivity growth only.
+        indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
         incumbent = employed & ~current_individual_stating_new_job
-        carried_wage_rate[incumbent] *= tfp_ratio[corresponding_firm[incumbent]]
+        carried_wage_rate[incumbent] *= indexation_ratio[corresponding_firm[incumbent]]
 
         # New hires: the accepted offer rate replaces the carried rate and
         # persists from here, rather than lasting a single period.
@@ -628,6 +657,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         current_tfp_multiplier: np.ndarray = None,
         prev_tfp_multiplier: np.ndarray = None,
         carried_wage_rate: np.ndarray = None,
+        realised_productivity_ratio: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Build the offer function from carried contract rates.
 
@@ -696,7 +726,8 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             where=prev_labour_productivity_factor > 0,
         )
 
-        offered_rate = reference_rate * tfp_ratio * effort_ratio * (1.0 + current_wage_tightness_markup)
+        indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
+        offered_rate = reference_rate * indexation_ratio * effort_ratio * (1.0 + current_wage_tightness_markup)
         offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
 
         self.last_wage_offer_historic_base = reference_rate.copy()

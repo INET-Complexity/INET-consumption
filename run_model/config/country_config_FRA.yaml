@@ -502,7 +502,9 @@ FRA:
       # It only reaches a 9.82% products/production-tax share, well short of
       # the 15.8% target -- that gap is open, not resolved, and the target is
       # not reachable by this scale alone without offsetting the corporate-tax
-      # erosion. Not yet multi-seed validated.
+      # erosion. Multi-seed validated (seeds 15/68/232, t_max=50): deficit
+      # converges to 21.0-21.2% of GDP and debt to 2.84-2.93x annual GDP in
+      # all three, no seed-to-seed divergence.
       production_tax_vector_scale: 2.0
     functions:
       social_benefits:

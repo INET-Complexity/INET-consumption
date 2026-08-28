@@ -1,6 +1,5 @@
 """Multi-seed comparison of the wage arms (t_max=50, 10 seeds each)."""
 
-import sys
 from pathlib import Path
 
 import numpy as np

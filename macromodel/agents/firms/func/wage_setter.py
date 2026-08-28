@@ -501,6 +501,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         markup_time_span: int,
         initial_rate_source: str = "individual",
         indexation_base: str = "tfp_multiplier",
+        slack_response_up: float = 0.0,
+        slack_response_down: float = 0.0,
+        max_offer_log_cut: float = 0.02,
         **kwargs,
     ):
         super().__init__(
@@ -514,10 +517,68 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             raise ValueError(
                 f"indexation_base must be 'tfp_multiplier' or 'realised_productivity', got {indexation_base!r}"
             )
+        if slack_response_up < 0.0 or slack_response_down < 0.0:
+            raise ValueError("slack_response_up and slack_response_down must be non-negative.")
+        if max_offer_log_cut < 0.0:
+            raise ValueError("max_offer_log_cut must be non-negative.")
         self.initial_rate_source = initial_rate_source
         self.indexation_base = indexation_base
+        self.slack_response_up = float(slack_response_up)
+        self.slack_response_down = float(slack_response_down)
+        self.max_offer_log_cut = float(max_offer_log_cut)
+        self.last_offer_slack_gap = None
+        self.last_offer_slack_factor = None
         self._rates_seeded = False
         self.last_contract_rate_mean = None
+
+    def _slack_factor(
+        self,
+        desired_labour_inputs: np.ndarray | None,
+        realised_labour_inputs: np.ndarray | None,
+        n_firms: int,
+    ) -> np.ndarray:
+        """Asymmetric signed response of wage offers to labour-market slack.
+
+        The parent's tightness markup is floored at zero, so a hiring shortfall
+        raises offers but excess labour never lowers them. This adds the missing
+        negative arm, deliberately asymmetric:
+
+            g = (D - L) / max(D, eps)
+            dlog w = kappa_up * max(g, 0) - kappa_down * max(-g, 0)
+
+        with ``kappa_down < kappa_up`` and the fall bounded below by
+        ``-max_offer_log_cut``, so downward nominal rigidity is preserved: slack
+        exerts some, not unlimited, downward pressure. The existing
+        unemployment-benefit floor still applies to the resulting offer.
+
+        Returns a multiplicative factor of 1.0 when both responses are zero, so
+        the arm is inert by default.
+        """
+        ones = np.ones(n_firms)
+        if self.slack_response_up == 0.0 and self.slack_response_down == 0.0:
+            return ones
+        if desired_labour_inputs is None or realised_labour_inputs is None:
+            return ones
+
+        desired = np.asarray(desired_labour_inputs, dtype=float)
+        realised = np.asarray(realised_labour_inputs, dtype=float)
+        if desired.shape != (n_firms,) or realised.shape != (n_firms,):
+            return ones
+
+        gap = np.divide(
+            desired - realised,
+            np.maximum(desired, 1e-12),
+            out=np.zeros(n_firms),
+            where=np.isfinite(desired) & np.isfinite(realised) & (desired > 0),
+        )
+        gap = np.clip(gap, -1.0, 1.0)
+        log_change = self.slack_response_up * np.maximum(gap, 0.0) - self.slack_response_down * np.maximum(-gap, 0.0)
+        log_change = np.maximum(log_change, -self.max_offer_log_cut)
+
+        self.last_offer_slack_gap = gap.copy()
+        factor = np.exp(log_change)
+        self.last_offer_slack_factor = factor.copy()
+        return factor
 
     def _indexation_ratio(
         self,
@@ -658,6 +719,8 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         prev_tfp_multiplier: np.ndarray = None,
         carried_wage_rate: np.ndarray = None,
         realised_productivity_ratio: np.ndarray = None,
+        desired_labour_inputs: np.ndarray = None,
+        realised_labour_inputs: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Build the offer function from carried contract rates.
 
@@ -727,7 +790,10 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         )
 
         indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
-        offered_rate = reference_rate * indexation_ratio * effort_ratio * (1.0 + current_wage_tightness_markup)
+        slack_factor = self._slack_factor(desired_labour_inputs, realised_labour_inputs, n_firms)
+        offered_rate = (
+            reference_rate * indexation_ratio * effort_ratio * (1.0 + current_wage_tightness_markup) * slack_factor
+        )
         offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
 
         self.last_wage_offer_historic_base = reference_rate.copy()

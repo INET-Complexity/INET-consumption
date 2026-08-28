@@ -340,3 +340,84 @@ def test__non_finite_realised_ratio_falls_back_to_no_growth():
     _run(setter, carried, realised=np.array([np.nan, -1.0, np.inf]))
 
     np.testing.assert_allclose(carried[:4], np.array([10.0, 20.0, 30.0, 40.0]))
+
+
+def _offer_slack(setter, carried, desired, realised, markup=None):
+    return setter.get_offered_wage_given_labour_inputs_function(
+        corresponding_firm=CORRESPONDING_FIRM,
+        current_individual_labour_inputs=np.array([1.0, 1.0, 1.0, 1.0, 0.0]),
+        previous_employee_income=np.full(5, 999.0),
+        current_target_production=np.full(N_FIRMS, 10.0),
+        current_limiting_intermediate_inputs=np.full(N_FIRMS, 10.0),
+        current_limiting_capital_inputs=np.full(N_FIRMS, 10.0),
+        industry_labour_productivity_by_firm=np.full(N_FIRMS, 1.0),
+        initial_wage_per_capita=INITIAL_WAGE,
+        current_wage_per_capita=np.full(N_FIRMS, 55.0),
+        current_labour_productivity_factor=np.ones(N_FIRMS),
+        prev_labour_productivity_factor=np.ones(N_FIRMS),
+        current_wage_tightness_markup=np.zeros(N_FIRMS) if markup is None else markup,
+        income_taxes=INCOME_TAX,
+        employee_social_insurance_tax=EMPLOYEE_SI,
+        employer_social_insurance_tax=EMPLOYER_SI,
+        unemployment_benefits_by_individual=0.0,
+        current_tfp_multiplier=TFP,
+        prev_tfp_multiplier=TFP,
+        carried_wage_rate=carried,
+        desired_labour_inputs=desired,
+        realised_labour_inputs=realised,
+    )
+
+
+def test__slack_is_inert_by_default():
+    """Both responses default to zero, so U-A is unaffected."""
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    f = _offer_slack(_setter(), carried, np.array([10.0, 10.0, 10.0]), np.array([5.0, 5.0, 5.0]))
+    np.testing.assert_allclose(f(0, 1.0), 15.0)
+
+
+def test__excess_labour_lowers_the_offer():
+    """The missing negative arm: realised above desired must cut the offer."""
+    setter = _setter(slack_response_up=0.05, slack_response_down=0.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    # realised 20% above desired -> gap = -0.2
+    f = _offer_slack(setter, carried, np.array([10.0, 10.0, 10.0]), np.array([12.0, 12.0, 12.0]))
+    assert f(0, 1.0) < 15.0
+    np.testing.assert_allclose(f(0, 1.0), 15.0 * np.exp(-0.02 * 0.2))
+
+
+def test__hiring_shortfall_raises_the_offer():
+    setter = _setter(slack_response_up=0.05, slack_response_down=0.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    f = _offer_slack(setter, carried, np.array([10.0, 10.0, 10.0]), np.array([8.0, 8.0, 8.0]))
+    np.testing.assert_allclose(f(0, 1.0), 15.0 * np.exp(0.05 * 0.2))
+
+
+def test__response_is_asymmetric():
+    """kappa_down < kappa_up: a cut is smaller than the symmetric rise."""
+    setter = _setter(slack_response_up=0.05, slack_response_down=0.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    up = _offer_slack(setter, carried.copy(), np.array([10.0] * 3), np.array([8.0] * 3))(0, 1.0)
+    down = _offer_slack(setter, carried.copy(), np.array([10.0] * 3), np.array([12.0] * 3))(0, 1.0)
+    assert (up - 15.0) > (15.0 - down)
+
+
+def test__downward_cut_is_bounded():
+    """Downward nominal rigidity: the log cut cannot exceed max_offer_log_cut."""
+    setter = _setter(slack_response_up=0.05, slack_response_down=5.0, max_offer_log_cut=0.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    f = _offer_slack(setter, carried, np.array([10.0] * 3), np.array([100.0] * 3))
+    np.testing.assert_allclose(f(0, 1.0), 15.0 * np.exp(-0.02))
+
+
+def test__negative_slack_parameters_are_rejected():
+    with pytest.raises(ValueError, match="non-negative"):
+        _setter(slack_response_down=-0.1)
+    with pytest.raises(ValueError, match="max_offer_log_cut"):
+        _setter(max_offer_log_cut=-0.1)
+
+
+def test__missing_labour_inputs_leave_offers_unchanged():
+    setter = _setter(slack_response_up=0.05, slack_response_down=0.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    f = _offer_slack(setter, carried, None, None)
+    np.testing.assert_allclose(f(0, 1.0), 15.0)

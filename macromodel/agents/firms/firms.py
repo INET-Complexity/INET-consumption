@@ -1164,6 +1164,9 @@ class Firms(Agent):
         if isinstance(self.functions["wage_setter"], ContractWageSetter):
             offer_kwargs["carried_wage_rate"] = carried_wage_rate
             offer_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio()
+            desired_labour, realised_labour = self.latest_matched_labour_gap_inputs()
+            offer_kwargs["desired_labour_inputs"] = desired_labour
+            offer_kwargs["realised_labour_inputs"] = realised_labour
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1249,6 +1252,27 @@ class Firms(Agent):
             where=previous_productivity > 0,
         )
         return np.where(np.isfinite(ratio) & (ratio > 0), ratio, ones)
+
+    def latest_matched_labour_gap_inputs(self) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """Desired and realised labour inputs from the last period where both exist.
+
+        The two series are appended at different points in the period, so they
+        are aligned by **period index** rather than from the end of the list -
+        the same care taken in :meth:`compute_realised_productivity_ratio`.
+
+        Returns:
+            tuple: (desired, realised) for the latest common index, or
+                ``(None, None)`` when no common index is available.
+        """
+        try:
+            desired = self.ts.historic("desired_labour_inputs")
+            realised = self.ts.historic("labour_inputs")
+        except (AttributeError, KeyError):
+            return None, None
+        last = min(len(desired), len(realised)) - 1
+        if last < 0:
+            return None, None
+        return np.asarray(desired[last], dtype=float), np.asarray(realised[last], dtype=float)
 
     def set_employee_income(
         self,

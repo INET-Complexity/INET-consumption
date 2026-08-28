@@ -210,6 +210,30 @@ WAGE_ARMS: dict[str, dict[str, object]] = {
         "wage_setter_name": "ContractWageSetter",
         "wage_setter": {"initial_rate_source": "individual", "indexation_base": "realised_productivity"},
     },
+    # U-B: adds the signed slack response on offers to the best-performing
+    # indexation base. kappa_down < kappa_up and the cut is bounded, so downward
+    # nominal rigidity is preserved while persistent slack exerts some pressure.
+    "contract_slack": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {
+            "initial_rate_source": "firm_anchor",
+            "indexation_base": "realised_productivity",
+            "slack_response_up": 0.05,
+            "slack_response_down": 0.02,
+            "max_offer_log_cut": 0.02,
+        },
+    },
+    # U-B applied to the TFP base, to separate the slack effect from the
+    # indexation-base effect.
+    "contract_slack_tfp": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {
+            "initial_rate_source": "firm_anchor",
+            "slack_response_up": 0.05,
+            "slack_response_down": 0.02,
+            "max_offer_log_cut": 0.02,
+        },
+    },
 }
 
 

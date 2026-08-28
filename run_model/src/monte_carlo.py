@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
 from typing import Iterable, Optional
 
+import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed
 from src.visual_helpers import build_macro_output_df
@@ -117,6 +119,40 @@ def _run_single_seed(
             except (AttributeError, KeyError, ValueError, TypeError):
                 continue
             output_df[col] = series
+
+        # Cross-firm means of the pricing cost decomposition. These are the
+        # diagnostics the wage/price investigation needs to attribute inflation
+        # between the labour channel and the material/AC-floor channels; they
+        # are means, not sums, so get_aggregate is not usable for them. Binding
+        # indicators average to the binding share. See
+        # knowledge-vault/raw/plans/2026-08-28-wage-rule-restructure-and-inflation-gain-decomposition.md
+        # section 6.
+        for col in (
+            "pricing_labour_mc",
+            "pricing_material_mc",
+            "pricing_depreciation_unit_cost",
+            "pricing_mc",
+            "pricing_mc_smooth",
+            "pricing_ac",
+            "pricing_ac_smooth",
+            "pricing_ac_floor_binding",
+            "pricing_ac_fallback_binding",
+            "unit_costs",
+            "pricing_markup_mu",
+            "pricing_markup_base_mu",
+            "labour_productivity_factor",
+            "tfp_multiplier",
+            "real_wage_per_capita",
+        ):
+            try:
+                history = np.asarray(firms_ts.historic(col), dtype=float)
+            except (AttributeError, KeyError, ValueError, TypeError):
+                continue
+            if history.ndim != 2 or history.shape[0] != len(output_df.index):
+                continue
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN early periods
+                output_df[f"{col}_mean"] = pd.Series(np.nanmean(history, axis=1), index=output_df.index, dtype=float)
     output_df.index.name = output_df.index.name or "time"
 
     return int(seed), output_df

@@ -3239,13 +3239,15 @@ class Households(Agent):
         if getattr(self.functions["investment"], "disables_household_investment", False):
             realised_spending = self.ts.current("nominal_amount_spent_in_lcu")
             numerical_excess = realised_spending - consumption_by_good
-            if not np.allclose(numerical_excess, 0.0, rtol=1e-10, atol=1e-7):
+            # Goods-market arithmetic can leave sub-cent residuals above the
+            # target (LCU units). atol matches that -- rtol is meaningless
+            # here since the comparison target is the literal scalar 0.0.
+            if not np.allclose(numerical_excess, 0.0, atol=1e-2):
                 raise RuntimeError(
                     "NoHouseholdInvestment cannot reclassify material expenditure above consumption as investment."
                 )
-            # Goods-market arithmetic can leave sub-cent machine residuals
-            # above the target. Under an authoritative investment-off rule they
-            # remain consumption; realised investment is exactly zero.
+            # Under an authoritative investment-off rule the residual above
+            # remains consumption; realised investment is exactly zero.
             consumption_by_good = realised_spending.copy()
 
         if add_emissions:

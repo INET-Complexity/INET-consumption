@@ -956,7 +956,10 @@ class TestHouseholds:
         target = np.zeros_like(test_households.ts.current("target_consumption"))
         target[:, 0] = 10.0
         realised = target.copy()
-        realised[:, 0] += 1e-9
+        # A realistic sub-cent (LCU) goods-market rounding residual, not a
+        # floating-point-noise-scale one: this is the boundary the guard's
+        # tolerance is meant to tolerate.
+        realised[:, 0] += 0.005
         test_households.ts.override_current("target_consumption", target)
         test_households.ts.override_current("target_investment", np.zeros_like(target))
         test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
@@ -965,6 +968,21 @@ class TestHouseholds:
 
         np.testing.assert_array_equal(test_households.ts.current("investment"), np.zeros_like(target))
         np.testing.assert_allclose(test_households.ts.current("consumption"), realised.sum(axis=1))
+
+    def test__investment_off_still_raises_on_material_excess_spending(self, test_households):
+        test_households.functions["investment"] = NoHouseholdInvestment()
+        target = np.zeros_like(test_households.ts.current("target_consumption"))
+        target[:, 0] = 10.0
+        realised = target.copy()
+        # Well above the sub-cent tolerance: a genuine reclassification
+        # attempt, not goods-market rounding, and must still raise.
+        realised[:, 0] += 1.0
+        test_households.ts.override_current("target_consumption", target)
+        test_households.ts.override_current("target_investment", np.zeros_like(target))
+        test_households.ts.override_current("nominal_amount_spent_in_lcu", realised)
+
+        with pytest.raises(RuntimeError, match="cannot reclassify material expenditure"):
+            test_households.update_consumption_and_investment(tau_vat=0.13, tau_cf=0.0)
 
     def test__paper_asset_returns_are_excluded_from_expected_and_realised_income(self, test_households):
         from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter

@@ -545,6 +545,14 @@ class Country:
         scale = synthetic_country.scale
         production_tax_vector_scale = country_configuration.central_government.tax_overrides.production_tax_vector_scale
         if production_tax_vector_scale is not None:
+            # _apply_production_tax_vector_scale mutates industry/firm/government
+            # tax views in place. synthetic_country may be a shared object reused
+            # across seeds (e.g. run_seeded_monte_carlo's batch_size>1 constructs
+            # several seeds from one DataWrapper in the same worker process), so
+            # scale a private copy rather than the caller's object -- otherwise
+            # repeated construction from the same synthetic_country compounds the
+            # scale multiplicatively instead of reapplying it once each time.
+            synthetic_country = deepcopy(synthetic_country)
             _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]

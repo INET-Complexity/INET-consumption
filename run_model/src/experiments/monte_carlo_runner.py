@@ -183,6 +183,21 @@ WAGE_ARMS: dict[str, dict[str, object]] = {
     "restructured": {
         "wage_setter": {"incumbent_effort_indexation": False, "incumbent_tfp_indexation": False},
     },
+    # U-A: settled HS-U specification (plan section 4c). Persistent per-worker
+    # contract rate indexed to TFP only; (1+m) confined to offers; effort paid
+    # but not stored in the rate. Firm-level seeding keeps the comparison against
+    # A0 clean by holding initial wage dispersion at the baseline's level.
+    "contract_firm_anchor": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {"initial_rate_source": "firm_anchor"},
+    },
+    # U-A-h: as above, but seeded from individual wage data, so the initial
+    # cross-worker dispersion survives instead of collapsing to firm-level
+    # values. Isolates the heterogeneity effect from the wage-rule effect.
+    "contract_individual": {
+        "wage_setter_name": "ContractWageSetter",
+        "wage_setter": {"initial_rate_source": "individual"},
+    },
 }
 
 
@@ -191,6 +206,8 @@ def _apply_wage_arm(country_cfg: CountryConfiguration, arm: str) -> None:
     if arm not in WAGE_ARMS:
         raise ValueError(f"Unknown wage arm {arm!r}. Available: {sorted(WAGE_ARMS)}")
     spec = WAGE_ARMS[arm]
+    if "wage_setter_name" in spec:
+        country_cfg.firms.functions.wage_setter.name = spec["wage_setter_name"]
     for key, value in spec.get("wage_setter", {}).items():
         country_cfg.firms.functions.wage_setter.parameters[key] = value
     for key, value in spec.get("firm_parameters", {}).items():

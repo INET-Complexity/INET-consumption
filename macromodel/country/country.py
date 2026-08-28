@@ -1265,6 +1265,7 @@ class Country:
                 income_taxes=self.central_government.states["Income Tax"],
                 employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
                 employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+                carried_wage_rate=self.individuals.states["Wage Rate"],
             )
         )
         self.individuals.ts.employee_income_histogram.append(

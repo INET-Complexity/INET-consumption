@@ -460,3 +460,151 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             )
 
         return f
+
+
+class ContractWageSetter(WorkEffortFirmWageSetter):
+    """Wage setter with a persistent per-worker contract wage rate.
+
+    Corrects three defects in :class:`WorkEffortFirmWageSetter` while keeping
+    the wage bill's economic content intact. See
+    ``knowledge-vault/raw/plans/2026-08-28-wage-rule-restructure-and-inflation-gain-decomposition.md``
+    section 4c for the settled specification.
+
+    Stored rate versus paid earnings are distinct objects::
+
+        w_rate[j,t] = w_rate[j,t-1] * TFP[i,t] / TFP[i,t-1]     (stored)
+        earnings[j,t] = w_rate[j,t] * u[i,t]                    (paid)
+
+    The tightness markup ``(1+m)`` does not appear: it is a hiring instrument
+    and applies to offers only. The work-effort factor ``u`` does not appear in
+    the stored rate: a rate is per hour worked, and ``u`` is intensity. Because
+    ``u`` is a firm-level scalar, ``sum_j(w*u) == u*sum_j(w)``, so the wage bill
+    is unchanged by where ``u`` is applied; what changes is that downstream
+    consumers of "the wage rate" (offer base, reservation wages, taxes) now
+    receive a rate rather than earnings.
+
+    Unlike the parent class this setter is **stateful**: it reads and writes
+    ``individuals.states["Wage Rate"]``, passed in as ``carried_wage_rate`` and
+    updated in place.
+
+    Args:
+        initial_rate_source: ``"individual"`` keeps the per-worker rates seeded
+            from the individual data, preserving initial wage dispersion.
+            ``"firm_anchor"`` overwrites every worker at a firm with the firm's
+            initial wage per capita on first use, reproducing the parent class's
+            firm-level uniformity. Arm switch; see the plan's section 4c.
+    """
+
+    def __init__(
+        self,
+        labour_market_tightness_markup_scale: float,
+        markup_time_span: int,
+        initial_rate_source: str = "individual",
+        **kwargs,
+    ):
+        super().__init__(
+            labour_market_tightness_markup_scale=labour_market_tightness_markup_scale,
+            markup_time_span=markup_time_span,
+            **kwargs,
+        )
+        if initial_rate_source not in ("individual", "firm_anchor"):
+            raise ValueError(
+                f"initial_rate_source must be 'individual' or 'firm_anchor', got {initial_rate_source!r}"
+            )
+        self.initial_rate_source = initial_rate_source
+        self._rates_seeded = False
+        self.last_contract_rate_mean = None
+
+    def _seed_rates(
+        self,
+        carried_wage_rate: np.ndarray,
+        corresponding_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        tax: float,
+    ) -> None:
+        """Apply the arm's initialisation choice once, on first use."""
+        if self._rates_seeded:
+            return
+        if self.initial_rate_source == "firm_anchor":
+            employed = corresponding_firm >= 0
+            carried_wage_rate[employed] = initial_wage_per_capita[corresponding_firm[employed]] / tax
+        self._rates_seeded = True
+
+    def set_employee_income(
+        self,
+        corresponding_firm: np.ndarray,
+        current_individual_labour_inputs: np.ndarray,
+        current_individual_stating_new_job: np.ndarray,
+        current_employee_income: np.ndarray,
+        current_individual_offered_wage: np.ndarray,
+        current_target_production: np.ndarray,
+        current_limiting_intermediate_inputs: np.ndarray,
+        current_limiting_capital_inputs: np.ndarray,
+        labour_inputs_from_employees: np.ndarray,
+        industry_labour_productivity_by_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        current_wage_per_capita: np.ndarray,
+        current_labour_productivity_factor: np.ndarray,
+        prev_labour_productivity_factor: np.ndarray,
+        current_wage_tightness_markup: np.ndarray,
+        estimated_ppi_inflation: float,
+        income_taxes: float,
+        employee_social_insurance_tax: float,
+        employer_social_insurance_tax: float,
+        current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
+        carried_wage_rate: np.ndarray = None,
+    ) -> np.ndarray:
+        """Advance carried wage rates and return paid earnings.
+
+        ``carried_wage_rate`` is updated **in place**; the return value is
+        earnings (rate times effort), which is what
+        ``individuals.ts.employee_income`` stores.
+
+        Args:
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Required.
+            (remaining arguments as in the parent class)
+
+        Returns:
+            np.ndarray: Paid earnings by individual.
+        """
+        if carried_wage_rate is None:
+            raise ValueError("ContractWageSetter requires carried_wage_rate (individuals.states['Wage Rate']).")
+
+        tax = (1.0 + employer_social_insurance_tax) / (
+            1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax)
+        )
+        self._seed_rates(carried_wage_rate, corresponding_firm, initial_wage_per_capita, tax)
+
+        employed = corresponding_firm >= 0
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        if prev_tfp_multiplier is None:
+            tfp_ratio = np.ones_like(tfp)
+        else:
+            prev_tfp = np.asarray(prev_tfp_multiplier, dtype=float)
+            tfp_ratio = np.divide(tfp, prev_tfp, out=np.ones_like(tfp), where=prev_tfp > 0)
+
+        # Incumbents: index the carried rate to firm TFP growth only.
+        incumbent = employed & ~current_individual_stating_new_job
+        carried_wage_rate[incumbent] *= tfp_ratio[corresponding_firm[incumbent]]
+
+        # New hires: the accepted offer rate replaces the carried rate and
+        # persists from here, rather than lasting a single period.
+        new_hire = employed & current_individual_stating_new_job
+        carried_wage_rate[new_hire] = current_individual_offered_wage[new_hire]
+
+        # Paid earnings = rate x effort. u is firm-level, so this leaves the
+        # aggregate wage bill identical to applying u inside the rate.
+        effort_by_individual = np.ones_like(carried_wage_rate)
+        effort_by_individual[employed] = current_labour_productivity_factor[corresponding_firm[employed]]
+
+        earnings = np.zeros_like(carried_wage_rate)
+        earnings[employed] = carried_wage_rate[employed] * effort_by_individual[employed]
+
+        self.last_contract_rate_mean = float(np.mean(carried_wage_rate[employed])) if employed.any() else np.nan
+        return earnings

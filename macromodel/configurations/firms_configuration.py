@@ -258,7 +258,7 @@ class WageSetter(BaseModel):
     Options: DefaultFirmWageSetter
     """
 
-    name: Literal["WorkEffortFirmWageSetter"] = "WorkEffortFirmWageSetter"
+    name: Literal["WorkEffortFirmWageSetter", "ContractWageSetter"] = "WorkEffortFirmWageSetter"
     path_name: str = "wage_setter"
     parameters: dict[str, Any] = {
         "labour_market_tightness_markup_scale": 0.0,

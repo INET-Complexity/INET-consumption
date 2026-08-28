@@ -11,6 +11,7 @@ from macro_data.readers.emission_fraction.emission_fraction_reader import Emissi
 from macro_data.readers.exo_prices import SectorExoPrices
 from macromodel.agents.agent import Agent
 from macromodel.agents.firms.firm_ts import FirmTimeSeries
+from macromodel.agents.firms.func.wage_setter import ContractWageSetter
 from macromodel.agents.firms.utils.create_bundle_matrix import create_bundle_matrix
 from macromodel.configurations import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
@@ -1190,6 +1191,7 @@ class Firms(Agent):
         income_taxes: float,
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
+        carried_wage_rate: np.ndarray = None,
     ) -> np.ndarray:
         """Set employee wages based on offers and market conditions.
 
@@ -1211,10 +1213,17 @@ class Firms(Agent):
             income_taxes (float): Income tax rate
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Updated in place by stateful
+                setters such as ``ContractWageSetter``; ignored by stateless ones.
 
         Returns:
             np.ndarray: Updated employee wages
         """
+        extra_kwargs = {}
+        if isinstance(self.functions["wage_setter"], ContractWageSetter):
+            extra_kwargs["carried_wage_rate"] = carried_wage_rate
+            extra_kwargs["prev_tfp_multiplier"] = self.ts.prev("tfp_multiplier")
         return self.functions["wage_setter"].set_employee_income(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1238,6 +1247,7 @@ class Firms(Agent):
             employee_social_insurance_tax=employee_social_insurance_tax,
             employer_social_insurance_tax=employer_social_insurance_tax,
             current_tfp_multiplier=self.states["tfp_multiplier"],
+            **extra_kwargs,
         )
 
     def update_total_wages_paid(

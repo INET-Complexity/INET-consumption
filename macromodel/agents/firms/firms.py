@@ -1300,7 +1300,12 @@ class Firms(Agent):
             weights=individual_wages[corresponding_firm >= 0],
             minlength=self.ts.current("n_firms"),
         )
-        return cpi * (
+        # Partial CPI indexation (H4): psi = 1.0 reproduces full pass-through,
+        # the historical behaviour. The deflator is normalised so that psi has
+        # no effect while the price level is at its base of 1.0.
+        psi = float(getattr(self.configuration.parameters, "wage_cpi_indexation_elasticity", 1.0))
+        indexation = cpi if psi == 1.0 else float(np.power(max(cpi, 1e-12), psi))
+        return indexation * (
             (1.0 + employer_social_insurance_tax)
             / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))
             * real_wages

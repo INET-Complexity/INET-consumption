@@ -410,6 +410,17 @@ class FirmsParameters(BaseModel):
     capital_depreciation_accounting_mode: Literal["none", "eurostat_cfc"] = "none"
     capital_replacement_matrix_source: Literal["capital_compensation", "eurostat_cfc_output"] = "capital_compensation"
     firm_activity_finance_revision_mode: Literal["none", "post_credit_cash_budget"] = "none"
+    wage_cpi_indexation_elasticity: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Pass-through elasticity of the CPI level into the nominal wage obligation. "
+            "1.0 (default) is full indexation, the historical behaviour: nominal wages "
+            "recover past inflation one-for-one. Values below 1.0 give partial "
+            "indexation, so real wages absorb part of past inflation (hypothesis H4)."
+        ),
+    )
     capital_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     intermediate_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     tfp_base_growth_rate: float = Field(0.0025, ge=0.0, le=0.1, description="Base TFP growth rate (quarterly)")

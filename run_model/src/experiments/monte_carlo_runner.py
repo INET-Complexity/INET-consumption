@@ -165,6 +165,38 @@ def _scale_tfp_target_intensities(country_cfg: CountryConfiguration, multiplier:
     }
 
 
+#: Controlled arms for the issue-145 wage/price investigation. Each arm is a
+#: single-parameter deviation from ``baseline`` so its effect is attributable.
+WAGE_ARMS: dict[str, dict[str, object]] = {
+    # A0: current code, unchanged.
+    "baseline": {},
+    # A1 (HS-b): confine the labour-tightness markup to its hiring role.
+    "no_incumbent_markup": {"wage_setter": {"incumbent_tightness_markup": False}},
+    # A2 (HS-c): effort scales labour input only, not the incumbent wage rate.
+    "no_incumbent_effort": {"wage_setter": {"incumbent_effort_indexation": False}},
+    # A3 (H0): stop indexing incumbent pay to the firm TFP multiplier.
+    "no_incumbent_tfp": {"wage_setter": {"incumbent_tfp_indexation": False}},
+    # A4 (H4): partial CPI pass-through into the nominal wage obligation.
+    "cpi_indexation_090": {"firm_parameters": {"wage_cpi_indexation_elasticity": 0.9}},
+    # A5: combined structural fix (A2 + A3), the specification the vault plan
+    # proposes once effort and TFP indexation are both corrected.
+    "restructured": {
+        "wage_setter": {"incumbent_effort_indexation": False, "incumbent_tfp_indexation": False},
+    },
+}
+
+
+def _apply_wage_arm(country_cfg: CountryConfiguration, arm: str) -> None:
+    """Apply one controlled wage-arm override set in-memory."""
+    if arm not in WAGE_ARMS:
+        raise ValueError(f"Unknown wage arm {arm!r}. Available: {sorted(WAGE_ARMS)}")
+    spec = WAGE_ARMS[arm]
+    for key, value in spec.get("wage_setter", {}).items():
+        country_cfg.firms.functions.wage_setter.parameters[key] = value
+    for key, value in spec.get("firm_parameters", {}).items():
+        setattr(country_cfg.firms.parameters, key, value)
+
+
 def main(
     seeds: list[int] | None = None,
     t_max: int | None = DEFAULT_T_MAX,
@@ -179,6 +211,8 @@ def main(
     output_file: str | Path | None = None,
     save_h5_dir: str | Path | None = None,
     tfp_target_intensity_multiplier: float = 1.0,
+    wage_arm: str = "baseline",
+    consumption_long_run_intercept: float | None = None,
 ) -> dict[str, object]:
     seed_list = _validate_unique_seeds(DEFAULT_SEEDS if seeds is None else seeds)
 
@@ -262,6 +296,9 @@ def main(
         )
     if assume_zero_noise is not None:
         country_cfg.assume_zero_noise = assume_zero_noise
+    _apply_wage_arm(country_cfg, wage_arm)
+    if consumption_long_run_intercept is not None:
+        country_cfg.households.functions.consumption.parameters["long_run_intercept"] = consumption_long_run_intercept
 
     print("Configuration summary")
     print(
@@ -283,6 +320,11 @@ def main(
             },
             "assume_zero_noise": country_cfg.assume_zero_noise,
             "tfp_target_intensity_multiplier": tfp_target_intensity_multiplier,
+            "wage_arm": wage_arm,
+            "wage_arm_overrides": WAGE_ARMS[wage_arm],
+            "wage_setter_parameters": country_cfg.firms.functions.wage_setter.parameters,
+            "wage_cpi_indexation_elasticity": country_cfg.firms.parameters.wage_cpi_indexation_elasticity,
+            "consumption_long_run_intercept": consumption_long_run_intercept,
         }
     )
 
@@ -569,6 +611,18 @@ def _parse_args() -> argparse.Namespace:
         help="Scale sector_innovation_intensity targets in-memory for revised TFP calibration runs.",
     )
     parser.add_argument(
+        "--wage-arm",
+        choices=tuple(WAGE_ARMS),
+        default="baseline",
+        help="Controlled wage-rule arm for the issue-145 investigation. Default: baseline (unchanged code).",
+    )
+    parser.add_argument(
+        "--consumption-long-run-intercept",
+        type=float,
+        default=None,
+        help="Override the consumption long-run intercept. Default: use country configuration.",
+    )
+    parser.add_argument(
         "--government-bridge-experiment",
         action="store_true",
         help="Run the four-arm government-consumption bridge Monte Carlo experiment.",
@@ -651,4 +705,6 @@ if __name__ == "__main__":
             output_file=args.output_file,
             save_h5_dir=args.save_h5_dir,
             tfp_target_intensity_multiplier=args.tfp_target_intensity_multiplier,
+            wage_arm=args.wage_arm,
+            consumption_long_run_intercept=args.consumption_long_run_intercept,
         )

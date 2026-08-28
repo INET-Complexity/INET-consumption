@@ -29,6 +29,9 @@ class FirmWageSetter(ABC):
         self,
         labour_market_tightness_markup_scale: float,
         markup_time_span: int,
+        incumbent_tightness_markup: bool = True,
+        incumbent_effort_indexation: bool = True,
+        incumbent_tfp_indexation: bool = True,
     ):
         """Initialize the wage setter with markup parameters.
 
@@ -37,9 +40,24 @@ class FirmWageSetter(ABC):
                 wage adjustments based on labor market tightness
             markup_time_span (int): Number of periods to consider when
                 calculating labor market tightness markup
+            incumbent_tightness_markup (bool): Apply the labour-tightness markup
+                to incumbent pay as well as to offers. Defaults to True, which
+                is the historical behaviour. Set False to confine the markup to
+                its hiring role (hypothesis HS-b).
+            incumbent_effort_indexation (bool): Apply the work-effort factor to
+                the incumbent wage *rate*. Defaults to True, the historical
+                behaviour. Set False to let effort scale labour input only,
+                removing the rate/input double count (hypothesis HS-c).
+            incumbent_tfp_indexation (bool): Index incumbent pay to the firm TFP
+                multiplier. Defaults to True, the historical behaviour. Set
+                False to test whether TFP indexation is the source of real
+                unit-labour-cost drift (hypothesis H0).
         """
         self.labour_market_tightness_markup_scale = labour_market_tightness_markup_scale
         self.markup_time_span = markup_time_span
+        self.incumbent_tightness_markup = incumbent_tightness_markup
+        self.incumbent_effort_indexation = incumbent_effort_indexation
+        self.incumbent_tfp_indexation = incumbent_tfp_indexation
         self.last_wage_offer_historic_base = None
         self.last_wage_offer_tfp_ratio = None
         self.last_wage_offer_productivity_ratio = None
@@ -309,9 +327,19 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             if current_tfp_multiplier is not None
             else np.ones_like(current_labour_productivity_factor)
         )
-        scaled_real_wages = (
-            (1 + current_wage_tightness_markup) * tfp * current_labour_productivity_factor * initial_wage_per_capita
+        # Arm switches (all default True = historical behaviour). See __init__.
+        incumbent_markup = (
+            (1 + current_wage_tightness_markup)
+            if self.incumbent_tightness_markup
+            else np.ones_like(current_labour_productivity_factor)
         )
+        incumbent_effort = (
+            current_labour_productivity_factor
+            if self.incumbent_effort_indexation
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        incumbent_tfp = tfp if self.incumbent_tfp_indexation else np.ones_like(current_labour_productivity_factor)
+        scaled_real_wages = incumbent_markup * incumbent_tfp * incumbent_effort * initial_wage_per_capita
         scaled_real_wages_by_individual[emp_ind] = scaled_real_wages[corresponding_firm[emp_ind]]
         realised_wages = scaled_real_wages_by_individual / tax
         new_job_ind = np.logical_and(emp_ind, current_individual_stating_new_job)

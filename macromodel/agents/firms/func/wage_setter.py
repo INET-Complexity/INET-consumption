@@ -606,3 +606,111 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
 
         self.last_contract_rate_mean = float(np.mean(carried_wage_rate[employed])) if employed.any() else np.nan
         return earnings
+
+    def get_offered_wage_given_labour_inputs_function(
+        self,
+        corresponding_firm: np.ndarray,
+        current_individual_labour_inputs: np.ndarray,
+        previous_employee_income: np.ndarray,
+        current_target_production: np.ndarray,
+        current_limiting_intermediate_inputs: np.ndarray,
+        current_limiting_capital_inputs: np.ndarray,
+        industry_labour_productivity_by_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        current_wage_per_capita: np.ndarray,
+        current_labour_productivity_factor: np.ndarray,
+        prev_labour_productivity_factor: np.ndarray,
+        current_wage_tightness_markup: np.ndarray,
+        income_taxes: float,
+        employee_social_insurance_tax: float,
+        employer_social_insurance_tax: float,
+        unemployment_benefits_by_individual: float,
+        current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
+        carried_wage_rate: np.ndarray = None,
+    ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
+        """Build the offer function from carried contract rates.
+
+        The reference wage is the firm's average *rate* over its current
+        workforce, read from ``carried_wage_rate``:
+
+            w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1 + m[i])
+
+        This replaces the parent's ``previous_employee_income`` base. That base
+        is unusable here because ``employee_income`` now holds earnings
+        (rate x effort), so reading it would re-import ``u`` into the offer and
+        undo the rate/earnings split.
+
+        ``u_ratio`` is deliberately retained: ``(1+m) >= 1`` by the ``max(0,.)``
+        floor in :meth:`compute_wage_tightness_markup`, and TFP ratios are
+        normally ``>= 1``, so ``u_ratio`` is the only factor able to fall below
+        one. Dropping it would make offers monotonically non-decreasing.
+
+        Args:
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Required.
+            (remaining arguments as in the parent class)
+
+        Returns:
+            Callable: Maps firm id and labour inputs to a wage offer.
+        """
+        if carried_wage_rate is None:
+            raise ValueError("ContractWageSetter requires carried_wage_rate (individuals.states['Wage Rate']).")
+
+        n_firms = current_target_production.shape[0]
+        tax = (1.0 + employer_social_insurance_tax) / (
+            1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax)
+        )
+        self._seed_rates(carried_wage_rate, corresponding_firm, initial_wage_per_capita, tax)
+
+        employed = corresponding_firm >= 0
+        employed_firm = corresponding_firm[employed]
+        rate_sum = np.bincount(employed_firm, weights=carried_wage_rate[employed], minlength=n_firms)
+        headcount = np.bincount(employed_firm, minlength=n_firms).astype(float)
+        has_workforce = headcount > 0
+
+        # Firms with no current workforce have no carried rates to average, so
+        # they fall back to their initial wage anchor.
+        reference_rate = np.divide(
+            rate_sum,
+            headcount,
+            out=(initial_wage_per_capita / tax).astype(float).copy(),
+            where=has_workforce,
+        )
+
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        if prev_tfp_multiplier is None:
+            tfp_ratio = np.ones_like(tfp)
+        else:
+            prev_tfp = np.asarray(prev_tfp_multiplier, dtype=float)
+            tfp_ratio = np.divide(tfp, prev_tfp, out=np.ones_like(tfp), where=prev_tfp > 0)
+
+        effort_ratio = np.divide(
+            current_labour_productivity_factor,
+            prev_labour_productivity_factor,
+            out=np.ones_like(current_labour_productivity_factor),
+            where=prev_labour_productivity_factor > 0,
+        )
+
+        offered_rate = reference_rate * tfp_ratio * effort_ratio * (1.0 + current_wage_tightness_markup)
+        offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
+
+        self.last_wage_offer_historic_base = reference_rate.copy()
+        self.last_wage_offer_tfp_ratio = tfp_ratio.copy()
+        self.last_wage_offer_productivity_ratio = effort_ratio.copy()
+        self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
+        self.last_wage_offer_level = offered_rate.copy()
+        self.last_wage_offer_historic_average_available = has_workforce.copy()
+
+        def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
+            """Return the wage offer for a firm at a proposed labour input."""
+            return np.maximum(
+                unemployment_benefits_by_individual,
+                labour_inputs * offered_rate[firm_id],
+            )
+
+        return f

@@ -1134,6 +1134,7 @@ class Firms(Agent):
         income_taxes: float,
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
+        carried_wage_rate: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create function that computes offered wages.
 
@@ -1152,10 +1153,16 @@ class Firms(Agent):
             income_taxes (float): Income tax rate
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Used by stateful setters
+                such as ``ContractWageSetter``; ignored by stateless ones.
 
         Returns:
             np.ndarray: Wage offers for each firm
         """
+        offer_kwargs = {}
+        if isinstance(self.functions["wage_setter"], ContractWageSetter):
+            offer_kwargs["carried_wage_rate"] = carried_wage_rate
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1177,6 +1184,7 @@ class Firms(Agent):
             unemployment_benefits_by_individual=unemployment_benefits_by_individual,
             current_tfp_multiplier=self.states["tfp_multiplier"],
             prev_tfp_multiplier=self.ts.prev("tfp_multiplier"),
+            **offer_kwargs,
         )
 
     def set_employee_income(

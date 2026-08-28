@@ -1055,6 +1055,7 @@ class Country:
             corresponding_firm=self.individuals.states["Corresponding Firm ID"],
             current_individual_labour_inputs=self.individuals.ts.current("labour_inputs"),
             previous_employee_income=self.individuals.ts.current("employee_income"),
+            carried_wage_rate=self.individuals.states["Wage Rate"],
             unemployment_benefits_by_individual=self.central_government.ts.current(
                 "unemployment_benefits_by_individual"
             )[0],

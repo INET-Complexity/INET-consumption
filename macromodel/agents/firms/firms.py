@@ -1518,6 +1518,9 @@ class Firms(Agent):
             "pricing_markup_upper": getattr(price_setter, "last_pricing_markup_upper", default),
             "pricing_markup_residual_factor": getattr(price_setter, "last_pricing_markup_residual_factor", default),
             "pricing_markup_residual_status": getattr(price_setter, "last_pricing_markup_residual_status", default),
+            "pricing_markup_residual_unreachable_gap": getattr(
+                price_setter, "last_pricing_markup_residual_unreachable_gap", default
+            ),
             "pricing_ac_floor_binding": getattr(price_setter, "last_pricing_ac_floor_binding", default),
             "pricing_ac_fallback_binding": getattr(price_setter, "last_pricing_ac_fallback_binding", default),
             "pricing_gate_state": getattr(price_setter, "last_pricing_gate_state", np.zeros(prices.shape, dtype=float)),

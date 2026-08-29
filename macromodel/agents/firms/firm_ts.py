@@ -44,6 +44,8 @@ class FirmTimeSeries(TimeSeries):
     - pricing_markup_upper: Upper markup corridor bound
     - pricing_markup_residual_factor: Sector residual markup calibration factor
     - pricing_markup_residual_status: Numeric code for residual calibration status
+    - pricing_markup_residual_unreachable_gap: Relative AC-floor overshoot of the
+      sector initial-price anchor; 0.0 when the anchor is reachable
     - pricing_ac_floor_binding: Indicator that the AC floor bound price
     - pricing_ac_fallback_binding: Indicator that AC used sector/previous fallback
     - pricing_gate_state: Numeric code for the demand-pull gate state
@@ -345,6 +347,7 @@ class FirmTimeSeries(TimeSeries):
             pricing_markup_upper=np.full(data.shape[0], np.nan),
             pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
             pricing_markup_residual_status=np.full(data.shape[0], np.nan),
+            pricing_markup_residual_unreachable_gap=np.full(data.shape[0], np.nan),
             pricing_ac_floor_binding=np.zeros(data.shape[0]),
             pricing_ac_fallback_binding=np.zeros(data.shape[0]),
             pricing_gate_state=np.zeros(data.shape[0]),
@@ -761,6 +764,7 @@ def create_firms_timeseries(
         pricing_markup_upper=np.full(data.shape[0], np.nan),
         pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
         pricing_markup_residual_status=np.full(data.shape[0], np.nan),
+        pricing_markup_residual_unreachable_gap=np.full(data.shape[0], np.nan),
         pricing_ac_floor_binding=np.zeros(data.shape[0]),
         pricing_ac_fallback_binding=np.zeros(data.shape[0]),
         pricing_gate_state=np.zeros(data.shape[0]),

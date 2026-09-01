@@ -9,6 +9,42 @@ from macromodel.markets.credit_market.func.clearing import compute_firm_borrower
 
 
 class TestFirms:
+    def test__realised_productivity_ratio_uses_valid_smoothed_output_per_labour(self):
+        class FakeTimeSeries:
+            def current(self, key):
+                assert key == "n_firms"
+                return 2
+
+            def historic(self, key):
+                return {
+                    "production": [np.array([10.0, 20.0]), np.array([12.0, np.nan]), np.array([14.0, 24.0])],
+                    "labour_inputs": [np.array([2.0, 4.0]), np.array([2.0, 4.0]), np.array([2.0, 4.0])],
+                }[key]
+
+        class FakeFirms:
+            ts = FakeTimeSeries()
+
+        ratio = Firms.compute_realised_productivity_ratio(FakeFirms())
+
+        # Invalid output is excluded from the relevant window; it is not
+        # converted into a finite economic observation.
+        expected = np.array([(36.0 / 6.0) / (22.0 / 4.0), (44.0 / 8.0) / (20.0 / 4.0)])
+        np.testing.assert_allclose(ratio, expected)
+
+    def test__realised_productivity_ratio_rejects_non_positive_window(self):
+        class FakeTimeSeries:
+            def current(self, key):
+                return 1
+
+            def historic(self, key):
+                return []
+
+        class FakeFirms:
+            ts = FakeTimeSeries()
+
+        with pytest.raises(ValueError, match="window"):
+            Firms.compute_realised_productivity_ratio(FakeFirms(), window=0)
+
     def test__firms_states(self, test_firms):
         assert test_firms is not None
         for state in [

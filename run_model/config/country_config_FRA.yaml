@@ -8,19 +8,34 @@ FRA:
         path_name: growth
         parameters:
           lags: 1
-          value: 0.0
+          # # DEAD (2026-09-01 config audit): `value` is swallowed by `**kwargs`.
+          # GrowthManualForecastingAutoReg.__init__ accepts only `lags` (and asserts lags == 1), then
+          # builds a bare ManualAutoregForecaster(). `value: 0.0` reads like
+          # "forecast zero" but has never had any effect. Do not reinstate
+          # without adding real support in the forecaster class.
+          # value: 0.0
       house_price_index:
         name: HPIManualForecastingAutoReg
         path_name: house_price_index
         parameters:
           lags: 1
-          value: 0.0
+          # # DEAD (2026-09-01 config audit): `value` is swallowed by `**kwargs`.
+          # HPIManualForecastingAutoReg.__init__ accepts only `lags` (and asserts lags == 1), then
+          # builds a bare ManualAutoregForecaster(). `value: 0.0` reads like
+          # "forecast zero" but has never had any effect. Do not reinstate
+          # without adding real support in the forecaster class.
+          # value: 0.0
       inflation_forecaster:
         name: InflationManualForecastingAutoReg
         path_name: inflation
         parameters:
           lags: 1
-          value: 0.0
+          # # DEAD (2026-09-01 config audit): `value` is swallowed by `**kwargs`.
+          # InflationManualForecastingAutoReg.__init__ accepts only `lags` (and asserts lags == 1), then
+          # builds a bare ManualAutoregForecaster(). `value: 0.0` reads like
+          # "forecast zero" but has never had any effect. Do not reinstate
+          # without adding real support in the forecaster class.
+          # value: 0.0
 
   individuals:
     functions:
@@ -199,7 +214,13 @@ FRA:
             - paper_parameter_file: consumption_paper_parameters.yaml
               paper_parameter_ref: portfolio_composition
     parameters:
-      take_consumption_weights_by_income_quantile: false
+      # # DEAD (2026-09-01 config audit): inert duplicate. This key is declared on BOTH
+      # HouseholdsParameters and HouseholdsConfiguration, but households.py:679
+      # reads `configuration.take_consumption_weights_by_income_quantile` --
+      # the TOP-LEVEL copy below (see the `take_...: false` line under
+      # `households:`, outside `parameters:`). Setting this one has no effect
+      # and would silently diverge from the live value. Edit the top-level key.
+      # take_consumption_weights_by_income_quantile: false
       uses_feasibility_resolver: true
     substitution_bundles:
       - 0
@@ -269,12 +290,22 @@ FRA:
           min_labour_utilisation_factor: 0.9
           max_labour_utilisation_factor: 1.1
           work_effort_increase_speed: 1.0
-      offered_wage_setter:  # DEPRECATED: determines wage offers used during labour-market matching. This should affect whether unemployed workers accept jobs and which firms can hire.
-        name: DefaultOfferedWageSetter
-        path_name: offered_wage_setter
-        parameters:
-          labour_market_tightness_markup_scale: 0
-          markup_time_span: 4
+      # # DEAD (2026-09-01 config audit): the ENTIRE slot is dead, not merely deprecated.
+      # The generic loader (util/function_mapping.py:168) still INSTANTIATES
+      # DefaultOfferedWageSetter, but nothing ever reads it: there is no
+      # `functions["offered_wage_setter"]` lookup anywhere in the codebase.
+      # Wage offers are produced by the `wage_setter` slot instead, via
+      # firms.py:1172 -> functions["wage_setter"]
+      #                    .get_offered_wage_given_labour_inputs_function(...).
+      # Commenting the block out is behaviour-preserving: FirmsFunctions
+      # declares `offered_wage_setter` with a default, so the slot is still
+      # constructed from defaults and still ignored.
+      # offered_wage_setter:
+      #   name: DefaultOfferedWageSetter
+      #   path_name: offered_wage_setter
+      #   parameters:
+      #     labour_market_tightness_markup_scale: 0
+      #     markup_time_span: 4
       prices:
         name: SectorMarkupMarginalCostPriceSetter
         path_name: prices
@@ -383,11 +414,15 @@ FRA:
           diminishing_returns_factor: 1.5  # previous: 0.5
           investment_effectiveness: 0.01  # previous: 0.15
       wage_setter:  # determines realized wages after matching. This should update incomes for existing workers and bind accepted offers for new hires.
-        name: WorkEffortFirmWageSetter
+        name: ContractWageSetter
         path_name: wage_setter
         parameters:
           labour_market_tightness_markup_scale: 0.05
           markup_time_span: 4
+          initial_rate_source: firm_anchor
+          indexation_base: realised_productivity
+          realised_productivity_window: 4
+          incumbent_indexation_pass_through: 0.0
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:
       arbitrage_intensity: 2.0
@@ -413,6 +448,18 @@ FRA:
         - 0
       capital_inputs_utilisation_rate: 0.85  # 1.0
       capital_compensation_accounting_mode: surplus_pool
+      # LIVE, made explicit 2026-09-01 (was unset and taking this same default).
+      # Exponent psi on the CPI deflator applied to the nominal wage obligation
+      # (firms.py:1420): indexation = CPI**psi, so 1.0 = full pass-through
+      # (past inflation recovered one-for-one) and psi < 1 lets real wages
+      # absorb part of past inflation (hypothesis H4). Normalised so psi has no
+      # effect while the price level sits at its base of 1.0.
+      # Stated here because this is the LARGEST single term in the 2026-09-01
+      # exact wage decomposition: CPI contributes 3.235pp of 3.641% annual wage
+      # growth at t=50, against 0.400pp from incumbent productivity indexation.
+      # It is the second indexation channel alongside the wage_setter's
+      # `incumbent_indexation_pass_through` (alpha); keep both visible together.
+      wage_cpi_indexation_elasticity: 1.0
       capital_depreciation_accounting_mode: eurostat_cfc
       capital_replacement_matrix_source: eurostat_cfc_output
       firm_activity_finance_revision_mode: post_credit_cash_budget
@@ -441,11 +488,32 @@ FRA:
       max_productivity_investment_fraction: 0.015  # conservative baseline: 0.01; previous: 0.15
       potential_weight: 0.3
       price_weight: 0.4
-      technical_diminishing_returns: 1.5  # previous: 0.5
-      technical_investment_effectiveness: 0.01  # previous: 0.15
+      # # DEAD (2026-09-01 config audit): both keys below are inert AND misleading.
+      # They live on FirmsParameters, which nothing reads for these two fields
+      # (only tfp_base_growth_rate and tfp_investment_elasticity are read from
+      # this block, at firms.py:4321-4322). They duplicate the identically
+      # named CONSTRUCTOR ARGS of the productivity planner, which are not set
+      # in this file and therefore take the planner defaults 0.5 and 0.15 --
+      # NOT the 1.5 / 0.01 written here. The `# previous:` comments suggested a
+      # retuning that never reached the planner.
+      # Note the separate, LIVE `technical_coefficients_growth` slot above does
+      # receive 1.5 / 0.01; that is a different function, not this one.
+      # Moot today because productivity_investment_planner sets
+      # silence_technical_investment: true, but they would mislead the moment
+      # it is switched off. To actually tune the planner, set these under
+      # `firms.functions.productivity_investment_planner.parameters`.
+      # technical_diminishing_returns: 1.5
+      # technical_investment_effectiveness: 0.01
       tfp_base_growth_rate: 0.0  # revised direct-TFP calibration: all TFP growth comes from firm investment
       tfp_investment_elasticity: 0.3  # legacy Simple planner parameter; revised planner uses investment_elasticity above
-      tfp_investment_share: 0.25  # legacy Simple planner parameter; revised planner silences technical investment
+      # # DEAD (2026-09-01 config audit): dead by two independent routes.
+      # (1) Nothing reads FirmsParameters.tfp_investment_share.
+      # (2) The planner's own `tfp_investment_share` arg is unset here (default
+      #     0.4) and is bypassed anyway: with silence_technical_investment=true,
+      #     planner:849 sets total_investment = tfp_investment.copy(), skipping
+      #     the TFP/technical split entirely. Flipping the silence flag would
+      #     still not activate THIS line.
+      # tfp_investment_share: 0.25
       usage_weight: 0.3
     substitution_bundles:
       - 0
@@ -616,7 +684,7 @@ FRA:
   labour_market:
     functions:
       clearing:
-        name: DefaultLabourMarketClearer
+        name: ReservationWageBindingDefaultLabourMarketClearer
         path_name: clearing
         parameters:
           allow_switching_industries: true

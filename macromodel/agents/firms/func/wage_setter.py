@@ -475,8 +475,21 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         w_rate[j,t] = w_rate[j,t-1] * TFP[i,t] / TFP[i,t-1]     (stored)
         earnings[j,t] = w_rate[j,t] * u[i,t]                    (paid)
 
-    The tightness markup ``(1+m)`` does not appear: it is a hiring instrument
-    and applies to offers only. The work-effort factor ``u`` does not appear in
+    The tightness markup ``(1+m)`` does not appear **in the stored rate**: it is
+    a hiring instrument and applies to offers only. It is emphatically NOT
+    inert in the model. This class never touches
+    ``self.labour_market_tightness_markup_scale`` in its own body -- the markup
+    is computed by the parent's :meth:`compute_wage_tightness_markup` and
+    arrives here as the ``current_wage_tightness_markup`` argument, entering
+    the offer as the ``(1+m)`` factor in
+    :meth:`get_offered_wage_given_labour_inputs_function`::
+
+        w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1+m[i])
+
+    So ``labour_market_tightness_markup_scale`` (FRA: 0.05) and
+    ``markup_time_span`` (FRA: 4, the averaging span inside that markup) are
+    LIVE wage channels. Do not exclude them when enumerating the drivers of
+    aggregate wage growth. The work-effort factor ``u`` does not appear in
     the stored rate: a rate is per hour worked, and ``u`` is intensity. Because
     ``u`` is a firm-level scalar, ``sum_j(w*u) == u*sum_j(w)``, so the wage bill
     is unchanged by where ``u`` is applied; what changes is that downstream
@@ -501,6 +514,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         markup_time_span: int,
         initial_rate_source: str = "individual",
         indexation_base: str = "tfp_multiplier",
+        realised_productivity_window: int = 4,
+        incumbent_indexation_pass_through: float = 0.0,
+        new_hire_offer_pass_through: float = 1.0,
         slack_response_up: float = 0.0,
         slack_response_down: float = 0.0,
         max_offer_log_cut: float = 0.02,
@@ -517,12 +533,21 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             raise ValueError(
                 f"indexation_base must be 'tfp_multiplier' or 'realised_productivity', got {indexation_base!r}"
             )
+        if realised_productivity_window <= 0:
+            raise ValueError("realised_productivity_window must be positive.")
+        if not 0.0 <= incumbent_indexation_pass_through <= 1.0:
+            raise ValueError("incumbent_indexation_pass_through must be between 0 and 1.")
+        if not 0.0 <= new_hire_offer_pass_through <= 1.0:
+            raise ValueError("new_hire_offer_pass_through must be between 0 and 1.")
         if slack_response_up < 0.0 or slack_response_down < 0.0:
             raise ValueError("slack_response_up and slack_response_down must be non-negative.")
         if max_offer_log_cut < 0.0:
             raise ValueError("max_offer_log_cut must be non-negative.")
         self.initial_rate_source = initial_rate_source
         self.indexation_base = indexation_base
+        self.realised_productivity_window = int(realised_productivity_window)
+        self.incumbent_indexation_pass_through = float(incumbent_indexation_pass_through)
+        self.new_hire_offer_pass_through = float(new_hire_offer_pass_through)
         self.slack_response_up = float(slack_response_up)
         self.slack_response_down = float(slack_response_down)
         self.max_offer_log_cut = float(max_offer_log_cut)
@@ -595,11 +620,13 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         unit labour cost up every period.
         """
         if self.indexation_base == "tfp_multiplier":
-            return tfp_ratio
-        if realised_productivity_ratio is None:
-            raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
-        ratio = np.asarray(realised_productivity_ratio, dtype=float)
-        return np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
+            ratio = np.asarray(tfp_ratio, dtype=float)
+        else:
+            if realised_productivity_ratio is None:
+                raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
+            ratio = np.asarray(realised_productivity_ratio, dtype=float)
+        valid_ratio = np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
+        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
 
     def _seed_rates(
         self,
@@ -681,10 +708,34 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         incumbent = employed & ~current_individual_stating_new_job
         carried_wage_rate[incumbent] *= indexation_ratio[corresponding_firm[incumbent]]
 
-        # New hires: the accepted offer rate replaces the carried rate and
-        # persists from here, rather than lasting a single period.
+        # New hires: pass the accepted-offer premium through relative to the
+        # hiring firm's incumbent mean.  lambda=1 preserves full binding;
+        # lambda=0 gives the incumbent mean.  Measure the reference before
+        # adding new hires so their own offers cannot raise their base.
         new_hire = employed & current_individual_stating_new_job
-        carried_wage_rate[new_hire] = current_individual_offered_wage[new_hire]
+        n_firms = len(current_labour_productivity_factor)
+        incumbent_firms = corresponding_firm[incumbent]
+        incumbent_rate_sum = np.bincount(
+            incumbent_firms,
+            weights=carried_wage_rate[incumbent],
+            minlength=n_firms,
+        )
+        incumbent_count = np.bincount(incumbent_firms, minlength=n_firms).astype(float)
+        incumbent_reference = np.divide(
+            incumbent_rate_sum,
+            incumbent_count,
+            out=(initial_wage_per_capita / tax).astype(float).copy(),
+            where=incumbent_count > 0,
+        )
+        new_hire_reference = incumbent_reference[corresponding_firm[new_hire]]
+        accepted_offer = current_individual_offered_wage[new_hire]
+        carried_wage_rate[new_hire] = new_hire_reference + self.new_hire_offer_pass_through * (
+            accepted_offer - new_hire_reference
+        )
+
+        self.last_new_hire_reference_rate = new_hire_reference.copy()
+        self.last_new_hire_accepted_offer = accepted_offer.copy()
+        self.last_new_hire_set_rate = carried_wage_rate[new_hire].copy()
 
         # Paid earnings = rate x effort. u is firm-level, so this leaves the
         # aggregate wage bill identical to applying u inside the rate.

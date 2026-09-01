@@ -1163,7 +1163,9 @@ class Firms(Agent):
         offer_kwargs = {}
         if isinstance(self.functions["wage_setter"], ContractWageSetter):
             offer_kwargs["carried_wage_rate"] = carried_wage_rate
-            offer_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio()
+            offer_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio(
+                window=self.functions["wage_setter"].realised_productivity_window
+            )
             desired_labour, realised_labour = self.latest_matched_labour_gap_inputs()
             offer_kwargs["desired_labour_inputs"] = desired_labour
             offer_kwargs["realised_labour_inputs"] = realised_labour
@@ -1215,6 +1217,9 @@ class Firms(Agent):
             np.ndarray: Per-firm productivity growth factor, 1.0 where it cannot
                 be computed.
         """
+        if window <= 0:
+            raise ValueError("window must be positive.")
+
         n_firms = int(self.ts.current("n_firms"))
         ones = np.ones(n_firms)
 
@@ -1236,8 +1241,9 @@ class Firms(Agent):
                 labour_k = np.asarray(labour_inputs[k], dtype=float)
                 if output_k.shape != (n_firms,) or labour_k.shape != (n_firms,):
                     return None
-                total_output += np.nan_to_num(output_k, nan=0.0)
-                total_labour += np.nan_to_num(labour_k, nan=0.0)
+                valid = np.isfinite(output_k) & (output_k >= 0.0) & np.isfinite(labour_k) & (labour_k > 0.0)
+                total_output += np.where(valid, output_k, 0.0)
+                total_labour += np.where(valid, labour_k, 0.0)
             return np.divide(total_output, total_labour, out=ones.copy(), where=total_labour > 0)
 
         current_productivity = smoothed(last)
@@ -1319,7 +1325,9 @@ class Firms(Agent):
         if isinstance(self.functions["wage_setter"], ContractWageSetter):
             extra_kwargs["carried_wage_rate"] = carried_wage_rate
             extra_kwargs["prev_tfp_multiplier"] = self.ts.prev("tfp_multiplier")
-            extra_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio()
+            extra_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio(
+                window=self.functions["wage_setter"].realised_productivity_window
+            )
         return self.functions["wage_setter"].set_employee_income(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,

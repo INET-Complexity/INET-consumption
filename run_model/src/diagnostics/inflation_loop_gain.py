@@ -16,6 +16,7 @@ CSV = (
 
 df = pd.read_csv(CSV)
 
+
 # Rebuild CPI/PPI *levels* from the YoY series (quarterly model, 4 periods/year).
 # YoY at t compares t to t-4, so chain the level forward in 4-period strides.
 def level_from_yoy(yoy: pd.Series, periods_per_year: int = 4) -> np.ndarray:
@@ -44,9 +45,16 @@ df["mc_over_ac"] = df["pricing_mc_mean"] / df["pricing_ac_mean"]
 df["labour_share_of_mc"] = df["pricing_labour_mc_mean"] / df["pricing_mc_mean"]
 
 # Period-on-period growth of the loop's inputs.
-for col in ["pricing_labour_mc_mean", "pricing_material_mc_mean",
-            "pricing_mc_mean", "pricing_ac_mean", "cpi_level", "ppi_level",
-            "real_labour_uc", "real_material_uc"]:
+for col in [
+    "pricing_labour_mc_mean",
+    "pricing_material_mc_mean",
+    "pricing_mc_mean",
+    "pricing_ac_mean",
+    "cpi_level",
+    "ppi_level",
+    "real_labour_uc",
+    "real_material_uc",
+]:
     df[f"g_{col}"] = df[col].pct_change()
 
 rows = [15, 20, 25, 30, 35, 40, 45, 50]
@@ -58,24 +66,36 @@ pd.set_option("display.float_format", lambda v: f"{v:.5f}")
 print("=" * 100)
 print("LEVELS: nominal unit costs vs real (deflated) unit costs")
 print("=" * 100)
-print(df.loc[rows, [
-    "time", "cpi_level", "ppi_level",
-    "pricing_labour_mc_mean", "real_labour_uc",
-    "pricing_material_mc_mean", "real_material_uc",
-    "labour_share_of_mc", "pricing_ac_floor_binding_share",
-]].to_string(index=False))
+print(
+    df.loc[
+        rows,
+        [
+            "time",
+            "cpi_level",
+            "ppi_level",
+            "pricing_labour_mc_mean",
+            "real_labour_uc",
+            "pricing_material_mc_mean",
+            "real_material_uc",
+            "labour_share_of_mc",
+            "pricing_ac_floor_binding_share",
+        ],
+    ].to_string(index=False)
+)
 
 print()
 print("=" * 100)
 print("GAIN TEST: is the drift pure pass-through (real UC flat) or gain>1 (real UC rising)?")
 print("=" * 100)
 seg = df[(df["time"] >= 15) & (df["time"] <= 50)]
-for name, col in [("nominal labour MC", "pricing_labour_mc_mean"),
-                  ("real labour UC   ", "real_labour_uc"),
-                  ("nominal materialMC", "pricing_material_mc_mean"),
-                  ("real material UC ", "real_material_uc"),
-                  ("CPI level        ", "cpi_level"),
-                  ("PPI level        ", "ppi_level")]:
+for name, col in [
+    ("nominal labour MC", "pricing_labour_mc_mean"),
+    ("real labour UC   ", "real_labour_uc"),
+    ("nominal materialMC", "pricing_material_mc_mean"),
+    ("real material UC ", "real_material_uc"),
+    ("CPI level        ", "cpi_level"),
+    ("PPI level        ", "ppi_level"),
+]:
     a, b = seg[col].iloc[0], seg[col].iloc[-1]
     tot = (b / a - 1.0) * 100.0
     per = ((b / a) ** (1.0 / (len(seg) - 1)) - 1.0) * 100.0
@@ -85,16 +105,32 @@ print()
 print("=" * 100)
 print("ACCELERATION: is YoY inflation rising, and is the gain rising with it?")
 print("=" * 100)
-print(df.loc[rows, [
-    "time", "cpi_chained_basket_yoy_change", "ppi_chained_yoy_change",
-    "g_real_labour_uc", "g_real_material_uc", "unemployment_rate", "vacancy_rate",
-]].to_string(index=False))
+print(
+    df.loc[
+        rows,
+        [
+            "time",
+            "cpi_chained_basket_yoy_change",
+            "ppi_chained_yoy_change",
+            "g_real_labour_uc",
+            "g_real_material_uc",
+            "unemployment_rate",
+            "vacancy_rate",
+        ],
+    ].to_string(index=False)
+)
 
 # Correlation between real-UC drift and subsequent inflation.
 sub = df[(df["time"] >= 12) & np.isfinite(df["g_real_labour_uc"])]
 if len(sub) > 5:
     print()
-    print(f"corr(g_real_labour_uc, cpi_yoy)   = {sub['g_real_labour_uc'].corr(sub['cpi_chained_basket_yoy_change']):+.3f}")
+    print(
+        f"corr(g_real_labour_uc, cpi_yoy)   = {sub['g_real_labour_uc'].corr(sub['cpi_chained_basket_yoy_change']):+.3f}"
+    )
     print(f"corr(g_real_material_uc, ppi_yoy) = {sub['g_real_material_uc'].corr(sub['ppi_chained_yoy_change']):+.3f}")
-    print(f"mean g_real_labour_uc  (t>=15)    = {df.loc[df.time>=15,'g_real_labour_uc'].mean()*100:+.4f}% per period")
-    print(f"mean g_real_material_uc(t>=15)    = {df.loc[df.time>=15,'g_real_material_uc'].mean()*100:+.4f}% per period")
+    print(
+        f"mean g_real_labour_uc  (t>=15)    = {df.loc[df.time >= 15, 'g_real_labour_uc'].mean() * 100:+.4f}% per period"
+    )
+    print(
+        f"mean g_real_material_uc(t>=15)    = {df.loc[df.time >= 15, 'g_real_material_uc'].mean() * 100:+.4f}% per period"
+    )

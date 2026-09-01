@@ -1081,6 +1081,7 @@ class Country:
         ts = self.firms.ts
         n_firms = int(ts.current("n_firms"))
         ones = np.ones(n_firms)
+
         def diagnostic_array(value):
             if value is None:
                 return ones.copy()
@@ -1118,9 +1119,7 @@ class Country:
             history = ts.historic(factor_name)
             previous_factor = history[-2] if replace_current and len(history) > 1 else history[-1]
             current[growth_name] = self._log_ratio(current[factor_name], previous_factor)
-        current["wage_offer_growth_historic_wage"] = self._log_ratio(
-            current["wage_offer_historic_base"], previous_base
-        )
+        current["wage_offer_growth_historic_wage"] = self._log_ratio(current["wage_offer_historic_base"], previous_base)
         current["wage_offer_growth"] = self._log_ratio(current["wage_offer_level"], previous_level)
         component_names = (
             "wage_offer_growth_historic_wage",

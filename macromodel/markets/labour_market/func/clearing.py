@@ -403,7 +403,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         for i_to_fire in range(len(firm_employments[firm_id]) - 1):
             ind_to_fire = ind_firing_queue[i_to_fire]
             if self.round_target_employment:
-                firing_reference = firm_productivity * prev_individuals_productivity[ind_to_fire]  / 2.0
+                firing_reference = firm_productivity * prev_individuals_productivity[ind_to_fire] / 2.0
             else:
                 firing_reference = 0.0
 

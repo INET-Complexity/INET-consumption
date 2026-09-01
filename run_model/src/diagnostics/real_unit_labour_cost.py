@@ -10,8 +10,10 @@ is structurally backwards.
 import h5py
 import numpy as np
 
-P = ("/Users/andone/Documents/python_projects/INET-consumption/run_model/data/"
-     "output_data/issue-145-wage-price-decomposition/seed-18/multi_country_simulation.h5")
+P = (
+    "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/"
+    "output_data/issue-145-wage-price-decomposition/seed-18/multi_country_simulation.h5"
+)
 
 f = h5py.File(P, "r")
 
@@ -68,9 +70,11 @@ print(hdr)
 for t in rows:
     if t >= T:
         continue
-    print(f"{t:>4} {tfp_m[t]:>10.5f} {lpf_m[t]:>11.5f} {rw_m[t]:>14.5f} "
-          f"{li_tot[t]:>13.4g} {emp_tot[t]:>12.4g} {tw_tot[t]/li_tot[t]:>13.5f} "
-          f"{prod_tot[t]/li_tot[t]:>12.5f}")
+    print(
+        f"{t:>4} {tfp_m[t]:>10.5f} {lpf_m[t]:>11.5f} {rw_m[t]:>14.5f} "
+        f"{li_tot[t]:>13.4g} {emp_tot[t]:>12.4g} {tw_tot[t] / li_tot[t]:>13.5f} "
+        f"{prod_tot[t] / li_tot[t]:>12.5f}"
+    )
 
 print()
 print("=" * 108)

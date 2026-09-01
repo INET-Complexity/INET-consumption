@@ -80,13 +80,18 @@ def main():
         if df is None:
             continue
         row = []
-        for cost, index in (("pricing_labour_mc_mean", "cpi_chained_basket"),
-                            ("pricing_material_mc_mean", "ppi_chained")):
+        for cost, index in (
+            ("pricing_labour_mc_mean", "cpi_chained_basket"),
+            ("pricing_material_mc_mean", "ppi_chained"),
+        ):
             a = mean_at(df, 25, cost) / mean_at(df, 24, index)
             b = mean_at(df, 50, cost) / mean_at(df, 49, index)
             row += [a, b, (b / a - 1) * 100]
-        print(f"{lab:<15}" + f"{row[0]:>10.4f}{row[1]:>10.4f}{row[2]:>+12.2f}"
-              + f"{row[3]:>10.4f}{row[4]:>10.4f}{row[5]:>+12.2f}")
+        print(
+            f"{lab:<15}"
+            + f"{row[0]:>10.4f}{row[1]:>10.4f}{row[2]:>+12.2f}"
+            + f"{row[3]:>10.4f}{row[4]:>10.4f}{row[5]:>+12.2f}"
+        )
 
     # ---- Is the rise itself slowing? ----
     print()
@@ -107,11 +112,13 @@ def main():
     print("=" * 104)
     print(f"TERMINAL t=50, mean [sd] across {n} seeds")
     print("=" * 104)
-    metrics = [("cpi_chained_basket_yoy_change", "CPI YoY %", 100),
-               ("unemployment_rate", "Unemp %", 100),
-               ("labour_share", "LabShare %", 100),
-               ("real_gdp", "realGDP bn", 1e-9),
-               ("economy_wage_rate", "wage m", 1e-6)]
+    metrics = [
+        ("cpi_chained_basket_yoy_change", "CPI YoY %", 100),
+        ("unemployment_rate", "Unemp %", 100),
+        ("labour_share", "LabShare %", 100),
+        ("real_gdp", "realGDP bn", 1e-9),
+        ("economy_wage_rate", "wage m", 1e-6),
+    ]
     print(f"{'arm':<15}" + "".join(f"{lab:>18}" for _, lab, _ in metrics))
     base = {}
     for arm, lab in ARMS:
@@ -136,8 +143,10 @@ def main():
             continue
         v = df.xs(50, level="time")["cpi_chained_basket_yoy_change"].to_numpy(dtype=float) * 100
         d = v - base["cpi_chained_basket_yoy_change"]
-        print(f"  {lab:<15} {int((d < 0).sum())}/{d.size}  mean {np.nanmean(d):+.4f}pp  "
-              f"min {np.nanmin(d):+.4f}  max {np.nanmax(d):+.4f}")
+        print(
+            f"  {lab:<15} {int((d < 0).sum())}/{d.size}  mean {np.nanmean(d):+.4f}pp  "
+            f"min {np.nanmin(d):+.4f}  max {np.nanmax(d):+.4f}"
+        )
 
 
 if __name__ == "__main__":

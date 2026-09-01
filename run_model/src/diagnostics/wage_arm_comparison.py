@@ -163,8 +163,10 @@ def main():
             if arm == "baseline" or arm not in rows:
                 continue
             d = rows[arm]["cpi_chained_basket_yoy_change"] - rows["baseline"]["cpi_chained_basket_yoy_change"]
-            print(f"{label:<30} {int((d < 0).sum())}/{d.size}   mean {np.nanmean(d):+.4f}pp   "
-                  f"min {np.nanmin(d):+.4f}  max {np.nanmax(d):+.4f}")
+            print(
+                f"{label:<30} {int((d < 0).sum())}/{d.size}   mean {np.nanmean(d):+.4f}pp   "
+                f"min {np.nanmin(d):+.4f}  max {np.nanmax(d):+.4f}"
+            )
 
 
 if __name__ == "__main__":

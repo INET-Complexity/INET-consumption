@@ -68,7 +68,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
     # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
     # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.7,
+    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.9,
     # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
     # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
     # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,

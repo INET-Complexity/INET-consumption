@@ -68,7 +68,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
     # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
     # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    # "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.56,
+    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.7,
     # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
     # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
     # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
@@ -139,7 +139,11 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     "wage_indexation_fixed_alpha_0": {
         "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.0,
     },
+    "labour_market_tightness": {
+        "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.5,
+    },
 }
+
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},

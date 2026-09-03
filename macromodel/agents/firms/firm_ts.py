@@ -285,6 +285,10 @@ class FirmTimeSeries(TimeSeries):
             - np.matmul(used_intermediate_inputs, initial_good_prices)
             - data["Taxes paid on Production"].values
         )
+        n_emp = data["Number of Employees"].values
+        wage_per_employee = np.where(n_emp > 0, data["Total Wages Paid"].values / n_emp, 0.0)
+        output_per_employee = np.where(n_emp > 0, data["Production"].values / n_emp, 0.0)
+
         return cls(
             n_firms=data.shape[0],
             limiting_intermediate_inputs=np.full(data.shape[0], np.nan),
@@ -292,8 +296,8 @@ class FirmTimeSeries(TimeSeries):
             target_intermediate_inputs_production=np.full(data.shape[0], np.nan),
             target_capital_inputs_production=np.full(data.shape[0], np.nan),
             wage_tightness_markup=np.full(data.shape[0], np.nan),
-            wage_offer_historic_base=data["Total Wages Paid"].values / data["Number of Employees"].values,
-            wage_offer_level=data["Total Wages Paid"].values / data["Number of Employees"].values,
+            wage_offer_historic_base=wage_per_employee,
+            wage_offer_level=wage_per_employee,
             wage_offer_tfp_factor=np.ones(data.shape[0]),
             wage_offer_productivity_factor=np.ones(data.shape[0]),
             wage_offer_tightness_factor=np.ones(data.shape[0]),
@@ -311,9 +315,7 @@ class FirmTimeSeries(TimeSeries):
             production=data["Production"].values,
             production_histogram=get_histogram(data["Production"].values, None),
             production_nominal=data["Price"].values * data["Production"].values,
-            output_by_employee_histogram=get_histogram(
-                data["Production"].values / data["Number of Employees"].values, None
-            ),
+            output_by_employee_histogram=get_histogram(output_per_employee, None),
             target_production=data["Production"].values.copy(),
             constrained_intermediate_inputs_target_production=np.full(len(data), np.nan),
             constrained_capital_inputs_target_production=np.full(len(data), np.nan),
@@ -330,7 +332,7 @@ class FirmTimeSeries(TimeSeries):
             dividend_fund_settlement_shortfall=np.zeros(data.shape[0]),
             expected_profits=data["Profits"].values,
             total_wage=data["Total Wages Paid"].values,
-            real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
+            real_wage_per_capita=wage_per_employee,
             unit_costs=data["Unit Costs"].values,
             pricing_mc=np.full(data.shape[0], np.nan),
             pricing_mc_smooth=np.full(data.shape[0], np.nan),
@@ -702,6 +704,10 @@ def create_firms_timeseries(
         - np.matmul(used_intermediate_inputs, initial_good_prices)
         - data["Taxes paid on Production"].values
     )
+    n_emp = data["Number of Employees"].values
+    wage_per_employee = np.where(n_emp > 0, data["Total Wages Paid"].values / n_emp, 0.0)
+    output_per_employee = np.where(n_emp > 0, data["Production"].values / n_emp, 0.0)
+
     return TimeSeries(
         n_firms=data.shape[0],
         limiting_intermediate_inputs=np.full(data.shape[0], np.nan),
@@ -709,8 +715,8 @@ def create_firms_timeseries(
         target_intermediate_inputs_production=np.full(data.shape[0], np.nan),
         target_capital_inputs_production=np.full(data.shape[0], np.nan),
         wage_tightness_markup=np.full(data.shape[0], np.nan),
-        wage_offer_historic_base=data["Total Wages Paid"].values / data["Number of Employees"].values,
-        wage_offer_level=data["Total Wages Paid"].values / data["Number of Employees"].values,
+        wage_offer_historic_base=wage_per_employee,
+        wage_offer_level=wage_per_employee,
         wage_offer_tfp_factor=np.ones(data.shape[0]),
         wage_offer_productivity_factor=np.ones(data.shape[0]),
         wage_offer_tightness_factor=np.ones(data.shape[0]),
@@ -728,9 +734,7 @@ def create_firms_timeseries(
         production=data["Production"].values,
         production_histogram=get_histogram(data["Production"].values, None),
         production_nominal=data["Price"].values * data["Production"].values,
-        output_by_employee_histogram=get_histogram(
-            data["Production"].values / data["Number of Employees"].values, None
-        ),
+        output_by_employee_histogram=get_histogram(output_per_employee, None),
         target_production=data["Production"].values.copy(),
         constrained_intermediate_inputs_target_production=np.full(len(data), np.nan),
         constrained_capital_inputs_target_production=np.full(len(data), np.nan),
@@ -747,7 +751,7 @@ def create_firms_timeseries(
         dividend_fund_settlement_shortfall=np.zeros(data.shape[0]),
         expected_profits=data["Profits"].values,
         total_wage=data["Total Wages Paid"].values,
-        real_wage_per_capita=data["Total Wages Paid"].values / data["Number of Employees"].values,
+        real_wage_per_capita=wage_per_employee,
         unit_costs=data["Unit Costs"].values,
         pricing_mc=np.full(data.shape[0], np.nan),
         pricing_mc_smooth=np.full(data.shape[0], np.nan),

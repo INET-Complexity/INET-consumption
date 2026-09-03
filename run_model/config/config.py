@@ -68,7 +68,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
     # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
     # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    # "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.56,
+    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.9,
     # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
     # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
     # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
@@ -111,7 +111,39 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     "change_sectoral_weights": {
         "government_entities.functions.consumption.parameters['sectoral_weights']": "initial_price_normalized",
     },
+    "default_labour_cleaner": {
+        "labour_market.functions.clearing.name": "ReservationWageBindingDefaultLabourMarketClearer",
+    },
+    "contract_wage_setter": {
+        "firms.functions.wage_setter.name": "ContractWageSetter",
+        "firms.functions.wage_setter.parameters['initial_rate_source']": "firm_anchor",
+        "firms.functions.wage_setter.parameters['indexation_base']": "realised_productivity",
+        "firms.functions.wage_setter.parameters['realised_productivity_window']": 4,
+    },
+    "realised_productivity_frozen_markup": {
+        "firms.functions.wage_setter.name": "ContractWageSetter",
+        "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
+        "firms.functions.wage_setter.parameters['indexation_base']": "realised_productivity",
+        "firms.functions.wage_setter.parameters['realised_productivity_window']": 4,
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.0,
+        "firms.functions.prices.parameters['demand_pull_speed']": 0.0,
+        "labour_market.functions.clearing.name": "ReservationWageBindingDefaultLabourMarketClearer",
+        "households.functions.consumption.parameters['long_run_intercept']": -0.3,
+    },
+    # France's country configuration is the alpha=0 benchmark. These presets
+    # change only the wage-indexation coefficient, keeping all other France
+    # settings—including active demand-pull markup adjustment—identical.
+    "wage_indexation_current_alpha_1": {
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 1.0,
+    },
+    "wage_indexation_fixed_alpha_0": {
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.0,
+    },
+    "labour_market_tightness": {
+        "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.5,
+    },
 }
+
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
@@ -176,7 +208,10 @@ POLICY_COLUMNS = (
     "unemployment_rate",
     "cpi_fixed_basket_yoy_change",
     "ppi_yoy_change",
+    "cpi_transaction",
+    "ppi",
     "central_bank_policy_rate",
+    "output_gap",
     "short_term_firm_borrowing_rate",
     "long_term_firm_borrowing_rate",
     "household_consumption_borrowing_rate",

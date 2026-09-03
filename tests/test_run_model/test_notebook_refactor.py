@@ -67,6 +67,15 @@ def test_calibrated_override_preset_retains_notebook_values():
     )
 
 
+def test_wage_indexation_presets_only_override_the_france_default_coefficient():
+    assert SCENARIO_PRESETS["wage_indexation_current_alpha_1"] == {
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 1.0,
+    }
+    assert SCENARIO_PRESETS["wage_indexation_fixed_alpha_0"] == {
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.0,
+    }
+
+
 def test_permanent_income_by_decile_handles_tied_income_deterministically():
     households = SimpleNamespace(
         ts=SimpleNamespace(

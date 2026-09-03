@@ -1,3 +1,4 @@
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 
@@ -342,6 +343,14 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
     MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE = 4
     MARKUP_RESIDUAL_MIN_FACTOR = 0.25
     MARKUP_RESIDUAL_MAX_FACTOR = 4.0
+    # When the sector's AC floor already exceeds its initial-price anchor, no
+    # residual factor can reach the anchor. Fall back to the unadjusted Orbis
+    # markup rather than the solver bound: clamping to MARKUP_RESIDUAL_MIN_FACTOR
+    # drives mu below 1, which makes the AC-floor test (d >= (mu - 1) * MC)
+    # unconditionally true and freezes those firms on the floor for the whole
+    # run. Keeping mu = base_mu leaves the test live, so a firm escapes the
+    # floor if its unit depreciation later falls relative to marginal cost.
+    MARKUP_RESIDUAL_UNREACHABLE_FALLBACK_FACTOR = 1.0
     MARKUP_RESIDUAL_SOLVER_TOLERANCE = 1e-6
     MARKUP_RESIDUAL_SOLVER_MAX_ITERATIONS = 80
 
@@ -447,6 +456,12 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             if self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE
             else self.MARKUP_RESIDUAL_STATUS_INVALID,
             dtype=float,
+        )
+        # Relative amount by which a sector's AC floor overshoots its initial-price
+        # anchor (ac_floor_average / target - 1). Zero when the anchor is reachable.
+        # Surfaces an otherwise silent calibration failure as a measurable series.
+        self.markup_residual_unreachable_gap_by_industry = np.zeros(
+            len(self.industry_to_nace_main_section), dtype=float
         )
         self._markup_residual_calibration_done = (
             self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE
@@ -582,6 +597,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_markup_upper = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_residual_factor = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_markup_residual_status = np.full(prev_prices.shape, np.nan, dtype=float)
+        self.last_pricing_markup_residual_unreachable_gap = np.full(prev_prices.shape, np.nan, dtype=float)
         self.last_pricing_ac_floor_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_ac_fallback_binding = np.zeros(prev_prices.shape, dtype=float)
         self.last_pricing_gate_state = np.zeros(prev_prices.shape, dtype=float)
@@ -612,7 +628,15 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         mc_smooth: np.ndarray,
         ac_candidate: np.ndarray,
         weights: np.ndarray,
-    ) -> tuple[float, float]:
+    ) -> tuple[float, float, float]:
+        """Solve for the sector residual markup factor.
+
+        Returns:
+            tuple:
+            - float: residual factor applied to the sector's Orbis base markup
+            - float: MARKUP_RESIDUAL_STATUS_* code
+            - float: relative AC-floor overshoot of the anchor, 0.0 when reachable
+        """
         min_factor = self.MARKUP_RESIDUAL_MIN_FACTOR
         max_factor = self.MARKUP_RESIDUAL_MAX_FACTOR
         low_value = self._candidate_sector_average(min_factor, markup_base, mc_smooth, ac_candidate, weights)
@@ -620,14 +644,20 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
 
         if low_value >= target:
             ac_floor_value = float(np.average(ac_candidate, weights=weights))
-            status = (
-                self.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
-                if ac_floor_value >= target
-                else self.MARKUP_RESIDUAL_STATUS_CLIPPED
-            )
-            return min_factor, status
+            if ac_floor_value >= target:
+                # No factor can reach the anchor: the AC floor alone already clears
+                # it. Keep the unadjusted Orbis markup and record how far the floor
+                # overshoots, instead of clamping mu below 1. See the constant's
+                # comment for why the clamp was structurally harmful.
+                unreachable_gap = ac_floor_value / target - 1.0 if target > 0.0 else 0.0
+                return (
+                    self.MARKUP_RESIDUAL_UNREACHABLE_FALLBACK_FACTOR,
+                    self.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE,
+                    unreachable_gap,
+                )
+            return min_factor, self.MARKUP_RESIDUAL_STATUS_CLIPPED, 0.0
         if high_value <= target:
-            return max_factor, self.MARKUP_RESIDUAL_STATUS_CLIPPED
+            return max_factor, self.MARKUP_RESIDUAL_STATUS_CLIPPED, 0.0
 
         lower = min_factor
         upper = max_factor
@@ -635,12 +665,12 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             mid = 0.5 * (lower + upper)
             mid_value = self._candidate_sector_average(mid, markup_base, mc_smooth, ac_candidate, weights)
             if abs(mid_value - target) <= self.MARKUP_RESIDUAL_SOLVER_TOLERANCE * max(1.0, abs(target)):
-                return mid, self.MARKUP_RESIDUAL_STATUS_APPLIED
+                return mid, self.MARKUP_RESIDUAL_STATUS_APPLIED, 0.0
             if mid_value < target:
                 lower = mid
             else:
                 upper = mid
-        return 0.5 * (lower + upper), self.MARKUP_RESIDUAL_STATUS_APPLIED
+        return 0.5 * (lower + upper), self.MARKUP_RESIDUAL_STATUS_APPLIED, 0.0
 
     def _maybe_calibrate_markup_residual(
         self,
@@ -655,6 +685,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             return
 
         self._markup_residual_calibration_done = True
+        self.markup_residual_unreachable_gap_by_industry.fill(0.0)
         if self.markup_residual_calibration_mode == self.MARKUP_RESIDUAL_CALIBRATION_NONE:
             self.markup_residual_factor_by_industry.fill(1.0)
             self.markup_residual_status_by_industry.fill(self.MARKUP_RESIDUAL_STATUS_DISABLED)
@@ -689,7 +720,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
 
             weights = weights_all[valid]
             target = float(np.average(previous_pre_tax_price[valid], weights=weights))
-            factor, status = self._sector_markup_residual_factor(
+            factor, status, unreachable_gap = self._sector_markup_residual_factor(
                 target=target,
                 markup_base=markup_base_mu[valid],
                 mc_smooth=mc_smooth[valid],
@@ -698,6 +729,37 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
             )
             self.markup_residual_factor_by_industry[sector] = factor
             self.markup_residual_status_by_industry[sector] = status
+            self.markup_residual_unreachable_gap_by_industry[sector] = unreachable_gap
+
+        self._warn_on_unreachable_markup_anchors()
+
+    def _warn_on_unreachable_markup_anchors(self) -> None:
+        """Surface sectors whose AC floor already exceeds their initial-price anchor.
+
+        These sectors cannot be calibrated to their anchor at any residual factor:
+        their calibrated cost structure prices above the observed initial price, so
+        they price at pure average cost until unit depreciation falls relative to
+        marginal cost. Reported once, at calibration, rather than left implicit in
+        a status code.
+        """
+        unreachable = np.flatnonzero(
+            self.markup_residual_status_by_industry == self.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
+        )
+        if unreachable.size == 0:
+            return
+        detail = ", ".join(
+            f"industry {int(sector)} (+{self.markup_residual_unreachable_gap_by_industry[sector]:.2%})"
+            for sector in unreachable
+        )
+        warnings.warn(
+            f"Markup residual calibration: {unreachable.size} sector(s) have an AC floor above their "
+            f"initial-price anchor and cannot reach it at any residual factor: {detail}. "
+            "These sectors keep their unadjusted Orbis markup and price at average cost until unit "
+            "depreciation falls relative to marginal cost. The percentage is the AC-floor overshoot "
+            "of the anchor, also recorded as pricing_markup_residual_unreachable_gap.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
 
     @staticmethod
     def _sector_stat(values: np.ndarray, current_firm_sectors: np.ndarray, stat: str) -> np.ndarray:
@@ -1043,6 +1105,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         )
         markup_residual_factor = self.markup_residual_factor_by_industry[current_firm_sectors]
         markup_residual_status = self.markup_residual_status_by_industry[current_firm_sectors]
+        markup_residual_unreachable_gap = self.markup_residual_unreachable_gap_by_industry[current_firm_sectors]
         markup_mu = markup_base_mu * markup_residual_factor
         markup_lower = markup_lower * markup_residual_factor
         markup_upper = markup_upper * markup_residual_factor
@@ -1084,6 +1147,7 @@ class SectorMarkupMarginalCostPriceSetter(PriceSetter):
         self.last_pricing_markup_upper = markup_upper
         self.last_pricing_markup_residual_factor = markup_residual_factor
         self.last_pricing_markup_residual_status = markup_residual_status
+        self.last_pricing_markup_residual_unreachable_gap = markup_residual_unreachable_gap
         self.last_pricing_ac_floor_binding = ac_floor_binding.astype(float)
         self.last_pricing_ac_fallback_binding = ac_fallback.astype(float)
         self.last_pricing_gate_state = gate_state

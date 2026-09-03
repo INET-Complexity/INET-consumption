@@ -191,6 +191,14 @@ class Individuals(Agent):
         states["Offered Wage of Accepted Job"] = np.zeros(len(states["Activity Status"]))
         states["Dividend Payout Ratio"] = 0.0
 
+        # Carried per-worker wage rate, in the same units as "Employee Income"
+        # (base-period net employee income; see the wage/CPI unit contract in
+        # wiki/debugging/2026-05-28-wage-cpi-feedback-unit-contract). Seeded from
+        # the individual data so that initial wage dispersion is available to
+        # wage setters that carry state; setters that do not read it are
+        # unaffected. Unemployed individuals retain their last rate as history.
+        states["Wage Rate"] = np.nan_to_num(states["Employee Income"].astype(float), nan=0.0)
+
         def fillnan(x: np.ndarray) -> np.ndarray:
             return np.where(np.isnan(x), -1, x)
 

@@ -11,6 +11,7 @@ from macro_data.readers.emission_fraction.emission_fraction_reader import Emissi
 from macro_data.readers.exo_prices import SectorExoPrices
 from macromodel.agents.agent import Agent
 from macromodel.agents.firms.firm_ts import FirmTimeSeries
+from macromodel.agents.firms.func.wage_setter import ContractWageSetter
 from macromodel.agents.firms.utils.create_bundle_matrix import create_bundle_matrix
 from macromodel.configurations import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
@@ -1133,6 +1134,7 @@ class Firms(Agent):
         income_taxes: float,
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
+        carried_wage_rate: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create function that computes offered wages.
 
@@ -1151,10 +1153,22 @@ class Firms(Agent):
             income_taxes (float): Income tax rate
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Used by stateful setters
+                such as ``ContractWageSetter``; ignored by stateless ones.
 
         Returns:
             np.ndarray: Wage offers for each firm
         """
+        offer_kwargs = {}
+        if isinstance(self.functions["wage_setter"], ContractWageSetter):
+            offer_kwargs["carried_wage_rate"] = carried_wage_rate
+            offer_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio(
+                window=self.functions["wage_setter"].realised_productivity_window
+            )
+            desired_labour, realised_labour = self.latest_matched_labour_gap_inputs()
+            offer_kwargs["desired_labour_inputs"] = desired_labour
+            offer_kwargs["realised_labour_inputs"] = realised_labour
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1176,7 +1190,95 @@ class Firms(Agent):
             unemployment_benefits_by_individual=unemployment_benefits_by_individual,
             current_tfp_multiplier=self.states["tfp_multiplier"],
             prev_tfp_multiplier=self.ts.prev("tfp_multiplier"),
+            **offer_kwargs,
         )
+
+    def compute_realised_productivity_ratio(self, window: int = 4) -> np.ndarray:
+        """Growth in smoothed realised labour productivity, output per labour input.
+
+        Used as an alternative wage-indexation base to the TFP multiplier. The
+        TFP multiplier is a technical parameter that in the France calibration
+        grows about twice as fast as realised output per labour input, and that
+        wedge drives real unit labour cost upward every period. See
+        ``wiki/experiments/2026-08-28-wage-arm-multiseed-inflation-attribution``.
+
+        The two series are aligned by **period index**, not from the end of the
+        list: ``production`` and ``labour_inputs`` are appended at different
+        points in the period, so their histories can differ in length. Only
+        indices where both exist are used, which lags the signal by at least one
+        period and so avoids making the wage simultaneous with the output it
+        indexes to.
+
+        Args:
+            window (int): Number of periods in the moving average used to damp
+                firm-level noise in output per labour input.
+
+        Returns:
+            np.ndarray: Per-firm productivity growth factor, 1.0 where it cannot
+                be computed.
+        """
+        if window <= 0:
+            raise ValueError("window must be positive.")
+
+        n_firms = int(self.ts.current("n_firms"))
+        ones = np.ones(n_firms)
+
+        production = self.ts.historic("production")
+        labour_inputs = self.ts.historic("labour_inputs")
+        # Highest period index for which both series have an entry.
+        last = min(len(production), len(labour_inputs)) - 1
+        if last < 1:
+            return ones
+
+        def smoothed(end_index: int) -> np.ndarray | None:
+            start = max(0, end_index - window + 1)
+            if end_index < start:
+                return None
+            total_output = np.zeros(n_firms)
+            total_labour = np.zeros(n_firms)
+            for k in range(start, end_index + 1):
+                output_k = np.asarray(production[k], dtype=float)
+                labour_k = np.asarray(labour_inputs[k], dtype=float)
+                if output_k.shape != (n_firms,) or labour_k.shape != (n_firms,):
+                    return None
+                valid = np.isfinite(output_k) & (output_k >= 0.0) & np.isfinite(labour_k) & (labour_k > 0.0)
+                total_output += np.where(valid, output_k, 0.0)
+                total_labour += np.where(valid, labour_k, 0.0)
+            return np.divide(total_output, total_labour, out=ones.copy(), where=total_labour > 0)
+
+        current_productivity = smoothed(last)
+        previous_productivity = smoothed(last - 1)
+        if current_productivity is None or previous_productivity is None:
+            return ones
+
+        ratio = np.divide(
+            current_productivity,
+            previous_productivity,
+            out=ones.copy(),
+            where=previous_productivity > 0,
+        )
+        return np.where(np.isfinite(ratio) & (ratio > 0), ratio, ones)
+
+    def latest_matched_labour_gap_inputs(self) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """Desired and realised labour inputs from the last period where both exist.
+
+        The two series are appended at different points in the period, so they
+        are aligned by **period index** rather than from the end of the list -
+        the same care taken in :meth:`compute_realised_productivity_ratio`.
+
+        Returns:
+            tuple: (desired, realised) for the latest common index, or
+                ``(None, None)`` when no common index is available.
+        """
+        try:
+            desired = self.ts.historic("desired_labour_inputs")
+            realised = self.ts.historic("labour_inputs")
+        except (AttributeError, KeyError):
+            return None, None
+        last = min(len(desired), len(realised)) - 1
+        if last < 0:
+            return None, None
+        return np.asarray(desired[last], dtype=float), np.asarray(realised[last], dtype=float)
 
     def set_employee_income(
         self,
@@ -1190,6 +1292,7 @@ class Firms(Agent):
         income_taxes: float,
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
+        carried_wage_rate: np.ndarray = None,
     ) -> np.ndarray:
         """Set employee wages based on offers and market conditions.
 
@@ -1211,10 +1314,20 @@ class Firms(Agent):
             income_taxes (float): Income tax rate
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Updated in place by stateful
+                setters such as ``ContractWageSetter``; ignored by stateless ones.
 
         Returns:
             np.ndarray: Updated employee wages
         """
+        extra_kwargs = {}
+        if isinstance(self.functions["wage_setter"], ContractWageSetter):
+            extra_kwargs["carried_wage_rate"] = carried_wage_rate
+            extra_kwargs["prev_tfp_multiplier"] = self.ts.prev("tfp_multiplier")
+            extra_kwargs["realised_productivity_ratio"] = self.compute_realised_productivity_ratio(
+                window=self.functions["wage_setter"].realised_productivity_window
+            )
         return self.functions["wage_setter"].set_employee_income(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1238,6 +1351,7 @@ class Firms(Agent):
             employee_social_insurance_tax=employee_social_insurance_tax,
             employer_social_insurance_tax=employer_social_insurance_tax,
             current_tfp_multiplier=self.states["tfp_multiplier"],
+            **extra_kwargs,
         )
 
     def update_total_wages_paid(
@@ -1300,7 +1414,12 @@ class Firms(Agent):
             weights=individual_wages[corresponding_firm >= 0],
             minlength=self.ts.current("n_firms"),
         )
-        return cpi * (
+        # Partial CPI indexation (H4): psi = 1.0 reproduces full pass-through,
+        # the historical behaviour. The deflator is normalised so that psi has
+        # no effect while the price level is at its base of 1.0.
+        psi = float(getattr(self.configuration.parameters, "wage_cpi_indexation_elasticity", 1.0))
+        indexation = cpi if psi == 1.0 else float(np.power(max(cpi, 1e-12), psi))
+        return indexation * (
             (1.0 + employer_social_insurance_tax)
             / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))
             * real_wages
@@ -1407,6 +1526,9 @@ class Firms(Agent):
             "pricing_markup_upper": getattr(price_setter, "last_pricing_markup_upper", default),
             "pricing_markup_residual_factor": getattr(price_setter, "last_pricing_markup_residual_factor", default),
             "pricing_markup_residual_status": getattr(price_setter, "last_pricing_markup_residual_status", default),
+            "pricing_markup_residual_unreachable_gap": getattr(
+                price_setter, "last_pricing_markup_residual_unreachable_gap", default
+            ),
             "pricing_ac_floor_binding": getattr(price_setter, "last_pricing_ac_floor_binding", default),
             "pricing_ac_fallback_binding": getattr(price_setter, "last_pricing_ac_fallback_binding", default),
             "pricing_gate_state": getattr(price_setter, "last_pricing_gate_state", np.zeros(prices.shape, dtype=float)),

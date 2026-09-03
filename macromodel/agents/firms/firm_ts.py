@@ -44,6 +44,8 @@ class FirmTimeSeries(TimeSeries):
     - pricing_markup_upper: Upper markup corridor bound
     - pricing_markup_residual_factor: Sector residual markup calibration factor
     - pricing_markup_residual_status: Numeric code for residual calibration status
+    - pricing_markup_residual_unreachable_gap: Relative AC-floor overshoot of the
+      sector initial-price anchor; 0.0 when the anchor is reachable
     - pricing_ac_floor_binding: Indicator that the AC floor bound price
     - pricing_ac_fallback_binding: Indicator that AC used sector/previous fallback
     - pricing_gate_state: Numeric code for the demand-pull gate state
@@ -65,6 +67,18 @@ class FirmTimeSeries(TimeSeries):
     - total_wage: Total wages paid
     - real_wage_per_capita: Real wages per worker
     - wage_tightness_markup: Wage adjustment for labor market conditions
+    - wage_offer_historic_base: Historic wage base used for offered wages
+    - wage_offer_level: Offered wage per unit of labor input
+    - wage_offer_tfp_factor: TFP factor used in offered wages
+    - wage_offer_productivity_factor: Labour-productivity factor used in offered wages
+    - wage_offer_tightness_factor: Tightness factor used in offered wages
+    - wage_offer_growth: Log growth of offered wage per unit of labor input
+    - wage_offer_growth_historic_wage: Historic-wage contribution to log growth
+    - wage_offer_growth_tfp: TFP contribution to log growth
+    - wage_offer_growth_productivity: Labour-productivity contribution to log growth
+    - wage_offer_growth_tightness: Tightness contribution to log growth
+    - wage_offer_growth_residual: Residual from fallback/floor/non-multiplicative effects
+    - wage_offer_historic_average_available: Indicator that a historic wage average was available
 
     Inventory & Inputs:
     - inventory: Stock of finished goods
@@ -278,6 +292,18 @@ class FirmTimeSeries(TimeSeries):
             target_intermediate_inputs_production=np.full(data.shape[0], np.nan),
             target_capital_inputs_production=np.full(data.shape[0], np.nan),
             wage_tightness_markup=np.full(data.shape[0], np.nan),
+            wage_offer_historic_base=data["Total Wages Paid"].values / data["Number of Employees"].values,
+            wage_offer_level=data["Total Wages Paid"].values / data["Number of Employees"].values,
+            wage_offer_tfp_factor=np.ones(data.shape[0]),
+            wage_offer_productivity_factor=np.ones(data.shape[0]),
+            wage_offer_tightness_factor=np.ones(data.shape[0]),
+            wage_offer_growth=np.zeros(data.shape[0]),
+            wage_offer_growth_historic_wage=np.zeros(data.shape[0]),
+            wage_offer_growth_tfp=np.zeros(data.shape[0]),
+            wage_offer_growth_productivity=np.zeros(data.shape[0]),
+            wage_offer_growth_tightness=np.zeros(data.shape[0]),
+            wage_offer_growth_residual=np.zeros(data.shape[0]),
+            wage_offer_historic_average_available=(data["Number of Employees"].values > 0).astype(float),
             n_firms_by_industry=get_n_firms_by_industry(data, n_industries),
             number_of_employees=data["Number of Employees"].values.astype(int),
             number_of_employees_histogram=get_histogram(data["Number of Employees"].values.astype(int), None),
@@ -321,6 +347,7 @@ class FirmTimeSeries(TimeSeries):
             pricing_markup_upper=np.full(data.shape[0], np.nan),
             pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
             pricing_markup_residual_status=np.full(data.shape[0], np.nan),
+            pricing_markup_residual_unreachable_gap=np.full(data.shape[0], np.nan),
             pricing_ac_floor_binding=np.zeros(data.shape[0]),
             pricing_ac_fallback_binding=np.zeros(data.shape[0]),
             pricing_gate_state=np.zeros(data.shape[0]),
@@ -682,6 +709,18 @@ def create_firms_timeseries(
         target_intermediate_inputs_production=np.full(data.shape[0], np.nan),
         target_capital_inputs_production=np.full(data.shape[0], np.nan),
         wage_tightness_markup=np.full(data.shape[0], np.nan),
+        wage_offer_historic_base=data["Total Wages Paid"].values / data["Number of Employees"].values,
+        wage_offer_level=data["Total Wages Paid"].values / data["Number of Employees"].values,
+        wage_offer_tfp_factor=np.ones(data.shape[0]),
+        wage_offer_productivity_factor=np.ones(data.shape[0]),
+        wage_offer_tightness_factor=np.ones(data.shape[0]),
+        wage_offer_growth=np.zeros(data.shape[0]),
+        wage_offer_growth_historic_wage=np.zeros(data.shape[0]),
+        wage_offer_growth_tfp=np.zeros(data.shape[0]),
+        wage_offer_growth_productivity=np.zeros(data.shape[0]),
+        wage_offer_growth_tightness=np.zeros(data.shape[0]),
+        wage_offer_growth_residual=np.zeros(data.shape[0]),
+        wage_offer_historic_average_available=(data["Number of Employees"].values > 0).astype(float),
         n_firms_by_industry=get_n_firms_by_industry(data, n_industries),
         number_of_employees=data["Number of Employees"].values.astype(int),
         number_of_employees_histogram=get_histogram(data["Number of Employees"].values.astype(int), None),
@@ -725,6 +764,7 @@ def create_firms_timeseries(
         pricing_markup_upper=np.full(data.shape[0], np.nan),
         pricing_markup_residual_factor=np.full(data.shape[0], np.nan),
         pricing_markup_residual_status=np.full(data.shape[0], np.nan),
+        pricing_markup_residual_unreachable_gap=np.full(data.shape[0], np.nan),
         pricing_ac_floor_binding=np.zeros(data.shape[0]),
         pricing_ac_fallback_binding=np.zeros(data.shape[0]),
         pricing_gate_state=np.zeros(data.shape[0]),

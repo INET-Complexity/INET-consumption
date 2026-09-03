@@ -454,7 +454,15 @@ class TestSectorMarkupMarginalCostPriceSetter:
         assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.2, rel=1e-5)
         assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_APPLIED
 
-    def test_markup_residual_ac_floor_unreachable_uses_min_factor(self, tmp_path):
+    def test_markup_residual_ac_floor_unreachable_keeps_base_markup(self, tmp_path):
+        """An unreachable anchor must not clamp mu below 1.
+
+        Clamping to MARKUP_RESIDUAL_MIN_FACTOR drove mu under 1, which makes the
+        AC-floor test ``d >= (mu - 1) * MC`` unconditionally true and pinned those
+        firms to the floor permanently. Here the floor still binds -- the base
+        markup genuinely cannot cover depreciation -- so the price is unchanged,
+        but the recorded markup stays economically meaningful.
+        """
         setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
         kwargs = PRICE_KWARGS | dict(
             prev_prices=np.array([8.0]),
@@ -469,11 +477,70 @@ class TestSectorMarkupMarginalCostPriceSetter:
             **self._cost_kwargs(1, mc=1.0, ac=10.0),
         )
 
-        prices = setter.compute_price(**kwargs)
+        with pytest.warns(RuntimeWarning, match="cannot reach it at any residual factor"):
+            prices = setter.compute_price(**kwargs)
 
         assert prices[0] == pytest.approx(10.0)
-        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(0.25)
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.0)
         assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
+        # mu is the unadjusted Orbis markup, not a solver artefact below 1.
+        assert setter.last_pricing_markup_mu[0] == pytest.approx(setter.last_pricing_markup_base_mu[0])
+        assert setter.last_pricing_markup_mu[0] >= 1.0
+        # AC floor overshoots the 8.0 anchor by 10.0 / 8.0 - 1.
+        assert setter.last_pricing_markup_residual_unreachable_gap[0] == pytest.approx(0.25)
+
+    def test_markup_residual_unreachable_anchor_does_not_pin_covering_markup(self, tmp_path):
+        """A sector whose base markup does cover depreciation must not be pinned.
+
+        The anchor is still unreachable (AC alone clears it), but ``base_mu * MC``
+        exceeds AC, so the firm should price on its markup rather than the floor.
+        Under the old min-factor clamp this sector was frozen at AC.
+        """
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([8.0]),
+            prev_firm_prices=np.array([8.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0]),
+            prev_supply=np.ones(1),
+            prev_demand=np.ones(1),
+            curr_unit_costs=np.array([8.0]),
+            prev_unit_costs=np.array([8.0]),
+            initial_output_weights=np.array([1.0]),
+            **self._cost_kwargs(1, mc=8.0, ac=8.5),
+        )
+
+        with pytest.warns(RuntimeWarning, match="cannot reach it at any residual factor"):
+            prices = setter.compute_price(**kwargs)
+
+        base_mu = setter.last_pricing_markup_base_mu[0]
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_AC_FLOOR_UNREACHABLE
+        assert setter.last_pricing_markup_residual_factor[0] == pytest.approx(1.0)
+        # Markup candidate (base_mu * 8.0) beats the 8.5 AC floor, so the floor is free.
+        assert prices[0] == pytest.approx(base_mu * 8.0)
+        assert prices[0] > 8.5
+        assert setter.last_pricing_ac_floor_binding[0] == 0.0
+        assert setter.last_pricing_markup_residual_unreachable_gap[0] == pytest.approx(8.5 / 8.0 - 1.0)
+
+    def test_markup_residual_reachable_anchor_reports_zero_unreachable_gap(self, tmp_path):
+        setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")
+        kwargs = PRICE_KWARGS | dict(
+            prev_prices=np.array([20.0, 12.0]),
+            prev_firm_prices=np.array([20.0, 12.0]),
+            prev_average_good_prices=np.array([10.0]),
+            current_firm_sectors=np.array([0, 0]),
+            prev_supply=np.ones(2),
+            prev_demand=np.ones(2),
+            curr_unit_costs=np.full(2, 10.0),
+            prev_unit_costs=np.full(2, 10.0),
+            initial_output_weights=np.array([3.0, 1.0]),
+            **self._cost_kwargs(2, mc=np.array([10.0, 20.0])),
+        )
+
+        setter.compute_price(**kwargs)
+
+        assert setter.last_pricing_markup_residual_status[0] == setter.MARKUP_RESIDUAL_STATUS_APPLIED
+        np.testing.assert_allclose(setter.last_pricing_markup_residual_unreachable_gap, np.zeros(2))
 
     def test_markup_residual_clipped_at_upper_guardrail(self, tmp_path):
         setter = self._make_setter(tmp_path, markup_residual_calibration_mode="sector_initial_price_anchor")

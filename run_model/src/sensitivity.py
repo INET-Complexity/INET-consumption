@@ -79,9 +79,13 @@ def _parse_parameter_path(parameter_path: str) -> tuple[str, ...]:
 
     Example
     -------
-    ``firms.functions.offered_wage_setter.parameters['labour_market_tightness_markup_scale']``
+    ``firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']``
     becomes
-    ``("firms", "functions", "offered_wage_setter", "parameters", "labour_market_tightness_markup_scale")``
+    ``("firms", "functions", "wage_setter", "parameters", "labour_market_tightness_markup_scale")``
+
+    The previous example used ``offered_wage_setter``; that slot is dead (never
+    read at runtime -- see the note in country_config_FRA.yaml), so sweeping it
+    would silently produce a flat response. ``wage_setter`` is the live slot.
     """
     pattern = r"[A-Za-z_][A-Za-z0-9_]*|\[['\"]([^'\"]+)['\"]\]"
     parts = []

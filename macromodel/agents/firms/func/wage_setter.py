@@ -29,6 +29,9 @@ class FirmWageSetter(ABC):
         self,
         labour_market_tightness_markup_scale: float,
         markup_time_span: int,
+        incumbent_tightness_markup: bool = True,
+        incumbent_effort_indexation: bool = True,
+        incumbent_tfp_indexation: bool = True,
     ):
         """Initialize the wage setter with markup parameters.
 
@@ -37,9 +40,30 @@ class FirmWageSetter(ABC):
                 wage adjustments based on labor market tightness
             markup_time_span (int): Number of periods to consider when
                 calculating labor market tightness markup
+            incumbent_tightness_markup (bool): Apply the labour-tightness markup
+                to incumbent pay as well as to offers. Defaults to True, which
+                is the historical behaviour. Set False to confine the markup to
+                its hiring role (hypothesis HS-b).
+            incumbent_effort_indexation (bool): Apply the work-effort factor to
+                the incumbent wage *rate*. Defaults to True, the historical
+                behaviour. Set False to let effort scale labour input only,
+                removing the rate/input double count (hypothesis HS-c).
+            incumbent_tfp_indexation (bool): Index incumbent pay to the firm TFP
+                multiplier. Defaults to True, the historical behaviour. Set
+                False to test whether TFP indexation is the source of real
+                unit-labour-cost drift (hypothesis H0).
         """
         self.labour_market_tightness_markup_scale = labour_market_tightness_markup_scale
         self.markup_time_span = markup_time_span
+        self.incumbent_tightness_markup = incumbent_tightness_markup
+        self.incumbent_effort_indexation = incumbent_effort_indexation
+        self.incumbent_tfp_indexation = incumbent_tfp_indexation
+        self.last_wage_offer_historic_base = None
+        self.last_wage_offer_tfp_ratio = None
+        self.last_wage_offer_productivity_ratio = None
+        self.last_wage_offer_tightness_factor = None
+        self.last_wage_offer_level = None
+        self.last_wage_offer_historic_average_available = None
 
     @abstractmethod
     def compute_wage_tightness_markup(
@@ -303,9 +327,19 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             if current_tfp_multiplier is not None
             else np.ones_like(current_labour_productivity_factor)
         )
-        scaled_real_wages = (
-            (1 + current_wage_tightness_markup) * tfp * current_labour_productivity_factor * initial_wage_per_capita
+        # Arm switches (all default True = historical behaviour). See __init__.
+        incumbent_markup = (
+            (1 + current_wage_tightness_markup)
+            if self.incumbent_tightness_markup
+            else np.ones_like(current_labour_productivity_factor)
         )
+        incumbent_effort = (
+            current_labour_productivity_factor
+            if self.incumbent_effort_indexation
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        incumbent_tfp = tfp if self.incumbent_tfp_indexation else np.ones_like(current_labour_productivity_factor)
+        scaled_real_wages = incumbent_markup * incumbent_tfp * incumbent_effort * initial_wage_per_capita
         scaled_real_wages_by_individual[emp_ind] = scaled_real_wages[corresponding_firm[emp_ind]]
         realised_wages = scaled_real_wages_by_individual / tax
         new_job_ind = np.logical_and(emp_ind, current_individual_stating_new_job)
@@ -403,6 +437,12 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             new_individual_wages,
             fallback_wages,
         )
+        self.last_wage_offer_historic_base = historic_average_wages.copy()
+        self.last_wage_offer_tfp_ratio = tfp_ratio.copy()
+        self.last_wage_offer_productivity_ratio = productivity_ratio.copy()
+        self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
+        self.last_wage_offer_level = new_individual_wages.copy()
+        self.last_wage_offer_historic_average_available = has_historic_average_wage.copy()
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
             """Calculate wage offer for given firm and labor inputs.
@@ -417,6 +457,408 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
             return np.maximum(
                 unemployment_benefits_by_individual,
                 labour_inputs * new_individual_wages[firm_id],
+            )
+
+        return f
+
+
+class ContractWageSetter(WorkEffortFirmWageSetter):
+    """Wage setter with a persistent per-worker contract wage rate.
+
+    Corrects three defects in :class:`WorkEffortFirmWageSetter` while keeping
+    the wage bill's economic content intact. See
+    ``knowledge-vault/raw/plans/2026-08-28-wage-rule-restructure-and-inflation-gain-decomposition.md``
+    section 4c for the settled specification.
+
+    Stored rate versus paid earnings are distinct objects::
+
+        w_rate[j,t] = w_rate[j,t-1] * TFP[i,t] / TFP[i,t-1]     (stored)
+        earnings[j,t] = w_rate[j,t] * u[i,t]                    (paid)
+
+    The tightness markup ``(1+m)`` does not appear **in the stored rate**: it is
+    a hiring instrument and applies to offers only. It is emphatically NOT
+    inert in the model. This class never touches
+    ``self.labour_market_tightness_markup_scale`` in its own body -- the markup
+    is computed by the parent's :meth:`compute_wage_tightness_markup` and
+    arrives here as the ``current_wage_tightness_markup`` argument, entering
+    the offer as the ``(1+m)`` factor in
+    :meth:`get_offered_wage_given_labour_inputs_function`::
+
+        w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1+m[i])
+
+    So ``labour_market_tightness_markup_scale`` (FRA: 0.05) and
+    ``markup_time_span`` (FRA: 4, the averaging span inside that markup) are
+    LIVE wage channels. Do not exclude them when enumerating the drivers of
+    aggregate wage growth. The work-effort factor ``u`` does not appear in
+    the stored rate: a rate is per hour worked, and ``u`` is intensity. Because
+    ``u`` is a firm-level scalar, ``sum_j(w*u) == u*sum_j(w)``, so the wage bill
+    is unchanged by where ``u`` is applied; what changes is that downstream
+    consumers of "the wage rate" (offer base, reservation wages, taxes) now
+    receive a rate rather than earnings.
+
+    Unlike the parent class this setter is **stateful**: it reads and writes
+    ``individuals.states["Wage Rate"]``, passed in as ``carried_wage_rate`` and
+    updated in place.
+
+    Args:
+        initial_rate_source: ``"individual"`` keeps the per-worker rates seeded
+            from the individual data, preserving initial wage dispersion.
+            ``"firm_anchor"`` overwrites every worker at a firm with the firm's
+            initial wage per capita on first use, reproducing the parent class's
+            firm-level uniformity. Arm switch; see the plan's section 4c.
+    """
+
+    def __init__(
+        self,
+        labour_market_tightness_markup_scale: float,
+        markup_time_span: int,
+        initial_rate_source: str = "individual",
+        indexation_base: str = "tfp_multiplier",
+        realised_productivity_window: int = 4,
+        incumbent_indexation_pass_through: float = 0.0,
+        new_hire_offer_pass_through: float = 1.0,
+        slack_response_up: float = 0.0,
+        slack_response_down: float = 0.0,
+        max_offer_log_cut: float = 0.02,
+        **kwargs,
+    ):
+        super().__init__(
+            labour_market_tightness_markup_scale=labour_market_tightness_markup_scale,
+            markup_time_span=markup_time_span,
+            **kwargs,
+        )
+        if initial_rate_source not in ("individual", "firm_anchor"):
+            raise ValueError(f"initial_rate_source must be 'individual' or 'firm_anchor', got {initial_rate_source!r}")
+        if indexation_base not in ("tfp_multiplier", "realised_productivity"):
+            raise ValueError(
+                f"indexation_base must be 'tfp_multiplier' or 'realised_productivity', got {indexation_base!r}"
+            )
+        if realised_productivity_window <= 0:
+            raise ValueError("realised_productivity_window must be positive.")
+        if not 0.0 <= incumbent_indexation_pass_through <= 1.0:
+            raise ValueError("incumbent_indexation_pass_through must be between 0 and 1.")
+        if not 0.0 <= new_hire_offer_pass_through <= 1.0:
+            raise ValueError("new_hire_offer_pass_through must be between 0 and 1.")
+        if slack_response_up < 0.0 or slack_response_down < 0.0:
+            raise ValueError("slack_response_up and slack_response_down must be non-negative.")
+        if max_offer_log_cut < 0.0:
+            raise ValueError("max_offer_log_cut must be non-negative.")
+        self.initial_rate_source = initial_rate_source
+        self.indexation_base = indexation_base
+        self.realised_productivity_window = int(realised_productivity_window)
+        self.incumbent_indexation_pass_through = float(incumbent_indexation_pass_through)
+        self.new_hire_offer_pass_through = float(new_hire_offer_pass_through)
+        self.slack_response_up = float(slack_response_up)
+        self.slack_response_down = float(slack_response_down)
+        self.max_offer_log_cut = float(max_offer_log_cut)
+        self.last_offer_slack_gap = None
+        self.last_offer_slack_factor = None
+        self._rates_seeded = False
+        self.last_contract_rate_mean = None
+
+    def _slack_factor(
+        self,
+        desired_labour_inputs: np.ndarray | None,
+        realised_labour_inputs: np.ndarray | None,
+        n_firms: int,
+    ) -> np.ndarray:
+        """Asymmetric signed response of wage offers to labour-market slack.
+
+        The parent's tightness markup is floored at zero, so a hiring shortfall
+        raises offers but excess labour never lowers them. This adds the missing
+        negative arm, deliberately asymmetric:
+
+            g = (D - L) / max(D, eps)
+            dlog w = kappa_up * max(g, 0) - kappa_down * max(-g, 0)
+
+        with ``kappa_down < kappa_up`` and the fall bounded below by
+        ``-max_offer_log_cut``, so downward nominal rigidity is preserved: slack
+        exerts some, not unlimited, downward pressure. The existing
+        unemployment-benefit floor still applies to the resulting offer.
+
+        Returns a multiplicative factor of 1.0 when both responses are zero, so
+        the arm is inert by default.
+        """
+        ones = np.ones(n_firms)
+        if self.slack_response_up == 0.0 and self.slack_response_down == 0.0:
+            return ones
+        if desired_labour_inputs is None or realised_labour_inputs is None:
+            return ones
+
+        desired = np.asarray(desired_labour_inputs, dtype=float)
+        realised = np.asarray(realised_labour_inputs, dtype=float)
+        if desired.shape != (n_firms,) or realised.shape != (n_firms,):
+            return ones
+
+        gap = np.divide(
+            desired - realised,
+            np.maximum(desired, 1e-12),
+            out=np.zeros(n_firms),
+            where=np.isfinite(desired) & np.isfinite(realised) & (desired > 0),
+        )
+        gap = np.clip(gap, -1.0, 1.0)
+        log_change = self.slack_response_up * np.maximum(gap, 0.0) - self.slack_response_down * np.maximum(-gap, 0.0)
+        log_change = np.maximum(log_change, -self.max_offer_log_cut)
+
+        self.last_offer_slack_gap = gap.copy()
+        factor = np.exp(log_change)
+        self.last_offer_slack_factor = factor.copy()
+        return factor
+
+    def _indexation_ratio(
+        self,
+        tfp_ratio: np.ndarray,
+        realised_productivity_ratio: np.ndarray | None,
+    ) -> np.ndarray:
+        """Select the growth factor incumbent rates are indexed to.
+
+        ``"tfp_multiplier"`` uses the technical TFP parameter, reproducing the
+        settled specification. ``"realised_productivity"`` uses smoothed output
+        per labour input instead, which cannot outrun actual output by
+        construction. In the France calibration the two diverge roughly 2:1
+        (+4.13% against +2.04% over t=15-50), and that wedge is what pushes real
+        unit labour cost up every period.
+        """
+        if self.indexation_base == "tfp_multiplier":
+            ratio = np.asarray(tfp_ratio, dtype=float)
+        else:
+            if realised_productivity_ratio is None:
+                raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
+            ratio = np.asarray(realised_productivity_ratio, dtype=float)
+        valid_ratio = np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
+        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
+
+    def _seed_rates(
+        self,
+        carried_wage_rate: np.ndarray,
+        corresponding_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        tax: float,
+    ) -> None:
+        """Apply the arm's initialisation choice once, on first use."""
+        if self._rates_seeded:
+            return
+        if self.initial_rate_source == "firm_anchor":
+            employed = corresponding_firm >= 0
+            carried_wage_rate[employed] = initial_wage_per_capita[corresponding_firm[employed]] / tax
+        self._rates_seeded = True
+
+    def set_employee_income(
+        self,
+        corresponding_firm: np.ndarray,
+        current_individual_labour_inputs: np.ndarray,
+        current_individual_stating_new_job: np.ndarray,
+        current_employee_income: np.ndarray,
+        current_individual_offered_wage: np.ndarray,
+        current_target_production: np.ndarray,
+        current_limiting_intermediate_inputs: np.ndarray,
+        current_limiting_capital_inputs: np.ndarray,
+        labour_inputs_from_employees: np.ndarray,
+        industry_labour_productivity_by_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        current_wage_per_capita: np.ndarray,
+        current_labour_productivity_factor: np.ndarray,
+        prev_labour_productivity_factor: np.ndarray,
+        current_wage_tightness_markup: np.ndarray,
+        estimated_ppi_inflation: float,
+        income_taxes: float,
+        employee_social_insurance_tax: float,
+        employer_social_insurance_tax: float,
+        current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
+        carried_wage_rate: np.ndarray = None,
+        realised_productivity_ratio: np.ndarray = None,
+    ) -> np.ndarray:
+        """Advance carried wage rates and return paid earnings.
+
+        ``carried_wage_rate`` is updated **in place**; the return value is
+        earnings (rate times effort), which is what
+        ``individuals.ts.employee_income`` stores.
+
+        Args:
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Required.
+            (remaining arguments as in the parent class)
+
+        Returns:
+            np.ndarray: Paid earnings by individual.
+        """
+        if carried_wage_rate is None:
+            raise ValueError("ContractWageSetter requires carried_wage_rate (individuals.states['Wage Rate']).")
+
+        tax = (1.0 + employer_social_insurance_tax) / (
+            1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax)
+        )
+        self._seed_rates(carried_wage_rate, corresponding_firm, initial_wage_per_capita, tax)
+
+        employed = corresponding_firm >= 0
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        if prev_tfp_multiplier is None:
+            tfp_ratio = np.ones_like(tfp)
+        else:
+            prev_tfp = np.asarray(prev_tfp_multiplier, dtype=float)
+            tfp_ratio = np.divide(tfp, prev_tfp, out=np.ones_like(tfp), where=prev_tfp > 0)
+
+        # Incumbents: index the carried rate to productivity growth only.
+        indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
+        incumbent = employed & ~current_individual_stating_new_job
+        carried_wage_rate[incumbent] *= indexation_ratio[corresponding_firm[incumbent]]
+
+        # New hires: pass the accepted-offer premium through relative to the
+        # hiring firm's incumbent mean.  lambda=1 preserves full binding;
+        # lambda=0 gives the incumbent mean.  Measure the reference before
+        # adding new hires so their own offers cannot raise their base.
+        new_hire = employed & current_individual_stating_new_job
+        n_firms = len(current_labour_productivity_factor)
+        incumbent_firms = corresponding_firm[incumbent]
+        incumbent_rate_sum = np.bincount(
+            incumbent_firms,
+            weights=carried_wage_rate[incumbent],
+            minlength=n_firms,
+        )
+        incumbent_count = np.bincount(incumbent_firms, minlength=n_firms).astype(float)
+        incumbent_reference = np.divide(
+            incumbent_rate_sum,
+            incumbent_count,
+            out=(initial_wage_per_capita / tax).astype(float).copy(),
+            where=incumbent_count > 0,
+        )
+        new_hire_reference = incumbent_reference[corresponding_firm[new_hire]]
+        accepted_offer = current_individual_offered_wage[new_hire]
+        carried_wage_rate[new_hire] = new_hire_reference + self.new_hire_offer_pass_through * (
+            accepted_offer - new_hire_reference
+        )
+
+        self.last_new_hire_reference_rate = new_hire_reference.copy()
+        self.last_new_hire_accepted_offer = accepted_offer.copy()
+        self.last_new_hire_set_rate = carried_wage_rate[new_hire].copy()
+
+        # Paid earnings = rate x effort. u is firm-level, so this leaves the
+        # aggregate wage bill identical to applying u inside the rate.
+        effort_by_individual = np.ones_like(carried_wage_rate)
+        effort_by_individual[employed] = current_labour_productivity_factor[corresponding_firm[employed]]
+
+        earnings = np.zeros_like(carried_wage_rate)
+        earnings[employed] = carried_wage_rate[employed] * effort_by_individual[employed]
+
+        self.last_contract_rate_mean = float(np.mean(carried_wage_rate[employed])) if employed.any() else np.nan
+        return earnings
+
+    def get_offered_wage_given_labour_inputs_function(
+        self,
+        corresponding_firm: np.ndarray,
+        current_individual_labour_inputs: np.ndarray,
+        previous_employee_income: np.ndarray,
+        current_target_production: np.ndarray,
+        current_limiting_intermediate_inputs: np.ndarray,
+        current_limiting_capital_inputs: np.ndarray,
+        industry_labour_productivity_by_firm: np.ndarray,
+        initial_wage_per_capita: np.ndarray,
+        current_wage_per_capita: np.ndarray,
+        current_labour_productivity_factor: np.ndarray,
+        prev_labour_productivity_factor: np.ndarray,
+        current_wage_tightness_markup: np.ndarray,
+        income_taxes: float,
+        employee_social_insurance_tax: float,
+        employer_social_insurance_tax: float,
+        unemployment_benefits_by_individual: float,
+        current_tfp_multiplier: np.ndarray = None,
+        prev_tfp_multiplier: np.ndarray = None,
+        carried_wage_rate: np.ndarray = None,
+        realised_productivity_ratio: np.ndarray = None,
+        desired_labour_inputs: np.ndarray = None,
+        realised_labour_inputs: np.ndarray = None,
+    ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
+        """Build the offer function from carried contract rates.
+
+        The reference wage is the firm's average *rate* over its current
+        workforce, read from ``carried_wage_rate``:
+
+            w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1 + m[i])
+
+        This replaces the parent's ``previous_employee_income`` base. That base
+        is unusable here because ``employee_income`` now holds earnings
+        (rate x effort), so reading it would re-import ``u`` into the offer and
+        undo the rate/earnings split.
+
+        ``u_ratio`` is deliberately retained: ``(1+m) >= 1`` by the ``max(0,.)``
+        floor in :meth:`compute_wage_tightness_markup`, and TFP ratios are
+        normally ``>= 1``, so ``u_ratio`` is the only factor able to fall below
+        one. Dropping it would make offers monotonically non-decreasing.
+
+        Args:
+            carried_wage_rate (np.ndarray): Per-individual contract wage rate,
+                ``individuals.states["Wage Rate"]``. Required.
+            (remaining arguments as in the parent class)
+
+        Returns:
+            Callable: Maps firm id and labour inputs to a wage offer.
+        """
+        if carried_wage_rate is None:
+            raise ValueError("ContractWageSetter requires carried_wage_rate (individuals.states['Wage Rate']).")
+
+        n_firms = current_target_production.shape[0]
+        tax = (1.0 + employer_social_insurance_tax) / (
+            1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax)
+        )
+        self._seed_rates(carried_wage_rate, corresponding_firm, initial_wage_per_capita, tax)
+
+        employed = corresponding_firm >= 0
+        employed_firm = corresponding_firm[employed]
+        rate_sum = np.bincount(employed_firm, weights=carried_wage_rate[employed], minlength=n_firms)
+        headcount = np.bincount(employed_firm, minlength=n_firms).astype(float)
+        has_workforce = headcount > 0
+
+        # Firms with no current workforce have no carried rates to average, so
+        # they fall back to their initial wage anchor.
+        reference_rate = np.divide(
+            rate_sum,
+            headcount,
+            out=(initial_wage_per_capita / tax).astype(float).copy(),
+            where=has_workforce,
+        )
+
+        tfp = (
+            current_tfp_multiplier
+            if current_tfp_multiplier is not None
+            else np.ones_like(current_labour_productivity_factor)
+        )
+        if prev_tfp_multiplier is None:
+            tfp_ratio = np.ones_like(tfp)
+        else:
+            prev_tfp = np.asarray(prev_tfp_multiplier, dtype=float)
+            tfp_ratio = np.divide(tfp, prev_tfp, out=np.ones_like(tfp), where=prev_tfp > 0)
+
+        effort_ratio = np.divide(
+            current_labour_productivity_factor,
+            prev_labour_productivity_factor,
+            out=np.ones_like(current_labour_productivity_factor),
+            where=prev_labour_productivity_factor > 0,
+        )
+
+        indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
+        slack_factor = self._slack_factor(desired_labour_inputs, realised_labour_inputs, n_firms)
+        offered_rate = (
+            reference_rate * indexation_ratio * effort_ratio * (1.0 + current_wage_tightness_markup) * slack_factor
+        )
+        offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
+
+        self.last_wage_offer_historic_base = reference_rate.copy()
+        self.last_wage_offer_tfp_ratio = tfp_ratio.copy()
+        self.last_wage_offer_productivity_ratio = effort_ratio.copy()
+        self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
+        self.last_wage_offer_level = offered_rate.copy()
+        self.last_wage_offer_historic_average_available = has_workforce.copy()
+
+        def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
+            """Return the wage offer for a firm at a proposed labour input."""
+            return np.maximum(
+                unemployment_benefits_by_individual,
+                labour_inputs * offered_rate[firm_id],
             )
 
         return f

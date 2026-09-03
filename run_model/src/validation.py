@@ -301,9 +301,7 @@ def build_validation_coverage_table(validation_results: dict, n_total_periods: i
     ).T
 
 
-def plot_validation_charts(
-    validation_results: dict, period_to_date: pd.Series, country_code: str
-) -> go.Figure:
+def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, country_code: str) -> go.Figure:
     """One row per validation variable, three panels each: level (simulated vs.
     actual, shared y-axis), autocorrelation, and cross-correlation against real
     GDP. Column 1's x-axis is labelled with calendar years (via
@@ -340,30 +338,54 @@ def plot_validation_charts(
         # Panel 1: levels over calendar time, shared y-axis.
         fig.add_trace(
             go.Scatter(
-                x=pair_dates, y=pair["simulated"], name="simulated", line={"color": SIM_COLOR},
-                legendgroup="simulated", showlegend=first,
+                x=pair_dates,
+                y=pair["simulated"],
+                name="simulated",
+                line={"color": SIM_COLOR},
+                legendgroup="simulated",
+                showlegend=first,
             ),
-            row=row, col=1,
+            row=row,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
-                x=pair_dates, y=pair["actual"], name="actual", line={"color": ACT_COLOR},
-                legendgroup="actual", showlegend=first,
+                x=pair_dates,
+                y=pair["actual"],
+                name="actual",
+                line={"color": ACT_COLOR},
+                legendgroup="actual",
+                showlegend=first,
             ),
-            row=row, col=1,
+            row=row,
+            col=1,
         )
 
         # Panel 2: autocorrelation.
         acf_sim, acf_act = result["acf_simulated"], result["acf_actual"]
         fig.add_trace(
-            go.Scatter(x=acf_sim.index, y=acf_sim.values, line={"color": SIM_COLOR},
-                       legendgroup="simulated", showlegend=False, **line_kw),
-            row=row, col=2,
+            go.Scatter(
+                x=acf_sim.index,
+                y=acf_sim.values,
+                line={"color": SIM_COLOR},
+                legendgroup="simulated",
+                showlegend=False,
+                **line_kw,
+            ),
+            row=row,
+            col=2,
         )
         fig.add_trace(
-            go.Scatter(x=acf_act.index, y=acf_act.values, line={"color": ACT_COLOR},
-                       legendgroup="actual", showlegend=False, **line_kw),
-            row=row, col=2,
+            go.Scatter(
+                x=acf_act.index,
+                y=acf_act.values,
+                line={"color": ACT_COLOR},
+                legendgroup="actual",
+                showlegend=False,
+                **line_kw,
+            ),
+            row=row,
+            col=2,
         )
         fig.add_hline(y=0.0, line={"color": "rgba(0,0,0,0.35)", "width": 1}, row=row, col=2)
 
@@ -371,14 +393,28 @@ def plot_validation_charts(
         ccf_sim, ccf_act = result["ccf_simulated"], result["ccf_actual"]
         if not ccf_sim.empty:
             fig.add_trace(
-                go.Scatter(x=ccf_sim.index, y=ccf_sim.values, line={"color": SIM_COLOR},
-                           legendgroup="simulated", showlegend=False, **line_kw),
-                row=row, col=3,
+                go.Scatter(
+                    x=ccf_sim.index,
+                    y=ccf_sim.values,
+                    line={"color": SIM_COLOR},
+                    legendgroup="simulated",
+                    showlegend=False,
+                    **line_kw,
+                ),
+                row=row,
+                col=3,
             )
             fig.add_trace(
-                go.Scatter(x=ccf_act.index, y=ccf_act.values, line={"color": ACT_COLOR},
-                           legendgroup="actual", showlegend=False, **line_kw),
-                row=row, col=3,
+                go.Scatter(
+                    x=ccf_act.index,
+                    y=ccf_act.values,
+                    line={"color": ACT_COLOR},
+                    legendgroup="actual",
+                    showlegend=False,
+                    **line_kw,
+                ),
+                row=row,
+                col=3,
             )
             fig.add_hline(y=0.0, line={"color": "rgba(0,0,0,0.35)", "width": 1}, row=row, col=3)
             fig.add_vline(x=0, line={"color": "rgba(0,0,0,0.2)", "width": 1, "dash": "dot"}, row=row, col=3)

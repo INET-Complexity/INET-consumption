@@ -75,6 +75,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
     # "central_bank.taylor_rule_overrides['rho']": 0.25,
     # "central_government.tax_overrides['production_tax_vector_scale']": 1,
+
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
@@ -141,6 +142,15 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     },
     "labour_market_tightness": {
         "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.5,
+    },
+    "debt_service_to_income_ratio": {
+        "banks.parameters.['firm_loans_min_dscr']": 2,
+    },
+    "production_tax_vector_scale": {
+        "central_government.tax_overrides['production_tax_vector_scale']": 4.0,
+    },
+    "firm_dividend_payout_ratio": {
+        "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
     },
 }
 

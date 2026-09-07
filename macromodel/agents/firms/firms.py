@@ -1977,7 +1977,7 @@ class Firms(Agent):
         self.ts.firm_settlement_balance_sheet_residual.append(np.zeros(n_firms))
         self.ts.firm_settlement_transaction_flow_residual.append(np.zeros(n_firms))
         self.ts.firm_settlement_accounting_control_passed.append(np.full(n_firms, False))
-        self.ts.total_credit_exposure.append(np.zeros(n_firms))
+        self.ts.total_credit_exposure.append([0.0])
 
     @staticmethod
     def _allocate_debt_service_bucket(

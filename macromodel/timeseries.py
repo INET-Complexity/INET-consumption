@@ -148,9 +148,9 @@ class TimeSeries:
                 ts_data = np.array(self.historic(field))
                 self.write_field_to_h5(ts_data, field, agent_group)
             except ValueError:
-                logging.error("inhomogeneous shape", agent_name, field)
-                for i in range(len(self.historic(field))):
-                    logging.error(self.historic(field)[i].shape)
+                logging.error("Inhomogeneous shape for %s.%s", agent_name, field)
+                for index, value in enumerate(self.historic(field)):
+                    logging.error("%s.%s[%d] shape=%s", agent_name, field, index, np.asarray(value).shape)
 
     def write_field_to_h5(self, ts_data: np.ndarray, field: str, agent_group: h5py.Group) -> None:
         """Write a single time series field to an HDF5 file.

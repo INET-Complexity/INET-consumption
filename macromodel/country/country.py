@@ -3265,7 +3265,10 @@ class Country:
             settlement=firm_debt_settlement,
             residual_overdraft_exposure=np.maximum(0.0, -self.firms.ts.current("deposits")),
         )
-        self.firms.ts.override_current("total_credit_exposure", self.firms.compute_total_credit_exposure())
+        self.firms.ts.override_current(
+            "total_credit_exposure",
+            [self.firms.compute_total_credit_exposure().sum()],
+        )
 
         firm_insolvency_rate, num_insolvent_firms_by_sector = self.firms.compute_insolvency_rate()
         self.economy.ts.firm_insolvency_rate.append([firm_insolvency_rate])
@@ -3273,6 +3276,7 @@ class Country:
 
         self.firms.ts.total_debt.append([self.firms.compute_total_debt()])
         self.firms.ts.total_deposits.append([self.firms.compute_total_deposits()])
+        self.firms.ts.total_credit_exposure.append([self.firms.compute_total_credit_exposure().sum()])
 
         self.banks.ts.dividend_fund_settlement_debit.append(
             np.maximum(self.banks.ts.current("dividend_fund_declared_distribution"), 0.0).copy()

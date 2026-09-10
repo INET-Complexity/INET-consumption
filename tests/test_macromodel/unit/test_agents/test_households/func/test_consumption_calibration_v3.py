@@ -49,9 +49,9 @@ V3 = {
     "gamma_1_high": 0.25,
     "gamma_4_low": -0.021,
     "gamma_4_high": 0.021,
-    "net_liquid_assets_ratio_bounds": (-6.7320, 4.1814),
+    "net_liquid_assets_ratio_bounds": (-6.7304, 4.1814),
     "illiquid_financial_assets_ratio_bounds": (0.0, 8.5902),
-    "housing_assets_ratio_bounds": (0.0, 23.5236),
+    "housing_assets_ratio_bounds": (0.0, 23.5064),
     "b_raw_min": -4.2232,
     "b_raw_max": 7.6982,
 }
@@ -69,9 +69,9 @@ def _rule(calibration=None, **kwargs):
 def _ratios(n=4000, seed=0):
     rng = np.random.default_rng(seed)
     return (
-        rng.uniform(-6.7320, 4.1814, n),
+        rng.uniform(-6.7304, 4.1814, n),
         rng.uniform(0.0, 8.5902, n),
-        rng.uniform(0.0, 23.5236, n),
+        rng.uniform(0.0, 23.5064, n),
     )
 
 
@@ -108,9 +108,9 @@ class TestGamma4Map:
         nla, ifa, ha = _ratios()
         _, _, gamma_4 = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
         b_raw = (
-            0.70 * np.clip(nla, -6.7320, 4.1814)
+            0.70 * np.clip(nla, -6.7304, 4.1814)
             + 0.10 * np.clip(ifa, 0.0, 8.5902)
-            + 0.20 * np.clip(ha, 0.0, 23.5236)
+            + 0.20 * np.clip(ha, 0.0, 23.5064)
         )
         b = np.clip((b_raw - (-4.2232)) / (7.6982 - (-4.2232)), 0.0, 1.0)
         logistic = 1.0 / (1.0 + np.exp(-43.9445 * (b - 0.2771)))
@@ -154,3 +154,30 @@ class TestConfigurationValidation:
         calibration = {k: v for k, v in V3.items() if k != "gamma_4_high"}
         with pytest.raises(ValueError, match="must be supplied together"):
             _rule(calibration=calibration)
+
+    @pytest.mark.parametrize("dropped", ["gamma_4_steepness", "gamma_4_midpoint"])
+    def test_shape_without_a_range_is_rejected(self, dropped):
+        """Shape keys with no range would be stored, never read, and silently ignored."""
+        calibration = {k: v for k, v in V3.items() if k not in ("gamma_4_low", "gamma_4_high")}
+        calibration = {k: v for k, v in calibration.items() if k != dropped}
+        with pytest.raises(ValueError, match="would be silently ignored"):
+            _rule(calibration=calibration)
+
+    def test_a_v2_config_with_no_gamma_4_keys_at_all_is_still_accepted(self):
+        """The guard must not break the supported v1/v2 fallback path."""
+        rule = _rule(calibration=V2, housing_wealth_propensity=0.009)
+        assert rule.continuous_wealth_calibration_gamma_4_range is None
+
+
+class TestSteepnessSignValidation:
+    """A non-positive steepness inverts or flattens the map as surely as an inverted range."""
+
+    @pytest.mark.parametrize("key", ["alpha_2_steepness", "gamma_1_steepness", "gamma_4_steepness"])
+    @pytest.mark.parametrize("bad", [-43.9445, 0.0])
+    def test_non_positive_steepness_is_rejected(self, key, bad):
+        with pytest.raises(ValueError, match="steepness must be positive"):
+            _rule(calibration=dict(V3, **{key: bad}))
+
+    def test_the_shipped_v3_constants_pass_validation(self):
+        rule = _rule()
+        assert rule.continuous_wealth_calibration_gamma_4_steepness > 0.0

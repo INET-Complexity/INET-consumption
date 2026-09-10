@@ -760,6 +760,21 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 "gamma_4_low and gamma_4_high must be supplied together to enable the "
                 f"gamma_4(B) map, got ({gamma_4_low}, {gamma_4_high})."
             )
+        # Shape without a range is a silently inert calibration: the steepness and
+        # midpoint would be stored, never read, and the run would quietly use the
+        # homogeneous scalar while appearing to configure the map. Refuse it -- an
+        # inert calibration parameter is indistinguishable from a correct one in the
+        # output, which is exactly the failure the repo's "no silent changes" rule
+        # exists to prevent.
+        inert_gamma_4_shape_keys = [
+            key for key in ("gamma_4_steepness", "gamma_4_midpoint") if key in calibration
+        ]
+        if gamma_4_low is None and inert_gamma_4_shape_keys:
+            raise ValueError(
+                f"{inert_gamma_4_shape_keys} configure the shape of the gamma_4(B) map, but "
+                "gamma_4_low/gamma_4_high are absent so the map is inactive and those values "
+                "would be silently ignored. Supply the range, or drop the shape keys."
+            )
         self.continuous_wealth_calibration_gamma_4_range = (
             None if gamma_4_low is None else (gamma_4_low, gamma_4_high)
         )
@@ -818,6 +833,23 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             if gamma_4_hi <= gamma_4_lo:
                 raise ValueError(
                     f"gamma_4 calibration range must satisfy high > low, got ({gamma_4_lo}, {gamma_4_hi})."
+                )
+        # The high>low checks above stop a range from inverting a mapping, but the
+        # logistic steepness is an equally effective inversion vector: a negative k
+        # flips the S-curve, so alpha_2 would fall and gamma_1/gamma_4 would rise in
+        # B -- the precise sign error the design doc records having made in prose on
+        # 2026-08-18, caught then only because the code was right. Zero flattens every
+        # map to its midpoint. Neither is a calibration anyone means to express.
+        for coefficient_name, steepness in (
+            ("alpha_2", self.continuous_wealth_calibration_alpha_2_steepness),
+            ("gamma_1", self.continuous_wealth_calibration_gamma_1_steepness),
+            ("gamma_4", self.continuous_wealth_calibration_gamma_4_steepness),
+        ):
+            if steepness <= 0.0:
+                raise ValueError(
+                    f"{coefficient_name} logistic steepness must be positive -- a non-positive "
+                    "value flattens or inverts the accessibility-to-coefficient mapping, got "
+                    f"{steepness}."
                 )
         # Idiosyncratic term eps in log(C/Y). The HFCS calibration estimates its
         # standard deviation jointly with the mapping; it accounts for most of the

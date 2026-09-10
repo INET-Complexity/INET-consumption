@@ -341,24 +341,39 @@ desired_consumption:
       # -0.0168.
       gamma_4_low: -0.021
       gamma_4_high: 0.021
-      # Realised support of each ratio on the retained calibration sample
-      # (n = 29,688) after the flag1 hard bounds and the flag2 [p1, p99] trim.
+      # Realised support of each ratio on the 2014 CALIBRATION SAMPLE
+      # (n = 9,859) after the flag1 hard bounds and the flag2 [p1, p99] trim --
+      # the same sample, and the same construction, that produced the b_raw
+      # reference below. Derived by running the notebook's own
+      # prepare_household_frame() under its production SETTINGS, not
+      # reconstructed by hand; that derivation reproduces the notebook's
+      # reported b_raw reference [-4.2232, 7.6982] exactly, which is what
+      # pins these to the fit.
+      #
+      # An earlier revision took these from the POOLED sample (n = 29,688,
+      # all waves) while keeping the 2014 b_raw reference, so the clip and the
+      # normalisation came from different populations. They now share one.
+      #
       # In the calibration these are TRIM outcomes (households outside are
       # dropped); at runtime households cannot be dropped, so they become clip
       # bounds. That is the intended translation, but it is a translation, not
-      # an identity. NOTE these are pooled across waves and so are marginally
-      # wider than the 2014 estimation wave alone; the binding guard on the
-      # mapping domain is the b_tilde clip to [0,1] against the 2014-fitted
-      # b_raw reference below, not these per-ratio bounds.
-      net_liquid_assets_ratio_bounds: [-6.7320, 4.1814]
+      # an identity.
+      #
+      # These are MARGINAL bounds, so the box they define is necessarily wider
+      # than the JOINT b_raw range below (0.7*-6.7304 = -4.71 against a b_raw
+      # min of -4.22): no single household attains all three extremes at once.
+      # That gap is intrinsic, not a mismatch, and the b_tilde clip to [0,1] is
+      # what reconciles the marginal box with the joint range.
+      net_liquid_assets_ratio_bounds: [-6.7304, 4.1814]
       illiquid_financial_assets_ratio_bounds: [0.0, 8.5902]
-      housing_assets_ratio_bounds: [0.0, 23.5236]
+      housing_assets_ratio_bounds: [0.0, 23.5064]
       # Fitted raw-score reference on the 2014 calibration sample
-      # (accessibility_normalization: calibration_sample). Frozen, never
-      # recomputed from the live household batch -- a per-batch min/max would
-      # make a household's coefficients depend on which other households happen
-      # to be evaluated in the same call, including the income-perturbed MPC
-      # probe that compute_target_consumption runs to difference out the MPC.
+      # (accessibility_normalization: calibration_sample) -- the same sample as
+      # the ratio bounds above. Frozen, never recomputed from the live household
+      # batch: a per-batch min/max would make a household's coefficients depend
+      # on which other households happen to be evaluated in the same call,
+      # including the income-perturbed MPC probe that compute_target_consumption
+      # runs to difference out the MPC.
       b_raw_min: -4.2232
       b_raw_max: 7.6982
 

@@ -1200,7 +1200,7 @@ class TestCreditAugmentedHouseholdConsumption:
         nla_ratio_a = np.array([0.2])
         ifa_ratio_a = np.array([0.1])
         ha_ratio_a = np.array([0.5])
-        reference_alpha_2, reference_gamma_1 = consumption_obj._compute_continuous_wealth_calibration(
+        reference_alpha_2, reference_gamma_1, _ = consumption_obj._compute_continuous_wealth_calibration(
             nla_ratio_a, ifa_ratio_a, ha_ratio_a
         )
 

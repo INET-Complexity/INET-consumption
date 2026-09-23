@@ -231,18 +231,18 @@ def run_firm_policy_rate_verification(
         for row in run_index.to_dict(orient="records"):
             shock_period = int(row["shock_period"]) + 1
             firm_panel = build_firm_policy_rate_irf_panel(
-                    row["baseline_h5"],
-                    row["shock_h5"],
-                    seed=int(row["seed"]),
-                    shock_name=str(row["shock_name"]),
-                    shock_kind=str(row["shock_kind"]),
-                    shock_period=shock_period,
-                    shock_magnitude=float(row["shock_magnitude"]),
-                    shock_duration=int(row["shock_duration"]),
-                    shock_mode=str(row["shock_mode"]),
-                    horizon_periods=horizon_periods,
-                    country_code=country_iso3,
-                    dscr_enabled=dscr_enabled,
+                row["baseline_h5"],
+                row["shock_h5"],
+                seed=int(row["seed"]),
+                shock_name=str(row["shock_name"]),
+                shock_kind=str(row["shock_kind"]),
+                shock_period=shock_period,
+                shock_magnitude=float(row["shock_magnitude"]),
+                shock_duration=int(row["shock_duration"]),
+                shock_mode=str(row["shock_mode"]),
+                horizon_periods=horizon_periods,
+                country_code=country_iso3,
+                dscr_enabled=dscr_enabled,
             )
             firm_aggregate_panels.append(aggregate_firm_policy_rate_irf(firm_panel))
             macro_panels.append(

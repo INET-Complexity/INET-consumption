@@ -164,15 +164,13 @@ def load_firm_policy_rate_panel(
         - frame["capital_internal_finance"]
     )
     productivity_costs = frame["credit_budget_technical_investment_costs"] + frame["credit_budget_tfp_costs"]
-    frame["capital_funding_gap"] = (
-        frame["credit_budget_capital_costs"] - frame["capital_internal_finance"]
-    ).clip(lower=0.0)
+    frame["capital_funding_gap"] = (frame["credit_budget_capital_costs"] - frame["capital_internal_finance"]).clip(
+        lower=0.0
+    )
     frame["productivity_funding_gap"] = (
         productivity_costs - np.minimum(residual_after_capital, productivity_costs)
     ).clip(lower=0.0)
-    frame["tfp_execution_gap"] = (
-        frame["planned_tfp_investment"] - frame["executed_tfp_investment"]
-    ).clip(lower=0.0)
+    frame["tfp_execution_gap"] = (frame["planned_tfp_investment"] - frame["executed_tfp_investment"]).clip(lower=0.0)
 
     frame["cash_constrained"] = frame["credit_budget_cash_after_hard_obligations"] < 0.0
     frame["debt_stressed"] = (
@@ -182,10 +180,7 @@ def load_firm_policy_rate_panel(
         | (frame["firm_settlement_opening_principal_arrears"] > 1e-12)
         | (frame["firm_settlement_closing_principal_arrears"] > 1e-12)
     )
-    frame["liquid"] = (
-        (frame["deposits"] > 0.0)
-        & ~frame["cash_constrained"]
-    )
+    frame["liquid"] = (frame["deposits"] > 0.0) & ~frame["cash_constrained"]
     frame["liquidity_group"] = np.select(
         [
             frame["deposits"] < 0.0,
@@ -230,8 +225,7 @@ def build_firm_policy_rate_irf_panel(
 
     stop = min(shock_period + horizon_periods, int(baseline.index.get_level_values("period").max()) + 1)
     selected_index = baseline.index[
-        (baseline.index.get_level_values("period") >= shock_period)
-        & (baseline.index.get_level_values("period") < stop)
+        (baseline.index.get_level_values("period") >= shock_period) & (baseline.index.get_level_values("period") < stop)
     ]
     base_selected = baseline.loc[selected_index]
     shock_selected = shock.loc[selected_index]

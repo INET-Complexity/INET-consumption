@@ -108,9 +108,7 @@ class TestGamma4Map:
         nla, ifa, ha = _ratios()
         _, _, gamma_4 = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
         b_raw = (
-            0.70 * np.clip(nla, -6.7304, 4.1814)
-            + 0.10 * np.clip(ifa, 0.0, 8.5902)
-            + 0.20 * np.clip(ha, 0.0, 23.5064)
+            0.70 * np.clip(nla, -6.7304, 4.1814) + 0.10 * np.clip(ifa, 0.0, 8.5902) + 0.20 * np.clip(ha, 0.0, 23.5064)
         )
         b = np.clip((b_raw - (-4.2232)) / (7.6982 - (-4.2232)), 0.0, 1.0)
         logistic = 1.0 / (1.0 + np.exp(-43.9445 * (b - 0.2771)))

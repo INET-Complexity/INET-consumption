@@ -851,8 +851,7 @@ def build_macro_output_df(model, country_code):
         if tfp_history is not None and technical_history is not None and gdp is not None:
             productivity_values = pd.Series(
                 [
-                    float(np.asarray(tfp, dtype=float).sum())
-                    + float(np.asarray(technical, dtype=float).sum())
+                    float(np.asarray(tfp, dtype=float).sum()) + float(np.asarray(technical, dtype=float).sum())
                     for tfp, technical in zip(tfp_history, technical_history)
                 ]
             ).reindex(range(len(out_index)))

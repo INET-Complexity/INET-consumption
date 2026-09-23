@@ -76,7 +76,6 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "central_bank.taylor_rule_overrides['rho']": 0.25,
     # "central_government.tax_overrides['production_tax_vector_scale']": 1,
     # "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
-
 }
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain

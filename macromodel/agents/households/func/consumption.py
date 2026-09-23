@@ -766,18 +766,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # inert calibration parameter is indistinguishable from a correct one in the
         # output, which is exactly the failure the repo's "no silent changes" rule
         # exists to prevent.
-        inert_gamma_4_shape_keys = [
-            key for key in ("gamma_4_steepness", "gamma_4_midpoint") if key in calibration
-        ]
+        inert_gamma_4_shape_keys = [key for key in ("gamma_4_steepness", "gamma_4_midpoint") if key in calibration]
         if gamma_4_low is None and inert_gamma_4_shape_keys:
             raise ValueError(
                 f"{inert_gamma_4_shape_keys} configure the shape of the gamma_4(B) map, but "
                 "gamma_4_low/gamma_4_high are absent so the map is inactive and those values "
                 "would be silently ignored. Supply the range, or drop the shape keys."
             )
-        self.continuous_wealth_calibration_gamma_4_range = (
-            None if gamma_4_low is None else (gamma_4_low, gamma_4_high)
-        )
+        self.continuous_wealth_calibration_gamma_4_range = None if gamma_4_low is None else (gamma_4_low, gamma_4_high)
         # [p5,p95] winsorization bounds for NLA/y, IFA/y, HA/y, fitted once on HFCS
         # 2014 France micro-data (see the design doc's Cell-Size Check table).
         # Calibration-fixed by design: not recomputed from the live simulated

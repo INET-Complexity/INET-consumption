@@ -323,6 +323,7 @@ def create_economy_timeseries(
         total_government_fce_growth=[np.nan],
         total_gross_fixed_capital_formation=[initial_gross_fixed_capital_formation],
         total_gross_fixed_capital_formation_growth=[np.nan],
+        total_productivity_investment_to_gdp=[0.0],
         total_changes_in_inventories=[initial_change_in_firm_stock_inventories],
         total_changes_in_inventories_growth=[np.nan],
         #

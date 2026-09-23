@@ -75,6 +75,7 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
     # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
     # "central_bank.taylor_rule_overrides['rho']": 0.25,
     # "central_government.tax_overrides['production_tax_vector_scale']": 1,
+    # "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
 
 }
 
@@ -189,7 +190,8 @@ MACRO_COLUMNS = (
     "cpi_transaction_yoy_change",
     # "cpi_transaction",
     # "ppi",
-    "bank_insolvency_rate",
+    # "bank_insolvency_rate",
+    "total_productivity_investment_to_gdp",
     "avg_tfp_multiplier",
 )
 FISCAL_COLUMNS = (

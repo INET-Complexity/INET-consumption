@@ -166,6 +166,52 @@ class HouseholdFinancialFeasibility:
             residual_shortfall_after_granted_credit=np.maximum(residual - granted - reserved, 0.0).copy(),
         )
 
+    def refresh_cash_needs(
+        self,
+        plan: PostGrantFeasiblePlan,
+        *,
+        cash_uses: np.ndarray,
+        cash_income: np.ndarray,
+        available_lfa: np.ndarray,
+    ) -> PostGrantFeasiblePlan:
+        """Reallocate opening liquidity against current nominal uses and fixed finance.
+
+        The loan and liquidation authorities are immutable. Their proceeds are
+        counted here once; neither operation is booked by this refresh.
+        """
+        shape = np.asarray(plan.credit_granted).shape
+        if len(shape) != 1:
+            raise ValueError("Credit granted must be a household vector.")
+        if plan.reserved_liquidation_total is None:
+            raise RuntimeError("Post-labour refresh requires executable liquidation authority.")
+        arrays = {}
+        for name, values in (
+            ("cash_uses", cash_uses),
+            ("cash_income", cash_income),
+            ("available_lfa", available_lfa),
+            ("credit_granted", plan.credit_granted),
+            ("reserved_liquidation_total", plan.reserved_liquidation_total),
+        ):
+            array = np.asarray(values, dtype=float)
+            if array.shape != shape or not np.all(np.isfinite(array)):
+                raise ValueError(f"{name} must be a finite household vector.")
+            if name in ("cash_uses", "credit_granted", "reserved_liquidation_total") and np.any(array < 0.0):
+                raise ValueError(f"{name} must be non-negative.")
+            arrays[name] = array
+        if plan.consumption_after_floor is not None:
+            raise RuntimeError("Cash needs must be refreshed before floor/payment settlement.")
+        need = np.maximum(arrays["cash_uses"] - arrays["cash_income"], 0.0)
+        funded = np.minimum(need, np.maximum(arrays["available_lfa"], 0.0))
+        residual = need - funded
+        return replace(
+            plan,
+            funded_from_liquid_assets=funded,
+            residual_shortfall_after_lfa=residual,
+            residual_shortfall_after_granted_credit=np.maximum(
+                residual - arrays["credit_granted"] - arrays["reserved_liquidation_total"], 0.0
+            ),
+        )
+
     def settle_consumption_floor(
         self,
         plan: PostGrantFeasiblePlan,

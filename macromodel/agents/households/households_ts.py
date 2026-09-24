@@ -173,6 +173,7 @@ def create_households_timeseries(
         income_belief_posterior_fallback_used=np.zeros(len(data)),
         income_belief_growth_clipped=np.zeros(len(data)),
         formula_implied_mpc=np.zeros(len(data)),
+        target_consumption_total_mpc=np.full(len(data), np.nan),
         amount_bought=np.full(len(data), np.nan),
         consumption=data["Consumption"].values,
         total_consumption=[(1 + vat) * initial_consumption_by_industry.sum()],

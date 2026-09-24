@@ -1,0 +1,843 @@
+{
+  "baseline_commit": "d752cf9fc349b8ef7e282f63e185c029446caf98",
+  "cases": [
+    {
+      "name": "gap_0_adjust_False_H_0",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 0,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 40.0,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": false
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          0
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          40.0
+        ]
+      }
+    },
+    {
+      "name": "gap_0_adjust_False_H_80",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 80,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 40.0,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": false
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          0
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          40.0
+        ]
+      }
+    },
+    {
+      "name": "gap_0_adjust_True_H_0",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 0,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 40.0,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          0
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          40.0
+        ]
+      }
+    },
+    {
+      "name": "gap_0_adjust_True_H_80",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 80,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 40.0,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          0
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          40.0
+        ]
+      }
+    },
+    {
+      "name": "gap_37.5_adjust_False_H_0",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 0,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 77.5,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": false
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          487.5
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          37.5
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          77.5
+        ]
+      }
+    },
+    {
+      "name": "gap_37.5_adjust_False_H_80",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 80,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 77.5,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": false
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          487.5
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          37.5
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          30.0
+        ],
+        "total_exports": [
+          77.5
+        ]
+      }
+    },
+    {
+      "name": "gap_37.5_adjust_True_H_0",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 0,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 77.5,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          37.5
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          67.5
+        ],
+        "total_exports": [
+          77.5
+        ]
+      }
+    },
+    {
+      "name": "gap_37.5_adjust_True_H_80",
+      "inputs": {
+        "total_output": 371.0,
+        "sectoral_sales": [
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0,
+          10.0
+        ],
+        "sectoral_intermediate_consumption": [
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0,
+          2.0
+        ],
+        "taxes_on_products": 20.0,
+        "taxes_on_production": 5.0,
+        "rent_paid": 100.0,
+        "rent_imputed": 80,
+        "hh_consumption": 200.0,
+        "gov_consumption": 50.0,
+        "change_in_inventories": 10.0,
+        "gross_fixed_capital_formation": 80.0,
+        "exports": 77.5,
+        "imports": 30.0,
+        "operating_surplus": 260.0,
+        "wages": 100.0,
+        "rent_received": 30.0,
+        "central_government_rent_received": 40.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          450.0
+        ],
+        "gdp_income": [
+          450.0
+        ],
+        "gdp_expenditure": [
+          450.0
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          37.5
+        ],
+        "total_household_fce": [
+          200.0
+        ],
+        "total_imports": [
+          67.5
+        ],
+        "total_exports": [
+          77.5
+        ]
+      }
+    },
+    {
+      "name": "FRA_seed15_t1",
+      "inputs": {
+        "total_output": 923400174973.2365,
+        "sectoral_sales": [
+          26042341969.818176,
+          1527182177.8425727,
+          185459587283.98642,
+          28375942305.24734,
+          9112741742.793983,
+          68742879790.71329,
+          97187177472.04645,
+          48858993326.24795,
+          24757469216.37944,
+          44941122619.345024,
+          51064438657.376495,
+          28792920785.447216,
+          80085586012.2461,
+          43489767998.459274,
+          54967577083.25517,
+          32558849487.216564,
+          55964387148.135475,
+          24904845534.361176
+        ],
+        "sectoral_intermediate_consumption": [
+          13344277464.651508,
+          773195598.6714531,
+          131071430085.33731,
+          17191585638.019623,
+          5271066837.708994,
+          41478320285.43774,
+          48446282725.484344,
+          24611086210.459805,
+          12021281126.440853,
+          21488255104.452526,
+          29877598739.42728,
+          13364118702.306105,
+          40452630788.334946,
+          18734079156.808422,
+          12877728069.678946,
+          5609540214.385409,
+          12760493975.836641,
+          8906215641.754194
+        ],
+        "taxes_on_products": 47956184760.63501,
+        "taxes_on_production": 16566364362.3184,
+        "rent_paid": 14079421228.714607,
+        "rent_imputed": 41135749998.759796,
+        "hh_consumption": 191136808353.48004,
+        "gov_consumption": 149791453925.2446,
+        "change_in_inventories": 96419984487.50226,
+        "gross_fixed_capital_formation": 65024516052.84915,
+        "exports": 127385619573.51387,
+        "imports": 133247573643.12411,
+        "operating_surplus": 166403913568.44867,
+        "wages": 282150710677.27313,
+        "rent_received": 14079421228.71461,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          510590230235.0715
+        ],
+        "gdp_expenditure": [
+          510590230235.0714
+        ],
+        "gdp_income": [
+          510590230235.0714
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          -256.89105224609375
+        ],
+        "total_household_fce": [
+          191136808353.48004
+        ]
+      }
+    },
+    {
+      "name": "FRA_seed15_t2",
+      "inputs": {
+        "total_output": 817268988882.3623,
+        "sectoral_sales": [
+          23673237421.60769,
+          1384080444.186294,
+          161980378922.48077,
+          26173454788.6926,
+          8466755615.377028,
+          47430810814.49445,
+          87027273346.16331,
+          45555855771.81465,
+          20254029016.363094,
+          37478457677.21696,
+          48154860734.6563,
+          25404409433.481346,
+          72124244546.7651,
+          42145822728.71535,
+          51574047069.79087,
+          30649461306.55148,
+          51931030203.89359,
+          21181365016.24877
+        ],
+        "sectoral_intermediate_consumption": [
+          12142651096.786926,
+          717158285.1048334,
+          114448823737.145,
+          15845029071.694826,
+          4897713266.332263,
+          28641950709.00547,
+          43420110753.46612,
+          22964425691.897896,
+          9842236287.340937,
+          17861577529.863476,
+          28198145236.37482,
+          11796208771.924736,
+          36414356794.60448,
+          18168062797.46636,
+          12063700004.342876,
+          5301691871.441175,
+          11849518311.140131,
+          7582084918.738701
+        ],
+        "taxes_on_products": 55285969502.554504,
+        "taxes_on_production": 14679414023.862576,
+        "rent_paid": 14098295160.874672,
+        "rent_imputed": 41274547444.291855,
+        "hh_consumption": 182882402700.62823,
+        "gov_consumption": 150963766773.5376,
+        "change_in_inventories": 13175957236.452332,
+        "gross_fixed_capital_formation": 115489322914.51859,
+        "exports": 117519808218.2584,
+        "imports": 124252862282.79353,
+        "operating_surplus": 145491545277.05972,
+        "wages": 254942584446.76904,
+        "rent_received": 14098295160.874674,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          469818394387.2579
+        ],
+        "gdp_expenditure": [
+          469818394387.2579
+        ],
+        "gdp_income": [
+          469818394387.25793
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          58296334.218444824
+        ],
+        "total_household_fce": [
+          182882402700.62823
+        ]
+      }
+    }
+  ]
+}

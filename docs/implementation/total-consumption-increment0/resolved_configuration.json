@@ -1,0 +1,835 @@
+{
+  "t_max": 2,
+  "seed": 15,
+  "country_configurations": {
+    "FRA": {
+      "economy": {
+        "functions": {
+          "growth": {
+            "name": "GrowthManualForecastingAutoReg",
+            "parameters": {
+              "lags": 1
+            },
+            "path_name": "growth"
+          },
+          "house_price_index": {
+            "name": "HPIManualForecastingAutoReg",
+            "parameters": {
+              "lags": 1
+            },
+            "path_name": "house_price_index"
+          },
+          "inflation_forecaster": {
+            "name": "InflationManualForecastingAutoReg",
+            "parameters": {
+              "lags": 1
+            },
+            "path_name": "inflation"
+          }
+        },
+        "consumer_price_index": {
+          "source": "fixed_basket_cpi"
+        }
+      },
+      "individuals": {
+        "functions": {
+          "demography": {
+            "path_name": "demography",
+            "name": "NoAging",
+            "parameters": {}
+          },
+          "income": {
+            "path_name": "income",
+            "name": "DefaultIncomeSetter",
+            "parameters": {}
+          },
+          "labour_inputs": {
+            "path_name": "labour_inputs",
+            "name": "ScaledIndividualsProductivitySetter",
+            "parameters": {
+              "decrease_unemployed": 0.0,
+              "increase_employed": 0.0
+            }
+          },
+          "reservation_wages": {
+            "path_name": "reservation_wages",
+            "name": "DefaultReservationWageSetter",
+            "parameters": {
+              "unemployed_reservation_wage_timespan": 8
+            }
+          }
+        }
+      },
+      "households": {
+        "functions": {
+          "financial_assets": {
+            "path_name": "financial_assets",
+            "name": "DefaultFinancialAssets",
+            "parameters": {
+              "income_from_fa_noise_std": 0.0
+            }
+          },
+          "consumption": {
+            "path_name": "consumption",
+            "name": "CreditAugmentedConsumption",
+            "parameters": {
+              "long_run_intercept": -0.3813,
+              "real_borrowing_rate_propensity": -0.72,
+              "permanent_income_propensity": 0.55,
+              "liquid_wealth_propensity": 0.14,
+              "illiquid_wealth_propensity": 0.02,
+              "housing_wealth_propensity": 0.009,
+              "rent_propensity": 1.0,
+              "mortgage_debt_propensity": 0.03,
+              "mortgage_payment_propensity": 1.0,
+              "house_price_propensity": 0.0,
+              "income_growth_propensity": 0.15,
+              "interest_rate_cashflow_propensity": -0.003,
+              "uncertainty_propensity": -0.005,
+              "partial_adjustment_speed": 0.56,
+              "long_run_mpc_lower_bound": 0.0,
+              "long_run_mpc_upper_bound": 2.0,
+              "idiosyncratic_sd": 0.4256,
+              "idiosyncratic_persistence": "fixed_effect",
+              "price_floor": 1e-12,
+              "income_floor": 1e-12,
+              "consumption_floor": 1e-12,
+              "house_price_floor": 1e-12,
+              "uses_income_belief_learning": true,
+              "income_belief_learning_horizon": {
+                "delta": 0.95,
+                "S": 40
+              },
+              "income_denominator": "geometric_average",
+              "income_denominator_window": 20,
+              "continuous_wealth_calibration": {
+                "index_construction": "raw_ratio",
+                "weight_net_liquid_assets": 0.7,
+                "weight_illiquid_financial_assets": 0.1,
+                "weight_housing_assets": 0.2,
+                "alpha_2_steepness": 43.9445,
+                "alpha_2_midpoint": 0.3951,
+                "gamma_1_steepness": 43.9445,
+                "gamma_1_midpoint": 0.1466,
+                "gamma_4_steepness": 43.9445,
+                "gamma_4_midpoint": 0.2771,
+                "alpha_2_low": 0.25,
+                "alpha_2_high": 0.7,
+                "gamma_1_low": 0.007,
+                "gamma_1_high": 0.25,
+                "gamma_4_low": -0.021,
+                "gamma_4_high": 0.021,
+                "net_liquid_assets_ratio_bounds": [
+                  -6.7304,
+                  4.1814
+                ],
+                "illiquid_financial_assets_ratio_bounds": [
+                  0.0,
+                  8.5902
+                ],
+                "housing_assets_ratio_bounds": [
+                  0.0,
+                  23.5064
+                ],
+                "b_raw_min": -4.2232,
+                "b_raw_max": 7.6982
+              },
+              "uses_continuous_wealth_calibration": true,
+              "consumption_smoothing_fraction": 0.0,
+              "consumption_smoothing_window": 12,
+              "elasticity_of_substitution": 1.0,
+              "minimum_consumption_fraction": 1.0,
+              "income_belief_growth_clip_bound": 1.0
+            }
+          },
+          "insolvency": {
+            "path_name": "insolvency",
+            "name": "DefaultHouseholdInsolvencyHandler",
+            "parameters": {}
+          },
+          "property": {
+            "path_name": "property",
+            "name": "DefaultHouseholdDemandForProperty",
+            "parameters": {
+              "cost_comparison_temperature": 0.001,
+              "maximum_price_income_coefficient": 42.9,
+              "maximum_price_income_exponent": 0.789,
+              "maximum_price_noise_mean": -0.0177,
+              "maximum_price_noise_variance": 0.1684,
+              "maximum_rent_income_coefficient": 17.2166,
+              "maximum_rent_income_exponent": 0.3464,
+              "partial_rent_inflation_delay": 1,
+              "partial_rent_inflation_indexation": 1.0,
+              "price_initial_markup": 0.0,
+              "price_decrease_probability_monthly": 0.0703,
+              "price_mean_percentage_reduction": 1.4532,
+              "std_of_price_percentage_reduction": 0.707,
+              "probability_stay_in_owned_property": 0.9875,
+              "probability_stay_in_rented_property": 0.875,
+              "psychological_pressure_of_renting": 0.4,
+              "rent_decrease_probability_monthly": 0.1057,
+              "rent_mean_percentage_reduction": 1.6559,
+              "std_of_rent_percentage_reduction": 0.7855,
+              "rent_initial_markup": 0.0
+            }
+          },
+          "rent": {
+            "path_name": "rent",
+            "name": "ConstantRentSetter",
+            "parameters": {
+              "new_property_rent_markup": 0.1,
+              "offered_rent_decrease": 0.03,
+              "partial_rent_inflation_indexation": 1.0
+            }
+          },
+          "target_credit": {
+            "path_name": "target_credit",
+            "name": "DefaultHouseholdTargetCredit",
+            "parameters": {
+              "down_payment_fraction": 1.0
+            }
+          },
+          "wealth": {
+            "path_name": "wealth",
+            "name": "PaperAssetReturnWealthSetter",
+            "parameters": {
+              "other_real_assets_depreciation_rate": 0.05,
+              "mu_eq": 0.0029,
+              "mu_bond": 0.0081,
+              "sigma_eq": 0.0935,
+              "sigma_bond": 0.0316,
+              "rho": -0.2585,
+              "equity_weight": 0.5,
+              "draw_scope": "country_period",
+              "dividend_fund_payout_ratio": 0.1,
+              "dividend_fund_firm_payout_ratio": 0.1,
+              "dividend_fund_bank_payout_ratio": 0.1,
+              "uses_portfolio_choice": true,
+              "settles_portfolio_choice": true,
+              "target_share_source": "scalar",
+              "participation_source": "initial_ifa_positive",
+              "default_target_illiquid_share": 0.65,
+              "liquid_return_source": "policy_rate_markup",
+              "liquid_asset_policy_rate_markup": null,
+              "phi_1": 5.0,
+              "lambda_kappa": 0.1,
+              "fixed_cost_share": 0.001,
+              "frm_coefficients_path": "data/raw_data/portfolio/FR_portfolio_frm_coefficients.json",
+              "dynamic_shifters_enabled": false,
+              "dynamic_shifters": {
+                "income_expectations": 0.0,
+                "uncertainty": 0.0,
+                "return_differential": 0.0
+              },
+              "data_paths": {
+                "frm_coefficients": "data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
+              }
+            }
+          },
+          "social_transfers": {
+            "path_name": "social_transfers",
+            "name": "EqualSocialTransfersSetter",
+            "parameters": {
+              "independents": [
+                "Income",
+                "Debt"
+              ]
+            }
+          },
+          "saving_rates": {
+            "path_name": "saving_rates",
+            "name": "AverageSavingRatesSetter",
+            "parameters": {
+              "independents": [
+                "Income",
+                "Debt"
+              ]
+            }
+          },
+          "investment": {
+            "path_name": "investment",
+            "name": "DefaultHouseholdInvestment",
+            "parameters": {}
+          }
+        },
+        "parameters": {
+          "take_consumption_weights_by_income_quantile": false,
+          "uses_feasibility_resolver": true
+        },
+        "take_consumption_weights_by_income_quantile": false,
+        "substitution_bundles": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17
+        ]
+      },
+      "firms": {
+        "parameters": {
+          "capital_inputs_delay": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "depreciation_rates": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "initial_inventory_to_input_fraction": 0.0,
+          "capital_compensation_accounting_mode": "surplus_pool",
+          "capital_depreciation_accounting_mode": "eurostat_cfc",
+          "capital_replacement_matrix_source": "eurostat_cfc_output",
+          "firm_activity_finance_revision_mode": "post_credit_cash_budget",
+          "wage_cpi_indexation_elasticity": 1.0,
+          "capital_inputs_utilisation_rate": 0.85,
+          "intermediate_inputs_utilisation_rate": 0.85,
+          "tfp_base_growth_rate": 0.0,
+          "tfp_investment_elasticity": 0.3,
+          "max_productivity_investment_fraction": 0.015,
+          "max_productivity_cash_fraction": 0.03,
+          "tfp_investment_share": 0.4,
+          "technical_investment_effectiveness": 0.15,
+          "technical_diminishing_returns": 0.5,
+          "price_weight": 0.4,
+          "usage_weight": 0.3,
+          "potential_weight": 0.3,
+          "enable_bundle_arbitrage": false,
+          "bundle_significance_threshold": 0.1,
+          "arbitrage_intensity": 2.0
+        },
+        "functions": {
+          "bought_goods_distributor": {
+            "name": "BoughtGoodsDistributorIIPrio",
+            "path_name": "bought_goods_distributor",
+            "parameters": {}
+          },
+          "demand_estimator": {
+            "name": "DefaultDemandEstimator",
+            "path_name": "demand_estimator",
+            "parameters": {
+              "firm_growth_adjustment_speed": 0.0,
+              "sectoral_growth_adjustment_speed": 0.0
+            }
+          },
+          "demand_for_goods": {
+            "name": "DefaultDemandSetter",
+            "path_name": "demand_for_goods",
+            "parameters": {}
+          },
+          "demography": {
+            "name": "DefaultFirmDemography",
+            "path_name": "demography",
+            "parameters": {}
+          },
+          "desired_labour": {
+            "name": "DefaultDesiredLabourSetter",
+            "path_name": "desired_labour",
+            "parameters": {
+              "consider_capital_inputs": 1.0,
+              "consider_intermediate_inputs": true
+            }
+          },
+          "growth_estimator": {
+            "name": "DefaultGrowthEstimator",
+            "path_name": "growth_estimator",
+            "parameters": {}
+          },
+          "offered_wage_setter": {
+            "name": "DefaultOfferedWageSetter",
+            "path_name": "offered_wage_setter",
+            "parameters": {
+              "labour_market_tightness_markup_scale": 0.5,
+              "markup_time_span": 4
+            }
+          },
+          "prices": {
+            "name": "SectorMarkupMarginalCostPriceSetter",
+            "path_name": "prices",
+            "parameters": {
+              "orbis_markup_path": "run_model/data/raw_data/orbis/orbis_markups_by_nace_rev_2_main_section.csv",
+              "markup_year": 2014,
+              "markup_central_column": "mu_op_weighted_median",
+              "markup_lower_column": "mu_op_median_interval_low",
+              "markup_upper_column": "mu_op_median_interval_high",
+              "markup_corridor_relative_cap": 1.0,
+              "mc_smoothing_horizon": 4,
+              "ac_smoothing_horizon": 8,
+              "normal_output_smoothing_horizon": 8,
+              "normal_output_capital_floor_lambda": 0.25,
+              "demand_pull_speed": 1.0,
+              "ac_floor_share": 1.0,
+              "initial_cost_normalization_mode": "output_weighted_robust_gap",
+              "initial_cost_normalization_lower_quantile": 0.01,
+              "initial_cost_normalization_upper_quantile": 0.99,
+              "initial_cost_normalization_min_factor": 0.5,
+              "initial_cost_normalization_max_factor": 2.0,
+              "initial_cost_normalization_min_valid_weight_share": 0.5,
+              "markup_residual_calibration_mode": "sector_initial_price_anchor"
+            }
+          },
+          "production": {
+            "name": "CriticalAndImportantLeontief",
+            "path_name": "production",
+            "parameters": {}
+          },
+          "productivity_growth": {
+            "name": "SimpleTFPGrowth",
+            "path_name": "productivity_growth",
+            "parameters": {
+              "investment_effectiveness": 0.005
+            }
+          },
+          "productivity_investment_planner": {
+            "name": "TargetIntensityTFPInvestmentPlanner",
+            "path_name": "productivity_investment_planner",
+            "parameters": {
+              "adjustment_cost_lambda": 1.0,
+              "cap_multiplier": 2.5,
+              "investment_elasticity": 0.3,
+              "n_firms": 821,
+              "private_value_weight": null,
+              "reference_effective_cost_rate": 0.01,
+              "sector_innovation_intensity": {
+                "0": 0.0594,
+                "1": 0.0049,
+                "2": 0.0399,
+                "3": 0.0059,
+                "4": 0.0041,
+                "5": 0.0031,
+                "6": 0.0126,
+                "7": 0.0062,
+                "8": 0.0047,
+                "9": 0.0391,
+                "10": 0.0172,
+                "11": 0.0006,
+                "12": 0.0113,
+                "13": 0.0379,
+                "14": 0.005,
+                "15": 0.006,
+                "16": 0.108,
+                "17": 0.0139
+              },
+              "silence_technical_investment": true,
+              "target_innovation_intensity": 0.02,
+              "tfp_risk_premium": 0.0,
+              "investment_effectiveness": 0.005
+            }
+          },
+          "target_capital_inputs": {
+            "name": "FinancialTargetCapitalInputsSetter",
+            "path_name": "target_capital_inputs",
+            "parameters": {
+              "credit_gap_fraction": 0.5,
+              "target_capital_inputs_fraction": 0.0
+            }
+          },
+          "target_credit": {
+            "name": "DefaultTargetCreditSetter",
+            "path_name": "target_credit",
+            "parameters": {}
+          },
+          "target_intermediate_inputs": {
+            "name": "FinancialTargetIntermediateInputsSetter",
+            "path_name": "target_intermediate_inputs",
+            "parameters": {
+              "credit_gap_fraction": 0.5,
+              "target_intermediate_inputs_fraction": 0.2
+            }
+          },
+          "wage_setter": {
+            "name": "ContractWageSetter",
+            "path_name": "wage_setter",
+            "parameters": {
+              "labour_market_tightness_markup_scale": 0.05,
+              "markup_time_span": 4,
+              "initial_rate_source": "firm_anchor",
+              "indexation_base": "realised_productivity",
+              "realised_productivity_window": 4,
+              "incumbent_indexation_pass_through": 0.0
+            }
+          },
+          "target_production": {
+            "name": "DefaultTargetProductionSetter",
+            "path_name": "target_production",
+            "parameters": {
+              "capital_inputs_target_considers_capital_inputs": 0.18,
+              "capital_inputs_target_considers_intermediate_inputs": 0.03,
+              "capital_inputs_target_considers_labour_inputs": 0.53,
+              "financial_constrains_fraction": 0.0,
+              "intermediate_inputs_target_considers_capital_inputs": 0.18,
+              "intermediate_inputs_target_considers_intermediate_inputs": 0.03,
+              "intermediate_inputs_target_considers_labour_inputs": 0.53,
+              "maximum_debt_to_equity_ratio": 2.0,
+              "inventory_adjustment_speed": 0.1,
+              "target_inventory_to_demand_fraction": 0.05
+            }
+          },
+          "excess_demand": {
+            "name": "ConstrainedExcessDemandSetter",
+            "path_name": "excess_demand",
+            "parameters": {
+              "consider_capital_inputs": 1.0,
+              "consider_intermediate_inputs": 0.0,
+              "consider_labour_inputs": 0.0
+            }
+          },
+          "labour_productivity": {
+            "name": "WorkEffortLabourProductivitySetter",
+            "path_name": "labour_productivity",
+            "parameters": {
+              "consider_capital_inputs": true,
+              "consider_intermediate_inputs": true,
+              "min_labour_utilisation_factor": 0.9,
+              "max_labour_utilisation_factor": 1.1,
+              "work_effort_increase_speed": 1.0
+            }
+          },
+          "profit_estimator": {
+            "name": "DefaultFirmProfitsSetter",
+            "path_name": "profit_estimator",
+            "parameters": {}
+          },
+          "technical_coefficients_growth": {
+            "name": "SimpleTechnicalGrowth",
+            "path_name": "technical_coefficients_growth",
+            "parameters": {
+              "diminishing_returns_factor": 1.5,
+              "investment_effectiveness": 0.01
+            }
+          }
+        },
+        "calculate_hill_exponent": true,
+        "substitution_bundles": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17
+        ]
+      },
+      "government_entities": {
+        "functions": {
+          "consumption": {
+            "name": "ExpectedGrowthGovernmentConsumptionSetter",
+            "path_name": "consumption",
+            "parameters": {
+              "consistency": 1.0,
+              "sectoral_weights": "initial_fixed"
+            }
+          }
+        }
+      },
+      "central_government": {
+        "functions": {
+          "social_benefits": {
+            "name": "ConstantSocialBenefitsSetter",
+            "path_name": "social_benefits",
+            "parameters": {}
+          },
+          "social_housing": {
+            "name": "DefaultSocialHousing",
+            "path_name": "social_housing",
+            "parameters": {
+              "rent_as_fraction_of_unemployment_rate": 0.25
+            }
+          },
+          "debt_interest": {
+            "name": "SmoothedPolicyRateDebtInterest",
+            "path_name": "debt_interest",
+            "parameters": {
+              "average_maturity_years": 9.0
+            }
+          }
+        },
+        "tax_overrides": {
+          "employer_social_insurance_rate": 0.30552085148943464,
+          "value_added_tax_rate": 0.13,
+          "household_investment_vat_rate": 0.13,
+          "household_capital_formation_rate": 0.0,
+          "firm_capital_formation_rate": 0.24856698371134814,
+          "production_tax_vector_scale": 2.0
+        }
+      },
+      "central_bank": {
+        "functions": {
+          "policy_rate": {
+            "path_name": "policy_rate",
+            "name": "SmoothTaylorRule",
+            "parameters": {}
+          }
+        },
+        "taylor_rule_overrides": {
+          "targeted_inflation_rate": null,
+          "rho": null,
+          "r_star": null,
+          "phi_pi": null,
+          "phi_q": null
+        }
+      },
+      "banks": {
+        "parameters": {
+          "capital_adequacy_ratio": 0.08,
+          "firm_loans_capital_stock_collateral_ratio": 1.0,
+          "firm_loans_return_on_equity_ratio": 0.15,
+          "firm_loans_return_on_assets_ratio": 0.05,
+          "enable_firm_loans_return_on_equity_restriction": false,
+          "enable_firm_loans_return_on_assets_restriction": false,
+          "enable_firm_loans_dscr_restriction": true,
+          "firm_loans_min_dscr": 1.25,
+          "firm_loans_cfads_window": 4,
+          "firm_loans_cfads_haircut": 1.0,
+          "firm_loans_dscr_underwriting_rate_mode": "max_bank_rate",
+          "household_consumption_loans_loan_to_income_ratio": 0.36,
+          "mortgage_loan_to_income_ratio": 21.0,
+          "mortgage_loan_to_value_ratio": 0.8,
+          "mortgage_debt_service_to_income_ratio": 0.35,
+          "household_consumption_loan_maturity": 2,
+          "long_term_firm_loan_maturity": 60,
+          "mortgage_maturity": 100,
+          "short_term_firm_loan_maturity": 12
+        },
+        "functions": {
+          "demography": {
+            "path_name": "demography",
+            "name": "DefaultBankDemography",
+            "parameters": {
+              "solvency_ratio": 0.05
+            }
+          },
+          "interest_rates": {
+            "path_name": "interest_rates",
+            "name": "MarkUpInterestRatesSetter",
+            "parameters": {}
+          },
+          "profit_estimator": {
+            "path_name": "profit_estimator",
+            "name": "DefaultBankProfitsSetter",
+            "parameters": {}
+          }
+        }
+      },
+      "exchange_rates": {
+        "exchange_rate_type": "constant"
+      },
+      "labour_market": {
+        "functions": {
+          "clearing": {
+            "name": "ReservationWageBindingDefaultLabourMarketClearer",
+            "parameters": {
+              "allow_switching_industries": true,
+              "compare_with_normalised_inputs": true,
+              "consider_reservation_wages": true,
+              "firing_cost_fraction": 0.0,
+              "firing_speed": 1.0,
+              "hiring_cost_fraction": 0.0,
+              "hiring_speed": 0.75,
+              "individuals_quitting": false,
+              "individuals_quitting_temperature": 1.0,
+              "optimised_hiring": true,
+              "random_firing_probability": 0.0,
+              "round_target_employment": true,
+              "sorted_firing": true
+            },
+            "path_name": "clearing"
+          }
+        }
+      },
+      "housing_market": {
+        "functions": {
+          "clearing": {
+            "path_name": "clearing",
+            "name": "AutomaticHousingMarketClearer",
+            "parameters": {
+              "random_assignment_shock_variance": 0.0
+            }
+          },
+          "value": {
+            "path_name": "value",
+            "name": "DefaultPropertyValueSetter",
+            "parameters": {
+              "random_fluctuation_std": 0.0
+            }
+          }
+        }
+      },
+      "credit_market": {
+        "functions": {
+          "clearing": {
+            "path_name": "clearing",
+            "name": "WaterBucketCreditMarketClearer",
+            "parameters": {
+              "allow_household_loans": true,
+              "allow_short_term_firm_loans": true,
+              "consider_loan_type_fractions": false,
+              "credit_supply_temperature": 2,
+              "creditor_minimum_fill": 0.0,
+              "creditor_selection_is_deterministic": true,
+              "debtor_minimum_fill": 0.0,
+              "firms_max_number_of_banks_visiting": 5,
+              "households_max_number_of_banks_visiting": 5,
+              "interest_rates_selection_temperature": 0.0
+            }
+          }
+        }
+      },
+      "goods_market": {
+        "functions": {
+          "clearing": {
+            "name": "WaterBucketGoodsMarketClearer",
+            "path_name": "clearing",
+            "parameters": {
+              "consider_trade_proportions": true,
+              "consider_buyer_priorities": true,
+              "additionally_available_factor": 0.2,
+              "price_markup": 0.2,
+              "price_temperature": 2.0,
+              "prio_domestic_sellers": false,
+              "prio_high_prio_buyers": false,
+              "prio_high_prio_sellers": false,
+              "real_country_prioritisation": 10.0,
+              "probability_keeping_previous_seller": 0.0,
+              "trade_temperature": 0.0,
+              "seller_selection_distribution_type": "additive",
+              "seller_minimum_fill": 0.9,
+              "buyer_minimum_fill_macro": 0.0,
+              "buyer_minimum_fill_micro": 0.95,
+              "deterministic": true
+            }
+          }
+        }
+      },
+      "consumer_credit": {
+        "maturity_quarters": 12,
+        "spread_annual": 0.035,
+        "dsti_limit": 0.35,
+        "maximum_borrowing_age": 75
+      },
+      "forecasting_window": 60,
+      "assume_zero_growth": false,
+      "assume_zero_noise": false,
+      "use_emission_multiplier": false,
+      "CH4_production_emissions_only": false
+    }
+  },
+  "row_configuration": {
+    "functions": {
+      "exports": {
+        "name": "GrowthRoWExportsSetter",
+        "path_name": "exports",
+        "parameters": {
+          "consistency": 0.0
+        }
+      },
+      "imports": {
+        "name": "InflationRoWImportsSetter",
+        "path_name": "imports",
+        "parameters": {
+          "consistency": 1.0
+        }
+      },
+      "excess_demand": {
+        "name": "InfinityExcessDemandSetter",
+        "path_name": "excess_demand",
+        "parameters": {}
+      },
+      "prices": {
+        "name": "InflationRoWPriceSetter",
+        "path_name": "prices",
+        "parameters": {}
+      }
+    },
+    "parameters": {
+      "adjustment_speed": 1.0
+    },
+    "forecasting_window": 60,
+    "assume_zero_growth": false,
+    "assume_zero_noise": false
+  },
+  "goods_market_configuration": {
+    "functions": {
+      "clearing": {
+        "name": "WaterBucketGoodsMarketClearer",
+        "path_name": "clearing",
+        "parameters": {
+          "consider_trade_proportions": true,
+          "consider_buyer_priorities": true,
+          "additionally_available_factor": 0.2,
+          "price_markup": 0.2,
+          "price_temperature": 2.0,
+          "prio_domestic_sellers": false,
+          "prio_high_prio_buyers": false,
+          "prio_high_prio_sellers": false,
+          "real_country_prioritisation": 10.0,
+          "probability_keeping_previous_seller": 0.0,
+          "trade_temperature": 0.0,
+          "seller_selection_distribution_type": "additive",
+          "seller_minimum_fill": 0.9,
+          "buyer_minimum_fill_macro": 0.0,
+          "buyer_minimum_fill_micro": 0.95,
+          "deterministic": true
+        }
+      }
+    }
+  },
+  "exchange_rates_configuration": {
+    "exchange_rate_type": "constant"
+  }
+}

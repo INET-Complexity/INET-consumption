@@ -1,0 +1,96 @@
+{
+  "parquet_sha256": "90fb6273ca7e088a812152243038477c8a2175005bf7f74810792937d7c31b6b",
+  "sources": {
+    "data/hfcs/2014/D1.csv": "130940ef52ff6381ccaa48f9e2d3f7551b63924afe969c8b18185ac0cfe357bb",
+    "data/hfcs/2014/D2.csv": "1f828681be8a492bd4a9fc0ae7b6bc1ed1ca0ae1642561906953a7f2ab927cda",
+    "data/hfcs/2014/D3.csv": "4e0d17b23394cd0154744b8d75d990605e2218c455ed368c8fc0fdd368f2c91b",
+    "data/hfcs/2014/D4.csv": "1ef5d7c9f22b6a7c634a48020754d5c1c8fa1d210e54c5edfb25694cfe5d38e4",
+    "data/hfcs/2014/D5.csv": "5bf8caf0419ff56275d5faf1de52140f51389bbcb417c6a6220a515a670bdf5e",
+    "data/hfcs/2014/H1.csv": "6bfeab9decb21810fdaa0af169f6d6f0e96d71814156c54cfb596bbf926a2bbb",
+    "data/hfcs/2014/H2.csv": "f57042e5a34d47594720107cba0510022cdc9ef9a8c6705bde56493f3ed49e57",
+    "data/hfcs/2014/H3.csv": "955ec973975a7eb831287c40a53167c7229ccaf02f84536e49495bb5d6bef0f8",
+    "data/hfcs/2014/H4.csv": "12a95a8daaf00d3857b6c33a881c92caaa66b8c0d479cdbd5526dbee8f9066eb",
+    "data/hfcs/2014/H5.csv": "ca5f41652b437ca1d6c233db8aae8891b5cf26bd2d6ce9df145713d7d83bd2a4",
+    "data/hfcs/2014/HN1.csv": "3c03c1d137cfe455783a643ce71dd5066d653add9dc6c83773c4c462159e6f84",
+    "data/hfcs/2014/HN2.csv": "3e12b86437bf6661fe6650ae3f2d09c66b4f28aaf01249dbad894e33bdae8223",
+    "data/hfcs/2014/HN3.csv": "654b5a3c712bf2ada5b3838ad8ae58f685e48659f5cb4ddc349a198661d5f148",
+    "data/hfcs/2014/HN4.csv": "3427ce1f6af31c54c3b2c2b679f79b051c815428ea2cc8a78dd108745433b088",
+    "data/hfcs/2014/HN5.csv": "c8cbd30eb29c5a05323f87c40ba47582ef3b0f9bce8fcb181a48642c650060a8",
+    "data/hfcs/2017/D1.csv": "a25c99449a86088408460d28cfa0a5f47dbd4e8c84d1e413c55176cb9ab170bc",
+    "data/hfcs/2017/D2.csv": "9e6b2684f5c1238b0c1cb3b402363c253d8036fc1c64746319be401641bc7b26",
+    "data/hfcs/2017/D3.csv": "778671cec72755748d3d7e05d3264efd4cdd7632bc8b6362e46720b724129ac8",
+    "data/hfcs/2017/D4.csv": "2e8f6ad4c6a65e2eb36bbcf19f52a73e62fe3cb5bb874db4ec72cd3da1e737ea",
+    "data/hfcs/2017/D5.csv": "1239a8257e60ffdb2d1b593c3095726565e81a6b1fc244269f95b8e5b6f456d3",
+    "data/hfcs/2017/H1.csv": "e3bf6579de1f8ccc77fe730fb053ab2d41d0024af7e88e2235846f02ea03b8de",
+    "data/hfcs/2017/H2.csv": "ae29e63d234ddc84f9868547dfc0f223553ca02f14d33434b0bd4c8a32b23911",
+    "data/hfcs/2017/H3.csv": "7fbceb47713cb042ff2cc3e74820e0ff95494e5c2aa8e7da27279685ccfd5d63",
+    "data/hfcs/2017/H4.csv": "ef1bdd285f1f790b11cd70eb66c06c678c65218eaf91161434e466fbd426ec88",
+    "data/hfcs/2017/H5.csv": "264d1a8643d6e0e9d8e17e0ffb4747ddb39ae44aa46774493d42608ed32b2756",
+    "data/hfcs/2017/HN1.csv": "0a2216b9bad7d9f85dce9ade9b0a2ab01d6680d2da2ce0fda5a511b8785260f1",
+    "data/hfcs/2017/HN2.csv": "dc05d8a4445cee25b08b3cc602dc98786d04895d9d001306a0e9c44e6915496b",
+    "data/hfcs/2017/HN3.csv": "6bbcad0c77aa1bcb5ee32dd06d84d5e4c31a88c0f55861cb81c4db3bd619981d",
+    "data/hfcs/2017/HN4.csv": "59856998cd42d8544dba522acb93a86fe3afa2d2b3a991392bfcac9e1e60079b",
+    "data/hfcs/2017/HN5.csv": "c2af4051e0bc70d670004e1369855252a793776e3b3fb0193bcf5083cac1861a",
+    "data/hfcs/2021/d1.csv": "376aa6061324f40f92d86257d6704de36a1645415e1f8f22ef6ae955ad5b510f",
+    "data/hfcs/2021/d2.csv": "9ff99f4afa5721341646113f80a0273064fc0873b2df4553222ec3871de65b67",
+    "data/hfcs/2021/d3.csv": "46c7ec225e6eb567f09055efdd8a5fd626eb813b23bf33c72067c1282ac95475",
+    "data/hfcs/2021/d4.csv": "05be998ce8925f100206a8f9cddd5dfbe51b809fc5692fa2e4f5dcb18fe08d2d",
+    "data/hfcs/2021/d5.csv": "d482395d07dc57350bb74ed98a3b612e3a2dd20355a7bf237fb2afde027bc237",
+    "data/hfcs/2021/h1.csv": "e1815bd61054f71c237b4e3f69041c9f8d84354269055b76b9edf9be16d62589",
+    "data/hfcs/2021/h2.csv": "86fe4999b597f5dfa916f20a387737340f1270b5e7205c4e2ffe2b638fe11cd1",
+    "data/hfcs/2021/h3.csv": "aad1429b56699c54cd7c5edb7a517ada13dc81764b84f9e20776070a037eb444",
+    "data/hfcs/2021/h4.csv": "c6f2e582f866edce1f9e06a296c597eeb79eabde829c5740938193861706fa9b",
+    "data/hfcs/2021/h5.csv": "b1f0c92c44b9ec920765720bec2b692262a95b4a9568b0a0fd9fed46147b36b8",
+    "data/hfcs/2021/hn1.csv": "1a31872b735ed8e93512a02c25eb141d7aa1f63d33a9529ea207911d248ac433",
+    "data/hfcs/2021/hn2.csv": "275a9ce2d17f1339f576337dcef9c63023f60bdf0495a92824b9b07fbfdf3336",
+    "data/hfcs/2021/hn3.csv": "c16a4e98b7027c06ef09ca94cefab5848cfa8f483050c04285fafee8606d3e27",
+    "data/hfcs/2021/hn4.csv": "7d1e05ffee403a81f868c7674a8cedbbcc5b304eaabe47ae1abac21066394d50",
+    "data/hfcs/2021/hn5.csv": "e6ed34f26955ae65eb467564717eda2b0f6996eb9782a459aa63bca8de1184b9",
+    "src/hfcs_reader_consumption.py": "d15f2c57433712027a8a2851869db7b6a2b89c63bfdaed95c8b46e1b16a3562f",
+    "src/SNA_reader.py": "b7e48ba9568d0e108fd1363fbe9a8ab287846f783d0bd6213269b8e583d662f0",
+    "src/portfolio_allocation_helpers.py": "30fcfd6769cd846b1cb57d4919caace371b8be6f5f8ea1562bd33e9fe9d97554",
+    "src/consumption_calibration.py": "46d654a9d1468ea559a935353959f05aa751bd09a9b72c7f5a99e21c6c6c8ab8",
+    "src/helpers.py": "ad098535956e19068ff2de6aa7ed98965b2c7779e07cd2d2a18ea4cdc4193f53",
+    "consumption_parameters_calibration.ipynb": "e4b7f9d5fb2626a72d58399972811962e47e321b73a943662ab970f91679227b",
+    "show_distributions_and_MPCs.ipynb": "c79f9e3abd9f27b0600a0be9ea887cac5e35c702a5bc31875bead99a201a7855",
+    "data/hfcs/consumption_data_SNA_FRA.yaml": "e0da2e64104935f419cd495d829730ca9b142ca56546b4c0f7fd514160d9bc10"
+  },
+  "waves": [
+    {
+      "wave": 2014,
+      "rows": 12035,
+      "max_consumption_error": 0.0,
+      "max_deflation_error": 0.02438307274132967,
+      "annual_consumption_sum": 289474080.0,
+      "annual_imputed_rent_sum": 35169748.0,
+      "annual_actual_rent_sum": 24189096.0,
+      "hfce_deflator": [
+        95.28575
+      ]
+    },
+    {
+      "wave": 2017,
+      "rows": 13685,
+      "max_consumption_error": 0.0,
+      "max_deflation_error": 0.016081984096672386,
+      "annual_consumption_sum": 309635744.0,
+      "annual_imputed_rent_sum": 37619296.0,
+      "annual_actual_rent_sum": 28519152.0,
+      "hfce_deflator": [
+        96.47149999999999
+      ]
+    },
+    {
+      "wave": 2021,
+      "rows": 10253,
+      "max_consumption_error": 0.0,
+      "max_deflation_error": 0.01322597824037075,
+      "annual_consumption_sum": 236410304.0,
+      "annual_imputed_rent_sum": 28722748.0,
+      "annual_actual_rent_sum": 20842887.22188,
+      "hfce_deflator": [
+        101.33525
+      ]
+    }
+  ]
+}

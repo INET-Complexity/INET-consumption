@@ -1,0 +1,30 @@
+{
+  "insee_smic_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/INSEE/SMIC_monthly_values.csv",
+    "sha256": "156f2bc4434c7e39d42b20198e9742d6024f4fcb41f335c3f62c6963d01d4632"
+  },
+  "income_belief_priors_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/CES/FR_priors_table5.csv",
+    "sha256": "c4e4f883b9f1cc7082441bc24902663278f35f0ff0b1ebfb5c8c4d0e01ea14f4"
+  },
+  "permanent_income_forecast_table_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/permanent_income/FR_table.json",
+    "sha256": "e0ddc2740b593371dd98218a1d2e5d03d27f537945457423c20023a7faaef4a6"
+  },
+  "permanent_income_forecast_covariance_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/permanent_income/FR_cov_hac.json",
+    "sha256": "02b02ddc463435e07146b5a1398025ea585e3abe83df181e5232f2f22e03bc74"
+  },
+  "permanent_income_forecast_residual_variance_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/permanent_income/FR_sigma2_u.json",
+    "sha256": "d193cd97647ba52451798418c47df396503698a676e321c283b1d35412ed2f41"
+  },
+  "permanent_income_design_matrix_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/permanent_income/FR_design_matrix.csv",
+    "sha256": "4fbf141bd2920068f12d86d348ed70cad87c0cb405c560f827143051f460ec73"
+  },
+  "frm_coefficients_path": {
+    "path": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json",
+    "sha256": "c4418f59f822485a1aa04ec15619d2a66fa73afe69cfaa1ca2bed8f7433252c1"
+  }
+}

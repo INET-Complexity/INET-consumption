@@ -44,6 +44,20 @@ def _validate_unique_seeds(seeds: list[int]) -> list[int]:
     return seed_list
 
 
+def _apply_firm_loan_dscr_override(
+    country_configurations: dict[str, CountryConfiguration],
+    country_code: str,
+    enabled: bool | None,
+) -> None:
+    """Apply an optional diagnostic-only DSCR switch to the selected country."""
+    if enabled is None:
+        return
+    try:
+        country_configurations[country_code].banks.parameters.enable_firm_loans_dscr_restriction = bool(enabled)
+    except AttributeError as exc:
+        raise TypeError("Country configuration does not expose bank firm-loan DSCR parameters") from exc
+
+
 def _prepare_irf_inputs(
     *,
     seed: int,
@@ -54,6 +68,7 @@ def _prepare_irf_inputs(
     config_dir: str | Path | None,
     force_rebuild_data: bool,
     single_hfcs_survey: bool,
+    firm_loan_dscr: bool | None = None,
 ) -> tuple[NotebookRunConfig, DataWrapper, dict[str, CountryConfiguration], str, Path]:
     run_config = NotebookRunConfig(
         seed=int(seed),
@@ -67,6 +82,7 @@ def _prepare_irf_inputs(
     )
     prepared = prepare_data(run_config)
     country_configurations = build_country_config(data=prepared.data, config=run_config)
+    _apply_firm_loan_dscr_override(country_configurations, prepared.cfg.country_iso3, firm_loan_dscr)
     return run_config, prepared.data, country_configurations, prepared.cfg.country_iso3, prepared.raw_data_path
 
 
@@ -204,6 +220,7 @@ def run_irf_experiment(
     backend: str = "loky",
     verbose: int = 0,
     batch_size: int = 1,
+    firm_loan_dscr: bool | None = None,
 ) -> dict[str, Path]:
     """Run paired IRF simulations, aggregate responses, and write outputs."""
 
@@ -233,6 +250,7 @@ def run_irf_experiment(
         config_dir=config_dir,
         force_rebuild_data=force_rebuild_data,
         single_hfcs_survey=single_hfcs_survey,
+        firm_loan_dscr=firm_loan_dscr,
     )
     data_paths = DataPaths.default_paths(resolved_raw_data_path, [data.configuration.year])
     baseline_dir = output_dir / "baseline"
@@ -314,6 +332,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--backend", default="loky", help="Joblib backend. Default: loky.")
     parser.add_argument("--verbose", type=int, default=0, help="Joblib verbosity level.")
     parser.add_argument("--batch-size", type=int, default=1, help="Number of seeds batched per worker.")
+    parser.add_argument(
+        "--firm-loan-dscr",
+        choices=("on", "off"),
+        default=None,
+        help="Optional diagnostic override for the country firm-loan DSCR restriction.",
+    )
     args = parser.parse_args()
     args.seeds = _validate_unique_seeds(args.seeds)
     args.shock_specs = _load_shocks(args.shock_config)
@@ -338,6 +362,7 @@ def main() -> None:
         backend=parsed.backend,
         verbose=parsed.verbose,
         batch_size=parsed.batch_size,
+        firm_loan_dscr=None if parsed.firm_loan_dscr is None else parsed.firm_loan_dscr == "on",
     )
     print({name: str(path) for name, path in outputs.items()})
 

@@ -837,6 +837,27 @@ def build_macro_output_df(model, country_code):
     if ppi is not None:
         add_column("ppi_yoy_change", ppi / ppi.shift(yoy_periods) - 1.0)
 
+    # Economy-wide executed productivity-investment intensity. New runs persist
+    # the ratio on the economy time series. The fallback keeps older in-memory
+    # runs/notebooks usable by reconstructing the numerator from firm-level
+    # executed technical investment.
+    productivity_ratio = economy_ts_dict.get("total_productivity_investment_to_gdp")
+    if productivity_ratio is not None:
+        add_column("total_productivity_investment_to_gdp", as_output_series(productivity_ratio))
+    else:
+        firm_ts_dict = getattr(country.firms.ts, "dicts", {})
+        tfp_history = firm_ts_dict.get("executed_tfp_investment")
+        technical_history = firm_ts_dict.get("executed_technical_investment")
+        if tfp_history is not None and technical_history is not None and gdp is not None:
+            productivity_values = pd.Series(
+                [
+                    float(np.asarray(tfp, dtype=float).sum()) + float(np.asarray(technical, dtype=float).sum())
+                    for tfp, technical in zip(tfp_history, technical_history)
+                ]
+            ).reindex(range(len(out_index)))
+            productivity_values.index = out_index
+            add_ratio("total_productivity_investment_to_gdp", productivity_values, gdp)
+
     add_ratio("household_consumption_to_gdp", household_consumption, gdp)
     add_ratio("government_consumption_to_gdp", government_consumption, gdp)
     add_ratio("total_consumption_to_gdp", total_consumption, gdp)

@@ -49,7 +49,7 @@ class TestDecoupledLogistics:
     def test_alpha_2_and_gamma_1_use_their_own_slopes(self):
         """A shared-slope implementation cannot produce both of these at once."""
         nla, ifa, ha = _ratios()
-        alpha_2, gamma_1 = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
+        alpha_2, gamma_1, _ = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
         # k_alpha = 2.0 is gentle: alpha_2 varies smoothly and widely.
         assert alpha_2.std() > 0.02
         # k_gamma = 148 on a [0,1] domain is a step: gamma_1 is at one end or the
@@ -60,14 +60,14 @@ class TestDecoupledLogistics:
     def test_alpha_2_rises_and_gamma_1_falls_in_b(self):
         """Anti-correlated by construction -- the sign the stale doc had backwards."""
         nla, ifa, ha = _ratios()
-        alpha_2, gamma_1 = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
+        alpha_2, gamma_1, _ = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
         b = 0.6719 * nla + 0.2486 * ifa + 0.0795 * ha
         assert np.corrcoef(b, alpha_2)[0, 1] > 0.9
         assert np.corrcoef(b, gamma_1)[0, 1] < 0.0
 
     def test_coefficients_stay_inside_their_configured_ranges(self):
         nla, ifa, ha = _ratios()
-        alpha_2, gamma_1 = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
+        alpha_2, gamma_1, _ = _rule()._compute_continuous_wealth_calibration(nla, ifa, ha)
         # Tolerance is for float64 round-off at the bound only (the logistic
         # saturates exactly there), not for genuine slack.
         tol = 1e-12
@@ -85,7 +85,7 @@ class TestDecoupledLogistics:
     def test_v1_config_reproduces_v1_mapping(self):
         """Legacy shared steepness/b0 must survive untouched."""
         nla, ifa, ha = _ratios()
-        alpha_2, gamma_1 = CreditAugmentedConsumption(
+        alpha_2, gamma_1, gamma_4 = CreditAugmentedConsumption(
             uses_continuous_wealth_calibration=True
         )._compute_continuous_wealth_calibration(nla, ifa, ha)
         nla_n = (np.clip(nla, -4.73, 2.15) + 4.73) / (2.15 + 4.73)
@@ -95,6 +95,8 @@ class TestDecoupledLogistics:
         logistic = 1.0 / (1.0 + np.exp(-34.3 * (b - 0.428)))
         np.testing.assert_allclose(alpha_2, 0.2497 + (0.6997 - 0.2497) * logistic)
         np.testing.assert_allclose(gamma_1, 0.1997 - (0.1997 - 0.0503) * logistic)
+        # No gamma_4 range configured: it stays the homogeneous scalar, as in v1/v2.
+        np.testing.assert_allclose(gamma_4, 0.02)
 
 
 class TestIdiosyncraticTerm:

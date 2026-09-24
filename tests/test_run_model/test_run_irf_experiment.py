@@ -166,3 +166,18 @@ def test_run_irf_experiment_rejects_shock_duration_beyond_horizon(tmp_path):
             country_iso3="FRA",
             n_jobs=1,
         )
+
+
+def test_apply_firm_loan_dscr_override_changes_only_requested_flag():
+    country_cfg = SimpleNamespace(
+        banks=SimpleNamespace(
+            parameters=SimpleNamespace(enable_firm_loans_dscr_restriction=True),
+        )
+    )
+    configurations = {"FRA": country_cfg}
+
+    irf_runner._apply_firm_loan_dscr_override(configurations, "FRA", False)
+    assert country_cfg.banks.parameters.enable_firm_loans_dscr_restriction is False
+
+    irf_runner._apply_firm_loan_dscr_override(configurations, "FRA", None)
+    assert country_cfg.banks.parameters.enable_firm_loans_dscr_restriction is False

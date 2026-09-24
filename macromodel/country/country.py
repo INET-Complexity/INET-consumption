@@ -3632,6 +3632,16 @@ class Country:
         )
         self.economy.compute_output_gap()
 
+        # Productivity investment is a firm productivity expense, not part of
+        # the current GDP expenditure-side GFCF aggregate. Record direct TFP
+        # plus technical-coefficient investment as an economy-wide intensity.
+        nominal_productivity_investment = self.firms.ts.current("executed_tfp_investment").sum()
+        nominal_productivity_investment += self.firms.ts.current("executed_technical_investment").sum()
+        nominal_gdp = self.economy.ts.current("gdp_output")[0]
+        self.economy.ts.total_productivity_investment_to_gdp.append(
+            [nominal_productivity_investment / nominal_gdp if nominal_gdp != 0.0 else np.nan]
+        )
+
     def update_population_structure(self) -> None:
         """Update demographic composition.
 

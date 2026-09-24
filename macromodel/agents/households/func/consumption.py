@@ -719,6 +719,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.continuous_wealth_calibration_gamma_1_steepness = calibration.get(
             "gamma_1_steepness", self.continuous_wealth_calibration_steepness
         )
+        # v3 adds a THIRD map, gamma_4(B), on the same footing. v1/v2 held gamma_4
+        # homogeneous at housing_wealth_propensity; the v3 estimator rejects that
+        # restriction (empirical corr(log C/Y, HA/Y) = -0.163 against a model value
+        # of +0.035 under a strictly positive gamma_4).
+        self.continuous_wealth_calibration_gamma_4_steepness = calibration.get(
+            "gamma_4_steepness", self.continuous_wealth_calibration_steepness
+        )
         # How the index weights combine with the ratios:
         #   "normalised_ratio" (v1) -- min-max each ratio to [0,1] first, then weight.
         #   "raw_ratio"        (v2) -- weight the clipped ratios directly, which is how
@@ -742,6 +749,31 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("gamma_1_low", 0.0503),
             calibration.get("gamma_1_high", 0.1997),
         )
+        # gamma_4(B) is OPT-IN and has no default range: absent both keys, gamma_4
+        # stays the homogeneous scalar housing_wealth_propensity, so every existing
+        # v1/v2 config keeps its exact behaviour. Supplying only one of the two is a
+        # config error, not a half-configured map.
+        gamma_4_low = calibration.get("gamma_4_low")
+        gamma_4_high = calibration.get("gamma_4_high")
+        if (gamma_4_low is None) != (gamma_4_high is None):
+            raise ValueError(
+                "gamma_4_low and gamma_4_high must be supplied together to enable the "
+                f"gamma_4(B) map, got ({gamma_4_low}, {gamma_4_high})."
+            )
+        # Shape without a range is a silently inert calibration: the steepness and
+        # midpoint would be stored, never read, and the run would quietly use the
+        # homogeneous scalar while appearing to configure the map. Refuse it -- an
+        # inert calibration parameter is indistinguishable from a correct one in the
+        # output, which is exactly the failure the repo's "no silent changes" rule
+        # exists to prevent.
+        inert_gamma_4_shape_keys = [key for key in ("gamma_4_steepness", "gamma_4_midpoint") if key in calibration]
+        if gamma_4_low is None and inert_gamma_4_shape_keys:
+            raise ValueError(
+                f"{inert_gamma_4_shape_keys} configure the shape of the gamma_4(B) map, but "
+                "gamma_4_low/gamma_4_high are absent so the map is inactive and those values "
+                "would be silently ignored. Supply the range, or drop the shape keys."
+            )
+        self.continuous_wealth_calibration_gamma_4_range = None if gamma_4_low is None else (gamma_4_low, gamma_4_high)
         # [p5,p95] winsorization bounds for NLA/y, IFA/y, HA/y, fitted once on HFCS
         # 2014 France micro-data (see the design doc's Cell-Size Check table).
         # Calibration-fixed by design: not recomputed from the live simulated
@@ -772,6 +804,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.continuous_wealth_calibration_gamma_1_midpoint = calibration.get(
             "gamma_1_midpoint", self.continuous_wealth_calibration_b0
         )
+        self.continuous_wealth_calibration_gamma_4_midpoint = calibration.get(
+            "gamma_4_midpoint", self.continuous_wealth_calibration_b0
+        )
         # Fail fast on degenerate calibration bounds rather than letting them silently
         # divide-by-zero into nan/inf inside _compute_continuous_wealth_calibration
         # (ratio/b_raw bounds), or silently invert the accessibility-to-coefficient
@@ -789,9 +824,34 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
         if gamma_1_hi <= gamma_1_lo:
             raise ValueError(f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi}).")
+        if self.continuous_wealth_calibration_gamma_4_range is not None:
+            gamma_4_lo, gamma_4_hi = self.continuous_wealth_calibration_gamma_4_range
+            if gamma_4_hi <= gamma_4_lo:
+                raise ValueError(
+                    f"gamma_4 calibration range must satisfy high > low, got ({gamma_4_lo}, {gamma_4_hi})."
+                )
+        # The high>low checks above stop a range from inverting a mapping, but the
+        # logistic steepness is an equally effective inversion vector: a negative k
+        # flips the S-curve, so alpha_2 would fall and gamma_1/gamma_4 would rise in
+        # B -- the precise sign error the design doc records having made in prose on
+        # 2026-08-18, caught then only because the code was right. Zero flattens every
+        # map to its midpoint. Neither is a calibration anyone means to express.
+        for coefficient_name, steepness in (
+            ("alpha_2", self.continuous_wealth_calibration_alpha_2_steepness),
+            ("gamma_1", self.continuous_wealth_calibration_gamma_1_steepness),
+            ("gamma_4", self.continuous_wealth_calibration_gamma_4_steepness),
+        ):
+            if steepness <= 0.0:
+                raise ValueError(
+                    f"{coefficient_name} logistic steepness must be positive -- a non-positive "
+                    "value flattens or inverts the accessibility-to-coefficient mapping, got "
+                    f"{steepness}."
+                )
         # Idiosyncratic term eps in log(C/Y). The HFCS calibration estimates its
-        # standard deviation jointly with the mapping; it accounts for 78.5% of the
-        # cross-sectional variance of log(C/Y), the structural part for 21.5%.
+        # standard deviation jointly with the mapping; it accounts for most of the
+        # cross-sectional variance of log(C/Y), the structural part for the rest
+        # (v2: 78.5/21.5; v3: 74.6/25.4). The split is vintage-specific -- see the
+        # configured block in consumption_paper_parameters.yaml, not this comment.
         #
         # PERSISTENCE IS A MODELLING DECISION, NOT AN ESTIMATE. A single cross-section
         # identifies the variance of eps but says nothing about whether it is drawn
@@ -876,17 +936,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         net_liquid_assets_ratio: np.ndarray,
         illiquid_financial_assets_ratio: np.ndarray,
         housing_assets_ratio: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Per-household alpha_2(B)/gamma_1(B) via the fitted accessibility-index mapping.
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Per-household alpha_2(B)/gamma_1(B)/gamma_4(B) via the fitted accessibility mapping.
 
-        B is built from the three balance-sheet ratios, each first clipped to its
-        HFCS-fitted [p5,p95] bound (the issue #90 explosion mechanism is in the
-        ratios, not in B, so it must be bounded there), then normalized using the
-        calibration-fixed B_raw range and centred at the calibration-fixed B0 (both
-        fitted once on the HFCS cross-section, not recomputed from this call's
-        household batch -- a per-batch min/max/median would make alpha_2/gamma_1
-        depend on which other households happen to be evaluated in the same call).
-        Finally passed through a logistic. See cacf-household-group-calibration.md.
+        B is built from the three balance-sheet ratios, each first clipped to the
+        HFCS-fitted support bound configured for it (the issue #90 explosion
+        mechanism is in the ratios, not in B, so it must be bounded there; v1/v2
+        set those bounds at [p5,p95], v3 at the retained sample's realised
+        support), then normalized using the calibration-fixed B_raw range and
+        centred at the calibration-fixed B0 (both fitted once on the HFCS
+        cross-section, not recomputed from this call's household batch -- a
+        per-batch min/max/median would make the coefficients depend on which other
+        households happen to be evaluated in the same call). Finally passed through
+        a logistic. gamma_4(B) is returned as a constant array unless a gamma_4
+        range is configured. See cacf-household-group-calibration.md.
         """
         nla_bounds, ifa_bounds, ha_bounds = self.continuous_wealth_calibration_ratio_bounds
         nla_clipped = np.clip(net_liquid_assets_ratio, nla_bounds[0], nla_bounds[1])
@@ -911,37 +974,41 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # logistic beyond the domain the mapping was fitted on.
         b_tilde = np.clip((b_raw - b_min) / (b_max - b_min), 0.0, 1.0)
 
-        # Two INDEPENDENT logistics: alpha_2 rises in B, gamma_1 falls in B, and they
-        # have their own slopes and midpoints. Under a v1 config both slopes and both
-        # midpoints collapse to the shared legacy values, reproducing v1 exactly.
+        # INDEPENDENT logistics: alpha_2 rises in B while gamma_1 and gamma_4 fall in
+        # B, each with its own slope and midpoint. Under a v1 config every slope and
+        # midpoint collapses to the shared legacy values, reproducing v1 exactly.
+        def _logistic(steepness: float, midpoint: float) -> np.ndarray:
+            return 1.0 / (1.0 + np.exp(np.clip(-steepness * (b_tilde - midpoint), -700.0, 700.0)))
+
         alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
-        logistic_alpha = 1.0 / (
-            1.0
-            + np.exp(
-                np.clip(
-                    -self.continuous_wealth_calibration_alpha_2_steepness
-                    * (b_tilde - self.continuous_wealth_calibration_alpha_2_midpoint),
-                    -700.0,
-                    700.0,
-                )
-            )
+        logistic_alpha = _logistic(
+            self.continuous_wealth_calibration_alpha_2_steepness,
+            self.continuous_wealth_calibration_alpha_2_midpoint,
         )
-        logistic_gamma = 1.0 / (
-            1.0
-            + np.exp(
-                np.clip(
-                    -self.continuous_wealth_calibration_gamma_1_steepness
-                    * (b_tilde - self.continuous_wealth_calibration_gamma_1_midpoint),
-                    -700.0,
-                    700.0,
-                )
-            )
+        logistic_gamma = _logistic(
+            self.continuous_wealth_calibration_gamma_1_steepness,
+            self.continuous_wealth_calibration_gamma_1_midpoint,
         )
         alpha_2 = alpha_2_lo + (alpha_2_hi - alpha_2_lo) * logistic_alpha
         # gamma_1 falls (not rises) as B rises, mirroring alpha_2's increase.
         gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic_gamma
-        return alpha_2, gamma_1
+        if self.continuous_wealth_calibration_gamma_4_range is None:
+            # v1/v2: gamma_4 is homogeneous. Returned as a full array anyway so the
+            # call site and the recorded diagnostics have one shape regardless of
+            # which calibration vintage is configured.
+            gamma_4 = np.full_like(alpha_2, self.housing_wealth_propensity)
+        else:
+            gamma_4_lo, gamma_4_hi = self.continuous_wealth_calibration_gamma_4_range
+            # Falls in B, like gamma_1: the less accessible the balance sheet, the
+            # larger the asset-response coefficient. The v3 range spans zero, so a
+            # high-B household's housing wealth can DRAG consumption down -- that
+            # sign flip is the point of the map, not an artefact.
+            gamma_4 = gamma_4_hi - (gamma_4_hi - gamma_4_lo) * _logistic(
+                self.continuous_wealth_calibration_gamma_4_steepness,
+                self.continuous_wealth_calibration_gamma_4_midpoint,
+            )
+        return alpha_2, gamma_1, gamma_4
 
     def set_run_seed(self, seed: int | None) -> None:
         """Re-seed the idiosyncratic generator for a new run, and drop cached draws.
@@ -1301,14 +1368,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
 
         wealth_drag_clipped_flag = np.zeros_like(real_spendable_income)
         if self.uses_continuous_wealth_calibration:
-            alpha_2, gamma_1 = self._compute_continuous_wealth_calibration(
+            alpha_2, gamma_1, gamma_4 = self._compute_continuous_wealth_calibration(
                 net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio
             )
             permanent_income_term = alpha_2 * permanent_income_log_ratio_arr
             wealth_drag = (
                 gamma_1 * net_liquid_assets_ratio
                 + self.illiquid_wealth_propensity * illiquid_assets_ratio
-                + self.housing_wealth_propensity * housing_wealth_ratio
+                + gamma_4 * housing_wealth_ratio
             )
             # MPC_LR = (C/y) * [(1-alpha_2) - (1/y)*(...)] (design doc) requires the
             # SAME y in both the C/y multiplier and the wealth_drag bracket above --
@@ -1331,7 +1398,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             # target_consumption_wealth_drag_clipped to detect that case.
             net_liquid_assets_term = gamma_1 * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
-            housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio
+            housing_wealth_term = gamma_4 * housing_wealth_ratio
             long_run_log_consumption_to_income = (
                 self.long_run_intercept
                 + real_borrowing_rate_term
@@ -1342,6 +1409,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         else:
             alpha_2 = np.full_like(real_spendable_income, self.permanent_income_propensity)
             gamma_1 = np.full_like(real_spendable_income, self.liquid_wealth_propensity)
+            gamma_4 = np.full_like(real_spendable_income, self.housing_wealth_propensity)
             net_liquid_assets_term = self.liquid_wealth_propensity * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
             housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio
@@ -1431,6 +1499,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_house_price": house_price_term,
             "target_consumption_alpha_2": alpha_2,
             "target_consumption_gamma_1": gamma_1,
+            "target_consumption_gamma_4": gamma_4,
             "target_consumption_wealth_drag_clipped": wealth_drag_clipped_flag,
             "target_consumption_interest_rate_cashflow": interest_rate_cashflow_term,
             "target_consumption_uncertainty": uncertainty_term,

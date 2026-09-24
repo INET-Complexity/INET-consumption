@@ -363,11 +363,11 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     with (_REPO_ROOT / "run_model/config/consumption_paper_parameters.yaml").open() as f:
         paper_parameters = yaml.safe_load(f)
-    # FRA resolves credit_augmented_v2 (continuous calibration estimated on HFCS
-    # France, 2026-08). credit_augmented_v1 is retained in the paper-parameter file
-    # for reproducibility of pre-v2 baselines but is no longer the FRA reference.
-    v2 = paper_parameters["desired_consumption"]["credit_augmented_v2"]
-    expected_income_growth_propensity = v2["income_growth_propensity"]
+    # FRA resolves credit_augmented_v3 (ten-moment minimum-distance fit on HFCS
+    # France). v1 and v2 are retained in the paper-parameter file for
+    # reproducibility of their baselines but are no longer the FRA reference.
+    v3 = paper_parameters["desired_consumption"]["credit_augmented_v3"]
+    expected_income_growth_propensity = v3["income_growth_propensity"]
 
     params = config.households.functions.consumption.parameters
     assert "paper_parameter_file" not in params
@@ -385,23 +385,31 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     assert params["elasticity_of_substitution"] == 1.0
     assert params["minimum_consumption_fraction"] == 1.0
     assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
-    # v2-specific: the estimated intercept (v1 used 0.08 plus a downstream recentring),
-    # the idiosyncratic term, and the calibration's own smoothed income denominator.
-    assert params["long_run_intercept"] == -0.4638
-    assert params["idiosyncratic_sd"] == 0.3308
+    # v3-specific: the re-estimated intercept and idiosyncratic term. sigma_eps
+    # rises against v2's 0.3308 -- structure now explains 25.4% of Var log(C/Y).
+    assert params["long_run_intercept"] == -0.3813
+    assert params["idiosyncratic_sd"] == 0.4256
     assert params["idiosyncratic_persistence"] == "fixed_effect"
     assert params["income_denominator"] == "geometric_average"
     assert params["income_denominator_window"] == 20
     assert params["uses_continuous_wealth_calibration"] is True
-    # Decoupled logistics: the estimator rejects v1's shared-slope restriction by two
-    # orders of magnitude, so these must resolve as four distinct numbers.
+    # Three logistics sharing one FIXED transition width (k = 43.9445 for each),
+    # with separately estimated midpoints. v2's pinned c_alpha (1.000) and
+    # ceiling-bound k_gamma (148.413) are both gone.
     calibration = params["continuous_wealth_calibration"]
     assert calibration["index_construction"] == "raw_ratio"
-    assert calibration["alpha_2_steepness"] == 2.012
-    assert calibration["gamma_1_steepness"] == 148.413
-    assert calibration["alpha_2_midpoint"] == 1.000
-    assert calibration["gamma_1_midpoint"] == 0.0532
-    assert calibration["weight_net_liquid_assets"] == 0.6719
+    assert calibration["alpha_2_steepness"] == 43.9445
+    assert calibration["gamma_1_steepness"] == 43.9445
+    assert calibration["gamma_4_steepness"] == 43.9445
+    assert calibration["alpha_2_midpoint"] == 0.3951
+    assert calibration["gamma_1_midpoint"] == 0.1466
+    assert calibration["gamma_4_midpoint"] == 0.2771
+    # Weights are FIXED by specification in v3, not estimated.
+    assert calibration["weight_net_liquid_assets"] == 0.70
+    # gamma_4(B) is new in v3 and its range spans zero, so housing wealth can
+    # reduce consumption for high-accessibility households.
+    assert calibration["gamma_4_low"] == -0.021
+    assert calibration["gamma_4_high"] == 0.021
 
 
 def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():

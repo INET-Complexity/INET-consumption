@@ -1,0 +1,31 @@
+{
+  "base_commit": "0b7aacf3",
+  "seed": 15,
+  "t_max": 2,
+  "household_periods": 11520,
+  "goods_identity_failures": 0,
+  "mpc_identity_failures": 0,
+  "realised_consumption_finite": true,
+  "initial_mpc_unavailable": true,
+  "gdp_output_lcu": [
+    522408556434.68317,
+    506303029821.4175,
+    444387263780.9158
+  ],
+  "focused_tests_passed": 595,
+  "hdf5_sha256": "f2cfaa6295b05b9890b7c4ef8acbe98de20ffa074da47fb0892c229febeb8af1",
+  "production_source_sha256": {
+    "macromodel/agents/households/func/consumption.py": "90c3a73702bae0eff9c7cb3cd5f976073f7ee2d7df48719811ba349c3ddadbf6",
+    "macromodel/agents/households/func/financial_feasibility.py": "ea34e8d7c7d8acedb3fe06e1277ae39f71587321876d46393267f31037806393",
+    "macromodel/agents/households/households.py": "86d07a7821626273dbbb6eeffd4620e7762ccc54463ade239d685c8cdeae9315",
+    "macromodel/agents/households/households_ts.py": "209e8c5516513089db7e30f06ee4a499b35df6364b666d653b5987cb46257045",
+    "macromodel/country/country.py": "1ee343ae13dc95316e5b9d094a468e086453d812e5710f80c22acac653cafb76"
+  },
+  "boundary_tests_passed": 109,
+  "targeted_tests_passed": 704,
+  "broader_suite": {
+    "passed_before_interruption": 723,
+    "completed": false,
+    "reason": "Stopped during unrelated data-fixture generation after 355 seconds; dedicated affected-boundary suite completed separately."
+  }
+}

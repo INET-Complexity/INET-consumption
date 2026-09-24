@@ -766,9 +766,9 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
         )
 
-    def test_cash_rent_reduces_market_consumption_but_imputed_rent_is_inert(self):
+    def test_cash_and_imputed_rent_reduce_market_consumption(self):
         # Cash rent is paid to landlords separately from market purchases;
-        # imputed rent is diagnostic-only.
+        # imputed rent represents services already included in the total target.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -793,14 +793,14 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_imputed_rent"], [0.0, 20.0])
         np.testing.assert_allclose(components["target_consumption_non_goods_housing"], [12.0, 20.0])
         np.testing.assert_allclose(
-            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0]
         )
         np.testing.assert_allclose(
-            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0]
         )
-        np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1]])
+        np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0])
 
-    def test_imputed_rent_is_inert_even_if_diagnostic_tenure_data_overlap(self):
+    def test_overlapping_cash_and_imputed_rent_are_both_subtracted(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -820,7 +820,7 @@ class TestCreditAugmentedHouseholdConsumption:
             rent_imputed=np.array([20.0]),
         )
 
-        np.testing.assert_allclose(with_imputed, without_imputed)
+        np.testing.assert_allclose(with_imputed, without_imputed - 20.0)
         np.testing.assert_allclose(
             consumption_obj.last_target_consumption_components["target_consumption_imputed_rent"],
             [20.0],

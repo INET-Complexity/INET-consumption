@@ -1106,7 +1106,15 @@ class Households(Agent):
 
         capacity = np.where(
             eligible,
-            np.maximum(income - consumption - mortgage - scheduled, 0.0),
+            np.maximum(
+                income
+                - consumption
+                - mortgage
+                - scheduled
+                - self.current_consumption_cash_rent()
+                - self.target_investment_cash(),
+                0.0,
+            ),
             0.0,
         )
         self.post_grant_feasible_plan = replace(
@@ -1895,6 +1903,11 @@ class Households(Agent):
         Returns:
             np.ndarray: Target consumption by household
         """
+        self.consumption_vat_rate = float(tau_vat)
+        if not np.isfinite(tau_vat) or tau_vat < 0.0:
+            raise ValueError("Consumption VAT must be finite and non-negative.")
+        if not replace_current_diagnostics:
+            self.planning_cash_rent = self.current_consumption_cash_rent().copy()
         saving_rates = self.get_saving_rates_by_household()
         self.ts.saving_rates_histogram.append(get_histogram(saving_rates, None))
 
@@ -2069,75 +2082,109 @@ class Households(Agent):
         else:
             self.ts.cacf_real_consumption_budget.append(budget)
 
+    def current_consumption_cash_rent(self) -> np.ndarray:
+        """Validated nominal cash rent, using the target's negative-flow convention."""
+        rent = np.asarray(self.ts.current("rent"), dtype=float)
+        if rent.shape != (self.ts.current("n_households"),) or not np.all(np.isfinite(rent)):
+            raise ValueError("rent must be finite and have one value per household.")
+        return np.maximum(rent, 0.0)
+
+    def consumption_cash_factor(self) -> float:
+        """Convert VAT-exclusive consumption orders to nominal cash uses."""
+        return 1.0 + getattr(self, "consumption_vat_rate", 0.0)
+
+    def target_investment_cash(self) -> np.ndarray:
+        """Keep investment and its own taxes outside consumption."""
+        investment = np.asarray(self.ts.current("target_investment"), dtype=float)
+        if investment.ndim == 2:
+            investment = investment.sum(axis=1)
+        if investment.shape != (self.ts.current("n_households"),) or not np.all(np.isfinite(investment)):
+            raise ValueError("Target investment must be a finite household vector.")
+        return np.maximum(investment, 0.0) * (1.0 + getattr(self, "investment_tax_rate", 0.0))
+
+    def validate_legacy_mandatory_cash_uses(self) -> None:
+        """The legacy path has no rent-support authority: reject an unfunded rent bill."""
+        rent = self.current_consumption_cash_rent()
+        resources = np.asarray(self.ts.current("expected_income"), dtype=float).copy()
+        resources += np.maximum(self.ts.current("wealth_financial_assets"), 0.0)
+        for key in ("received_consumption_loans", "received_mortgages"):
+            resources += np.asarray(self.ts.current(key), dtype=float)
+        mandatory = rent.copy()
+        for key in ("interest_paid", "debt_installments", "price_paid_for_property"):
+            mandatory += np.asarray(self.ts.current(key), dtype=float)
+        if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(mandatory)):
+            raise ValueError("Legacy mandatory-payment funding must be finite.")
+        if np.any((rent > 0.0) & (mandatory > resources + 1e-8)):
+            raise RuntimeError(
+                "Legacy financing cannot fund mandatory cash rent; no rent-support authority is enabled."
+            )
+
+    def refresh_post_labour_feasibility(self, scheduled_debt_service: np.ndarray) -> None:
+        """Refresh cash needs without rebooking loans or authorising new sales."""
+        if self.post_grant_feasible_plan is None:
+            raise RuntimeError("Post-labour refresh requires a settled post-grant plan.")
+        income = np.asarray(self.ts.current("expected_income"), dtype=float)
+        uses = (
+            self.consumption_cash_factor() * self.ts.current("target_consumption").sum(axis=1)
+            + self.current_consumption_cash_rent()
+            + self.target_investment_cash()
+            + np.asarray(scheduled_debt_service, dtype=float)
+            + np.asarray(self.ts.current("price_paid_for_property"), dtype=float)
+        )
+        # Mortgage proceeds are distinct from the fixed consumer-credit grant.
+        income = income + np.asarray(self.ts.current("received_mortgages"), dtype=float)
+        self.post_grant_feasible_plan = self.financial_feasibility.refresh_cash_needs(
+            self.post_grant_feasible_plan,
+            cash_uses=uses,
+            cash_income=income,
+            available_lfa=self.ts.current("liquid_financial_assets"),
+        )
+        for key in ("funded_from_liquid_assets", "residual_shortfall_after_lfa"):
+            self.ts.override_current(key, getattr(self.post_grant_feasible_plan, key).copy())
+        self.ts.override_current("liquidity_shortfall", uses - income)
+        self.ts.override_current("liquidity_shortfall_before_repair", np.maximum(uses - income, 0.0))
+        self.persist_post_grant_planned_liquidation_total()
+
     def compute_and_record_liquidity_shortfall(
         self,
         target_consumption: np.ndarray,
         scheduled_debt_service: np.ndarray,
         income_override: Optional[np.ndarray] = None,
         replace_current: bool = False,
+        other_cash_uses: np.ndarray | float = 0.0,
     ) -> np.ndarray:
-        """Compute and persist the Stage 5 (feasibility resolver) liquidity-shortfall diagnostic.
+        """Record current nominal cash needs before financing.
 
-        Diagnostics-only (Increment 0): appends ``liquidity_shortfall`` and
-        ``household_saving`` time series and has no effect on goods or credit
-        demand. Must be called after ``compute_target_consumption()`` for the
-        current period, since it consumes that period's ``target_consumption``.
-
-        Uses ``expected_income`` by default (the current-period income basis
-        used by ``compute_target_consumption()`` itself, see ``households.py``'s
-        ``income = self.ts.current("expected_income") if income_override is
-        None else income_override``), not ``income`` (the realized series,
-        which is only appended later in ``Country.update_realised_metrics()``
-        — after both call sites of this method run, per ``simulation.py``'s
-        per-period ordering). Using ``income`` would silently compare this
-        period's consumption plan against last period's realized income, an
-        off-by-one-period mismatch caught in round-2 review (not by the
-        original hand-computed unit tests, which use synthetic scalars and
-        can't see this ordering bug). ``income_override`` mirrors
-        ``compute_target_consumption()``'s own override parameter so that, if
-        a future caller ever passes an override there (e.g. a shock-test
-        scenario), this diagnostic stays on the same income basis rather than
-        silently reverting to ``expected_income`` underneath it — the same
-        class of bug round-2 found, pre-empted here rather than left latent.
-        ``Country._set_household_target_demand()`` does not pass an override
-        today, so this is currently always ``None`` in production.
-
-        See ``knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md``
-        (Increment 0 section) for the paper's ``L^d_it = -(s_it + b_it)``
-        definition and the exit criterion.
-
-        Since GH #120 the array returned by ``compute_target_consumption()``
-        carries market expenditure only: cash rent is carved out before demand
-        reaches firms and is paid to landlords as its own cash use. This method
-        supplies that cash rent to the shortfall computation. Imputed rent is
-        deliberately never passed because it is diagnostic-only, not a
-        liability, and must not create a feasibility shortfall.
-
-        Args:
-            target_consumption (np.ndarray): This period's per-household
-                target consumption, summed across goods (i.e. the same total
-                already returned by ``compute_target_consumption()``, which is
-                the market-expenditure part of the calibrated target).
-            scheduled_debt_service (np.ndarray): Total scheduled mortgage plus
-                consumer-loan instalments for the period, per household.
-            income_override (Optional[np.ndarray]): Explicit income basis,
-                forwarded unchanged if supplied; defaults to
-                ``self.ts.current("expected_income")`` otherwise, matching
-                ``compute_target_consumption()``'s own override semantics.
-            replace_current (bool): Replace the latest appended diagnostic
-                row instead of appending a new one (mirrors the
-                ``replace_current_diagnostics`` convention used elsewhere in
-                this class).
-
-        Returns:
-            np.ndarray: Per-household liquidity shortfall, ``L^d_it``.
+        Goods orders are VAT-exclusive; gross them up once and add cash rent
+        separately. ``other_cash_uses`` carries investment with its own taxes.
+        Expected income is the same current-period cash-income basis used by
+        the behavioural target. Imputed rent is never an additive cash use.
         """
         income = self.ts.current("expected_income") if income_override is None else income_override
+        n_households = self.ts.current("n_households")
+        if np.asarray(target_consumption).ndim != 2 or np.asarray(target_consumption).shape[0] != n_households:
+            raise ValueError("Target consumption must be a household-by-industry matrix.")
+        for values in (income, scheduled_debt_service):
+            if np.asarray(values).shape != (n_households,):
+                raise ValueError("Income and scheduled service must be household vectors.")
+        if np.asarray(other_cash_uses).shape not in ((), (n_households,)):
+            raise ValueError("Other cash uses must be scalar or a household vector.")
+        if np.any(np.asarray(scheduled_debt_service) < 0.0) or np.any(np.asarray(other_cash_uses) < 0.0):
+            raise ValueError("Scheduled service and other cash uses must be non-negative.")
+        for values in (
+            income,
+            target_consumption,
+            scheduled_debt_service,
+            other_cash_uses,
+            self.ts.current("liquid_financial_assets"),
+        ):
+            if not np.all(np.isfinite(values)):
+                raise ValueError("Household financing inputs must be finite.")
         result = compute_liquidity_shortfall(
             income=income,
-            target_consumption=np.asarray(target_consumption, dtype=float).sum(axis=1),
-            scheduled_debt_service=scheduled_debt_service,
-            cash_rent=self.ts.current("rent"),
+            target_consumption=self.consumption_cash_factor() * np.asarray(target_consumption, dtype=float).sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service + other_cash_uses,
+            cash_rent=self.current_consumption_cash_rent(),
         )
         if replace_current:
             self.ts.override_current("liquidity_shortfall", result.liquidity_shortfall)
@@ -2548,6 +2595,7 @@ class Households(Agent):
             "target_consumption_imputed_rent",
             "target_consumption_non_goods_housing",
             "target_consumption_calibrated_total",
+            "target_consumption_total_mpc",
             "target_consumption_goods_total",
             "target_consumption_market_total",
         ]
@@ -2565,8 +2613,10 @@ class Households(Agent):
             consumption_function is None
             or getattr(consumption_function, "last_target_consumption_components", None) is None
         ):
-            zero_series = np.zeros(n_households)
             for key in diagnostic_keys:
+                zero_series = (
+                    np.full(n_households, np.nan) if key == "target_consumption_total_mpc" else np.zeros(n_households)
+                )
                 if replace_current:
                     self.ts.override_current(key, zero_series.copy())
                 else:
@@ -2960,12 +3010,12 @@ class Households(Agent):
         # Target consumption loans to cover immediate financing gaps. The legacy
         # unbounded-gap formula is always computed first; Stage 5 Increment 5
         # substitutes the DSTI-capped live carrier value only when the
-        # feasibility resolver is enabled, so flag-off behaviour is unchanged
-        # and live_credit_requested gives a like-for-like diagnostic either way.
+        # feasibility resolver is enabled. Both paths use gross consumption
+        # cash amounts and the same planning-rent snapshot.
         legacy_target_consumption_loans = self.functions["target_credit"].compute_target_consumption_loans(
-            target_consumption=self.ts.current("target_consumption"),
+            target_consumption=self.consumption_cash_factor() * self.ts.current("target_consumption"),
             income=self.ts.current("expected_income"),
-            rent=self.ts.current("rent"),
+            rent=getattr(self, "planning_cash_rent", self.current_consumption_cash_rent()),
             wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
         )
         if self.uses_feasibility_resolver:
@@ -3000,9 +3050,9 @@ class Households(Agent):
         self.ts.target_mortgage.append(
             self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,
-                target_consumption=self.ts.current("target_consumption"),
+                target_consumption=self.consumption_cash_factor() * self.ts.current("target_consumption"),
                 income=self.ts.current("expected_income"),
-                rent=self.ts.current("rent"),
+                rent=getattr(self, "planning_cash_rent", self.current_consumption_cash_rent()),
                 wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
             )
         )
@@ -3139,12 +3189,14 @@ class Households(Agent):
                 # Compatibility for direct agent-level callers. The live Country
                 # path settles this outcome before consumer-loan settlement.
                 self.apply_consumption_floor_to_post_grant_plan(
-                    consumption_before_floor=target_consumption.sum(axis=1),
+                    consumption_before_floor=self.consumption_cash_factor() * target_consumption.sum(axis=1),
                     subsistence_floor=subsistence_consumption,
                 )
                 goods_consumption = self._scale_consumption_matrix_to_household_totals(
                     target_consumption=target_consumption,
-                    household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor,
+                    household_consumption_total=self.post_grant_feasible_plan.consumption_after_floor
+                    / self.consumption_cash_factor(),
+                    fallback_weights=self.consumption_weights,
                 )
                 self.ts.override_current("target_consumption", goods_consumption)
             else:
@@ -3162,6 +3214,7 @@ class Households(Agent):
         *,
         target_consumption: np.ndarray,
         household_consumption_total: np.ndarray,
+        fallback_weights: np.ndarray | None = None,
     ) -> np.ndarray:
         """Scale each household consumption row to a settled total."""
         consumption = np.asarray(target_consumption, dtype=float)
@@ -3173,7 +3226,21 @@ class Households(Agent):
             out=np.zeros_like(totals),
             where=row_sums > 0.0,
         )
-        return consumption * scale[:, None]
+        result = consumption * scale[:, None]
+        empty = (row_sums == 0.0) & (totals > 0.0)
+        if np.any(empty):
+            if fallback_weights is None:
+                raise ValueError("Positive consumption floor on empty goods rows requires consumption weights.")
+            weights = np.asarray(fallback_weights, dtype=float)
+            if (
+                weights.shape != (consumption.shape[1],)
+                or not np.all(np.isfinite(weights))
+                or np.any(weights < 0.0)
+                or not np.isclose(weights.sum(), 1.0)
+            ):
+                raise ValueError("Consumption weights must be finite, non-negative and sum to one.")
+            result[empty] = totals[empty, None] * weights
+        return result
 
     def prepare_buying_goods(self, target_consumption: np.ndarray | None = None) -> None:
         """Prepare goods purchase decisions.
@@ -3355,6 +3422,7 @@ class Households(Agent):
         tau_cf: float,
         period_index: int | None = None,
         tau_vat_on_investment: float = 0.0,
+        tau_vat: float = 0.0,
     ) -> float:
         """Update household wealth positions.
 
@@ -3385,10 +3453,13 @@ class Households(Agent):
         if getattr(self.functions["wealth"], "exclude_financial_asset_income_from_saving", False):
             income_for_residual_saving = income_for_residual_saving - self.ts.current("income_financial_assets")
 
-        realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+        # Consumption allocation excludes investment, which has its own tax.
+        realised_expenditure = self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1) + tau_vat * self.ts.current(
+            "consumption"
+        )
         # Cash rent is paid separately to landlords rather than through firm
         # purchases, so it is a distinct household cash use.
-        cash_rent = np.asarray(self.ts.current("rent"), dtype=float)
+        cash_rent = self.current_consumption_cash_rent()
         realised_cash_balance = income_for_residual_saving - realised_expenditure - cash_rent
         if self.uses_feasibility_resolver:
 

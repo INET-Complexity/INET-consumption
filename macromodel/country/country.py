@@ -445,8 +445,8 @@ class Country:
 
     def compute_realised_stage5_subsistence_support(self) -> np.ndarray:
         """Return the settled Stage 5 support amount added to realised transfers."""
-        current_cpi = self.economy.current_consumer_price_level()
-        return current_cpi * self.current_stage5_subsistence_support_by_household()
+        # Both the floor and funding gap are already nominal cash amounts.
+        return self.current_stage5_subsistence_support_by_household().copy()
 
     def current_settled_stage5_subsistence_support_total(self) -> float:
         """Return aggregate settled Stage 5 support from the persisted household series."""
@@ -1305,7 +1305,13 @@ class Country:
         self._set_household_income_expectations(replace_current=True)
         self._set_household_target_demand(replace_current=True)
         if self.configuration.households.parameters.uses_feasibility_resolver:
+            self.households.refresh_post_labour_feasibility(
+                self.credit_market.compute_opening_scheduled_consumption_payments_by_household()
+                + self.credit_market.compute_opening_scheduled_mortgage_payments_by_household()
+            )
             self.settle_authoritative_household_payments()
+        else:
+            self.households.validate_legacy_mandatory_cash_uses()
 
     def _update_benefit_planning_metrics(self) -> None:
         self.clear_stage5_subsistence_support()
@@ -1479,6 +1485,12 @@ class Country:
             uncertainty_delta = learning_inputs["uncertainty_delta"]
 
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
+        self.households.consumption_vat_rate = float(self.central_government.states["Value-added Tax"])
+        self.households.investment_tax_rate = self.central_government.states["Household Capital Formation Tax"] + (
+            self.central_government.states["Household Investment VAT Rate"] or 0.0
+        )
+        if not replace_current:
+            self.households.planning_cash_rent = self.households.current_consumption_cash_rent().copy()
         if uses_feasibility_resolver:
             if replace_current:
                 scheduled_consumption_loan_payment = (
@@ -1653,14 +1665,7 @@ class Country:
         else:
             self.households.ts.target_investment.append(target_investment)
 
-        # Stage 5 (feasibility resolver), Increment 0: diagnostics-only liquidity-
-        # shortfall computation. Must run after target_consumption is finalized
-        # above (it consumes that value) and uses the same scheduled mortgage
-        # service already computed for compute_target_consumption, plus the
-        # parallel consumer-loan scheduled-service accessor. Has no effect on
-        # goods or credit demand at this increment. See
-        # knowledge-vault/wiki/architecture/consumption-stage-5-feasibility-resolver.md
-        # (Increment 0 section).
+        # Plan financing in nominal cash units; preserve net goods matrices.
         self.households.configure_feasibility_resolver(
             uses_feasibility_resolver,
             clear_post_grant=not replace_current,
@@ -1669,6 +1674,7 @@ class Country:
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
             scheduled_debt_service=scheduled_debt_service,
+            other_cash_uses=self.households.target_investment_cash() if uses_feasibility_resolver else 0.0,
             replace_current=replace_current,
         )
         residual_shortfall_after_lfa = self.households.compute_and_record_liquid_asset_drawdown(
@@ -1686,7 +1692,11 @@ class Country:
             self.households.clear_pre_grant_feasible_plan()
             stage5_residual_shortfall = residual_shortfall_after_lfa
         borrow_vs_sell_inputs = self.households.build_borrow_vs_sell_inputs(
-            target_consumption_total=self.households.ts.current("target_consumption").sum(axis=1),
+            target_consumption_total=(
+                self.households.consumption_cash_factor() * self.households.ts.current("target_consumption").sum(axis=1)
+                + self.households.current_consumption_cash_rent()
+                + (self.households.target_investment_cash() if uses_feasibility_resolver else 0.0)
+            ),
             scheduled_debt_service=scheduled_debt_service,
         )
         self.households.compute_and_record_borrow_vs_sell_choice(
@@ -1736,7 +1746,7 @@ class Country:
         # replace_current=True pass would write a credit_requested value that
         # is never read before next period's configure_feasibility_resolver()
         # wipes the carrier -- dead work that could mislead a future reader
-        # into thinking the post-labour refresh matters.
+        # into thinking it authorises a second credit request.
         if uses_feasibility_resolver and not replace_current:
             self.households.populate_pre_grant_feasible_plan_credit_requested(
                 credit_requested=self.households.ts.current("shadow_credit_requested"),
@@ -1967,12 +1977,16 @@ class Country:
         target_consumption = self.households.ts.current("target_consumption")
         subsistence_consumption = self.economy.ts.current("subsistence_consumption")
         self.households.apply_consumption_floor_to_post_grant_plan(
-            consumption_before_floor=target_consumption.sum(axis=1),
+            consumption_before_floor=self.households.consumption_cash_factor() * target_consumption.sum(axis=1),
             subsistence_floor=subsistence_consumption,
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
-            household_consumption_total=self.households.post_grant_feasible_plan.consumption_after_floor,
+            household_consumption_total=(
+                self.households.post_grant_feasible_plan.consumption_after_floor
+                / self.households.consumption_cash_factor()
+            ),
+            fallback_weights=self.households.consumption_weights,
         )
         self.households.ts.override_current("target_consumption", goods_consumption)
         self.households.populate_post_grant_early_repayment_capacity(
@@ -3415,6 +3429,7 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             tau_cf=self.central_government.states["Household Capital Formation Tax"],
             period_index=period_index,
+            tau_vat=self.central_government.states["Value-added Tax"],
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])

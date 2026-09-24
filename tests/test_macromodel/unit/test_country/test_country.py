@@ -2058,13 +2058,13 @@ class TestCountry:
         )
         np.testing.assert_allclose(
             test_country.households.ts.current("stage5_subsistence_support"),
-            2.0 * settled_shortfall,
+            settled_shortfall,
         )
         np.testing.assert_allclose(
             test_country.households.ts.current("income_social_transfers"),
-            ordinary_transfers + 2.0 * settled_shortfall,
+            ordinary_transfers + settled_shortfall,
         )
-        assert test_country.current_settled_stage5_subsistence_support_total() == float((2.0 * settled_shortfall).sum())
+        assert test_country.current_settled_stage5_subsistence_support_total() == float((settled_shortfall).sum())
 
     def test__compute_realised_household_social_transfers_adds_stage5_support_once(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
@@ -2089,17 +2089,17 @@ class TestCountry:
 
         realised_transfers = test_country.compute_realised_household_social_transfers()
 
-        np.testing.assert_allclose(realised_transfers, ordinary_transfers + 2.0 * real_support)
+        np.testing.assert_allclose(realised_transfers, ordinary_transfers + real_support)
         assert np.isclose(
             realised_transfers.sum() - ordinary_transfers.sum(),
-            2.0 * test_country.current_stage5_subsistence_support_total(),
+            test_country.current_stage5_subsistence_support_total(),
         )
 
     def test__settle_household_social_transfers_persists_settled_stage5_support(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
         ordinary_transfers = np.full(n_households, 5.0)
         targeted_support = np.full(n_households, 3.0)
-        settled_support = np.full(n_households, 6.0)
+        settled_support = np.full(n_households, 3.0)
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
         test_country.individuals.ts.override_current(
             "income_from_unemployment_benefits",
@@ -2165,12 +2165,10 @@ class TestCountry:
             test_country.households.ts.current("income_unemployment_benefits"), expected_unemployment
         )
         np.testing.assert_allclose(test_country.households.ts.current("income_other_social_transfers"), other_transfers)
-        np.testing.assert_allclose(
-            test_country.households.ts.current("stage5_subsistence_support"), 2.0 * stage5_support
-        )
+        np.testing.assert_allclose(test_country.households.ts.current("stage5_subsistence_support"), stage5_support)
         np.testing.assert_allclose(
             test_country.households.ts.current("income_social_transfers"),
-            expected_public + expected_unemployment + other_transfers + 2.0 * stage5_support,
+            expected_public + expected_unemployment + other_transfers + stage5_support,
         )
 
     def test__settled_stage5_support_total_reads_persisted_series_not_transient_carrier(
@@ -2190,7 +2188,7 @@ class TestCountry:
         n_households = test_country.households.ts.current("n_households")
         ordinary_transfers = np.full(n_households, 5.0)
         targeted_support = np.full(n_households, 3.0)
-        settled_support = np.full(n_households, 6.0)
+        settled_support = np.full(n_households, 3.0)
         monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
         monkeypatch.setattr(
             test_country.households,
@@ -2371,13 +2369,25 @@ class TestCountry:
         )
         monkeypatch.setattr(test_country.firms, "compute_price", lambda **_kwargs: np.ones(n_firms))
         monkeypatch.setattr(test_country, "_set_household_income_expectations", lambda **_kwargs: None)
-        monkeypatch.setattr(test_country, "_set_household_target_demand", lambda **_kwargs: None)
-        monkeypatch.setattr(test_country, "settle_authoritative_household_payments", lambda: None)
+        monkeypatch.setattr(
+            test_country, "_set_household_target_demand", lambda **_kwargs: events.append("household_target")
+        )
+        monkeypatch.setattr(
+            test_country.households, "refresh_post_labour_feasibility", lambda service: events.append("cash_refresh")
+        )
+        monkeypatch.setattr(test_country, "settle_authoritative_household_payments", lambda: events.append("payments"))
 
         test_country.assume_zero_growth = False
         test_country.update_post_labour_planning_metrics()
 
-        assert events == ["firm_labour", "post_labour_revision", "production"]
+        assert events == [
+            "firm_labour",
+            "post_labour_revision",
+            "production",
+            "household_target",
+            "cash_refresh",
+            "payments",
+        ]
 
     def test__household_finance_metrics_are_available_pre_credit_and_replaced_post_labour(
         self, test_country, monkeypatch
@@ -2975,6 +2985,12 @@ class TestCountry:
         monkeypatch,
     ):
         n_households = test_country.households.ts.current("n_households")
+        test_country.central_government.states["Value-added Tax"] = 0.0
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_investment",
+            lambda **kwargs: np.zeros_like(test_country.households.ts.current("target_consumption")),
+        )
         n_industries = len(test_country.firms.ts.current("price"))
         expected_income = np.full(n_households, 100.0)
         target_consumption = np.zeros((n_households, n_industries))
@@ -3262,6 +3278,12 @@ class TestCountry:
 
     def test__set_household_target_demand_records_increment_3_shadow_residual_caps(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
+        test_country.central_government.states["Value-added Tax"] = 0.0
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_investment",
+            lambda **kwargs: np.zeros_like(test_country.households.ts.current("target_consumption")),
+        )
         n_industries = len(test_country.firms.ts.current("price"))
         test_country.households.functions["wealth"] = PaperAssetReturnWealthSetter(
             other_real_assets_depreciation_rate=0.05,
@@ -3486,6 +3508,12 @@ class TestCountry:
         """Corrected demand reaches live credit before housing inputs advance."""
         households = test_country.households
         n_households = households.ts.current("n_households")
+        test_country.central_government.states["Value-added Tax"] = 0.0
+        monkeypatch.setattr(
+            test_country.households,
+            "compute_target_investment",
+            lambda **kwargs: np.zeros_like(test_country.households.ts.current("target_consumption")),
+        )
         test_country.configuration.households.parameters.uses_feasibility_resolver = True
         test_country.configuration.consumer_credit = {"maturity_quarters": 24, "dsti_limit": 0.35}
         monkeypatch.setattr(test_country, "assume_zero_growth", False)

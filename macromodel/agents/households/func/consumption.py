@@ -1703,8 +1703,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         )
 
         # ``target_total`` is the calibrated consumption budget. Cash rent is
-        # removed from market purchases below; the formula-implied MPC remains
-        # computed on the calibrated behavioural target.
+        # and imputed rent are removed from goods below; the legacy MPC remains
+        # computed on the VAT-exclusive full behavioural target.
         full_target_consumption = np.maximum(
             0.0,
             1.0
@@ -1722,9 +1722,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             perturbed_target_consumption.sum(axis=1) - full_target_consumption.sum(axis=1)
         ) / nominal_income_perturbation
 
-        # Cash rent is a separate household cash use, so remove it from the
-        # market-consumption demand. Imputed rent is diagnostic-only and must
-        # remain behaviourally inert.
+        # Both housing services are already in T. Only cash rent is a payment;
+        # imputed rent reduces goods demand without becoming a cash use.
         raw_cash_rent = np.asarray(rent, dtype=float)
         raw_imputed_rent = np.asarray(rent_imputed, dtype=float)
         for name, housing_flow in (("rent", raw_cash_rent), ("rent_imputed", raw_imputed_rent)):
@@ -1736,7 +1735,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         cash_rent = np.maximum(0.0, raw_cash_rent)
         imputed_rent = np.maximum(0.0, raw_imputed_rent)
         diagnostic_housing_component = cash_rent + imputed_rent
-        market_target_total = np.maximum(0.0, target_total - cash_rent)
+        market_target_total = np.maximum(0.0, target_total - cash_rent - imputed_rent)
 
         target_consumption = np.maximum(
             0.0,
@@ -1756,8 +1755,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         components["target_consumption_imputed_rent"] = imputed_rent
         components["target_consumption_non_goods_housing"] = diagnostic_housing_component
         components["target_consumption_calibrated_total"] = target_total
+        components["target_consumption_total_mpc"] = (perturbed_target - target_total) / nominal_income_perturbation
         # Keep the historical diagnostic name as a compatibility alias for the
-        # market-consumption target after the cash-rent carve-out.
+        # gross goods target after subtracting both housing services.
         components["target_consumption_goods_total"] = market_target_total
         components["target_consumption_market_total"] = market_target_total
         self.last_target_consumption_components = components

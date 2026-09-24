@@ -3482,6 +3482,73 @@ class TestCountry:
 
         assert test_country.households.pre_grant_feasible_plan is None
 
+    def test__live_credit_request_uses_one_planning_consumption_snapshot(self, test_country, monkeypatch):
+        """Corrected demand reaches live credit before housing inputs advance."""
+        households = test_country.households
+        n_households = households.ts.current("n_households")
+        test_country.configuration.households.parameters.uses_feasibility_resolver = True
+        test_country.configuration.consumer_credit = {"maturity_quarters": 24, "dsti_limit": 0.35}
+        monkeypatch.setattr(test_country, "assume_zero_growth", False)
+        test_country.central_government.states["Value-added Tax"] = 0.0
+        total = np.resize(np.array([300.0, 300.0, 30.0]), n_households)
+        cash_rent = np.resize(np.array([40.0, 0.0, 40.0]), n_households)
+        imputed_rent = np.resize(np.array([0.0, 60.0, 0.0]), n_households)
+        # Renter, owner, and binding goods floor: cash needs 300, 240, 40;
+        # after income 100 and available deposits 20, credit is 180, 120, 0.
+        expected_credit = np.resize(np.array([180.0, 120.0, 0.0]), n_households)
+        for key, values in {
+            "expected_income": np.full(n_households, 100.0),
+            "liquid_financial_assets": np.full(n_households, 20.0),
+            "illiquid_financial_assets": np.zeros(n_households),
+            "wealth_financial_assets": np.full(n_households, 20.0),
+            "rent": cash_rent,
+            "rent_imputed": imputed_rent,
+            "ficp_exclusion_remaining_periods": np.zeros(n_households),
+        }.items():
+            households.ts.override_current(key, values.copy())
+        test_country.banks.ts.override_current(
+            "interest_rates_on_household_consumption_loans",
+            np.zeros(test_country.banks.ts.current("n_banks")),
+        )
+        monkeypatch.setattr(households.functions["wealth"], "uses_portfolio_choice", False, raising=False)
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "preview_opening_household_service",
+            lambda: (np.zeros(n_households), np.zeros(n_households)),
+        )
+        rule = CreditAugmentedConsumption()
+        households.functions["consumption"] = rule
+        snapshots = []
+
+        def corrected_target_for_wiring_test(**kwargs):
+            # Supply the planned correction at the rule boundary. This test
+            # exercises the real household/country/finance path, not the
+            # still-unimplemented CACF housing subtraction itself.
+            snapshots.append((total.copy(), kwargs["rent"].copy(), kwargs["rent_imputed"].copy()))
+            goods = np.maximum(0.0, total - kwargs["rent"] - kwargs["rent_imputed"])
+            return np.outer(goods, kwargs["consumption_weights"]) / (1.0 + kwargs["tau_vat"])
+
+        monkeypatch.setattr(rule, "compute_target_consumption", corrected_target_for_wiring_test)
+        test_country._set_household_target_demand(replace_current=False)
+
+        assert len(snapshots) == 1
+        for actual, expected in zip(snapshots[0], (total, cash_rent, imputed_rent), strict=True):
+            np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_allclose(households.current_live_credit_requested(), expected_credit)
+
+        # Housing preparation can change rent before compute_target_credit.
+        # Neither those newer flows nor a newer shadow value may replace the
+        # request already derived from the single planning snapshot.
+        households.ts.override_current("rent", cash_rent + 900.0)
+        households.ts.override_current("rent_imputed", imputed_rent + 800.0)
+        households.ts.override_current("shadow_credit_requested", np.full(n_households, 777.0))
+        households.compute_target_credit(current_sales=None)
+
+        assert len(snapshots) == 1
+        np.testing.assert_allclose(households.current_live_credit_requested(), expected_credit)
+        np.testing.assert_allclose(households.ts.current("target_consumption_loans"), expected_credit)
+        np.testing.assert_allclose(households.ts.current("live_credit_requested"), expected_credit)
+
     def test__set_household_target_demand_only_populates_credit_requested_on_first_pass(
         self, test_country, monkeypatch
     ):

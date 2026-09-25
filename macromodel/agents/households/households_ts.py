@@ -27,6 +27,25 @@ from macromodel.timeseries import TimeSeries
 from macromodel.util.get_histogram import get_histogram
 
 
+def realised_consumption_outcomes(
+    consumption: np.ndarray, vat: float, rent: np.ndarray, rent_imputed: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return purchase-price cash and total consumption, excluding investment.
+
+    Housing flows follow the CACF convention: reject malformed observations
+    and normalise negative flows to zero. Imputed rent is an output only.
+    """
+    consumption = np.asarray(consumption, dtype=float)
+    flows = []
+    for name, value in (("rent", rent), ("rent_imputed", rent_imputed)):
+        flow = np.asarray(value, dtype=float)
+        if flow.shape != consumption.shape or not np.all(np.isfinite(flow)):
+            raise ValueError(f"{name} must be a finite vector matching household consumption.")
+        flows.append(np.maximum(flow, 0.0))
+    cash = (1.0 + vat) * consumption + flows[0]
+    return cash, cash + flows[1]
+
+
 def create_households_timeseries(
     data: pd.DataFrame,
     initial_consumption_by_industry: np.ndarray,
@@ -110,6 +129,10 @@ def create_households_timeseries(
     initial_debt = initial_mortgage_debt + initial_consumption_loan_debt
     initial_wealth = initial_wealth_real_assets + initial_wealth_financial_assets
 
+    initial_cash, initial_total = realised_consumption_outcomes(
+        data["Consumption"].values, vat, data["Rent Paid"].values, data["Rent Imputed"].values
+    )
+
     return TimeSeries(
         n_households=len(data),
         #
@@ -162,7 +185,7 @@ def create_households_timeseries(
         target_consumption_cash_rent=np.zeros(len(data)),
         target_consumption_imputed_rent=np.zeros(len(data)),
         target_consumption_non_goods_housing=np.zeros(len(data)),
-        target_consumption_calibrated_total=np.zeros(len(data)),
+        target_consumption_calibrated_total=np.full(len(data), np.nan),
         target_consumption_goods_total=np.zeros(len(data)),
         target_consumption_market_total=np.zeros(len(data)),
         # ECM state variable for CreditAugmentedConsumption: the real consumption
@@ -176,6 +199,8 @@ def create_households_timeseries(
         target_consumption_total_mpc=np.full(len(data), np.nan),
         amount_bought=np.full(len(data), np.nan),
         consumption=data["Consumption"].values,
+        consumption_cash_expenditure=initial_cash,
+        consumption_including_housing=initial_total,
         total_consumption=[(1 + vat) * initial_consumption_by_industry.sum()],
         total_consumption_before_vat=[initial_consumption_by_industry.sum()],
         industry_consumption=initial_consumption_by_industry,

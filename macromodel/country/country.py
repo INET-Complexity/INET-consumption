@@ -67,6 +67,7 @@ from macromodel.agents.central_government.central_government import CentralGover
 from macromodel.agents.firms import Firms
 from macromodel.agents.government_entities.government_entities import GovernmentEntities
 from macromodel.agents.households.households import Households
+from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
 from macromodel.configurations import CountryConfiguration
@@ -652,6 +653,14 @@ class Country:
                     * households.ts.current("total_consumption_before_vat")[0]
                 ],
             )
+            initial_cash, initial_total = realised_consumption_outcomes(
+                households.ts.current("consumption"),
+                central_government.states["Value-added Tax"],
+                households.ts.current("rent"),
+                households.ts.current("rent_imputed"),
+            )
+            households.ts.override_current("consumption_cash_expenditure", initial_cash)
+            households.ts.override_current("consumption_including_housing", initial_total)
             households.ts.override_current(
                 "total_investment",
                 [

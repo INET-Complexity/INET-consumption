@@ -69,7 +69,7 @@ from macromodel.agents.households.func.residual_capacity_fallback import (
     compute_residual_capacity_fallback,
 )
 from macromodel.agents.households.household_properties import HouseholdType
-from macromodel.agents.households.households_ts import create_households_timeseries
+from macromodel.agents.households.households_ts import create_households_timeseries, realised_consumption_outcomes
 from macromodel.agents.households.income_belief_learning import (
     IncomeBeliefLearningOutputs,
     _scalar_rho,
@@ -2615,7 +2615,9 @@ class Households(Agent):
         ):
             for key in diagnostic_keys:
                 zero_series = (
-                    np.full(n_households, np.nan) if key == "target_consumption_total_mpc" else np.zeros(n_households)
+                    np.full(n_households, np.nan)
+                    if key in {"target_consumption_total_mpc", "target_consumption_calibrated_total"}
+                    else np.zeros(n_households)
                 )
                 if replace_current:
                     self.ts.override_current(key, zero_series.copy())
@@ -3295,6 +3297,11 @@ class Households(Agent):
             emitting_indices_ch4 (Optional[np.ndarray]): CH4 emitting sector indices
             use_emission_multiplier (bool): Whether to apply industry-specific fraction multipliers
         """
+        # Validate realised housing inputs before appending this period's outputs.
+        cash_rent = self.ts.current("rent")
+        imputed_rent = self.ts.current("rent_imputed")
+        realised_consumption_outcomes(np.zeros(self.ts.current("n_households")), tau_vat, cash_rent, imputed_rent)
+
         # Total amount spent
         self.ts.amount_bought.append(self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1))
 
@@ -3363,6 +3370,11 @@ class Households(Agent):
 
         # Consumption
         self.ts.consumption.append(consumption_by_good.sum(axis=1))
+        cash_consumption, total_consumption = realised_consumption_outcomes(
+            self.ts.current("consumption"), tau_vat, cash_rent, imputed_rent
+        )
+        self.ts.consumption_cash_expenditure.append(cash_consumption)
+        self.ts.consumption_including_housing.append(total_consumption)
         self.ts.total_consumption.append([(1 + tau_vat) * self.ts.current("consumption").sum()])
         self.ts.total_consumption_before_vat.append([self.ts.current("consumption").sum()])
         self.ts.industry_consumption.append(consumption_by_good.sum(axis=0))

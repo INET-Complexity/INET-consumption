@@ -92,7 +92,7 @@ def test_non_cacf_target_unavailable_in_both_passes(test_households):
     np.testing.assert_array_equal(ts.current("formula_implied_mpc"), 0.0)
 
 
-@pytest.mark.parametrize("vat", [0.0, 0.2])
+@pytest.mark.parametrize("vat", [None, 0.0, 0.2])
 def test_country_initial_vat_override_refreshes_outputs(datawrapper, vat):
     from macromodel.configurations import CountryConfiguration, ExchangeRatesConfiguration
     from macromodel.country import Country
@@ -120,9 +120,27 @@ def test_country_initial_vat_override_refreshes_outputs(datawrapper, vat):
         emission_factors_usd=np.array([datawrapper.emission_factors[k] for k in ("coal", "gas", "oil")]),
     )
     ts = country.households.ts
+    vat = country.central_government.states["Value-added Tax"]
     cash = (1 + vat) * ts.current("consumption") + np.maximum(ts.current("rent"), 0)
     np.testing.assert_allclose(ts.current("consumption_cash_expenditure"), cash)
     np.testing.assert_allclose(
         ts.current("consumption_including_housing"), cash + np.maximum(ts.current("rent_imputed"), 0)
     )
     assert len(ts.consumption_cash_expenditure) == len(ts.consumption) == 1
+
+    assert (1 + vat) * ts.initial("consumption").sum() == pytest.approx(ts.initial("total_consumption")[0])
+    assert ts.initial("consumption_including_housing").sum() == pytest.approx(
+        country.economy.ts.initial("total_household_fce")[0]
+    )
+    np.testing.assert_allclose(
+        ts.initial("cacf_real_consumption_budget") * country.economy.initial_consumer_price_level(),
+        ts.initial("consumption_including_housing"),
+    )
+    # Reconciliation allocates an opening observation; it cannot book finance.
+    source = datawrapper.synthetic_countries["FRA"].population.household_data
+    for field, column in (
+        ("liquid_financial_assets", "Wealth in Deposits"),
+        ("income", "Income"),
+        ("income_rental", "Rental Income from Real Estate"),
+    ):
+        np.testing.assert_array_equal(ts.initial(field), source[column].values)

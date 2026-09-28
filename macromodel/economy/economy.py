@@ -1310,8 +1310,8 @@ class Economy:
             taxes_on_production (float): Production taxes
             rent_paid (float): Cash rent paid by households to landlords; it is
                 a separate consumption expenditure and GDP flow
-            rent_imputed (float): Diagnostic imputed rent, outside model GDP
-            hh_consumption (float): Household consumption
+            rent_imputed (float): Accounting-only owner-occupied housing services
+            hh_consumption (float): VAT-inclusive goods consumption, excluding rent
             gov_consumption (float): Government consumption
             change_in_inventories (float): Inventory changes
             gross_fixed_capital_formation (float): Fixed investment
@@ -1324,6 +1324,12 @@ class Economy:
             running_multiple_countries (bool): Multi-country simulation flag
             always_adjust (bool, optional): Force trade adjustments. Defaults to True.
         """
+        # Goods arrive at purchaser prices. Housing is added exactly once and
+        # never enters a household payment, income, or market-order path here.
+        household_fce_na = hh_consumption + rent_paid + rent_imputed
+        self.ts.owner_occupied_housing_output.append([rent_imputed])
+        self.ts.owner_occupied_housing_value_added.append([rent_imputed])
+        self.ts.owner_occupied_housing_operating_income.append([rent_imputed])
         self.ts.gdp_output.append(
             [
                 total_output
@@ -1331,6 +1337,7 @@ class Economy:
                 - taxes_on_production
                 + taxes_on_products
                 + rent_paid
+                + rent_imputed
             ]
         )
         if self.ts.prev("gdp_output")[0] == 0.0:
@@ -1497,18 +1504,17 @@ class Economy:
         gdp_expenditure = (
             change_in_inventories
             + gross_fixed_capital_formation
-            + hh_consumption
+            + household_fce_na
             + gov_consumption
             + exports
             - imports
-            + rent_paid
         )
         # Persist the pre-balancing residual before always_adjust below plugs
         # imports/exports to force expenditure GDP to equal output GDP. This is
         # the true output/expenditure discrepancy; the adjusted series recorded
         # further down is mechanically zero-residual and hides it.
         self.ts.gdp_expenditure_prebalancing_residual.append([gdp_expenditure - self.ts.current("gdp_output")[0]])
-        self.ts.total_household_fce.append([hh_consumption])
+        self.ts.total_household_fce.append([household_fce_na])
         if self.ts.prev("total_household_fce")[0] == 0.0:
             self.ts.total_household_fce_growth.append([0.0])
         else:
@@ -1544,7 +1550,14 @@ class Economy:
                 ]
             )
         self.ts.gdp_income.append(
-            [operating_surplus + wages + taxes_on_products + rent_received + central_government_rent_received]
+            [
+                operating_surplus
+                + wages
+                + taxes_on_products
+                + rent_received
+                + central_government_rent_received
+                + rent_imputed
+            ]
         )
         if self.ts.prev("gdp_income")[0] == 0.0:
             self.ts.gdp_income_growth.append([0.0])
@@ -1599,11 +1612,10 @@ class Economy:
             [
                 change_in_inventories
                 + gross_fixed_capital_formation
-                + hh_consumption
+                + household_fce_na
                 + gov_consumption
                 + exports
                 - imports
-                + rent_paid
             ]
         )
         if self.ts.prev("gdp_expenditure")[0] == 0.0:

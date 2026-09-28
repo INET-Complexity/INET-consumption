@@ -1,7 +1,7 @@
 """Pre-change GDP fixtures captured before the atomic housing migration.
 
-Increment 3 must update these expectations explicitly: all GDP approaches gain
-H, FCE gains R+H, and raw residuals and trade balancing stay unchanged.
+Increment 3 replays these frozen inputs: all GDP approaches gain H, FCE gains
+R+H, and raw residuals and trade balancing stay unchanged.
 """
 
 import json
@@ -17,12 +17,17 @@ CASES = json.loads(FIXTURE_PATH.read_text())["cases"]
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case["name"])
-def test_prechange_gdp_fixture(test_economy, case):
+def test_national_accounts_migration_against_prechange_fixture(test_economy, case):
     inputs = dict(case["inputs"])
     for name in ("sectoral_sales", "sectoral_intermediate_consumption"):
         inputs[name] = np.asarray(inputs[name], dtype=float)
     test_economy.compute_gdp(**inputs)
     for name, expected in case["outputs"].items():
+        expected = np.asarray(expected, dtype=float)
+        if name in ("gdp_output", "gdp_income", "gdp_expenditure"):
+            expected = expected + inputs["rent_imputed"]
+        elif name == "total_household_fce":
+            expected = expected + inputs["rent_paid"] + inputs["rent_imputed"]
         np.testing.assert_allclose(
             test_economy.ts.current(name),
             expected,

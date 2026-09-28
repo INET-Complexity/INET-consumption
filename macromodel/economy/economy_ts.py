@@ -147,6 +147,10 @@ def create_economy_timeseries(
     Returns:
         TimeSeries: Initialized time series object with all economic indicators
     """
+    # Runtime accounts are reconstructed from agents, not copied from synthetic
+    # GDP (which already includes housing). Add the housing bridge once here.
+    housing_services = initial_imp_rent_paid.sum()
+    household_fce_na = initial_hh_consumption + initial_real_rent_paid.sum() + housing_services
     ts = TimeSeries(
         ppi=[1.0],
         cpi_transaction=[1.0],
@@ -247,12 +251,16 @@ def create_economy_timeseries(
         exports=(1 + export_taxes) * initial_exports,
         imports=initial_imports,
         #
+        owner_occupied_housing_output=[housing_services],
+        owner_occupied_housing_value_added=[housing_services],
+        owner_occupied_housing_operating_income=[housing_services],
         gdp_output=[
             initial_firm_total_sales
             - initial_sectoral_firm_used_ii.sum()
             + initial_total_taxes_on_products
             - initial_total_taxes_on_production
             + initial_real_rent_paid.sum()
+            + housing_services
         ],
         gdp_output_growth=[np.nan],
         total_output=[initial_firm_total_sales],
@@ -305,11 +313,10 @@ def create_economy_timeseries(
         gdp_expenditure=[
             initial_change_in_firm_stock_inventories
             + initial_gross_fixed_capital_formation
-            + initial_hh_consumption
+            + household_fce_na
             + initial_gov_consumption
             + (1 + export_taxes) * initial_exports.sum()
             - initial_imports.sum()
-            + initial_real_rent_paid.sum()
         ],
         gdp_expenditure_growth=[np.nan],
         # Expenditure GDP minus output GDP, computed from raw exports/imports
@@ -317,7 +324,7 @@ def create_economy_timeseries(
         # construction (see the sanity-check assertion below); compute_gdp()
         # appends the true per-period value before it mutates exports/imports.
         gdp_expenditure_prebalancing_residual=[0.0],
-        total_household_fce=[initial_hh_consumption],
+        total_household_fce=[household_fce_na],
         total_household_fce_growth=[np.nan],
         total_government_fce=[initial_gov_consumption],
         total_government_fce_growth=[np.nan],
@@ -339,7 +346,8 @@ def create_economy_timeseries(
             + initial_total_taxes_on_products
             + initial_hh_rental_income.sum()
             + initial_cg_rent_received
-            + initial_cg_taxes_rental_income,
+            + initial_cg_taxes_rental_income
+            + housing_services,
         ],
         gdp_income_growth=[np.nan],
         total_gross_operating_surplus_and_mixed_income=[initial_total_operating_surplus],

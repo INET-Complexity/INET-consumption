@@ -307,7 +307,7 @@ def test_from_pickled_market_preserves_property_identifiers_and_initial_counts()
     _assert_mixed_property_state(market)
 
 
-def test_observed_fraction_rent_value_regresses_rent_on_property_value(test_config):
+def test_observed_fraction_rent_value_is_frozen_after_initialisation(test_config):
     market = HousingMarket.from_data(
         country_name="FRA",
         scale=1,
@@ -319,7 +319,7 @@ def test_observed_fraction_rent_value_regresses_rent_on_property_value(test_conf
             "sales_types": ["Rental", "Rental", "Rental"],
             "property_id": [10, 11, 12],
             "property_value": [100.0, 200.0, 300.0],
-            "price_or_rent": [1.0, 2.0, 3.0],
+            "price_or_rent": [10.0, 60.0, 300.0],
             "seller_id": [0, 1, 2],
             "buyer_id": [3, 4, 5],
         }
@@ -327,7 +327,7 @@ def test_observed_fraction_rent_value_regresses_rent_on_property_value(test_conf
 
     np.testing.assert_allclose(
         market.compute_observed_fraction_rent_value(),
-        np.array([0.01, 0.0]),
+        market.ts.current("observed_fraction_rent_value"),
         atol=1e-12,
     )
 

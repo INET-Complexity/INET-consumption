@@ -1,0 +1,28 @@
+{
+  "base_commit": "89c9e118",
+  "seed": 15,
+  "t_max": 2,
+  "household_rows_including_initial": 17280,
+  "cash_identity_failures": 0,
+  "total_identity_failures": 0,
+  "legacy_datasets_compared": 1056,
+  "legacy_differences": [],
+  "initial_target_marker": "NaN (previously zero placeholder)",
+  "baseline_sha256": "f2cfaa6295b05b9890b7c4ef8acbe98de20ffa074da47fb0892c229febeb8af1",
+  "candidate_sha256": "52008c06389efb01e02bd0782a6fe11c78430c495153ee9403d385b1744a1939",
+  "production_source_sha256": {
+    "macromodel/agents/households/households.py": "a4e10ece66517c81bb505ce951168f7e54a797f248a242a8cdcdd2dcb6ed804b",
+    "macromodel/agents/households/households_ts.py": "cf1dbb42178c2f9f9254b361a83f349c1e06f3b42eef432c32b82e5f7360ad8d",
+    "macromodel/country/country.py": "095ae9c678c159cbbbfba313a92a09fd0e2b1891ca9cd8f16e3597eab08c9569",
+    "run_model/src/mpc_analysis.py": "29460a46337de9b60846de8b5c7ce234df3a191145cb1d27d7bfd769ce0fc138"
+  },
+  "python": "3.12.13",
+  "new_tests": 31,
+  "targeted_tests_passed": 659,
+  "ruff": "pass",
+  "broader_suite": {
+    "passed_before_interruption": 631,
+    "completed": false,
+    "reason": "Stopped during unrelated full-simulation fixture work; bounded affected suite completed separately."
+  }
+}

@@ -61,6 +61,7 @@ from macromodel.economy.economy_ts import create_economy_timeseries
 from macromodel.exogenous.exogenous import Exogenous
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
+from macromodel.util.housing_flows import normalise_housing_flows
 
 
 class Economy:
@@ -1259,8 +1260,9 @@ class Economy:
             imp_rent_paid (np.ndarray): Imputed rent values
             rental_income (np.ndarray): Income from rental properties
         """
-        self.ts.total_real_rent_paid.append([real_rent_paid.sum()])
-        self.ts.total_imp_rent_paid.append([imp_rent_paid.sum()])
+        normalized_rent, normalized_imputed = normalise_housing_flows(real_rent_paid, imp_rent_paid)
+        self.ts.total_real_rent_paid.append([normalized_rent.sum()])
+        self.ts.total_imp_rent_paid.append([normalized_imputed.sum()])
         self.ts.total_real_rent_rec.append([rental_income.sum()])
 
     def compute_gdp(

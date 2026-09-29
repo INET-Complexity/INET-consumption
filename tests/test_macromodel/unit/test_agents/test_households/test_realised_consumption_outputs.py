@@ -82,6 +82,44 @@ def test_realised_housing_rejects_malformed_flows(flow, bad):
         realised_consumption_outcomes(np.ones(2), 0.2, **kwargs)
 
 
+@pytest.mark.parametrize(
+    "consumption,vat",
+    [
+        (np.array([np.nan, 1.0]), 0.2),
+        (np.array([-1.0, 1.0]), 0.2),
+        (np.ones(2), np.nan),
+        (np.ones(2), -0.1),
+        (np.ones(2), np.array([0.2, 0.2])),
+    ],
+)
+def test_realised_outputs_reject_invalid_consumption_or_vat(consumption, vat):
+    with pytest.raises(ValueError, match="consumption|vat"):
+        realised_consumption_outcomes(consumption, vat, np.zeros(2), np.zeros(2))
+
+
+def test_zero_growth_cacf_preserves_total_target_while_carving_out_housing(test_households):
+    household = test_households
+    household.functions["consumption"] = CreditAugmentedConsumption()
+    vat = 0.2
+    target = household.compute_target_consumption(
+        expected_inflation=0.0,
+        current_cpi=1.0,
+        initial_cpi=1.0,
+        exogenous_total_consumption=0.0,
+        per_capita_unemployment_benefits=0.0,
+        tau_vat=vat,
+        assume_zero_growth=True,
+    )
+    cash_rent = np.maximum(household.ts.current("rent"), 0.0)
+    imputed_rent = np.maximum(household.ts.current("rent_imputed"), 0.0)
+    expected_goods_total = np.maximum(
+        household.ts.initial("cacf_real_consumption_budget") - cash_rent - imputed_rent,
+        0.0,
+    )
+    np.testing.assert_allclose((1.0 + vat) * target.sum(axis=1), expected_goods_total)
+    assert np.isnan(household.ts.current("target_consumption_total_mpc")).all()
+
+
 def test_non_cacf_target_unavailable_in_both_passes(test_households):
     ts = test_households.ts
     test_households._append_target_consumption_diagnostics(None)

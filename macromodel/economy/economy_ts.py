@@ -45,6 +45,7 @@ import numpy as np
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.timeseries import TimeSeries
+from macromodel.util.housing_flows import normalise_housing_flows
 
 
 def create_economy_timeseries(
@@ -147,6 +148,10 @@ def create_economy_timeseries(
     Returns:
         TimeSeries: Initialized time series object with all economic indicators
     """
+    initial_real_rent_paid, initial_imp_rent_paid = normalise_housing_flows(
+        initial_real_rent_paid,
+        initial_imp_rent_paid,
+    )
     # Runtime accounts are reconstructed from agents, not copied from synthetic
     # GDP (which already includes housing). Add the housing bridge once here.
     housing_services = initial_imp_rent_paid.sum()

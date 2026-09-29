@@ -25,6 +25,7 @@ import pandas as pd
 
 from macromodel.timeseries import TimeSeries
 from macromodel.util.get_histogram import get_histogram
+from macromodel.util.housing_flows import normalise_housing_flows
 
 
 def realised_consumption_outcomes(
@@ -36,14 +37,18 @@ def realised_consumption_outcomes(
     and normalise negative flows to zero. Imputed rent is an output only.
     """
     consumption = np.asarray(consumption, dtype=float)
-    flows = []
-    for name, value in (("rent", rent), ("rent_imputed", rent_imputed)):
-        flow = np.asarray(value, dtype=float)
-        if flow.shape != consumption.shape or not np.all(np.isfinite(flow)):
-            raise ValueError(f"{name} must be a finite vector matching household consumption.")
-        flows.append(np.maximum(flow, 0.0))
-    cash = (1.0 + vat) * consumption + flows[0]
-    return cash, cash + flows[1]
+    if consumption.ndim != 1 or not np.all(np.isfinite(consumption)) or np.any(consumption < 0.0):
+        raise ValueError("consumption must be a finite nonnegative household vector.")
+    vat_array = np.asarray(vat, dtype=float)
+    if vat_array.shape != () or not np.isfinite(vat_array) or float(vat_array) < 0.0:
+        raise ValueError("vat must be a finite nonnegative scalar.")
+    cash_rent, imputed_rent = normalise_housing_flows(
+        rent,
+        rent_imputed,
+        expected_shape=consumption.shape,
+    )
+    cash = (1.0 + float(vat_array)) * consumption + cash_rent
+    return cash, cash + imputed_rent
 
 
 def align_initial_goods_consumption(consumption: np.ndarray, aggregate_goods: float) -> np.ndarray:

@@ -37,6 +37,7 @@ from macromodel.agents.households.func.consumer_distress import (
     FICPForgivenessEvent,
     compute_stage6_consumer_distress_state,
 )
+from macromodel.agents.households.func.consumption import validate_consumption_weights
 from macromodel.agents.households.func.financial_feasibility import (
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
@@ -85,6 +86,7 @@ from macromodel.markets.goods_market.value_type import ValueType
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
 from macromodel.util.get_histogram import get_histogram
+from macromodel.util.housing_flows import normalise_housing_flow
 from macromodel.util.property_mapping import map_to_enum
 
 VACANT_HOUSEHOLD_ID = -1
@@ -327,7 +329,10 @@ class Households(Agent):
         # Set initial values
         self.ts["saving_rates_histogram"] = get_histogram(self.get_saving_rates_by_household(), None)
 
-        self.consumption_weights = consumption_weights
+        self.consumption_weights = validate_consumption_weights(
+            consumption_weights,
+            expected_size=n_industries,
+        )
         self.consumption_weights_by_income = consumption_weights_by_income.astype(float)
 
         self.investment_weights = investment_weights
@@ -1913,12 +1918,29 @@ class Households(Agent):
 
         # Target consumption
         if assume_zero_growth:
-            target_consumption = np.outer(
-                self.ts.initial("consumption"),
-                self.states["consumption_weights_data"],
-            ).astype(float)
+            consumption_function = self.functions["consumption"]
+            if getattr(consumption_function, "uses_housing_carve_out", False):
+                initial_real_budget = np.asarray(self.ts.initial("cacf_real_consumption_budget"), dtype=float)
+                if initial_real_budget.shape != (self.ts.current("n_households"),) or not np.all(
+                    np.isfinite(initial_real_budget)
+                ):
+                    raise ValueError("Initial CACF real consumption budget must be a finite household vector.")
+                target_total = initial_real_budget * float(current_cpi)
+                cash_rent = self.current_consumption_cash_rent()
+                imputed_rent = self.current_consumption_imputed_rent()
+                market_target_total = np.maximum(0.0, target_total - cash_rent - imputed_rent)
+                target_consumption = np.outer(market_target_total, self.consumption_weights) / (1.0 + float(tau_vat))
+                consumption_function.last_real_consumption_budget = initial_real_budget.copy()
+            else:
+                target_consumption = np.outer(
+                    self.ts.initial("consumption"),
+                    self.consumption_weights,
+                ).astype(float)
             self._append_target_consumption_diagnostics(None, replace_current=replace_current_diagnostics)
-            self._persist_cacf_real_consumption_budget(None, replace_current=replace_current_diagnostics)
+            self._persist_cacf_real_consumption_budget(
+                consumption_function if getattr(consumption_function, "uses_housing_carve_out", False) else None,
+                replace_current=replace_current_diagnostics,
+            )
             return target_consumption
         else:
             income = self.ts.current("expected_income") if income_override is None else income_override
@@ -2084,10 +2106,19 @@ class Households(Agent):
 
     def current_consumption_cash_rent(self) -> np.ndarray:
         """Validated nominal cash rent, using the target's negative-flow convention."""
-        rent = np.asarray(self.ts.current("rent"), dtype=float)
-        if rent.shape != (self.ts.current("n_households"),) or not np.all(np.isfinite(rent)):
-            raise ValueError("rent must be finite and have one value per household.")
-        return np.maximum(rent, 0.0)
+        return normalise_housing_flow(
+            self.ts.current("rent"),
+            name="rent",
+            expected_shape=(self.ts.current("n_households"),),
+        )
+
+    def current_consumption_imputed_rent(self) -> np.ndarray:
+        """Validated nominal imputed rent, using the target's negative-flow convention."""
+        return normalise_housing_flow(
+            self.ts.current("rent_imputed"),
+            name="rent_imputed",
+            expected_shape=(self.ts.current("n_households"),),
+        )
 
     def consumption_cash_factor(self) -> float:
         """Convert VAT-exclusive consumption orders to nominal cash uses."""

@@ -68,6 +68,21 @@ The usual two-pass append/replace and lag behavior remains intact. Non-CACF
 rules do not consume this ECM state. An initial total-target/MPC evaluation is
 still unavailable rather than manufactured.
 
+## Housing rent/value relationship boundary
+
+PR #155 deliberately keeps the initial rent/value coefficients fixed during a
+run. `HousingMarket.compute_observed_fraction_rent_value()` still records
+completed rental transactions in its diagnostic histogram, but does not refit
+the pricing coefficients from the current-period sample. This is a model-policy
+choice, not an accounting identity: small or compositionally changing rental
+samples can produce unstable slopes, including negative offered rents. The
+freeze therefore protects the housing-pricing input used by household rent,
+credit, and GDP flows while leaving realised rental observations available for
+diagnostics. The dedicated housing-market regression test verifies that new
+transactions do not change the coefficients; the total-consumption validation
+also verifies that the same non-negative housing-flow convention is used by
+households, initial economy accounts, and runtime economy aggregates.
+
 ## Validation and reproduction
 
 Registered spec: vault

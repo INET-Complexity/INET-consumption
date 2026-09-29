@@ -420,6 +420,26 @@ class TestCESHouseholdConsumption:
 
 
 class TestCreditAugmentedHouseholdConsumption:
+    @pytest.mark.parametrize(
+        "weights",
+        [
+            np.array([0.4, 0.4]),
+            np.array([-1.0, 2.0]),
+            np.array([np.nan, 1.0]),
+        ],
+    )
+    def test_consumption_weights_must_be_finite_nonnegative_and_sum_to_one(self, weights):
+        consumption_obj = CreditAugmentedConsumption()
+        args = self._housing_carve_out_args(n_households=1)
+        args["consumption_weights"] = weights
+        args["consumption_weights_by_income"] = np.zeros((weights.size, 1))
+        with pytest.raises(ValueError, match="consumption_weights"):
+            consumption_obj.compute_target_consumption(
+                **args,
+                rent=np.zeros(1),
+                rent_imputed=np.zeros(1),
+            )
+
     def test_compute_target_consumption_records_log_linear_decomposition_and_mpc(self):
         # partial_adjustment_speed=0.4 (rather than 1.0) keeps this scenario's implied
         # delta_log_consumption under the +-0.5 growth-sanity clip in _evaluate_target,

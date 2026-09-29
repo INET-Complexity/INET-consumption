@@ -18,7 +18,7 @@ BRIDGES = (
 )
 
 
-def initial_accounts(housing):
+def initial_accounts(housing, cash_rent=100.0):
     """Independent balanced input accounts: old GDP=450, new GDP=450+H."""
     sales = np.full(18, 371.0 / 18)
     return create_economy_timeseries(
@@ -44,7 +44,7 @@ def initial_accounts(housing):
         initial_cpi_yoy_inflation=0.0,
         initial_ppi_inflation=0.0,
         initial_hpi_inflation=0.0,
-        initial_real_rent_paid=np.array([100.0]),
+        initial_real_rent_paid=np.array([cash_rent]),
         initial_imp_rent_paid=np.array([housing]),
         initial_hh_rental_income=np.array([30.0]),
         initial_hh_consumption=200.0,
@@ -91,6 +91,27 @@ def test_initial_and_first_period_basis_and_hdf5(test_economy, tmp_path, housing
     with h5py.File(tmp_path / "accounting.h5", "r") as handle:
         for name in BRIDGES:
             np.testing.assert_allclose(handle["FRA/economy/" + name], [[housing], [housing + 20]])
+
+
+@pytest.mark.parametrize("rent,imputed", [(-100.0, -80.0), (-100.0, 20.0), (100.0, -80.0)])
+def test_initial_housing_flows_use_the_household_zero_floor(rent, imputed):
+    ts = initial_accounts(imputed, cash_rent=rent)
+    expected_rent = max(rent, 0.0)
+    expected_imputed = max(imputed, 0.0)
+    np.testing.assert_allclose(ts.initial("total_real_rent_paid"), [expected_rent])
+    np.testing.assert_allclose(ts.initial("total_imp_rent_paid"), [expected_imputed])
+    np.testing.assert_allclose(ts.initial("total_household_fce"), [200.0 + expected_rent + expected_imputed])
+    np.testing.assert_allclose(ts.initial("gdp_output"), [350.0 + expected_rent + expected_imputed])
+
+
+def test_runtime_housing_aggregates_use_the_household_zero_floor(test_economy):
+    test_economy.compute_rental_market_aggregates(
+        real_rent_paid=np.array([-10.0, 30.0]),
+        imp_rent_paid=np.array([-20.0, 40.0]),
+        rental_income=np.array([5.0, 6.0]),
+    )
+    np.testing.assert_allclose(test_economy.ts.current("total_real_rent_paid"), [30.0])
+    np.testing.assert_allclose(test_economy.ts.current("total_imp_rent_paid"), [40.0])
 
 
 @pytest.mark.parametrize("adjust", [False, True])

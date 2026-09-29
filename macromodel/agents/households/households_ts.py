@@ -25,6 +25,7 @@ import pandas as pd
 
 from macromodel.timeseries import TimeSeries
 from macromodel.util.get_histogram import get_histogram
+from macromodel.util.housing_flows import normalise_housing_flows
 
 
 def realised_consumption_outcomes(
@@ -36,14 +37,37 @@ def realised_consumption_outcomes(
     and normalise negative flows to zero. Imputed rent is an output only.
     """
     consumption = np.asarray(consumption, dtype=float)
-    flows = []
-    for name, value in (("rent", rent), ("rent_imputed", rent_imputed)):
-        flow = np.asarray(value, dtype=float)
-        if flow.shape != consumption.shape or not np.all(np.isfinite(flow)):
-            raise ValueError(f"{name} must be a finite vector matching household consumption.")
-        flows.append(np.maximum(flow, 0.0))
-    cash = (1.0 + vat) * consumption + flows[0]
-    return cash, cash + flows[1]
+    if consumption.ndim != 1 or not np.all(np.isfinite(consumption)) or np.any(consumption < 0.0):
+        raise ValueError("consumption must be a finite nonnegative household vector.")
+    vat_array = np.asarray(vat, dtype=float)
+    if vat_array.shape != () or not np.isfinite(vat_array) or float(vat_array) < 0.0:
+        raise ValueError("vat must be a finite nonnegative scalar.")
+    cash_rent, imputed_rent = normalise_housing_flows(
+        rent,
+        rent_imputed,
+        expected_shape=consumption.shape,
+    )
+    cash = (1.0 + float(vat_array)) * consumption + cash_rent
+    return cash, cash + imputed_rent
+
+
+def align_initial_goods_consumption(consumption: np.ndarray, aggregate_goods: float) -> np.ndarray:
+    """Allocate the national-accounts goods anchor using household shares.
+
+    This reconciles starting observations only; it books no cash transaction.
+    A positive anchor without household shares cannot be allocated silently.
+    """
+    goods = np.asarray(consumption, dtype=float)
+    if goods.ndim != 1 or not np.all(np.isfinite(goods)) or np.any(goods < 0):
+        raise ValueError("Initial household goods consumption must be a finite nonnegative vector.")
+    if not np.isfinite(aggregate_goods) or aggregate_goods < 0:
+        raise ValueError("Initial aggregate goods consumption must be finite and nonnegative.")
+    total = goods.sum()
+    if total == 0:
+        if aggregate_goods != 0:
+            raise ValueError("Cannot allocate positive aggregate consumption without household shares.")
+        return goods.copy()
+    return goods * (aggregate_goods / total)
 
 
 def create_households_timeseries(
@@ -129,8 +153,9 @@ def create_households_timeseries(
     initial_debt = initial_mortgage_debt + initial_consumption_loan_debt
     initial_wealth = initial_wealth_real_assets + initial_wealth_financial_assets
 
+    initial_goods = align_initial_goods_consumption(data["Consumption"].values, initial_consumption_by_industry.sum())
     initial_cash, initial_total = realised_consumption_outcomes(
-        data["Consumption"].values, vat, data["Rent Paid"].values, data["Rent Imputed"].values
+        initial_goods, vat, data["Rent Paid"].values, data["Rent Imputed"].values
     )
 
     return TimeSeries(
@@ -189,16 +214,16 @@ def create_households_timeseries(
         target_consumption_goods_total=np.zeros(len(data)),
         target_consumption_market_total=np.zeros(len(data)),
         # ECM state variable for CreditAugmentedConsumption: the real consumption
-        # budget it produced. Seeded from initial consumption, which is already
-        # real at t=0 since the CPI deflator is 1 there.
-        cacf_real_consumption_budget=data["Consumption"].values,
+        # total budget it produced. Initial CPI is one; Country refreshes this
+        # after effective VAT and the selected consumer-price level are known.
+        cacf_real_consumption_budget=initial_total,
         income_belief_floor_used=np.zeros(len(data)),
         income_belief_posterior_fallback_used=np.zeros(len(data)),
         income_belief_growth_clipped=np.zeros(len(data)),
         formula_implied_mpc=np.zeros(len(data)),
         target_consumption_total_mpc=np.full(len(data), np.nan),
         amount_bought=np.full(len(data), np.nan),
-        consumption=data["Consumption"].values,
+        consumption=initial_goods,
         consumption_cash_expenditure=initial_cash,
         consumption_including_housing=initial_total,
         total_consumption=[(1 + vat) * initial_consumption_by_industry.sum()],
@@ -211,7 +236,7 @@ def create_households_timeseries(
         total_investment_before_vat=[initial_hh_investment.sum()],
         industry_investment=initial_investment_by_industry,
         income_for_residual_saving=data["Income"].values,
-        realised_household_expenditure=data["Consumption"].values + initial_hh_investment.sum(axis=1),
+        realised_household_expenditure=initial_goods + initial_hh_investment.sum(axis=1),
         cash_saving_before_financing=np.full(len(data), np.nan),
         #
         # HFCS source components are preserved as initialization diagnostics;

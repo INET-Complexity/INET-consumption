@@ -1,0 +1,505 @@
+{
+  "model_commit": "b08346375fdbe0d521682cece2fcf5c57aba9fa3",
+  "seed": 15,
+  "t_max": 5,
+  "python": "3.12.13",
+  "cache": "/private/tmp/inet-total-consumption-increment3/run_model/data/output_data/data_benchmark.pkl",
+  "cache_sha256": "37dfbc5d154b586c5656f94c82c3e137ef348b0df936608272465b5ac99ec213",
+  "config_sha256": "b9dbdc3d66c83345b81caa0f1a9fa1042793412c7d75ee52302264981badc425",
+  "synthetic_gdp": {
+    "gdp_output": 546625690884.4408,
+    "gdp_expenditure": 546625690884.44073,
+    "gdp_income": 546625690884.4408
+  },
+  "synthetic_rent_imputed": 41065648653.91114,
+  "time_unit": 3,
+  "scale": 5000,
+  "n_households": 5760,
+  "initial_economy": {
+    "gdp_output": [
+      563474205088.5944
+    ],
+    "gdp_expenditure": [
+      563474205088.5942
+    ],
+    "gdp_income": [
+      563474205088.5944
+    ],
+    "gdp_expenditure_prebalancing_residual": [
+      0.0
+    ],
+    "total_household_fce": [
+      309822319093.82196
+    ],
+    "total_real_rent_paid": [
+      14082326799.485172
+    ],
+    "total_imp_rent_paid": [
+      41065648653.91114
+    ],
+    "owner_occupied_housing_output": [
+      41065648653.91114
+    ],
+    "owner_occupied_housing_value_added": [
+      41065648653.91114
+    ],
+    "owner_occupied_housing_operating_income": [
+      41065648653.91114
+    ]
+  },
+  "initial_household_sums": {
+    "consumption": 225375525345.50946,
+    "total_consumption": 254674343640.42566,
+    "rent": 14082326799.485172,
+    "rent_imputed": 41065648653.91114,
+    "cacf_real_consumption_budget": 309822319093.822
+  },
+  "initial_goods_alignment_factor": 0.9962496421214523,
+  "initial_raw_household_goods_before_vat": 226223946104.0971,
+  "hdf5_sha256": "b581220938caf61df788fa4b2f941b0af8e6c57d2dba05bae369db94a79ed7d1",
+  "calls": [
+    {
+      "inputs": {
+        "total_output": 923400174973.2365,
+        "sectoral_sales": [
+          26042341969.818176,
+          1527182177.8425727,
+          185459587283.98642,
+          28375942305.24734,
+          9112741742.793983,
+          68742879790.71329,
+          97187177472.04645,
+          48858993326.24795,
+          24757469216.37944,
+          44941122619.345024,
+          51064438657.376495,
+          28792920785.447216,
+          80085586012.2461,
+          43489767998.459274,
+          54967577083.25517,
+          32558849487.216564,
+          55964387148.135475,
+          24904845534.361176
+        ],
+        "sectoral_intermediate_consumption": [
+          13344276926.02438,
+          773195562.853566,
+          131071422704.25726,
+          17191584653.65672,
+          5271066735.586435,
+          41478319025.92405,
+          48446281407.27293,
+          24611085380.84811,
+          12021280643.455235,
+          21488254657.341793,
+          29877598373.952168,
+          13364118523.06148,
+          40452629951.32558,
+          18734078778.777504,
+          12877727751.891634,
+          5609540081.652206,
+          12760493614.836378,
+          8906215424.360403
+        ],
+        "taxes_on_products": 48556486951.730774,
+        "taxes_on_production": 16566364362.3184,
+        "rent_paid": 14079421228.714607,
+        "rent_imputed": 41135749998.759796,
+        "hh_consumption": 196354819492.31195,
+        "gov_consumption": 149791453925.2446,
+        "change_in_inventories": 92223571683.18616,
+        "gross_fixed_capital_formation": 65024516176.82567,
+        "exports": 127781418192.14857,
+        "imports": 134064652341.93642,
+        "operating_surplus": 166403938279.1469,
+        "wages": 282150702134.69336,
+        "rent_received": 14079421228.71461,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          552326298593.0454
+        ],
+        "gdp_expenditure": [
+          552326298593.0454
+        ],
+        "gdp_income": [
+          552326298593.0454
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          -237.7904052734375
+        ],
+        "total_household_fce": [
+          251569990719.78635
+        ],
+        "owner_occupied_housing_output": [
+          41135749998.759796
+        ],
+        "owner_occupied_housing_value_added": [
+          41135749998.759796
+        ],
+        "owner_occupied_housing_operating_income": [
+          41135749998.759796
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "total_output": 824057617543.8943,
+        "sectoral_sales": [
+          23862430262.679745,
+          1384849486.9813035,
+          165254913959.26968,
+          26365489669.65381,
+          8521108929.147092,
+          47491151199.99559,
+          87671524611.12445,
+          45802657019.3595,
+          20539168609.68402,
+          37658087424.6948,
+          48407271272.36481,
+          25740179331.077366,
+          72181467633.0214,
+          42195302703.37956,
+          51656831920.43246,
+          30737548688.462193,
+          52284700183.90829,
+          21476111233.488445
+        ],
+        "sectoral_intermediate_consumption": [
+          12239083134.744793,
+          717548826.9918928,
+          116772097230.72327,
+          15961820391.04277,
+          4929008305.290155,
+          28677135760.39745,
+          43739835083.16971,
+          23088032818.70592,
+          9980228588.508564,
+          17949664624.71133,
+          28344932940.962215,
+          11951892050.323961,
+          36442529078.22686,
+          18188608923.17122,
+          12082344628.356985,
+          5315902900.17529,
+          11929752068.939697,
+          7687238988.779408
+        ],
+        "taxes_on_products": 53316516037.260895,
+        "taxes_on_production": 14826823405.169817,
+        "rent_paid": 14072868975.273266,
+        "rent_imputed": 41378409420.84573,
+        "hh_consumption": 163089507810.1235,
+        "gov_consumption": 150961758789.4407,
+        "change_in_inventories": 31782713696.610718,
+        "gross_fixed_capital_formation": 116341626123.24182,
+        "exports": 117384014967.81511,
+        "imports": 122952785954.78279,
+        "operating_surplus": 146584445049.95505,
+        "wages": 256648692745.548,
+        "rent_received": 14072868975.273266,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          512000932228.88293
+        ],
+        "gdp_expenditure": [
+          512000932228.88293
+        ],
+        "gdp_income": [
+          512000932228.88293
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          57181599.68511963
+        ],
+        "total_household_fce": [
+          218540786206.2425
+        ],
+        "owner_occupied_housing_output": [
+          41378409420.84573
+        ],
+        "owner_occupied_housing_value_added": [
+          41378409420.84573
+        ],
+        "owner_occupied_housing_operating_income": [
+          41378409420.84573
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "total_output": 772954121575.6403,
+        "sectoral_sales": [
+          19026247452.00274,
+          1335326050.9803724,
+          150035871912.3775,
+          23240161155.54246,
+          7464703572.721373,
+          65161030893.484695,
+          70398357308.27235,
+          40877710175.16566,
+          16952825445.766546,
+          38815844147.03526,
+          43073690425.53856,
+          21541855079.387928,
+          72435334357.44969,
+          38021835161.612686,
+          51217443634.55797,
+          30223071065.84209,
+          50182465676.47196,
+          18863441543.978977
+        ],
+        "sectoral_intermediate_consumption": [
+          9782703685.498804,
+          690195166.453297,
+          106013552946.27025,
+          14094684749.272934,
+          4324891620.572081,
+          38506761437.91735,
+          35173080956.0153,
+          20644208681.749794,
+          8256027870.457685,
+          18480121498.803055,
+          25258145057.942116,
+          10036263850.18429,
+          36597440382.33933,
+          16417277929.542778,
+          11995631522.737488,
+          5236551613.665711,
+          11478615676.611914,
+          6771405218.951947
+        ],
+        "taxes_on_products": 53591339926.942,
+        "taxes_on_production": 14086906517.451822,
+        "rent_paid": 14080535898.719322,
+        "rent_imputed": 41496009783.23485,
+        "hh_consumption": 156696126592.3865,
+        "gov_consumption": 149211134593.79962,
+        "change_in_inventories": 5208167553.759094,
+        "gross_fixed_capital_formation": 125009573126.95851,
+        "exports": 109604510537.34378,
+        "imports": 112913773505.73099,
+        "operating_surplus": 136803323003.1886,
+        "wages": 242306332190.01398,
+        "rent_received": 14080535898.719322,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          488277540802.0984
+        ],
+        "gdp_expenditure": [
+          488277540802.0984
+        ],
+        "gdp_income": [
+          488277540802.09875
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          114743778.37231445
+        ],
+        "total_household_fce": [
+          212272672274.3407
+        ],
+        "owner_occupied_housing_output": [
+          41496009783.23485
+        ],
+        "owner_occupied_housing_value_added": [
+          41496009783.23485
+        ],
+        "owner_occupied_housing_operating_income": [
+          41496009783.23485
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "total_output": 728838093326.8676,
+        "sectoral_sales": [
+          18529921146.588276,
+          1047133314.3073934,
+          139159430912.51093,
+          20390550608.22763,
+          6642103525.485592,
+          63576348592.504814,
+          69967460597.08014,
+          36222078362.52057,
+          16238077440.697996,
+          37365238194.66896,
+          37587263163.335495,
+          20918661048.409763,
+          68205905874.17639,
+          32838548272.214554,
+          50165715484.32288,
+          29362595000.818874,
+          49161513075.553215,
+          18018277371.444904
+        ],
+        "sectoral_intermediate_consumption": [
+          9535559089.490265,
+          527480873.01772505,
+          98039238518.52316,
+          12367054291.490337,
+          3849168448.2556667,
+          38270284295.134514,
+          34981657678.49922,
+          18301694731.23936,
+          7916308045.974053,
+          17763574985.22338,
+          22049032499.273914,
+          9728375524.039017,
+          34410147070.7026,
+          14185535477.905405,
+          11691851030.979143,
+          5085057019.759146,
+          11248972469.267063,
+          6466792176.648773
+        ],
+        "taxes_on_products": 51757512677.728874,
+        "taxes_on_production": 13441271341.998928,
+        "rent_paid": 14118037968.41671,
+        "rent_imputed": 41693134409.690735,
+        "hh_consumption": 157727529149.23694,
+        "gov_consumption": 139568594908.8747,
+        "change_in_inventories": 64289624.04522705,
+        "gross_fixed_capital_formation": 117488943697.4777,
+        "exports": 104755361757.4575,
+        "imports": 108702502967.64085,
+        "operating_surplus": 128156077356.00809,
+        "wages": 230822960403.43784,
+        "rent_received": 14118037968.41671,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          466547722815.2822
+        ],
+        "gdp_expenditure": [
+          466547722815.2822
+        ],
+        "gdp_income": [
+          466547722815.2822
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          165665732.2763672
+        ],
+        "total_household_fce": [
+          213538701527.3444
+        ],
+        "owner_occupied_housing_output": [
+          41693134409.690735
+        ],
+        "owner_occupied_housing_value_added": [
+          41693134409.690735
+        ],
+        "owner_occupied_housing_operating_income": [
+          41693134409.690735
+        ]
+      }
+    },
+    {
+      "inputs": {
+        "total_output": 699740136228.9524,
+        "sectoral_sales": [
+          17959794682.693623,
+          953765488.5214963,
+          135360925379.23897,
+          18614649919.47345,
+          6335503027.059903,
+          65895816643.47191,
+          69184614877.56831,
+          34409170698.834206,
+          16048044286.879503,
+          35916273789.99692,
+          34744431603.17753,
+          20179325825.464966,
+          60475301712.84796,
+          32554099978.833897,
+          46885391436.76123,
+          27505624989.969017,
+          46461409814.729904,
+          17315016221.943382
+        ],
+        "sectoral_intermediate_consumption": [
+          9258458532.272596,
+          466834364.2252652,
+          95225723131.13548,
+          11282227854.97233,
+          3670672938.078235,
+          39724212997.72389,
+          34641809336.54479,
+          17410294023.556572,
+          7838261067.212991,
+          17035999932.716373,
+          20406225914.31105,
+          9396480157.553638,
+          30488353419.34948,
+          14084786443.155907,
+          10881338475.461424,
+          4772014241.908377,
+          10649539135.392004,
+          6224332225.652617
+        ],
+        "taxes_on_products": 46902904432.42102,
+        "taxes_on_production": 12940975851.486042,
+        "rent_paid": 14137636193.951359,
+        "rent_imputed": 41836426675.77261,
+        "hh_consumption": 124357966379.78336,
+        "gov_consumption": 134172747670.91129,
+        "change_in_inventories": 17099499310.850891,
+        "gross_fixed_capital_formation": 115860362285.29498,
+        "exports": 99345555224.00447,
+        "imports": 100323817410.66656,
+        "operating_surplus": 124220890511.05478,
+        "wages": 219120705675.18842,
+        "rent_received": 14137636193.951359,
+        "central_government_rent_received": 0.0,
+        "running_multiple_countries": false,
+        "always_adjust": true
+      },
+      "outputs": {
+        "gdp_output": [
+          446218563488.3883
+        ],
+        "gdp_expenditure": [
+          446218563488.3883
+        ],
+        "gdp_income": [
+          446218563488.3882
+        ],
+        "gdp_expenditure_prebalancing_residual": [
+          267812841.5140381
+        ],
+        "total_household_fce": [
+          180332029249.50732
+        ],
+        "owner_occupied_housing_output": [
+          41836426675.77261
+        ],
+        "owner_occupied_housing_value_added": [
+          41836426675.77261
+        ],
+        "owner_occupied_housing_operating_income": [
+          41836426675.77261
+        ]
+      }
+    }
+  ],
+  "source_hashes": {
+    "macromodel/agents/households/households_ts.py": "947ebc4bf736e13ffa4ba228c0025e0005868c3eebe7ba8f5c0badd25ad8489d",
+    "macromodel/economy/economy.py": "c0e207e90b09267d28b336c400f4309cdfbad94bf5dea2326210bee9df31a5a6",
+    "macromodel/economy/economy_ts.py": "bf8fc1590c38d9293baf5ff43b95c3b0ef1867ce1acaf56a78d7bf1a9ecf26c9",
+    "macromodel/country/country.py": "5a7ee97c2bf6c13d118da86277d06a16089325b010fbe5f27d8e2a41c5d2321b",
+    "macromodel/agents/households/households.py": "a4e10ece66517c81bb505ce951168f7e54a797f248a242a8cdcdd2dcb6ed804b",
+    "macromodel/agents/households/func/financial_feasibility.py": "ea34e8d7c7d8acedb3fe06e1277ae39f71587321876d46393267f31037806393"
+  }
+}

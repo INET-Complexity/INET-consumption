@@ -733,6 +733,12 @@ class Country:
             time_unit=time_unit,
             initial_sectoral_household_consumption=initial_consumption_by_industry.values.flatten(),
         )
+        # ECM uses total consumption at purchaser prices, after VAT overrides.
+        # This initialization is accounting-only: no income or balance is booked.
+        households.ts.override_current(
+            "cacf_real_consumption_budget",
+            households.ts.current("consumption_including_housing") / economy.initial_consumer_price_level(),
+        )
         net_smic_base = cls._select_net_smic_base(
             initial_year=initial_year,
             fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],

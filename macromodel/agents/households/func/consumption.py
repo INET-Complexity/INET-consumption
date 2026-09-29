@@ -20,6 +20,26 @@ from abc import ABC, abstractmethod
 import numpy as np
 from numba import njit
 
+from macromodel.util.housing_flows import normalise_housing_flows
+
+
+def validate_consumption_weights(
+    consumption_weights: np.ndarray,
+    *,
+    expected_size: int | None = None,
+) -> np.ndarray:
+    """Validate the fixed industry-share invariant used by household targets."""
+    weights = np.asarray(consumption_weights, dtype=float)
+    if weights.ndim != 1:
+        raise ValueError("consumption_weights must be a one-dimensional vector.")
+    if expected_size is not None and weights.size != expected_size:
+        raise ValueError(f"consumption_weights must contain {expected_size} industries, got {weights.size}.")
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0.0):
+        raise ValueError("consumption_weights must be finite and non-negative.")
+    if not np.isclose(weights.sum(), 1.0, rtol=1e-8, atol=1e-8):
+        raise ValueError(f"consumption_weights must sum to one, got {weights.sum()!r}.")
+    return weights
+
 
 class HouseholdConsumption(ABC):
     """Abstract base class for household consumption behavior.
@@ -633,6 +653,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     not an open question: do not recalibrate ``partial_adjustment_speed`` or
     the other propensities against it.
     """
+
+    uses_housing_carve_out = True
 
     def __init__(
         self,
@@ -1572,6 +1594,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         historic_deflator: np.ndarray = None,
         subsistence_income: np.ndarray | float | None = None,
     ) -> np.ndarray:
+        tau_vat_array = np.asarray(tau_vat, dtype=float)
+        if tau_vat_array.shape != () or not np.isfinite(tau_vat_array) or float(tau_vat_array) < 0.0:
+            raise ValueError("tau_vat must be a finite nonnegative scalar.")
+        tau_vat = float(tau_vat_array)
+        consumption_weights = validate_consumption_weights(consumption_weights)
         if lagged_consumption is None:
             lagged_consumption = np.asarray(historic_consumption_sum, dtype=float)[-1]
         else:
@@ -1703,8 +1730,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         )
 
         # ``target_total`` is the calibrated consumption budget. Cash rent is
-        # removed from market purchases below; the formula-implied MPC remains
-        # computed on the calibrated behavioural target.
+        # and imputed rent are removed from goods below; the legacy MPC remains
+        # computed on the VAT-exclusive full behavioural target.
         full_target_consumption = np.maximum(
             0.0,
             1.0
@@ -1722,21 +1749,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             perturbed_target_consumption.sum(axis=1) - full_target_consumption.sum(axis=1)
         ) / nominal_income_perturbation
 
-        # Cash rent is a separate household cash use, so remove it from the
-        # market-consumption demand. Imputed rent is diagnostic-only and must
-        # remain behaviourally inert.
-        raw_cash_rent = np.asarray(rent, dtype=float)
-        raw_imputed_rent = np.asarray(rent_imputed, dtype=float)
-        for name, housing_flow in (("rent", raw_cash_rent), ("rent_imputed", raw_imputed_rent)):
-            if housing_flow.shape != income.shape or not np.all(np.isfinite(housing_flow)):
-                raise ValueError(f"{name} must be finite and have one value per household.")
-        # Preserve PR #124's existing nonnegative accounting convention for
-        # malformed negative raw housing observations, then enforce the
-        # economically meaningful split on the values actually routed onward.
-        cash_rent = np.maximum(0.0, raw_cash_rent)
-        imputed_rent = np.maximum(0.0, raw_imputed_rent)
+        # Both housing services are already in T. Only cash rent is a payment;
+        # imputed rent reduces goods demand without becoming a cash use.
+        # Preserve the established zero-floor convention at the same boundary
+        # used by realised household outputs and economy-wide aggregates.
+        cash_rent, imputed_rent = normalise_housing_flows(rent, rent_imputed, expected_shape=income.shape)
         diagnostic_housing_component = cash_rent + imputed_rent
-        market_target_total = np.maximum(0.0, target_total - cash_rent)
+        market_target_total = np.maximum(0.0, target_total - cash_rent - imputed_rent)
 
         target_consumption = np.maximum(
             0.0,
@@ -1756,8 +1775,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         components["target_consumption_imputed_rent"] = imputed_rent
         components["target_consumption_non_goods_housing"] = diagnostic_housing_component
         components["target_consumption_calibrated_total"] = target_total
+        components["target_consumption_total_mpc"] = (perturbed_target - target_total) / nominal_income_perturbation
         # Keep the historical diagnostic name as a compatibility alias for the
-        # market-consumption target after the cash-rent carve-out.
+        # gross goods target after subtracting both housing services.
         components["target_consumption_goods_total"] = market_target_total
         components["target_consumption_market_total"] = market_target_total
         self.last_target_consumption_components = components

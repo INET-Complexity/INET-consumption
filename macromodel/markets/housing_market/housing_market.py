@@ -420,20 +420,21 @@ class HousingMarket:
         )
 
     def compute_observed_fraction_rent_value(self) -> np.ndarray:
-        """Calculate the relationship between property values and rental rates.
+        """Record rental-market diagnostics without refitting rent pricing.
 
-        This method analyzes completed rental agreements to determine the
-        current relationship between property values and rental rates.
-        It uses linear regression to estimate the rent-to-value ratio.
+        The rent/value relationship is estimated once from the initial
+        property data and then held fixed.  Re-estimating it from the current
+        period's completed rentals makes the pricing rule depend on very small
+        and compositionally unstable samples, which can produce negative
+        slopes and invalid offered rents.  Completed rental transactions are
+        still recorded in the histogram for diagnostics.
 
         Returns:
-            np.ndarray: Regression coefficients [slope, intercept] representing
-                the relationship between property values and rental rates.
-                Returns current ratio if no rentals occurred.
+            np.ndarray: The initial rent/value coefficients.
 
         Note:
-            The ratio helps track rental market efficiency and yield rates,
-            providing insights into investment returns and market balance.
+            The initial coefficients are the pricing rule; the histogram helps
+            track realised rental yields without changing that rule.
         """
         current_rentals = self.states["current_sales"].loc[self.states["current_sales"]["sales_types"] == "Rental"]
         if len(current_rentals) == 0:
@@ -447,10 +448,7 @@ class HousingMarket:
                 None,
             )
         )
-        return self._perform_linear_regression(
-            property_values,
-            rents,
-        )
+        return self.ts.current("observed_fraction_rent_value")
 
     def _filter_feasible_current_sale_indices(
         self,

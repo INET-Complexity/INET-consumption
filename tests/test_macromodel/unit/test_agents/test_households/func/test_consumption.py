@@ -420,6 +420,26 @@ class TestCESHouseholdConsumption:
 
 
 class TestCreditAugmentedHouseholdConsumption:
+    @pytest.mark.parametrize(
+        "weights",
+        [
+            np.array([0.4, 0.4]),
+            np.array([-1.0, 2.0]),
+            np.array([np.nan, 1.0]),
+        ],
+    )
+    def test_consumption_weights_must_be_finite_nonnegative_and_sum_to_one(self, weights):
+        consumption_obj = CreditAugmentedConsumption()
+        args = self._housing_carve_out_args(n_households=1)
+        args["consumption_weights"] = weights
+        args["consumption_weights_by_income"] = np.zeros((weights.size, 1))
+        with pytest.raises(ValueError, match="consumption_weights"):
+            consumption_obj.compute_target_consumption(
+                **args,
+                rent=np.zeros(1),
+                rent_imputed=np.zeros(1),
+            )
+
     def test_compute_target_consumption_records_log_linear_decomposition_and_mpc(self):
         # partial_adjustment_speed=0.4 (rather than 1.0) keeps this scenario's implied
         # delta_log_consumption under the +-0.5 growth-sanity clip in _evaluate_target,
@@ -766,9 +786,9 @@ class TestCreditAugmentedHouseholdConsumption:
             house_price_index=1.0,
         )
 
-    def test_cash_rent_reduces_market_consumption_but_imputed_rent_is_inert(self):
+    def test_cash_and_imputed_rent_reduce_market_consumption(self):
         # Cash rent is paid to landlords separately from market purchases;
-        # imputed rent is diagnostic-only.
+        # imputed rent represents services already included in the total target.
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -793,14 +813,14 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_imputed_rent"], [0.0, 20.0])
         np.testing.assert_allclose(components["target_consumption_non_goods_housing"], [12.0, 20.0])
         np.testing.assert_allclose(
-            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+            components["target_consumption_goods_total"], [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0]
         )
         np.testing.assert_allclose(
-            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1]]
+            components["target_consumption_market_total"], [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0]
         )
-        np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1]])
+        np.testing.assert_allclose(result.sum(axis=1), [calibrated_total[0] - 12.0, calibrated_total[1] - 20.0])
 
-    def test_imputed_rent_is_inert_even_if_diagnostic_tenure_data_overlap(self):
+    def test_overlapping_cash_and_imputed_rent_are_both_subtracted(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
             consumption_smoothing_window=1,
@@ -820,7 +840,7 @@ class TestCreditAugmentedHouseholdConsumption:
             rent_imputed=np.array([20.0]),
         )
 
-        np.testing.assert_allclose(with_imputed, without_imputed)
+        np.testing.assert_allclose(with_imputed, without_imputed - 20.0)
         np.testing.assert_allclose(
             consumption_obj.last_target_consumption_components["target_consumption_imputed_rent"],
             [20.0],

@@ -111,6 +111,66 @@ def read_household_consumption(h5_path: str | Path, country_code: str) -> np.nda
         return np.asarray(handle[f"{country_code}/households/consumption"], dtype=float)
 
 
+def read_household_consumption_outcomes(h5_path: str | Path, country_code: str) -> dict[str, np.ndarray]:
+    """Read additive consumption concepts; reconstruct old files only with evidence.
+
+    Legacy ``consumption`` is net goods. Its saved gross/net aggregate ratio
+    identifies the period VAT factor (including the separately seeded initial
+    aggregates). Missing rent or VAT information yields NaN, never zero rent.
+    Persisted new outputs take precedence. CACF targets are gross behavioural
+    totals, not feasible goods orders; old zero placeholders are unavailable.
+    """
+    with h5py.File(h5_path, "r") as handle:
+        group = handle[f"{country_code}/households"]
+        goods = np.asarray(group["consumption"], dtype=float)
+        if goods.ndim != 2:
+            raise ValueError("consumption must have time and household dimensions.")
+
+        def optional(name: str, *, housing: bool = False) -> np.ndarray:
+            if name not in group:
+                return np.full_like(goods, np.nan)
+            values = np.asarray(group[name], dtype=float)
+            if values.shape != goods.shape:
+                raise ValueError(f"{name} must match consumption shape {goods.shape}.")
+            if housing:
+                if not np.all(np.isfinite(values)):
+                    raise ValueError(f"{name} must contain finite housing flows.")
+                values = np.maximum(values, 0.0)
+            return values
+
+        rent = optional("rent", housing=True)
+        imputed = optional("rent_imputed", housing=True)
+        if "consumption_cash_expenditure" in group:
+            cash = optional("consumption_cash_expenditure")
+        else:
+            factor = np.full((goods.shape[0], 1), np.nan)
+            if "total_consumption" in group and "total_consumption_before_vat" in group:
+                gross = np.asarray(group["total_consumption"], dtype=float)
+                net = np.asarray(group["total_consumption_before_vat"], dtype=float)
+                if gross.shape != factor.shape or net.shape != factor.shape:
+                    raise ValueError("Gross/net goods aggregates must have one value per consumption row.")
+                np.divide(gross, net, out=factor, where=np.isfinite(gross) & np.isfinite(net) & (net > 0))
+                factor[~np.isfinite(factor) | (factor < 1.0)] = np.nan
+            cash = goods * factor + rent
+        total = (
+            optional("consumption_including_housing") if "consumption_including_housing" in group else cash + imputed
+        )
+        target = optional("target_consumption_calibrated_total")
+        derivative = optional("target_consumption_total_mpc")
+        if "target_consumption_total_mpc" in group:
+            target[(target == 0.0) & ~np.isfinite(derivative)] = np.nan
+        else:
+            # Pre-Increment-1 files used zero for unevaluated/non-CACF targets.
+            target[target == 0.0] = np.nan
+        return {
+            "cash": cash,
+            "total": total,
+            "behavioural_total_target": target,
+            "imputed_rent": imputed,
+            "target_consumption_total_mpc": derivative,
+        }
+
+
 def read_household_income(h5_path: str | Path, country_code: str) -> np.ndarray | None:
     """Read household income if it was saved in the HDF5 output."""
     with h5py.File(h5_path, "r") as handle:
@@ -217,6 +277,10 @@ def build_household_mpc_panel(
     The returned panel preserves pre-shock household characteristics and adds:
     impact realised MPC, cumulative realised MPC, and target-consumption
     counterparts. All MPC denominators use the common equal household shock.
+    Legacy columns remain VAT-exclusive goods measures. Additive ``cash_*``,
+    ``total_*`` and ``behavioural_total_target_*`` columns use purchase prices.
+    ``imputed_rent_*`` reports the cash/total bridge, including each arm's CPI.
+    New cumulative columns prefix the supplied legacy cumulative column names.
     """
     panel = metadata.sort_values("household_id").reset_index(drop=True).copy()
     household_ids = panel["household_id"].to_numpy(dtype=int)
@@ -327,7 +391,33 @@ def build_household_mpc_panel(
         panel[f"target_cmpc_{suffix}"] = target_horizon / shock_amount
         panel[f"real_cmpc_{suffix}"] = real_horizon / real_shock_amount
         panel[f"target_real_cmpc_{suffix}"] = target_real_horizon / real_shock_amount
-    return panel
+    baseline_outcomes = read_household_consumption_outcomes(baseline_h5, country_code)
+    shock_outcomes = read_household_consumption_outcomes(shock_h5, country_code)
+    additions = {}
+    for name in ("cash", "total", "behavioural_total_target", "imputed_rent"):
+        base = baseline_outcomes[name]
+        shocked = shock_outcomes[name]
+        additions[f"baseline_{name}_consumption_impact"] = base[shock_row]
+        additions[f"shock_{name}_consumption_impact"] = shocked[shock_row]
+        for real, denominator in ((False, shock_amount), (True, real_shock_amount)):
+            base_values = _deflate_by_own_cpi(base, baseline_cpi) if real else base
+            shock_values = _deflate_by_own_cpi(shocked, shock_cpi) if real else shocked
+            impact_value, cumulative_value = _delta_at_and_cumulative(
+                base_values, shock_values, shock_row=shock_row, horizon_periods=horizon_periods
+            )
+            measure = "real_" if real else ""
+            additions[f"{name}_{measure}mpc_impact"] = impact_value / denominator
+            cumulative_name = real_cumulative_mpc_column if real else cumulative_mpc_column
+            additions[f"{name}_{cumulative_name}"] = cumulative_value / denominator
+            for periods in range(2, horizon_periods):
+                suffix = "4q" if periods == 4 else f"{periods}p"
+                cumulative_value = _delta_at_and_cumulative(
+                    base_values, shock_values, shock_row=shock_row, horizon_periods=periods
+                )[1]
+                additions[f"{name}_{measure}cmpc_{suffix}"] = cumulative_value / denominator
+    for arm, outcomes in (("baseline", baseline_outcomes), ("shock", shock_outcomes)):
+        additions[f"{arm}_target_consumption_total_mpc"] = outcomes["target_consumption_total_mpc"][shock_row]
+    return pd.concat([panel, pd.DataFrame(additions, index=panel.index)], axis=1)
 
 
 def _current_or_zero(households, field: str, *, n_households: int) -> np.ndarray:

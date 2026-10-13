@@ -541,6 +541,9 @@ class TestHouseholds:
         # Ensure the posterior variance is non-zero so the uncertainty term is non-zero.
         assert np.any(runtime_state["posterior_variance"] != 0.0)
 
+        # Establish the preceding planning period, then advance the income clock.
+        test_households.current_income_belief_learning_inputs(common_forecast_variance=0.01)
+        test_households.ts.income.append(test_households.ts.current("income").copy())
         common_log_ratio = 0.02
         common_forecast_variance = 0.03
         inputs = test_households.current_income_belief_learning_inputs(
@@ -560,7 +563,8 @@ class TestHouseholds:
             inputs["permanent_income_log_ratio_common"],
             np.full(n_households, common_log_ratio),
         )
-        np.testing.assert_allclose(inputs["uncertainty_delta"], expected_uncertainty)
+        np.testing.assert_allclose(inputs["income_uncertainty"], expected_uncertainty)
+        np.testing.assert_allclose(inputs["uncertainty_delta"], 0.02)
         assert np.all(np.isfinite(inputs["permanent_income_log_ratio"]))
         assert np.all(np.isfinite(inputs["uncertainty_delta"]))
         assert np.any(inputs["permanent_income_log_ratio"] != 0.0)
@@ -594,10 +598,10 @@ class TestHouseholds:
         )
         np.testing.assert_allclose(
             components["target_consumption_uncertainty_delta"],
-            expected_uncertainty,
+            np.full(n_households, 0.02),
         )
         assert np.any(components["target_consumption_permanent_income"] != 0.0)
-        assert np.any(components["target_consumption_uncertainty"] != 0.0)
+        np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.1 * 0.02)
 
     def test__current_income_belief_learning_inputs_zero_common_reduces_to_individual(self, test_households):
         # None common terms (forecast unavailable) reduce each output to its pure
@@ -629,7 +633,8 @@ class TestHouseholds:
         inputs = test_households.current_income_belief_learning_inputs()
         zeta = test_households.states["income_belief_zeta"]
         np.testing.assert_allclose(inputs["permanent_income_log_ratio"], zeta * runtime_state["posterior_mean"])
-        np.testing.assert_allclose(inputs["uncertainty_delta"], (zeta**2) * runtime_state["posterior_variance"])
+        np.testing.assert_allclose(inputs["income_uncertainty"], (zeta**2) * runtime_state["posterior_variance"])
+        np.testing.assert_array_equal(inputs["uncertainty_delta"], np.zeros(n_households))
 
     def test__current_income_belief_learning_inputs_raises_when_horizon_unset(self, test_households):
         # No silent default: zeta has economic meaning, so a missing delta/S
@@ -3788,3 +3793,47 @@ class TestComputeAndRecordResidualCapacityFallback:
         np.testing.assert_allclose(
             test_households.ts.current("residual_shortfall_after_caps"), np.full(n_households, 0.0)
         )
+
+
+def test_uncertainty_change_keeps_previous_period_fixed_during_replanning(test_households):
+    households = test_households
+    n = households.ts.current("n_households")
+    households.states["income_belief_priors"] = {
+        "income_belief_mu": np.zeros(n),
+        "income_belief_p": np.full(n, 0.005),
+        "income_belief_rho": np.full(n, 0.9519),
+        "sigma2_v": np.full(n, 0.001),
+        "sigma2_xi": np.full(n, 0.01),
+    }
+    households.functions["consumption"] = CreditAugmentedConsumption(
+        uses_income_belief_learning=True,
+        income_belief_learning_horizon={"delta": 0.95, "S": 40},
+    )
+    first = households.current_income_belief_learning_inputs(common_forecast_variance=0.01)
+    np.testing.assert_array_equal(first["uncertainty_delta"], np.zeros(n))
+    # Calling again in the first period neither invents a lag nor aliases outputs.
+    first["income_uncertainty"][:] = -999.0
+    repeated = households.current_income_belief_learning_inputs(common_forecast_variance=0.01)
+    np.testing.assert_array_equal(repeated["uncertainty_delta"], np.zeros(n))
+
+    households.ts.income.append(households.ts.current("income").copy())
+    unchanged = households.current_income_belief_learning_inputs(common_forecast_variance=0.01)
+    np.testing.assert_array_equal(unchanged["uncertainty_delta"], np.zeros(n))
+    # The second planning pass revises the common variance within the same period.
+    revised = households.current_income_belief_learning_inputs(common_forecast_variance=0.03)
+    np.testing.assert_allclose(revised["uncertainty_delta"], 0.02)
+    again = households.current_income_belief_learning_inputs(common_forecast_variance=0.03)
+    np.testing.assert_allclose(again["uncertainty_delta"], 0.02)
+
+    households.ts.income.append(households.ts.current("income").copy())
+    runtime = households.states["income_belief_runtime_state"]
+    runtime["posterior_variance"] += 0.002
+    zeta = households.states["income_belief_zeta"]
+    decreased_common = households.current_income_belief_learning_inputs(common_forecast_variance=0.0)
+    np.testing.assert_allclose(decreased_common["uncertainty_delta"], zeta**2 * 0.002 - 0.03)
+    # Both posterior and common changes contribute; the final previous planning
+    # value (0.03 common variance), rather than its first pass (0.01), is the lag.
+    np.testing.assert_allclose(
+        households.current_income_belief_learning_inputs(common_forecast_variance=0.0)["uncertainty_delta"],
+        decreased_common["uncertainty_delta"],
+    )

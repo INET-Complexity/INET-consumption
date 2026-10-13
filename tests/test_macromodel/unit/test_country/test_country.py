@@ -2818,11 +2818,20 @@ class TestCountry:
         zeta = test_country.households.states["income_belief_zeta"]
         runtime_state = test_country.households.states["income_belief_runtime_state"]
         np.testing.assert_allclose(captured["permanent_income_log_ratio"], zeta * runtime_state["posterior_mean"])
-        np.testing.assert_allclose(captured["uncertainty_delta"], (zeta**2) * runtime_state["posterior_variance"])
+        np.testing.assert_array_equal(captured["uncertainty_delta"], np.zeros(n_households))
         # The added call site reads only existing series (side-effect free w.r.t.
         # economy/household income state).
         assert set(test_country.economy.ts.get_keys()) == economy_keys_before
         assert np.array_equal(test_country.households.ts.dicts["income"][-1], households_income_before)
+
+        # A completed income period advances the uncertainty lag once. Both
+        # subsequent planning passes must consume the same change.
+        test_country.households.ts.income.append(households_income_before.copy())
+        runtime_state["posterior_variance"] += 0.001
+        test_country._set_household_target_demand(replace_current=True)
+        np.testing.assert_allclose(captured["uncertainty_delta"], zeta**2 * 0.001)
+        test_country._set_household_target_demand(replace_current=True)
+        np.testing.assert_allclose(captured["uncertainty_delta"], zeta**2 * 0.001)
 
     def test__income_belief_zeta_raises_when_horizon_not_configured(self, test_country):
         # With uses_income_belief_learning=True but no income_belief_learning_horizon,

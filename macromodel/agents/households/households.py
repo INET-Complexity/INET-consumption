@@ -2510,6 +2510,11 @@ class Households(Agent):
         scalar floats broadcast across households; ``None`` (forecast
         unavailable) is treated as ``0.0``, reducing each output to its pure
         individual component.
+
+        ``income_uncertainty`` is the level theta; ``uncertainty_delta`` is
+        its change from the previous planning period. The completed-income
+        history identifies periods, so repeated planning calls retain the
+        same lag. The first period has no observed lag and returns zero change.
         """
         priors = self.states.get("income_belief_priors")
         if priors is None:
@@ -2523,13 +2528,27 @@ class Households(Agent):
         common_variance = 0.0 if common_forecast_variance is None else common_forecast_variance
         individual_log_ratio = float(zeta) * runtime_state["posterior_mean"]
         common_log_ratio_arr = np.full(runtime_state["posterior_mean"].shape, float(common_log_ratio), dtype=float)
+        uncertainty = compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance)
+        period = len(self.ts.historic("income"))
+        uncertainty_state = self.states.get("income_uncertainty_runtime_state")
+        if uncertainty_state is None:
+            uncertainty_state = {"period": period, "previous": None, "current": uncertainty.copy()}
+            self.states["income_uncertainty_runtime_state"] = uncertainty_state
+        elif uncertainty_state["period"] != period:
+            uncertainty_state["previous"] = uncertainty_state["current"].copy()
+            uncertainty_state["period"] = period
+        # Replanning may revise the common forecast, but must not advance the lag.
+        uncertainty_state["current"] = uncertainty.copy()
+        previous = uncertainty_state["previous"]
+        uncertainty_delta = np.zeros_like(uncertainty) if previous is None else uncertainty - previous
         return {
             "permanent_income_log_ratio": compute_permanent_income_log_ratio(
                 runtime_state["posterior_mean"], zeta, common_log_ratio
             ),
             "permanent_income_log_ratio_individual": individual_log_ratio,
             "permanent_income_log_ratio_common": common_log_ratio_arr,
-            "uncertainty_delta": compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance),
+            "income_uncertainty": uncertainty,
+            "uncertainty_delta": uncertainty_delta,
         }
 
     def _income_belief_zeta(self, priors: dict[str, np.ndarray]) -> float:

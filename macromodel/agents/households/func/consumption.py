@@ -884,9 +884,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # interacts with the wealth distribution.
         if idiosyncratic_sd < 0.0:
             raise ValueError(f"idiosyncratic_sd must be non-negative, got {idiosyncratic_sd}.")
-        if idiosyncratic_persistence not in ("fixed_effect", "iid"):
+        if idiosyncratic_persistence not in ("fixed_effect", "iid", "initial_state"):
             raise ValueError(
-                f"idiosyncratic_persistence must be 'fixed_effect' or 'iid', got {idiosyncratic_persistence!r}."
+                "idiosyncratic_persistence must be 'fixed_effect', 'iid' or 'initial_state', "
+                f"got {idiosyncratic_persistence!r}."
             )
         self.idiosyncratic_sd = idiosyncratic_sd
         self.idiosyncratic_persistence = idiosyncratic_persistence
@@ -1081,7 +1082,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         violated it fails loudly at the point of violation instead of silently
         misattributing a taste shock.
         """
-        if self.idiosyncratic_sd <= 0.0:
+        if self.idiosyncratic_persistence == "initial_state" and self._household_epsilon is None:
+            # Not yet backed out: compute_target_consumption sets it on first use.
+            return np.zeros(n_households, dtype=float)
+        if self.idiosyncratic_sd <= 0.0 and self._household_epsilon is None:
             return np.zeros(n_households, dtype=float)
         if self.idiosyncratic_persistence == "iid":
             return self._idiosyncratic_rng.normal(0.0, self.idiosyncratic_sd, n_households)
@@ -1101,6 +1105,23 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 "silently; call set_run_seed() to reset the cache if the shrink is intentional."
             )
         return self._household_epsilon[:n_households]
+
+    def _initial_state_epsilon(self, income: np.ndarray, target_inputs: dict) -> np.ndarray:
+        """Back out the fixed effect so each household starts at its long-run target.
+
+        eps_i = log(C_i / y_i) - x_i, with x_i the deterministic long-run log
+        consumption-to-income ratio. The observed initial consumption is then the
+        steady state of the rule, and E[eps] = 0 identifies the intercept.
+        Households with non-finite residuals (zero income or consumption) get 0.
+        """
+        components, _ = self._evaluate_target(income=income, epsilon=None, **target_inputs)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            eps = (
+                np.log(components["target_consumption_real_lagged_consumption"])
+                - np.log(components["target_consumption_real_income"])
+                - components["target_consumption_log_long_run"]
+            )
+        return np.where(np.isfinite(eps), eps, 0.0)
 
     def _geometric_average_income(
         self,
@@ -1654,8 +1675,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         else:
             ratio_denominator = None
 
-        components, target_total = self._evaluate_target(
-            income=income,
+        target_inputs = dict(
             lagged_income=lagged_income,
             lagged_consumption=lagged_consumption,
             liquid_wealth=liquid_wealth,
@@ -1686,8 +1706,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,
             ratio_denominator=ratio_denominator,
-            epsilon=epsilon,
         )
+        if self.idiosyncratic_persistence == "initial_state" and self._household_epsilon is None:
+            self._household_epsilon = self._initial_state_epsilon(income, target_inputs)
+            epsilon = self._household_epsilon
+        components, target_total = self._evaluate_target(income=income, epsilon=epsilon, **target_inputs)
 
         current_deflator = max(
             float(current_cpi) / (float(initial_cpi) if initial_cpi != 0.0 else 1.0), self.price_floor
@@ -1695,38 +1718,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_income_perturbation = np.maximum(1.0, np.abs(income / current_deflator) * 1e-4)
         nominal_income_perturbation = real_income_perturbation * current_deflator
         _, perturbed_target = self._evaluate_target(
-            income=income + nominal_income_perturbation,
-            lagged_income=lagged_income,
-            lagged_consumption=lagged_consumption,
-            liquid_wealth=liquid_wealth,
-            illiquid_wealth=illiquid_wealth,
-            housing_wealth=housing_wealth,
-            lagged_housing_wealth=lagged_housing_wealth,
-            rent=rent,
-            mortgage_debt=mortgage_debt,
-            mortgage_payment=mortgage_payment,
-            lagged_liquid_wealth=lagged_liquid_wealth,
-            lagged_illiquid_wealth=lagged_illiquid_wealth,
-            lagged_mortgage_debt=lagged_mortgage_debt,
-            lagged_consumption_loan_debt=lagged_consumption_loan_debt,
-            cashflow_consumer_debt=cashflow_consumer_debt,
-            owner_occupied=owner_occupied,
-            mortgagor=mortgagor,
-            house_price_index=house_price_index,
-            lagged_house_price_index=lagged_house_price_index,
-            real_borrowing_rate=real_borrowing_rate,
-            permanent_income_log_ratio=permanent_income_log_ratio,
-            consumer_debt_rate_delta=consumer_debt_rate_delta,
-            uncertainty_delta=uncertainty_delta,
-            current_cpi=current_cpi,
-            lagged_cpi=lagged_cpi,
-            initial_cpi=initial_cpi,
-            expected_inflation=expected_inflation,
-            population_scale_factor=population_scale_factor,
-            time_unit=time_unit,
-            lagged_real_consumption_budget=lagged_real_consumption_budget,
-            ratio_denominator=ratio_denominator,
-            epsilon=epsilon,
+            income=income + nominal_income_perturbation, epsilon=epsilon, **target_inputs
         )
 
         # ``target_total`` is the calibrated consumption budget. Cash rent is

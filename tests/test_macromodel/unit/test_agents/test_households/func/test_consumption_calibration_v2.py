@@ -127,6 +127,34 @@ class TestIdiosyncraticTerm:
         assert eps.std() == pytest.approx(0.3308, abs=0.005)
         assert eps.mean() == pytest.approx(0.0, abs=0.005)
 
+    def test_initial_state_residual_starts_every_household_at_its_target(self):
+        """Backed-out eps makes observed initial consumption the rule's steady state."""
+        rule = _rule(idiosyncratic_persistence="initial_state", idiosyncratic_sd=0.3308)
+        lagged_consumption = np.array([40.0, 90.0, 130.0])
+        kwargs = dict(
+            expected_inflation=0.0,
+            current_cpi=1.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=lagged_consumption[None, :],
+            saving_rates=np.zeros(3),
+            income=np.full(3, 100.0),
+            household_benefits=np.zeros(3),
+            consumption_weights=np.array([1.0]),
+            consumption_weights_by_income=np.array([[1.0]]),
+            exogenous_total_consumption=np.zeros(3),
+            current_time=1,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            lagged_real_consumption_budget=lagged_consumption,
+        )
+        rule.compute_target_consumption(**kwargs)
+        gap = rule.last_target_consumption_components["target_consumption_partial_adjustment_gap"]
+        np.testing.assert_allclose(gap, 0.0, atol=1e-10)
+        # Backed out once: a second call keeps the same fixed effect.
+        first = rule._epsilon(3).copy()
+        rule.compute_target_consumption(**kwargs)
+        np.testing.assert_array_equal(rule._epsilon(3), first)
+
     def test_negative_sd_is_rejected(self):
         with pytest.raises(ValueError, match="non-negative"):
             _rule(idiosyncratic_sd=-0.1)

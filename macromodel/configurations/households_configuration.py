@@ -229,9 +229,7 @@ class SocialTransfersFunction(BaseModel):
         "ConstantSocialTransfersSetter",
         "DefaultSocialTransfersSetter",
         "InitialShareSocialTransfersSetter",
-    ] = (
-        "EqualSocialTransfersSetter"
-    )
+    ] = "EqualSocialTransfersSetter"
     parameters: dict[str, Any] = {
         "independents": ["Income", "Debt"],
     }

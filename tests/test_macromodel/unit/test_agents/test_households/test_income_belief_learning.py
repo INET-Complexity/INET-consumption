@@ -118,7 +118,7 @@ def test__income_belief_learning_outputs_use_correct_variance_mapping_and_predic
     )
 
     expected_growth = np.log(current_income) - np.log(lagged_income)
-    expected_common_growth = np.log(current_income).mean() - np.log(lagged_income).mean()
+    expected_common_growth = expected_growth.mean()
     expected_signal = expected_growth - expected_common_growth
     expected_predicted_mean = 0.8 * priors["income_belief_mu"]
     expected_predicted_variance = (0.8**2) * priors["income_belief_p"] + priors["sigma2_v"]
@@ -129,7 +129,7 @@ def test__income_belief_learning_outputs_use_correct_variance_mapping_and_predic
 
     np.testing.assert_allclose(outputs.realised_income_growth, expected_growth)
     assert outputs.common_income_growth_signal == pytest.approx(expected_common_growth)
-    np.testing.assert_allclose(outputs.income_signal, expected_signal)
+    np.testing.assert_allclose(outputs.income_signal, expected_signal, atol=1e-12)
     assert outputs.income_signal.mean() == pytest.approx(0.0)
     np.testing.assert_allclose(outputs.predicted_mean, expected_predicted_mean)
     np.testing.assert_allclose(outputs.predicted_variance, expected_predicted_variance)
@@ -217,6 +217,34 @@ def test__income_belief_learning_handles_zero_income_floor():
     # this finite, it does not keep it economically plausible. See GH issue #90.
     assert outputs.growth_clipped.all()
     assert np.all(np.abs(outputs.realised_income_growth) <= 1.0)
+
+
+def test__income_belief_learning_common_signal_ignores_floored_households():
+    # 2 of 100 households move from zero to positive income. They must not shift
+    # the common component, and must not be updated (missing observation).
+    n = 100
+    lagged_income = np.full(n, 100.0)
+    lagged_income[:2] = 0.0
+    current_income = np.full(n, 102.0)
+    priors = {
+        "income_belief_mu": np.full(n, 0.1),
+        "income_belief_p": np.full(n, 0.5),
+        "income_belief_rho": np.full(n, 0.8),
+        "sigma2_xi": np.full(n, 1.0),
+        "sigma2_v": np.full(n, 0.2),
+    }
+
+    outputs = compute_income_belief_learning_outputs(
+        current_income=current_income,
+        lagged_income=lagged_income,
+        priors=priors,
+    )
+
+    assert outputs.common_income_growth_signal == pytest.approx(np.log(1.02))
+    np.testing.assert_allclose(outputs.income_signal[2:], 0.0, atol=1e-12)
+    np.testing.assert_allclose(outputs.kalman_gain[:2], 0.0)
+    np.testing.assert_allclose(outputs.posterior_mean[:2], outputs.predicted_mean[:2])
+    np.testing.assert_allclose(outputs.posterior_variance[:2], outputs.predicted_variance[:2])
 
 
 def test__income_belief_learning_clips_extreme_growth_but_not_normal_growth():

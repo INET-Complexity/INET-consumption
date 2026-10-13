@@ -160,7 +160,12 @@ def compute_income_belief_learning_outputs(
     raw_income_growth = log_current_income - log_lagged_income
     realised_income_growth = np.clip(raw_income_growth, -growth_clip_bound, growth_clip_bound)
     growth_clipped = np.abs(raw_income_growth) > growth_clip_bound
-    common_income_growth_signal = float(log_current_income.mean() - log_lagged_income.mean())
+    # The common component is the mean clipped growth over households with
+    # observable income. Floored households carry ~+-27.6 log points of spurious
+    # growth each; 2% of them shifted the unclipped mean by ~+0.85 at the first
+    # update, so every other household read a permanent income loss.
+    observed = ~floor_used
+    common_income_growth_signal = float(realised_income_growth[observed].mean()) if observed.any() else 0.0
     income_signal = realised_income_growth - common_income_growth_signal
     predicted_mean = rho * prior_mean
     predicted_variance = np.maximum((rho**2) * prior_variance + process_variance, 0.0)
@@ -176,6 +181,8 @@ def compute_income_belief_learning_outputs(
         out=np.zeros_like(predicted_variance),
         where=np.isfinite(innovation_variance) & (innovation_variance > 0.0),
     )
+    # Floored income is a missing observation: no update, posterior = prediction.
+    kalman_gain = np.where(floor_used, 0.0, kalman_gain)
     with np.errstate(invalid="ignore"):
         posterior_mean = predicted_mean + kalman_gain * prediction_error
         posterior_variance = np.maximum((1.0 - kalman_gain) * predicted_variance, 0.0)

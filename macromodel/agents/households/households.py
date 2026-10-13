@@ -1473,6 +1473,17 @@ class Households(Agent):
             minlength=self.ts.current("n_households"),
         )
 
+    def _social_transfer_independents(self) -> tuple[np.ndarray, np.ndarray]:
+        """Current and initial values of the social-transfer setter's own independents."""
+        inds = getattr(self.functions["social_transfers"], "independents", None)
+        if inds is None:
+            inds = self.independents
+        if len(inds) == 0:
+            return np.array([]), np.array([])
+        current = np.stack([self.ts.current(ind.lower()) for ind in inds], axis=1)
+        initial = np.stack([self.ts.initial(ind.lower()) for ind in inds], axis=1)
+        return current, initial
+
     def compute_expected_social_transfer_income(
         self,
         total_other_social_transfers: float,
@@ -1494,29 +1505,15 @@ class Households(Agent):
         Returns:
             np.ndarray: Expected transfers by household
         """
-        inds = self.independents
+        current_independents, initial_independents = self._social_transfer_independents()
         return (
             (1 + expected_inflation)
             * cpi
             * self.functions["social_transfers"].get_social_transfers(
                 n_households=self.ts.current("n_households"),
                 total_other_social_transfers=total_other_social_transfers,
-                current_independents=(
-                    np.array([])
-                    if len(inds) == 0
-                    else np.stack(
-                        [self.ts.current(ind.lower()) for ind in inds],
-                        axis=1,
-                    )
-                ),
-                initial_independents=(
-                    np.array([])
-                    if len(inds) == 0
-                    else np.stack(
-                        [self.ts.initial(ind.lower()) for ind in inds],
-                        axis=1,
-                    )
-                ),
+                current_independents=current_independents,
+                initial_independents=initial_independents,
                 model=self.states["social_transfers_model"],
             )
         )
@@ -1539,26 +1536,12 @@ class Households(Agent):
         Returns:
             np.ndarray: Current transfers by household
         """
-        inds = self.independents
+        current_independents, initial_independents = self._social_transfer_independents()
         return cpi * self.functions["social_transfers"].get_social_transfers(
             n_households=self.ts.current("n_households"),
             total_other_social_transfers=total_other_social_transfers,
-            current_independents=(
-                np.array([])
-                if len(inds) == 0
-                else np.stack(
-                    [self.ts.current(ind.lower()) for ind in inds],
-                    axis=1,
-                )
-            ),
-            initial_independents=(
-                np.array([])
-                if len(inds) == 0
-                else np.stack(
-                    [self.ts.initial(ind.lower()) for ind in inds],
-                    axis=1,
-                )
-            ),
+            current_independents=current_independents,
+            initial_independents=initial_independents,
             model=self.states["social_transfers_model"],
         )
 

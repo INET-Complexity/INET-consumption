@@ -1,7 +1,11 @@
 import numpy as np
 import pytest
 
-from macromodel.agents.households.func.social_transfers import DefaultSocialTransfersSetter, EqualSocialTransfersSetter
+from macromodel.agents.households.func.social_transfers import (
+    DefaultSocialTransfersSetter,
+    EqualSocialTransfersSetter,
+    InitialShareSocialTransfersSetter,
+)
 
 
 class ZeroPredictionModel:
@@ -65,3 +69,28 @@ def test__equal_social_transfers_handles_an_empty_household_population():
     )
 
     np.testing.assert_array_equal(result, np.zeros(0))
+
+
+def test_initial_share_setter_preserves_initial_allocation_shares():
+    setter = InitialShareSocialTransfersSetter(independents=["Income_Other_Social_Transfers"])
+    initial = np.array([[0.0], [10.0], [30.0], [0.0]])
+    out = setter.get_social_transfers(
+        n_households=4,
+        total_other_social_transfers=80.0,
+        current_independents=np.full((4, 1), 5.0),
+        initial_independents=initial,
+        model=None,
+    )
+    np.testing.assert_allclose(out, [0.0, 20.0, 60.0, 0.0])
+
+
+def test_initial_share_setter_falls_back_to_equal_without_initial_shares():
+    setter = InitialShareSocialTransfersSetter(independents=["Income_Other_Social_Transfers"])
+    out = setter.get_social_transfers(4, 8.0, np.zeros((4, 1)), np.zeros((4, 1)), None)
+    np.testing.assert_allclose(out, [2.0, 2.0, 2.0, 2.0])
+
+
+def test_initial_share_setter_requires_a_single_independent():
+    setter = InitialShareSocialTransfersSetter(independents=["Income", "Debt"])
+    with pytest.raises(ValueError, match="exactly one independent"):
+        setter.get_social_transfers(2, 1.0, np.ones((2, 2)), np.ones((2, 2)), None)

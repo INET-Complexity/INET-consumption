@@ -196,3 +196,43 @@ class DefaultSocialTransfersSetter(SocialTransfersSetter):
             independents=current_independents,
             model=model,
         )
+
+
+class InitialShareSocialTransfersSetter(SocialTransfersSetter):
+    """Allocate the budget in proportion to each household's initial transfer share.
+
+    Mirrors the HFCS-weighted public-pension path: the t=0 allocation of other
+    social transfers (``Allocated Other Social Transfers``, proportional to HFCS
+    ``Social Transfer Income``) fixes each household's share, and the runtime
+    budget is distributed with those shares. The equal setter instead pays
+    budget/n to every household, so the t=0 HFCS allocation is replaced by a
+    flat one at t=1.
+
+    Configure with a single independent naming the initial allocation series,
+    ``independents: [Income_Other_Social_Transfers]``; its initial values arrive
+    as ``initial_independents``.
+    """
+
+    def get_social_transfers(
+        self,
+        n_households: int,
+        total_other_social_transfers: float,
+        current_independents: np.ndarray,
+        initial_independents: np.ndarray,
+        model: Optional[Any],
+    ) -> np.ndarray:
+        budget = _validate_social_transfer_budget(n_households, total_other_social_transfers)
+        if n_households == 0:
+            return np.zeros(0, dtype=float)
+        weights = np.asarray(initial_independents, dtype=float)
+        if weights.ndim != 2 or weights.shape != (n_households, 1):
+            raise ValueError(
+                "InitialShareSocialTransfersSetter needs exactly one independent (the initial "
+                "transfer allocation) with one row per household."
+            )
+        weights = weights[:, 0]
+        weights = np.where(np.isfinite(weights) & (weights > 0.0), weights, 0.0)
+        total_weight = weights.sum()
+        if total_weight <= 0.0:
+            return np.full(n_households, budget / n_households, dtype=float)
+        return budget * weights / total_weight

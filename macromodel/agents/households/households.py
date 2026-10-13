@@ -1475,7 +1475,9 @@ class Households(Agent):
 
     def _social_transfer_independents(self) -> tuple[np.ndarray, np.ndarray]:
         """Current and initial values of the social-transfer setter's own independents."""
-        inds = getattr(self.functions["social_transfers"], "independents", None) or self.independents
+        inds = getattr(self.functions["social_transfers"], "independents", None)
+        if inds is None:
+            inds = self.independents
         if len(inds) == 0:
             return np.array([]), np.array([])
         current = np.stack([self.ts.current(ind.lower()) for ind in inds], axis=1)

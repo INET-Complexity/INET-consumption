@@ -148,6 +148,9 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     "firm_dividend_payout_ratio": {
         "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
     },
+    "hiring_speed_1_0": {
+    "labour_market.functions.clearing.parameters['hiring_speed']": 1.0,
+    },
 }
 
 

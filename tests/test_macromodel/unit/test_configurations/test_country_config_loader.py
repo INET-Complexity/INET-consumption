@@ -319,7 +319,7 @@ def test__load_country_configuration_rejects_extra_keys_inside_paper_parameter_r
 def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_parameter_section(tmp_path):
     paper_params = {
         "desired_consumption": {
-            "credit_augmented_v1": {
+            "credit_augmented": {
                 "income_belief_learning_horizon": {
                     "paper_parameter_file": "paper.yaml",
                     "paper_parameter_ref": "income_belief_learning.permanent_income_log_ratio",
@@ -341,7 +341,7 @@ def test__load_country_configuration_resolves_nested_paper_parameter_ref_in_para
                                 "path_name": "consumption",
                                 "parameters": {
                                     "paper_parameter_file": "paper.yaml",
-                                    "paper_parameter_ref": "desired_consumption.credit_augmented_v1",
+                                    "paper_parameter_ref": "desired_consumption.credit_augmented",
                                 },
                             }
                         }
@@ -363,11 +363,8 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     with (_REPO_ROOT / "run_model/config/consumption_paper_parameters.yaml").open() as f:
         paper_parameters = yaml.safe_load(f)
-    # FRA resolves credit_augmented_v3 (ten-moment minimum-distance fit on HFCS
-    # France). v1 and v2 are retained in the paper-parameter file for
-    # reproducibility of their baselines but are no longer the FRA reference.
-    v3 = paper_parameters["desired_consumption"]["credit_augmented_v3"]
-    expected_income_growth_propensity = v3["income_growth_propensity"]
+    canonical = paper_parameters["desired_consumption"]["credit_augmented"]
+    expected_income_growth_propensity = canonical["income_growth_propensity"]
 
     params = config.households.functions.consumption.parameters
     assert "paper_parameter_file" not in params
@@ -385,13 +382,12 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     assert params["elasticity_of_substitution"] == 1.0
     assert params["minimum_consumption_fraction"] == 1.0
     assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
-    # v3-specific: the re-estimated intercept and idiosyncratic term. sigma_eps
-    # rises against v2's 0.3308 -- structure now explains 25.4% of Var log(C/Y).
-    assert params["long_run_intercept"] == -0.3813
+    # Provisional runtime intercept; retain the previously active fitted sigma.
+    assert params["long_run_intercept"] == 0.25
     assert params["idiosyncratic_sd"] == 0.4256
-    assert params["idiosyncratic_persistence"] == "fixed_effect"
+    assert params["idiosyncratic_persistence"] == "initial_state"
     assert params["income_denominator"] == "geometric_average"
-    assert params["income_denominator_window"] == 20
+    assert params["income_denominator_window"] == 4
     assert params["uses_continuous_wealth_calibration"] is True
     # Three logistics sharing one FIXED transition width (k = 43.9445 for each),
     # with separately estimated midpoints. v2's pinned c_alpha (1.000) and

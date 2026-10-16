@@ -1195,12 +1195,7 @@ class CreditMarket:
         grants = cons[0].sum(axis=0)
         rate = np.divide((cons[0] * cons[1]).sum(axis=0), grants, out=np.zeros_like(grants), where=grants > 0)
         factor = _annuity_payment_factor(rate, maturity)
-        opening_cons_interest, _ = _scheduled_service_components(
-            self._serviceable_loans_this_period["cons_loans"],
-            self._consumer_principal_arrears_by_cell,
-            principal_arrears_accrue_interest=False,
-        )
-        balance = self.current_consumer_balance_by_household() + opening_cons_interest.sum(axis=0)
+        balance = self.current_consumer_balance_by_household() + self.preview_opening_consumer_interest()
         _, mortgage_service = self.preview_opening_household_service()
         headroom = np.maximum(limit * income - mortgage_service - other, 0.0)
         capacity = np.maximum(headroom / factor - balance, 0.0)
@@ -1323,19 +1318,23 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
         self._pending_consumer_loans_this_period = None
 
+    def preview_opening_consumer_interest(self) -> np.ndarray:
+        """Opening consumer interest reserved for refinancing, excluding mortgages."""
+        interest, _ = _scheduled_service_components(
+            self._serviceable_loans_this_period["cons_loans"],
+            opening_principal_arrears=self._consumer_principal_arrears_by_cell,
+            principal_arrears_accrue_interest=False,
+        )
+        return interest.sum(axis=0)
+
     def preview_opening_household_interest(self) -> np.ndarray:
         """Preview current contractual interest, excluding principal and old arrears.
 
         Reuses the frozen opening schedule. Same-period new loans are excluded,
         exactly as in service feasibility. This accessor mutates no credit state.
         """
-        consumer_interest, _ = _scheduled_service_components(
-            self._serviceable_loans_this_period["cons_loans"],
-            opening_principal_arrears=self._consumer_principal_arrears_by_cell,
-            principal_arrears_accrue_interest=False,
-        )
         mortgage_interest, _ = _scheduled_service_components(self._serviceable_loans_this_period["mort_loans"])
-        return (consumer_interest + mortgage_interest).sum(axis=0)
+        return self.preview_opening_consumer_interest() + mortgage_interest.sum(axis=0)
 
     def preview_opening_household_service(self) -> tuple[np.ndarray, np.ndarray]:
         """Return non-mutating opening consumer and mortgage service by household."""

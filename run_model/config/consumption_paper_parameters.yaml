@@ -136,10 +136,7 @@ desired_consumption:
     #   optimiser        seeded 50-start L-BFGS-B, seed 20260815
     #   objective        1.869430e-02
     # ------------------------------------------------------------------
-    long_run_intercept: -0.4638           # alpha_0, ESTIMATED.
-    # v1 used 0.08 plus a -0.5209 hand recentring applied downstream to force
-    # median C*/y onto the HFCS anchor. v2 estimates the intercept on the data,
-    # so that recentring must NOT be reapplied on top of this value.
+    long_run_intercept: 0.15           # alpha_0
     real_borrowing_rate_propensity: -0.72  # alpha_1, unchanged (paper Table 1)
     # INERT while uses_continuous_wealth_calibration is true: alpha_2 and gamma_1 then
     # come from the fitted mapping, household by household, and these scalars are not
@@ -180,7 +177,7 @@ desired_consumption:
     # -- the HFCS cross-section identifies the variance but not its
     # persistence, so this is a modelling decision, recorded as such.
     idiosyncratic_sd: 0.3308
-    idiosyncratic_persistence: fixed_effect
+    idiosyncratic_persistence: initial_state
     price_floor: 1.0e-12
     income_floor: 1.0e-12
     consumption_floor: 1.0e-12
@@ -196,10 +193,7 @@ desired_consumption:
     # volatile denominator, which is the near-zero-denominator mechanism behind
     # issue #90. "geometric_average" restores the calibration's own concept.
     income_denominator: geometric_average
-    income_denominator_window: 20          # periods (5 years at quarterly)
-    # Warm-up: a household with fewer than `window` observed periods uses the
-    # geometric mean of whatever positive history it has, so the denominator
-    # converges smoothly rather than jumping at a switchover period.
+    income_denominator_window: 4          # periods
     continuous_wealth_calibration:
       # ---- PROVISIONAL: two known boundary problems are ported as-is ----
       # 1. c_alpha sits at its UPPER bound (1.000), so alpha_2 spans only

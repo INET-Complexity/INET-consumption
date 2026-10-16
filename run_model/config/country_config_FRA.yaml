@@ -127,12 +127,14 @@ FRA:
             - Income
             - Debt
       social_transfers:
-        name: EqualSocialTransfersSetter
+        # Keeps each household's t=0 HFCS share of other social transfers (as public
+        # pensions keep Public Pension Weight). EqualSocialTransfersSetter paid budget/n
+        # to all, replacing the HFCS allocation at t=1 (59% of households had zero).
+        name: InitialShareSocialTransfersSetter
         path_name: social_transfers
         parameters:
           independents:
-            - Income
-            - Debt
+            - Income_Other_Social_Transfers
       target_credit:
         name: DefaultHouseholdTargetCredit
         path_name: target_credit

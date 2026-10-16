@@ -224,9 +224,12 @@ class SocialTransfersFunction(BaseModel):
     """
 
     path_name: str = "social_transfers"
-    name: Literal["EqualSocialTransfersSetter", "ConstantSocialTransfersSetter", "DefaultSocialTransfersSetter"] = (
-        "EqualSocialTransfersSetter"
-    )
+    name: Literal[
+        "EqualSocialTransfersSetter",
+        "ConstantSocialTransfersSetter",
+        "DefaultSocialTransfersSetter",
+        "InitialShareSocialTransfersSetter",
+    ] = "EqualSocialTransfersSetter"
     parameters: dict[str, Any] = {
         "independents": ["Income", "Debt"],
     }

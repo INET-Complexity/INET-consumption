@@ -911,7 +911,7 @@ class CreditMarket:
             - Outstanding loan balances
             - Bank portfolio composition
         """
-        if banks.parameters.enable_household_dsti_restriction and not hasattr(
+        if banks.parameters.requires_household_underwriting_snapshot and not hasattr(
             households, "consumer_underwriting_income"
         ):
             raise RuntimeError(
@@ -1168,7 +1168,9 @@ class CreditMarket:
         )
         loans[2] += new_loans[2]
 
-    def enforce_household_origination_dsti(self, households, maturity, consumer_loans, mortgage_loans):
+    def enforce_household_origination_dsti(
+        self, households: Households, maturity: int, consumer_loans: np.ndarray, mortgage_loans: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Cap net grants against total service at actual offered contract rates.
 
         Refinancing leaves each bank's existing principal claim in place and
@@ -1184,6 +1186,10 @@ class CreditMarket:
         other = np.asarray(households.consumer_underwriting_other_service, dtype=float)
         if income.shape != (self.states["cons_loans"].shape[2],) or not np.all(np.isfinite(income)):
             raise ValueError("Gross cash underwriting requires a finite income per household.")
+        if other.shape != income.shape or not np.all(np.isfinite(other)) or np.any(other < 0):
+            raise ValueError("Other underwriting service must be finite and non-negative per household.")
+        if not np.isfinite(limit) or not 0 < limit <= 1 or isinstance(maturity, bool) or maturity <= 0:
+            raise ValueError("DSTI limit must lie in (0,1] and contract maturity must be positive.")
         cons = consumer_loans.copy()
         mort = mortgage_loans.copy()
         grants = cons[0].sum(axis=0)

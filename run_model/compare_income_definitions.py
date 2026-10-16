@@ -13,7 +13,6 @@ from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
-
 from config import SCENARIO_PRESETS
 from src.notebook_state import run_notebook_workflow, write_run_manifest
 from src.notebook_workflow import NotebookRunConfig

@@ -390,6 +390,11 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
+        # Both direct construction and from_pickled_country pass here. Seed
+        # aligned t0 income after all initial social components are in place.
+        if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
+            self._record_behavioural_income(expected=True, initial=True)
+            self._record_behavioural_income(expected=False, initial=True)
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
@@ -873,9 +878,6 @@ class Country:
             permanent_income_forecast_inputs=permanent_income_forecast_inputs,
             permanent_income_design_matrix=permanent_income_design_matrix,
         )
-        if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
-            country._record_behavioural_income(expected=True, initial=True)
-            country._record_behavioural_income(expected=False, initial=True)
         return country
 
     @staticmethod
@@ -1484,6 +1486,13 @@ class Country:
         """
         hh = self.households
         prefix = "expected_" if expected else ""
+        base = prefix + "behavioural_income"
+        if not initial and base not in hh.ts.dicts:
+            raise ValueError(
+                "Aligned income must be enabled before Country construction so its t0 history can be initialized. "
+                "Construct a fresh country with uses_aligned_behavioural_income=True; "
+                "do not switch an existing cash-income history in place."
+            )
         non_property = hh.ts.current(prefix + "income_employee") + hh.ts.current(prefix + "income_social_transfers")
         # A staged income intervention enters non-property income once. The
         # existing cash-income route books it independently; this is a diagnostic.
@@ -1509,7 +1518,6 @@ class Country:
             imputed_rent=hh.current_consumption_imputed_rent(),
             subsistence=self.economy.ts.current("subsistence_consumption"),
         )
-        base = prefix + "behavioural_income"
         for name, values in parts.items():
             key = base if name == "income" else base + "_" + name
             if initial:

@@ -1948,6 +1948,13 @@ class Households(Agent):
                 if getattr(self.functions["consumption"], "uses_aligned_behavioural_income", False)
                 else "expected_income"
             )
+            if income_series not in self.ts.dicts:
+                raise ValueError(
+                    "Reconciled consumption requires initialized expected_behavioural_income history. "
+                    "Construct the country with uses_aligned_behavioural_income=True, or provide "
+                    "a consistent behavioural-income history explicitly for standalone households. "
+                    "Use uses_aligned_behavioural_income=False for the previous cash-income contract."
+                )
             income = self.ts.current(income_series) if income_override is None else income_override
             lagged_income = self.ts.prev(income_series) if lagged_income_override is None else lagged_income_override
             mortgage_payment = (

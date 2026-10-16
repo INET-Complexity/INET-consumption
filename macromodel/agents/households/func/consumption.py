@@ -655,7 +655,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     """
 
     uses_housing_carve_out = True
-    uses_aligned_behavioural_income = True
+    uses_aligned_behavioural_income = False
 
     def __init__(
         self,
@@ -693,7 +693,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         idiosyncratic_seed: int | None = None,
         income_denominator: str = "current",
         income_denominator_window: int = 20,
-        uses_aligned_behavioural_income: bool = True,
+        uses_aligned_behavioural_income: bool = False,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -701,7 +701,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             minimum_consumption_fraction,
             elasticity_of_substitution,
         )
-        # Toggle the input definition for paired reconciliation comparisons.
+        # The canonical country config opts in explicitly. Standalone rules
+        # retain their previous cash-income contract unless reconciliation is
+        # requested together with initialized behavioural-income histories.
         # False restores the previous expected cash-income input/history, while
         # keeping the annualisation fix and all other rule parameters unchanged.
         if not isinstance(uses_aligned_behavioural_income, bool):

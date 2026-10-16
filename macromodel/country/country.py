@@ -390,11 +390,49 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
+        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._initialize_nominal_employee_income()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=True, initial=True)
             self._record_behavioural_income(expected=False, initial=True)
+
+    def nominal_employee_income(self) -> np.ndarray:
+        """Current wage-only nominal receipts, on the payroll price basis."""
+        from macromodel.util.wage_receipts import wage_price_factor
+
+        cpi = getattr(self, "_wage_price_level", self.economy.current_consumer_price_level())
+        psi = self.firms.configuration.parameters.wage_cpi_indexation_elasticity
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(cpi, psi)
+
+    def _initialize_nominal_employee_income(self) -> None:
+        """Seed t0 components without rescaling benefits or existing saved histories."""
+        wages = self.households.aggregate_individual_amount(
+            self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
+        )
+        for name in ("income_employee", "expected_income_employee"):
+            self.households.ts.override_current(name, wages.copy())
+        self.households.ts.override_current("total_income_employee", [wages.sum()])
+        self.households.ts.override_current("income", self.households.compute_income())
+        self.households.ts.override_current("expected_income", self.households.compute_expected_income())
+
+    def refresh_known_household_receipts(self) -> None:
+        """Replace wage/regular-benefit forecasts for current financing only."""
+        hh = self.households
+        wages = hh.aggregate_individual_amount(
+            self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
+        )
+        pension, unemployment, other, _ = self.compute_realised_household_social_income_components()
+        receipts = (
+            hh.ts.current("expected_income")
+            - hh.ts.current("expected_income_employee")
+            - hh.ts.current("expected_income_social_transfers")
+        )
+        receipts = receipts + wages + pension + unemployment + other
+        hh.ts.override_current("financing_income", receipts)
+        hh._known_receipts_ready = True
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
@@ -1274,6 +1312,8 @@ class Country:
         )
         self.prepare_post_labour_realised_feasible_activity_plan()
 
+        # Lock the wage price basis before goods clearing changes current CPI.
+        self._wage_price_level = self.economy.current_consumer_price_level()
         # Firm wages
         self.individuals.ts.employee_income.append(
             self.firms.set_employee_income(
@@ -1325,6 +1365,7 @@ class Country:
             )
 
         self._set_household_income_expectations(replace_current=True)
+        self.refresh_known_household_receipts()
         self._set_household_target_demand(replace_current=True)
         if self.configuration.households.parameters.uses_feasibility_resolver:
             self.households.refresh_post_labour_feasibility(
@@ -1360,6 +1401,8 @@ class Country:
         )
 
     def _set_household_income_expectations(self, *, replace_current: bool) -> None:
+        from macromodel.util.wage_receipts import wage_price_factor
+
         # Individual income
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
@@ -1368,6 +1411,10 @@ class Country:
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
+            wage_price_factor=wage_price_factor(
+                getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
+                self.firms.configuration.parameters.wage_cpi_indexation_elasticity,
+            ),
         )
         if replace_current:
             self.individuals.ts.override_current("expected_income", expected_individual_income)
@@ -1384,11 +1431,10 @@ class Country:
             )
         )
         expected_income_employee = (
-            self.households.compute_employee_income(
-                individual_income=self.individuals.ts.current("expected_income"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-            - expected_unemployment_benefits
+            1 + self.economy.current_expected_consumer_period_inflation()
+        ) * self.households.compute_employee_income(
+            individual_income=self.nominal_employee_income(),
+            corr_households=self.individuals.states["Corresponding Household ID"],
         )
         expected_public_pension_by_individual = (
             self.central_government.distribute_public_pension_benefits_to_individuals(
@@ -1473,7 +1519,9 @@ class Country:
         if replace_current:
             self.households.ts.override_current("expected_income", expected_household_income)
         else:
+            self.households._known_receipts_ready = False
             self.households.ts.expected_income.append(expected_household_income)
+            self.households.ts.financing_income.append(expected_household_income.copy())
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
@@ -3153,7 +3201,7 @@ class Country:
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
         )
 
         # C3. EMISSIONS AND INVENTORY
@@ -3398,6 +3446,14 @@ class Country:
                 tau_firm=self.central_government.states["Profit Tax"],
             )
         )
+        nominal_wages = self.nominal_employee_income()
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        corrected_individual_income = self.individuals.ts.current("income").copy()
+        corrected_individual_income[employed] += (
+            nominal_wages[employed]
+            - self.economy.current_consumer_price_level() * self.individuals.ts.current("employee_income")[employed]
+        )
+        self.individuals.ts.override_current("income", corrected_individual_income)
         self.individuals.ts.income_histogram.append(get_histogram(self.individuals.ts.current("income"), self.scale))
 
         # E2. HOUSEHOLD INCOME COMPONENTS
@@ -3413,7 +3469,7 @@ class Country:
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(
-                individual_income=self.individuals.ts.current("employee_income"),
+                individual_income=self.nominal_employee_income(),
                 corr_households=self.individuals.states["Corresponding Household ID"],
             )
         )
@@ -3621,7 +3677,7 @@ class Country:
             else self.households.ts.current("income_financial_assets")
         )
         self.central_government.compute_taxes(
-            current_ind_employee_income=self.individuals.ts.current("employee_income"),
+            current_ind_employee_income=self.nominal_employee_income(),
             current_total_rent_paid=self.households.ts.current("rent")[
                 self.households.states["Tenure Status of the Main Residence"] == 3
             ].sum(),

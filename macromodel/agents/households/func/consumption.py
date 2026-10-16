@@ -655,6 +655,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     """
 
     uses_housing_carve_out = True
+    uses_aligned_behavioural_income = True
 
     def __init__(
         self,
@@ -1111,10 +1112,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     ) -> np.ndarray:
         """Trailing geometric mean of real income over the configured window.
 
-        The HFCS calibration divides consumption and the three balance-sheet stocks
-        by ``disp_geom_avg_income`` -- a smoothed multi-year income -- not by a
-        single period's income. Reproducing that here is what makes the fitted
-        coefficients applicable to the simulated ratios at all.
+        This is temporal smoothing of runtime behavioural income. The HFCS
+        ``disp_geom_avg_income`` is instead a same-year component blend; it does
+        not determine this window. This helper returns period income; the target
+        evaluator annualises it before constructing stock ratios.
 
         Computed in logs on positive observations only. A household with fewer than
         ``income_denominator_window`` periods of history uses whatever positive
@@ -1362,9 +1363,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         current_period_illiquid_financial_assets = lagged_illiquid_wealth / current_deflator
         current_period_lagged_housing_wealth = lagged_housing_wealth / current_deflator
         # Denominator of the balance-sheet ratios. Under "geometric_average" this is
-        # the trailing geometric mean supplied by the caller, matching the calibration's
-        # smoothed-income concept; under "current" it is this period's annualised
-        # income, as in v1. It is deliberately NOT recomputed from the perturbed income
+        # the annualised trailing geometric mean of period income supplied by the
+        # caller; under "current" it is this period's annualised income, as in v1.
+        # Temporal smoothing preserves period units, so both branches need the same
+        # annualisation factor. It is deliberately NOT recomputed from the perturbed income
         # inside the MPC probe: a five-year average moves by ~1/window of the
         # perturbation, and holding it fixed keeps the probe a clean derivative of the
         # numerator channels.
@@ -1372,6 +1374,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             annual_spendable_income
             if ratio_denominator is None
             else np.maximum(np.asarray(ratio_denominator, dtype=float), self.income_floor)
+            * annualization_factor
         )
         net_liquid_assets_ratio = current_period_net_liquid_assets / ratio_denominator_arr
         illiquid_assets_ratio = current_period_illiquid_financial_assets / ratio_denominator_arr
@@ -1503,8 +1506,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_real_lagged_housing_wealth": real_lagged_housing_wealth,
             "target_consumption_real_consumer_debt": real_consumer_debt,
             # The wealth-ratio denominator actually divided by (finding 2, PR #138
-            # review): under "geometric_average" this is the smoothed multi-year
-            # income from _geometric_average_income; under "current" it is
+            # review): under "geometric_average" this is the annualised smoothed
+            # period income from _geometric_average_income; under "current" it is
             # annual_spendable_income. Persisted so the value driving the
             # wealth-drag clip is inspectable after a run instead of only
             # reconstructible by approximation.
@@ -1641,9 +1644,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         epsilon = self._epsilon(income.size)
         if self.income_denominator == "geometric_average":
             if historic_income is None:
-                # No silent fallback: the fitted coefficients are only interpretable
-                # against the smoothed denominator they were estimated with, so a
-                # missing history is a wiring error, not a default.
+                # The configured temporal denominator requires an explicit
+                # history. Missing history is a wiring error, not permission to
+                # switch silently to a different denominator.
                 raise ValueError(
                     "income_denominator='geometric_average' requires historic_income "
                     "(periods x households); none was supplied by the caller."

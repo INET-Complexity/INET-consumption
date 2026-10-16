@@ -58,37 +58,11 @@ class Config:
         )
 
 
-CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
-    # "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
-    # Provisional. With initial_state residuals a + eps_i is fixed by the data, so the
-    # intercept is a normalisation: chosen so backed-out eps has zero mean (FRA seed 40:
-    # mean eps 0.173 at a=-0.11, SD 0.343 vs calibrated sigma_eps 0.331). Was -0.3.
-    "households.functions.consumption.parameters.['long_run_intercept']": 0.25,
-    # Household residual eps_i in log(C/y) = x_i + eps_i. Options:
-    #   "fixed_effect"  - eps_i ~ N(0, idiosyncratic_sd), drawn once and kept; unrelated
-    #                     to observed initial C/y, so households start off their target.
-    #   "iid"           - redrawn every call; comparison only (breaks the MPC probe).
-    #   "initial_state" - backed out on first use, eps_i = log(C_i/y_i) - x_i, so observed
-    #                     initial consumption is each household's long-run target.
-    #                     idiosyncratic_sd is used only for households added mid-run.
-    # "households.functions.consumption.parameters.['idiosyncratic_persistence']": "initial_state",
-    # "households.functions.consumption.parameters.['income_denominator_window']": 4,
-    # "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
-    # "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
-    # "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
-    # "households.functions.consumption.parameters.['housing_wealth_propensity']": 0.013,
-    # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
-    # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
-    # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    # "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.9,
-    # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
-    # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
-    # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
-    # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
-    # "central_bank.taylor_rule_overrides['rho']": 0.25,
-    # "central_government.tax_overrides['production_tax_vector_scale']": 1,
-    # "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
-}
+# Shared consumption settings are authoritative in
+# consumption_paper_parameters.yaml -> desired_consumption.credit_augmented.
+# Keep this public preset name for notebook compatibility; it adds no hidden
+# intercept, smoothing or residual-mode override to the country baseline.
+CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {}
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
 # separate so selecting one cannot silently alter the calibrated baseline.
@@ -126,7 +100,7 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
         "firms.functions.target_production.parameters['inventory_adjustment_speed']": 0.75,
     },
     "income_growth_propensity_0_5_legacy_path": {
-        "households.parameters.desired_consumption.credit_augmented_v1.['income_growth_propensity']": 0.5,
+        "households.functions.consumption.parameters['income_growth_propensity']": 0.5,
     },
     "income_growth_propensity_0_5": {
         "households.functions.consumption.parameters.['income_growth_propensity']": 0.5,

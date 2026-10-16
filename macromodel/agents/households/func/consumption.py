@@ -643,7 +643,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     VAT convention (GH #123): ``target_total`` and the persisted ECM state
     (``target_consumption_real_budget`` / ``lagged_real_consumption_budget``)
     are both gross of VAT, matching the national-accounts, purchaser-price
-    basis ``credit_augmented_v1`` was calibrated against. VAT is stripped only
+    basis of the total-consumption calibration. VAT is stripped only
     once, at the goods-market allocation step (``1 / (1 + tau_vat)``), after
     the target/lag comparison is made. Realised ``ts.consumption`` is
     therefore net of VAT; call sites that need a gross-comparable aggregate

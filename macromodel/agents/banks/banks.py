@@ -376,10 +376,13 @@ class Banks(Agent):
         return (
             self.ts.current("interest_received_on_loans")
             - self.ts.current("consumer_opening_interest_arrears_collected")
+            - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("consumer_interest_accrued")
+            + self.ts.current("mortgage_interest_accrued")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
+            - self.ts.current("mortgage_default_credit_loss")
             - self.ts.current("consumer_default_interest_income_loss")
         )
 
@@ -388,9 +391,11 @@ class Banks(Agent):
         return (
             self.ts.current("interest_received_on_loans")
             - self.ts.current("consumer_opening_interest_arrears_collected")
+            - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
+            - self.ts.current("mortgage_default_credit_loss")
             - self.ts.current("consumer_default_interest_income_loss")
         )
 

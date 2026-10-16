@@ -130,7 +130,7 @@ desired_consumption:
     # cross-section identifies the variance but not its persistence, so this
     # remains a recorded modelling decision, not an estimate.
     idiosyncratic_sd: 0.4256
-    idiosyncratic_persistence: fixed_effect  # supported modes: fixed_effect, iid
+    idiosyncratic_persistence: initial_state  # supported modes: fixed_effect, iid, initial_state
     price_floor: 1.0e-12
     income_floor: 1.0e-12
     consumption_floor: 1.0e-12

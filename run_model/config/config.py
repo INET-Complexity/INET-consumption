@@ -93,6 +93,16 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
 # separate so selecting one cannot silently alter the calibrated baseline.
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
+    # Paired income-definition comparison: both inherit exactly the same
+    # calibrated overrides. Only the behavioural-income input switch differs.
+    "calibrated_income_legacy": {
+        **CALIBRATED_CONSUMPTION_OVERRIDES,
+        "households.functions.consumption.parameters['uses_aligned_behavioural_income']": False,
+    },
+    "calibrated_income_reconciled": {
+        **CALIBRATED_CONSUMPTION_OVERRIDES,
+        "households.functions.consumption.parameters['uses_aligned_behavioural_income']": True,
+    },
     "no_target_inventory_buffer": {
         "firms.functions.target_production.parameters['target_inventory_to_demand_fraction']": 0.0,
     },

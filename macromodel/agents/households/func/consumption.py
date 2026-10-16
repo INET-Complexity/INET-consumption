@@ -693,6 +693,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         idiosyncratic_seed: int | None = None,
         income_denominator: str = "current",
         income_denominator_window: int = 20,
+        uses_aligned_behavioural_income: bool = True,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -700,6 +701,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             minimum_consumption_fraction,
             elasticity_of_substitution,
         )
+        # Toggle the input definition for paired reconciliation comparisons.
+        # False restores the previous expected cash-income input/history, while
+        # keeping the annualisation fix and all other rule parameters unchanged.
+        if not isinstance(uses_aligned_behavioural_income, bool):
+            raise ValueError("uses_aligned_behavioural_income must be a boolean.")
+        self.uses_aligned_behavioural_income = uses_aligned_behavioural_income
         # Income-belief learning is implemented by this rule only.
         self.uses_income_belief_learning = uses_income_belief_learning
         self.income_belief_growth_clip_bound = income_belief_growth_clip_bound

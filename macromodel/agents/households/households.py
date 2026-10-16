@@ -2281,7 +2281,7 @@ class Households(Agent):
             delta_tilde=borrow_vs_sell_inputs["delta_tilde"],
             opening_tfa_scale=borrow_vs_sell_inputs["opening_tfa_scale"],
             post_return_ifa=borrow_vs_sell_inputs["post_return_ifa"],
-            r_b=bank_rates,
+            r_b=np.full_like(bank_rates, np.max(bank_rates)) if bank_rates.size else bank_rates,
             r_kappa=borrow_vs_sell_inputs["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
@@ -2313,6 +2313,8 @@ class Households(Agent):
         dsti_limit: float,
         current_ifa: np.ndarray,
         replace_current: bool = False,
+        existing_consumer_balance: np.ndarray | float = 0.0,
+        other_debt_service: np.ndarray | float = 0.0,
     ) -> ResidualCapacityFallbackResult:
         """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
 
@@ -2346,6 +2348,8 @@ class Households(Agent):
             consumer_loan_maturity=consumer_loan_maturity,
             dsti_limit=dsti_limit,
             current_ifa=np.asarray(current_ifa, dtype=float),
+            existing_consumer_balance=existing_consumer_balance,
+            other_debt_service=other_debt_service,
         )
         if replace_current:
             self.ts.override_current("dsti_headroom", result.dsti_headroom)

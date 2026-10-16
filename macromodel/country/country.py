@@ -418,6 +418,39 @@ class Country:
         self.households.ts.override_current("income", self.households.compute_income())
         self.households.ts.override_current("expected_income", self.households.compute_expected_income())
 
+    def household_gross_cash_income(self) -> np.ndarray:
+        """Gross cash underwriting income under the model's flat-tax convention.
+
+        Public benefits are untaxed; rental/dividend receipts are net of Income
+        Tax. Deposit interest uses the existing unwithheld posting convention.
+        This is an origination forecast, not the behavioural-income transform.
+        """
+        from macromodel.util.wage_receipts import labour_income_components
+
+        hh = self.households
+        taxes = self.central_government.states
+        tau = taxes["Income Tax"]
+        bridge = labour_income_components(
+            hh.ts.current("expected_income_employee"),
+            tau,
+            taxes["Employee Social Insurance Tax"],
+            taxes["Employer Social Insurance Tax"],
+        )
+        if tau >= 1.0:
+            raise ValueError("Gross cash underwriting requires Income Tax below one.")
+        financial = (
+            hh.ts.current("expected_income_dividend_distributions")
+            if getattr(hh.functions["wealth"], "illiquid_returns_are_capital_gains", False)
+            else hh.ts.current("expected_income_financial_assets")
+        )
+        deposit = hh.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        gross = bridge["gross_wages"] + hh.ts.current("expected_income_social_transfers")
+        gross = gross + (hh.ts.current("income_rental") + financial) / (1.0 - tau) + np.maximum(-deposit, 0.0)
+        return np.maximum(self._apply_household_income_shock(gross), 0.0)
+
     def refresh_known_household_receipts(self) -> None:
         """Replace wage/regular-benefit forecasts for current financing only."""
         hh = self.households
@@ -1835,26 +1868,42 @@ class Country:
             replace_current=replace_current,
         )
         consumer_credit_parameters = getattr(self.configuration, "consumer_credit", {}) or {}
-        consumer_credit_maturity = _positive_int_or_default(
-            consumer_credit_parameters.get(
-                "maturity_quarters", self.banks.parameters.household_consumption_loan_maturity
-            ),
-            self.banks.parameters.household_consumption_loan_maturity,
-        )
+        # One source, in model periods, shared with issued/refinanced loans.
+        consumer_credit_maturity = self.banks.parameters.household_consumption_loan_maturity
         consumer_credit_dsti_limit = _positive_float_or_default(
             consumer_credit_parameters.get("dsti_limit", 0.35),
             0.35,
         )
+        gross_cash_income = self.household_gross_cash_income()
+        deposit_service = self.households.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        existing_balance = self.credit_market.current_consumer_balance_by_household()
+        # Reserve current interest if service is suspended before the new
+        # consolidated schedule starts. Principal dues are already in balance.
+        current_cons_interest = self.credit_market.preview_opening_household_interest()
+        if existing_balance.shape != gross_cash_income.shape:
+            if np.any(existing_balance > 0.0):
+                raise ValueError("Consumer underwriting must align with household loan state.")
+            existing_balance = np.zeros_like(gross_cash_income)
+            current_cons_interest = np.zeros_like(gross_cash_income)
+        if not replace_current:
+            self.households.consumer_underwriting_income = gross_cash_income.copy()
+            self.households.consumer_underwriting_other_service = np.maximum(deposit_service, 0.0)
+            self.households.consumer_underwriting_dsti_limit = consumer_credit_dsti_limit
         self.households.compute_and_record_residual_capacity_fallback(
             preferred_margin_after_lfa=self.households.ts.current("preferred_margin_after_lfa"),
             preferred_margin_amount=self.households.ts.current("preferred_margin_amount"),
             banks=self.banks,
-            income=self.households.ts.current("expected_income"),
+            income=gross_cash_income,
             scheduled_mortgage_payment=scheduled_mortgage_payment,
             consumer_loan_maturity=consumer_credit_maturity,
             dsti_limit=consumer_credit_dsti_limit,
             current_ifa=self.households.ts.current("illiquid_financial_assets"),
             replace_current=replace_current,
+            existing_consumer_balance=existing_balance + current_cons_interest,
+            other_debt_service=np.maximum(deposit_service, 0.0),
         )
         # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
         # with the DSTI-capped shadow_credit_requested value just computed

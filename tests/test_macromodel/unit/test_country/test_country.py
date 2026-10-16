@@ -3287,6 +3287,7 @@ class TestCountry:
 
     def test__set_household_target_demand_records_increment_3_shadow_residual_caps(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
+        monkeypatch.setattr(test_country, "household_gross_cash_income", lambda: np.full(n_households, 100.0))
         test_country.central_government.states["Value-added Tax"] = 0.0
         monkeypatch.setattr(
             test_country.households,
@@ -3517,6 +3518,7 @@ class TestCountry:
         """Corrected demand reaches live credit before housing inputs advance."""
         households = test_country.households
         n_households = households.ts.current("n_households")
+        monkeypatch.setattr(test_country, "household_gross_cash_income", lambda: np.full(n_households, 100.0))
         test_country.central_government.states["Value-added Tax"] = 0.0
         monkeypatch.setattr(
             test_country.households,
@@ -3524,7 +3526,8 @@ class TestCountry:
             lambda **kwargs: np.zeros_like(test_country.households.ts.current("target_consumption")),
         )
         test_country.configuration.households.parameters.uses_feasibility_resolver = True
-        test_country.configuration.consumer_credit = {"maturity_quarters": 24, "dsti_limit": 0.35}
+        test_country.configuration.consumer_credit = {"dsti_limit": 0.35}
+        test_country.banks.parameters.household_consumption_loan_maturity = 24
         monkeypatch.setattr(test_country, "assume_zero_growth", False)
         test_country.central_government.states["Value-added Tax"] = 0.0
         total = np.resize(np.array([300.0, 300.0, 30.0]), n_households)

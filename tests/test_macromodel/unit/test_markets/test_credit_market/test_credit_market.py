@@ -627,7 +627,8 @@ def test_consumer_refinancing_records_only_realized_contractual_repricing_for_ca
     # first-time borrower and has no prior contractual rate to reprice.
     refinanced_rate = (30.0 * 0.03 + 20.0 * 0.05) / 50.0
     np.testing.assert_allclose(market.consumer_debt_rate_delta_for_cacf(), np.array([refinanced_rate - 0.02, 0.0]))
-    expected_payment = 150.0 * _annuity_payment_factor(refinanced_rate, 8)
+    # Unpaid current interest (2) is a preserved bank claim in the new pool.
+    expected_payment = 152.0 * _annuity_payment_factor(refinanced_rate, 8)
     np.testing.assert_allclose(market.states["cons_loans"][2, :, 0].sum(), expected_payment)
 
 

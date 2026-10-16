@@ -385,7 +385,7 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     # Provisional runtime intercept; retain the previously active fitted sigma.
     assert params["long_run_intercept"] == 0.25
     assert params["idiosyncratic_sd"] == 0.4256
-    assert params["idiosyncratic_persistence"] == "fixed_effect"
+    assert params["idiosyncratic_persistence"] == "initial_state"
     assert params["income_denominator"] == "geometric_average"
     assert params["income_denominator_window"] == 4
     assert params["uses_continuous_wealth_calibration"] is True

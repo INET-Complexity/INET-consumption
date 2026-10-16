@@ -76,7 +76,6 @@ from macromodel.agents.households.income_belief_learning import (
     _scalar_rho,
     compute_income_belief_learning_outputs,
     compute_income_uncertainty,
-    compute_permanent_income_log_ratio,
     compute_zeta,
 )
 from macromodel.agents.households.utils.create_bundle_matrix import create_bundle_matrix
@@ -2503,8 +2502,15 @@ class Households(Agent):
         *,
         common_permanent_income_log_ratio: float | None = None,
         common_forecast_variance: float | None = None,
+        monetary_income_components: dict[str, np.ndarray] | None = None,
     ) -> dict[str, np.ndarray]:
         """Map posterior beliefs into Stage 3 consumption-rule inputs.
+
+        With monetary components, transform the Gaussian individual log-income
+        belief through N+P before adding the common macro proxy once. Property
+        receipts stay fixed in real terms; imputed rent and debt interest are
+        absent. The learner itself and current behavioural-income level do not
+        change. Without components, retain the existing earnings-only mapping.
 
         Combines the cached scalar weight ``zeta`` with the current posterior
         beliefs (``income_belief_mu``/``income_belief_p``) and the broadcast
@@ -2534,10 +2540,36 @@ class Households(Agent):
         individual_log_ratio = float(zeta) * runtime_state["posterior_mean"]
         common_log_ratio_arr = np.full(runtime_state["posterior_mean"].shape, float(common_log_ratio), dtype=float)
         uncertainty = compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance)
+        bridge_diagnostics = {}
+        if monetary_income_components is not None:
+            from macromodel.util.permanent_monetary_income import monetary_income_moments
+
+            if not np.isfinite(common_log_ratio) or not np.isfinite(common_variance) or common_variance < 0:
+                raise ValueError("Common monetary-income proxy requires finite mean and nonnegative variance.")
+            raw_individual = individual_log_ratio.copy()
+            raw_variance = float(zeta) ** 2 * runtime_state["posterior_variance"]
+            bridge = monetary_income_moments(
+                **monetary_income_components, log_mean=raw_individual, log_variance=raw_variance
+            )
+            individual_log_ratio = bridge["mean"]
+            uncertainty = bridge["variance"] + common_variance
+            bridge_diagnostics = {
+                "income_bridge_raw_individual": raw_individual,
+                "income_bridge_raw_variance": raw_variance,
+                **{"income_bridge_" + key: value for key, value in bridge.items() if key != "mean"},
+            }
         period = len(self.ts.historic("income"))
         uncertainty_state = self.states.get("income_uncertainty_runtime_state")
+        definition = "monetary" if monetary_income_components is not None else "earnings"
+        if uncertainty_state is not None and uncertainty_state.get("definition", "earnings") != definition:
+            raise ValueError("Construct fresh income histories before changing the permanent-income definition.")
         if uncertainty_state is None:
-            uncertainty_state = {"period": period, "previous": None, "current": uncertainty.copy()}
+            uncertainty_state = {
+                "period": period,
+                "previous": None,
+                "current": uncertainty.copy(),
+                "definition": definition,
+            }
             self.states["income_uncertainty_runtime_state"] = uncertainty_state
         elif uncertainty_state["period"] != period:
             uncertainty_state["previous"] = uncertainty_state["current"].copy()
@@ -2547,13 +2579,12 @@ class Households(Agent):
         previous = uncertainty_state["previous"]
         uncertainty_delta = np.zeros_like(uncertainty) if previous is None else uncertainty - previous
         return {
-            "permanent_income_log_ratio": compute_permanent_income_log_ratio(
-                runtime_state["posterior_mean"], zeta, common_log_ratio
-            ),
+            "permanent_income_log_ratio": individual_log_ratio + common_log_ratio_arr,
             "permanent_income_log_ratio_individual": individual_log_ratio,
             "permanent_income_log_ratio_common": common_log_ratio_arr,
             "income_uncertainty": uncertainty,
             "uncertainty_delta": uncertainty_delta,
+            **bridge_diagnostics,
         }
 
     def _income_belief_zeta(self, priors: dict[str, np.ndarray]) -> float:

@@ -257,6 +257,8 @@ def create_households_timeseries(
         income_histogram=get_histogram(data["Income"].values, scale),
         expected_income=data["Income"].values,
         non_property_income=data["Employee Income"].values + data["Regular Social Transfers"].values,
+        financing_income=data["Income"].values,
+        financing_income_error=np.zeros(len(data)),
         income_employee=data["Employee Income"].values,
         total_income_employee=[data["Employee Income"].values.sum()],
         expected_income_employee=data["Employee Income"].values,

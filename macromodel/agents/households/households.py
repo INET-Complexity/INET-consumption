@@ -2281,7 +2281,7 @@ class Households(Agent):
             delta_tilde=borrow_vs_sell_inputs["delta_tilde"],
             opening_tfa_scale=borrow_vs_sell_inputs["opening_tfa_scale"],
             post_return_ifa=borrow_vs_sell_inputs["post_return_ifa"],
-            r_b=np.full_like(bank_rates, np.max(bank_rates)) if bank_rates.size else bank_rates,
+            r_b=bank_rates,
             r_kappa=borrow_vs_sell_inputs["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),

@@ -1936,7 +1936,7 @@ class Country:
         existing_balance = self.credit_market.current_consumer_balance_by_household()
         # Reserve current interest if service is suspended before the new
         # consolidated schedule starts. Principal dues are already in balance.
-        current_cons_interest = self.credit_market.preview_opening_household_interest()
+        current_cons_interest = self.credit_market.preview_opening_consumer_interest()
         if existing_balance.shape != gross_cash_income.shape:
             if np.any(existing_balance > 0.0):
                 raise ValueError("Consumer underwriting must align with household loan state.")

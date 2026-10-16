@@ -582,6 +582,7 @@ FRA:
       firm_loans_dscr_underwriting_rate_mode: max_bank_rate
       firm_loans_cfads_window: 4
       firm_loans_cfads_haircut: 1.0
+      enable_household_dsti_restriction: true
       household_consumption_loan_maturity: 12  # shared capacity/contract maturity in model periods
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
       long_term_firm_loan_maturity: 60 # 60

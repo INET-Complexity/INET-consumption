@@ -15,9 +15,12 @@ def reconcile_behavioural_income(
 ) -> dict[str, np.ndarray]:
     """Combine existing net nominal period flows, without HFCS tax replication.
 
-    Retain raw operands and flag negative operands truncated to zero. A
-    nonpositive final income uses nominal subsistence for log/ratio evaluation
-    only. Positive income is unchanged. Neither adjustment books a receipt.
+    Retain raw operands and flag negative operands truncated to zero. Apply
+    the same positive nominal subsistence lower bound to every final income:
+    max(raw_income, subsistence). This is continuous at zero and at the bound;
+    it cannot make evaluation income fall when raw income increases with a
+    fixed bound. Keep raw income and flag every bound application. This floor
+    affects consumption-rule inputs only and never books a cash receipt.
     """
     values = {
         "non_property_raw": np.asarray(non_property, dtype=float),
@@ -38,13 +41,11 @@ def reconcile_behavioural_income(
     total = np.maximum(total_raw, 0.0)
     blend = np.sqrt(n) * np.sqrt(total)
     raw = blend - values["borrower_interest"] + values["imputed_rent"]
-    floor_used = raw <= 0.0
     floor = np.asarray(subsistence, dtype=float)
-    if floor.shape != shape or not np.all(np.isfinite(floor)) or np.any(floor < 0.0):
-        raise ValueError("Subsistence income must be a finite nonnegative household vector.")
-    if np.any(floor_used & (floor <= 0.0)):
-        raise ValueError("Nonpositive behavioural income requires a positive subsistence fallback.")
-    income = np.where(floor_used, floor, raw)
+    if floor.shape != shape or not np.all(np.isfinite(floor)) or np.any(floor <= 0.0):
+        raise ValueError("Subsistence income must be a finite positive household vector.")
+    floor_used = raw < floor
+    income = np.maximum(raw, floor)
     if not np.all(np.isfinite(income)):
         raise ValueError("Reconciled behavioural income must be finite.")
     return {

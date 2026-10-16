@@ -252,7 +252,7 @@ income_belief_learning:
 
 consumer_credit:
   # Section 3.3, Table 16 — Chauvin & Muellbauer (2018)
-  maturity_quarters: 12
+  maturity_source: banks.parameters.household_consumption_loan_maturity
   spread_annual: 0.035  # over 10-yr French government bond yield
   dsti_limit: 0.35      # debt-service-to-income limit
   maximum_borrowing_age: 75

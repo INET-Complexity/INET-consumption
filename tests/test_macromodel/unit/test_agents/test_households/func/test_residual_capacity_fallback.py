@@ -190,7 +190,7 @@ def test__non_finite_inputs_collapse_to_conservative_zero_capacity_behavior():
     np.testing.assert_allclose(result.residual_shortfall_after_caps, [10.0])
 
 
-def test__non_finite_rate_uses_zero_rate_annuity_limit():
+def test__non_finite_rate_cannot_authorise_credit():
     result = _compute(
         preferred_margin_amount=np.asarray([80.0], dtype=float),
         income=np.asarray([100.0], dtype=float),
@@ -201,10 +201,10 @@ def test__non_finite_rate_uses_zero_rate_annuity_limit():
         current_ifa=np.asarray([0.0], dtype=float),
     )
 
-    np.testing.assert_allclose(result.dsti_headroom, [20.0])
-    np.testing.assert_allclose(result.dsti_maximum_loan_size, [80.0])
-    np.testing.assert_allclose(result.borrow_planned, [80.0])
-    np.testing.assert_array_equal(result.dsti_cap_binding, [False])
+    np.testing.assert_allclose(result.dsti_headroom, [0.0])
+    np.testing.assert_allclose(result.dsti_maximum_loan_size, [0.0])
+    np.testing.assert_allclose(result.borrow_planned, [0.0])
+    np.testing.assert_array_equal(result.dsti_cap_binding, [True])
 
 
 def test__negative_proxy_inputs_collapse_to_zero_capacity():
@@ -232,3 +232,17 @@ def test__returns_typed_result_without_side_effects():
 
     assert isinstance(result, ResidualCapacityFallbackResult)
     np.testing.assert_allclose(preferred_amount, [10.0])
+
+
+def test_total_refinanced_balance_and_other_service_reduce_net_new_cash():
+    result = _compute(
+        preferred_margin_amount=np.array([200.0]),
+        consumer_loan_maturity=12,
+        dsti_limit=0.35,
+        scheduled_mortgage_payment=np.array([10.0]),
+        other_debt_service=np.array([5.0]),
+        existing_consumer_balance=np.array([120.0]),
+    )
+    # Total annuity capacity is 240, of which 120 refinances existing debt.
+    np.testing.assert_allclose(result.dsti_maximum_loan_size, [120.0])
+    np.testing.assert_allclose(result.borrow_planned, [120.0])

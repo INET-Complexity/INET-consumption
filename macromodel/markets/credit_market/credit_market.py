@@ -965,6 +965,9 @@ class CreditMarket:
             current_npl_mortgages=current_npl_mortgages,
         )
         self._validate_new_consumer_loans(new_cons_loans)
+        new_cons_loans, new_mort_loans = self.enforce_household_origination_dsti(
+            households, banks.parameters.household_consumption_loan_maturity, new_cons_loans, new_mort_loans
+        )
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
@@ -1140,6 +1143,51 @@ class CreditMarket:
             where=total_principal > 0.0,
         )
         loans[2] += new_loans[2]
+
+    def enforce_household_origination_dsti(self, households, maturity, consumer_loans, mortgage_loans):
+        """Cap net grants against total service at actual offered contract rates.
+
+        Refinancing leaves each bank's existing principal claim in place and
+        remodulates it to the grant-weighted rate. Only net grants use bank
+        capital/supply. Rejected mortgage applications remain all-or-nothing.
+        """
+        if not hasattr(households, "consumer_underwriting_income"):
+            return consumer_loans, mortgage_loans
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        income = np.asarray(households.consumer_underwriting_income, dtype=float)
+        limit = float(households.consumer_underwriting_dsti_limit)
+        other = np.asarray(households.consumer_underwriting_other_service, dtype=float)
+        if income.shape != (self.states["cons_loans"].shape[2],) or not np.all(np.isfinite(income)):
+            raise ValueError("Gross cash underwriting requires a finite income per household.")
+        cons = consumer_loans.copy()
+        mort = mortgage_loans.copy()
+        grants = cons[0].sum(axis=0)
+        rate = np.divide((cons[0] * cons[1]).sum(axis=0), grants, out=np.zeros_like(grants), where=grants > 0)
+        factor = _annuity_payment_factor(rate, maturity)
+        opening_cons_interest, _ = _scheduled_service_components(
+            self._serviceable_loans_this_period["cons_loans"],
+            self._consumer_principal_arrears_by_cell,
+            principal_arrears_accrue_interest=False,
+        )
+        balance = self.current_consumer_balance_by_household() + opening_cons_interest.sum(axis=0)
+        _, mortgage_service = self.preview_opening_household_service()
+        headroom = np.maximum(limit * income - mortgage_service - other, 0.0)
+        capacity = np.maximum(headroom / factor - balance, 0.0)
+        if households.uses_feasibility_resolver:
+            capacity = np.where(households.current_ficp_active(), 0.0, capacity)
+        permitted = np.minimum(grants, capacity)
+        scale = np.divide(permitted, grants, out=np.zeros_like(grants), where=grants > 0)
+        cons[0] *= scale[None, :]
+        cons[2] = cons[0] * factor[None, :]
+        cons[1] = np.where(cons[0] > 0, cons[1], 0.0)
+        has_new_consumer = permitted > 0
+        current_cons_service, _ = self.preview_opening_household_service()
+        future_cons_service = np.where(has_new_consumer, (balance + permitted) * factor, current_cons_service)
+        combined = future_cons_service + mortgage_service + mort[2].sum(axis=0) + other
+        reject_mortgage = (mort[0].sum(axis=0) > 0) & (combined > limit * income + 1e-8)
+        mort[:, :, reject_mortgage] = 0.0
+        return cons, mort
 
     def _validate_new_consumer_loans(self, new_loans: np.ndarray) -> None:
         """Reject malformed consumer-credit clearing output before it changes state."""
@@ -1692,6 +1740,9 @@ class CreditMarket:
         self._consumer_debt_rate_delta_for_cacf[refinanced_existing_debt] = (
             settled_rate[refinanced_existing_debt] - self._consumer_refinancing_opening_rate[refinanced_existing_debt]
         )
+        loans[0][:, remodulated] += self._consumer_interest_arrears_by_cell[:, remodulated]
+        self._consumer_interest_arrears_by_cell[:, remodulated] = 0.0
+        self._consumer_principal_arrears_by_cell[:, remodulated] = 0.0
         aggregate_principal = loans[0].sum(axis=0)
         aggregate_payment = aggregate_principal * _annuity_payment_factor(
             settled_rate,

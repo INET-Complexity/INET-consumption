@@ -719,11 +719,9 @@ def get_compatibility_mismatches(
             bank_data_conf.long_term_firm_loan_maturity,
             bank_sim_params.long_term_firm_loan_maturity,
         ),
-        (
-            "banks.consumption_exp_loan_maturity / household_consumption_loan_maturity",
-            bank_data_conf.consumption_exp_loan_maturity,
-            bank_sim_params.household_consumption_loan_maturity,
-        ),
+        # Synthetic consumer contracts retain their inherited annuities.
+        # Runtime maturity applies only at new origination/refinancing and
+        # must not trigger rebuilding the initial synthetic balance sheet.
         (
             "banks.mortgage_maturity",
             bank_data_conf.mortgage_maturity,

@@ -1,19 +1,8 @@
-"""Stage 5 Increment 3: shadow residual-capacity fallback.
+"""Consumer refinancing capacity and executable illiquid-asset fallback.
 
-This helper caps the preferred Stage 5 branch from Increment 2 using a
-provisional consumer-credit DSTI proxy and feasible illiquid-asset
-liquidation capacity. It is still shadow-only: it does not mutate household
-stocks, debt service, or bank-clearing state.
-
-The DSTI proxy intentionally uses the new-loan annuity cap with mortgage
-service only:
-
-``psi * Y - a^m``
-
-where ``psi`` is the calibrated debt-service-to-income ceiling, ``Y`` is
-gross household income, and ``a^m`` is scheduled mortgage service. That
-proxy is a Stage 5 approximation only; settled remodulated consumer-debt
-service belongs to Stage 6.
+Annuity capacity applies to the total consumer balance. Subtract existing
+principal/interest arrears once to obtain the maximum additional cash loan.
+Mortgage and overdraft service reduce all-debt service headroom first.
 """
 
 from dataclasses import dataclass
@@ -67,6 +56,8 @@ def compute_residual_capacity_fallback(
     consumer_loan_maturity: np.ndarray | int,
     dsti_limit: np.ndarray | float,
     current_ifa: np.ndarray,
+    existing_consumer_balance: np.ndarray | float = 0.0,
+    other_debt_service: np.ndarray | float = 0.0,
 ) -> ResidualCapacityFallbackResult:
     """Apply the shadow DSTI and liquidation caps to the preferred Stage 5 branch.
 
@@ -113,6 +104,12 @@ def compute_residual_capacity_fallback(
         & (income >= 0.0)
         & np.isfinite(scheduled_mortgage_payment)
         & (scheduled_mortgage_payment >= 0.0)
+        & np.isfinite(r_b)
+        & (r_b >= 0.0)
+        & np.isfinite(existing_consumer_balance)
+        & (np.asarray(existing_consumer_balance) >= 0.0)
+        & np.isfinite(other_debt_service)
+        & (np.asarray(other_debt_service) >= 0.0)
         & np.isfinite(consumer_loan_maturity)
         & np.isfinite(dsti_limit)
         & np.isfinite(current_ifa)
@@ -123,14 +120,14 @@ def compute_residual_capacity_fallback(
 
     dsti_headroom = np.where(
         proxy_valid,
-        np.maximum(dsti_limit * income - scheduled_mortgage_payment, 0.0),
+        np.maximum(dsti_limit * income - scheduled_mortgage_payment - np.asarray(other_debt_service), 0.0),
         0.0,
     )
     safe_rate = np.where(proxy_valid & (r_b > 0.0), r_b, 0.0)
     annuity_factor = _annuity_payment_factor(safe_rate, consumer_loan_maturity)
     dsti_maximum_loan_size = np.where(
         proxy_valid & (annuity_factor > 0.0),
-        dsti_headroom / annuity_factor,
+        np.maximum(dsti_headroom / annuity_factor - np.asarray(existing_consumer_balance), 0.0),
         0.0,
     )
     dsti_maximum_loan_size = np.where(

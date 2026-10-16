@@ -390,11 +390,86 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
+        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._initialize_nominal_employee_income()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=True, initial=True)
             self._record_behavioural_income(expected=False, initial=True)
+
+    def nominal_employee_income(self) -> np.ndarray:
+        """Current wage-only nominal receipts, on the payroll price basis."""
+        from macromodel.util.wage_receipts import wage_price_factor
+
+        cpi = getattr(self, "_wage_price_level", self.economy.current_consumer_price_level())
+        psi = self.firms.configuration.parameters.wage_cpi_indexation_elasticity
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(cpi, psi)
+
+    def _initialize_nominal_employee_income(self) -> None:
+        """Seed t0 components without rescaling benefits or existing saved histories."""
+        # The synthetic t0 ledger is already nominal at the base price level.
+        # Preserve its exact stored totals, including source aggregation order.
+        if self.economy.current_consumer_price_level() == 1.0:
+            return
+        wages = self.households.aggregate_individual_amount(
+            self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
+        )
+        for name in ("income_employee", "expected_income_employee"):
+            self.households.ts.override_current(name, wages.copy())
+        self.households.ts.override_current("total_income_employee", [wages.sum()])
+        self.households.ts.override_current("income", self.households.compute_income())
+        self.households.ts.override_current("expected_income", self.households.compute_expected_income())
+
+    def household_gross_cash_income(self) -> np.ndarray:
+        """Gross cash underwriting income under the model's flat-tax convention.
+
+        Public benefits are untaxed; rental/dividend receipts are net of Income
+        Tax. Deposit interest uses the existing unwithheld posting convention.
+        This is an origination forecast, not the behavioural-income transform.
+        """
+        from macromodel.util.wage_receipts import labour_income_components
+
+        hh = self.households
+        taxes = self.central_government.states
+        tau = taxes["Income Tax"]
+        bridge = labour_income_components(
+            hh.ts.current("expected_income_employee"),
+            tau,
+            taxes["Employee Social Insurance Tax"],
+            taxes["Employer Social Insurance Tax"],
+        )
+        if tau >= 1.0:
+            raise ValueError("Gross cash underwriting requires Income Tax below one.")
+        financial = (
+            hh.ts.current("expected_income_dividend_distributions")
+            if getattr(hh.functions["wealth"], "illiquid_returns_are_capital_gains", False)
+            else hh.ts.current("expected_income_financial_assets")
+        )
+        deposit = hh.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        gross = bridge["gross_wages"] + hh.ts.current("expected_income_social_transfers")
+        gross = gross + (hh.ts.current("income_rental") + financial) / (1.0 - tau) + np.maximum(-deposit, 0.0)
+        return np.maximum(self._apply_household_income_shock(gross), 0.0)
+
+    def refresh_known_household_receipts(self) -> None:
+        """Replace wage/regular-benefit forecasts for current financing only."""
+        hh = self.households
+        wages = hh.aggregate_individual_amount(
+            self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
+        )
+        pension, unemployment, other, _ = self.compute_realised_household_social_income_components()
+        receipts = (
+            hh.ts.current("expected_income")
+            - hh.ts.current("expected_income_employee")
+            - hh.ts.current("expected_income_social_transfers")
+        )
+        receipts = receipts + wages + pension + unemployment + other
+        hh.ts.override_current("financing_income", receipts)
+        hh._known_receipts_ready = True
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
@@ -449,6 +524,45 @@ class Country:
     def current_stage5_subsistence_support_total(self) -> float:
         """Return aggregate Stage 5 support derived from the household vector."""
         return float(self.current_stage5_subsistence_support_by_household().sum())
+
+    def reconcile_realised_household_support(self) -> None:
+        """Resolve receipt errors before final cash/learning/fiscal postings.
+
+        Support is provisional until the actual cash ledger is known. Existing
+        regular benefits enter resources once; only the residual is a top-up.
+        Payment relief already committed by the credit authority is preserved.
+        """
+        hh = self.households
+        if not hh.uses_feasibility_resolver or hh.post_grant_feasible_plan is None:
+            return
+        planned_support = hh.ts.current("stage5_subsistence_support")
+        income_without_support = self._apply_household_income_shock(hh.compute_income()) - planned_support
+        spent = hh.ts.current("nominal_amount_spent_in_lcu")
+        goods_consumption = np.minimum(spent, hh.ts.current("target_consumption"))
+        if getattr(hh.functions["investment"], "disables_household_investment", False):
+            goods_consumption = spent
+        investment = np.maximum(spent - goods_consumption, 0.0).sum(axis=1)
+        taxes = self.central_government.states
+        uses = spent.sum(axis=1) + taxes["Value-added Tax"] * goods_consumption.sum(axis=1)
+        uses += hh.current_consumption_cash_rent() + hh.ts.current("price_paid_for_property")
+        uses += hh.ts.current("interest_paid") + hh.ts.current("debt_installments")
+        uses += (
+            taxes["Household Capital Formation Tax"] + (taxes["Household Investment VAT Rate"] or 0.0)
+        ) * investment
+        liquidation = hh.post_grant_feasible_plan.reserved_liquidation_total
+        if liquidation is None:
+            raise RuntimeError("Final support requires an executable liquidation reservation.")
+        resources = income_without_support + hh.ts.current("liquid_financial_assets") + liquidation
+        resources += hh.ts.current("received_consumption_loans") + hh.ts.current("received_mortgages")
+        if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
+            raise ValueError("Final household funding must use finite receipts and obligations.")
+        support = np.maximum(uses - resources, 0.0)
+        hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
+        self.set_stage5_subsistence_support_by_household(support)
+        delta = support - planned_support
+        hh.ts.override_current("stage5_subsistence_support", support)
+        hh.ts.override_current("income_social_transfers", hh.ts.current("income_social_transfers") + delta)
+        hh.ts.override_current("total_income_social_transfers", [hh.ts.current("income_social_transfers").sum()])
 
     def compute_realised_stage5_subsistence_support(self) -> np.ndarray:
         """Return the settled Stage 5 support amount added to realised transfers."""
@@ -1274,6 +1388,8 @@ class Country:
         )
         self.prepare_post_labour_realised_feasible_activity_plan()
 
+        # Lock the wage price basis before goods clearing changes current CPI.
+        self._wage_price_level = self.economy.current_consumer_price_level()
         # Firm wages
         self.individuals.ts.employee_income.append(
             self.firms.set_employee_income(
@@ -1325,6 +1441,7 @@ class Country:
             )
 
         self._set_household_income_expectations(replace_current=True)
+        self.refresh_known_household_receipts()
         self._set_household_target_demand(replace_current=True)
         if self.configuration.households.parameters.uses_feasibility_resolver:
             self.households.refresh_post_labour_feasibility(
@@ -1360,6 +1477,10 @@ class Country:
         )
 
     def _set_household_income_expectations(self, *, replace_current: bool) -> None:
+        from macromodel.util.wage_receipts import wage_price_factor
+
+        if not replace_current:
+            self._wage_price_level = self.economy.current_consumer_price_level()
         # Individual income
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
@@ -1368,6 +1489,10 @@ class Country:
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
+            wage_price_factor=wage_price_factor(
+                getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
+                self.firms.configuration.parameters.wage_cpi_indexation_elasticity,
+            ),
         )
         if replace_current:
             self.individuals.ts.override_current("expected_income", expected_individual_income)
@@ -1384,11 +1509,10 @@ class Country:
             )
         )
         expected_income_employee = (
-            self.households.compute_employee_income(
-                individual_income=self.individuals.ts.current("expected_income"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-            - expected_unemployment_benefits
+            1 + self.economy.current_expected_consumer_period_inflation()
+        ) * self.households.compute_employee_income(
+            individual_income=self.nominal_employee_income(),
+            corr_households=self.individuals.states["Corresponding Household ID"],
         )
         expected_public_pension_by_individual = (
             self.central_government.distribute_public_pension_benefits_to_individuals(
@@ -1473,7 +1597,9 @@ class Country:
         if replace_current:
             self.households.ts.override_current("expected_income", expected_household_income)
         else:
+            self.households._known_receipts_ready = False
             self.households.ts.expected_income.append(expected_household_income)
+            self.households.ts.financing_income.append(expected_household_income.copy())
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
@@ -1787,26 +1913,42 @@ class Country:
             replace_current=replace_current,
         )
         consumer_credit_parameters = getattr(self.configuration, "consumer_credit", {}) or {}
-        consumer_credit_maturity = _positive_int_or_default(
-            consumer_credit_parameters.get(
-                "maturity_quarters", self.banks.parameters.household_consumption_loan_maturity
-            ),
-            self.banks.parameters.household_consumption_loan_maturity,
-        )
+        # One source, in model periods, shared with issued/refinanced loans.
+        consumer_credit_maturity = self.banks.parameters.household_consumption_loan_maturity
         consumer_credit_dsti_limit = _positive_float_or_default(
             consumer_credit_parameters.get("dsti_limit", 0.35),
             0.35,
         )
+        gross_cash_income = self.household_gross_cash_income()
+        deposit_service = self.households.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        existing_balance = self.credit_market.current_consumer_balance_by_household()
+        # Reserve current interest if service is suspended before the new
+        # consolidated schedule starts. Principal dues are already in balance.
+        current_cons_interest = self.credit_market.preview_opening_consumer_interest()
+        if existing_balance.shape != gross_cash_income.shape:
+            if np.any(existing_balance > 0.0):
+                raise ValueError("Consumer underwriting must align with household loan state.")
+            existing_balance = np.zeros_like(gross_cash_income)
+            current_cons_interest = np.zeros_like(gross_cash_income)
+        if not replace_current:
+            self.households.consumer_underwriting_income = gross_cash_income.copy()
+            self.households.consumer_underwriting_other_service = np.maximum(deposit_service, 0.0)
+            self.households.consumer_underwriting_dsti_limit = consumer_credit_dsti_limit
         self.households.compute_and_record_residual_capacity_fallback(
             preferred_margin_after_lfa=self.households.ts.current("preferred_margin_after_lfa"),
             preferred_margin_amount=self.households.ts.current("preferred_margin_amount"),
             banks=self.banks,
-            income=self.households.ts.current("expected_income"),
+            income=gross_cash_income,
             scheduled_mortgage_payment=scheduled_mortgage_payment,
             consumer_loan_maturity=consumer_credit_maturity,
             dsti_limit=consumer_credit_dsti_limit,
             current_ifa=self.households.ts.current("illiquid_financial_assets"),
             replace_current=replace_current,
+            existing_consumer_balance=existing_balance + current_cons_interest,
+            other_debt_service=np.maximum(deposit_service, 0.0),
         )
         # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
         # with the DSTI-capped shadow_credit_requested value just computed
@@ -1981,7 +2123,7 @@ class Country:
         )
 
         if self.configuration.households.parameters.uses_feasibility_resolver:
-            self.credit_market.pay_household_mortgage_installments()
+            # Both consumer and mortgage service settle after labour receipts are known.
             return
 
         # Legacy resolver-disabled household servicing remains unchanged.
@@ -2084,6 +2226,21 @@ class Country:
             early_repayment_capacity=self.households.current_early_consumer_repayment_capacity(),
         )
         # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
+        before_relief = self.households.current_remaining_subsistence_shortfall()
+        after_consumer_relief = np.maximum(before_relief - settlement.unpaid_payment, 0.0)
+        self.credit_market.pay_household_mortgage_installments(after_consumer_relief)
+        mortgage_relief = self.credit_market._mortgage_unpaid_payment
+        after_relief = np.maximum(after_consumer_relief - mortgage_relief, 0.0)
+        for name, values in (
+            ("pre_relief_funding_gap", before_relief),
+            ("post_relief_funding_gap", after_relief),
+            ("actual_mortgage_payment", self.credit_market._mortgage_actual_payment),
+            ("unpaid_mortgage_payment", mortgage_relief),
+            ("mortgage_interest_arrears", self.credit_market._mortgage_interest_arrears_by_cell.sum(axis=0)),
+            ("mortgage_principal_arrears", self.credit_market._mortgage_principal_arrears_by_cell.sum(axis=0)),
+        ):
+            self.households.ts.dicts[name].append(values.copy())
+        self.set_stage5_subsistence_support_by_household(after_relief)
         mortgage_principal = self.credit_market.compute_mortgage_principal_paid_by_household()
         debt_installments = mortgage_principal + settlement.principal_paid
         self.households.ts.debt_installments.append(debt_installments)
@@ -2383,7 +2540,9 @@ class Country:
                 scheduled_mortgage_payments=scheduled_mortgage_payments,
             )
             support_by_household = compute_stage5_subsistence_support(
-                self.households.current_remaining_subsistence_shortfall()
+                self.households.ts.current("post_relief_funding_gap")
+                if self.credit_market.consumer_payments_settled()
+                else self.households.current_remaining_subsistence_shortfall()
             )
             self.set_stage5_subsistence_support_by_household(support_by_household)
         self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
@@ -3153,7 +3312,7 @@ class Country:
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
         )
 
         # C3. EMISSIONS AND INVENTORY
@@ -3287,6 +3446,10 @@ class Country:
             self.credit_market.compute_consumer_opening_interest_arrears_collected_by_bank()
         )
         self.banks.ts.consumer_interest_accrued.append(self.credit_market.compute_consumer_interest_accrued_by_bank())
+        self.banks.ts.mortgage_opening_interest_arrears_collected.append(
+            self.credit_market._mortgage_opening_arrears_collected_by_bank.copy()
+        )
+        self.banks.ts.mortgage_interest_accrued.append(self.credit_market._mortgage_interest_accrued_by_bank.copy())
         self.banks.ts.recognized_interest_received_on_loans.append(
             self.credit_market.compute_recognized_interest_received_by_bank()
         )
@@ -3398,6 +3561,14 @@ class Country:
                 tau_firm=self.central_government.states["Profit Tax"],
             )
         )
+        nominal_wages = self.nominal_employee_income()
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        corrected_individual_income = self.individuals.ts.current("income").copy()
+        corrected_individual_income[employed] += (
+            nominal_wages[employed]
+            - self.economy.current_consumer_price_level() * self.individuals.ts.current("employee_income")[employed]
+        )
+        self.individuals.ts.override_current("income", corrected_individual_income)
         self.individuals.ts.income_histogram.append(get_histogram(self.individuals.ts.current("income"), self.scale))
 
         # E2. HOUSEHOLD INCOME COMPONENTS
@@ -3413,7 +3584,7 @@ class Country:
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(
-                individual_income=self.individuals.ts.current("employee_income"),
+                individual_income=self.nominal_employee_income(),
                 corr_households=self.individuals.states["Corresponding Household ID"],
             )
         )
@@ -3444,6 +3615,7 @@ class Country:
         self.households.ts.total_income_financial_assets.append(
             [self.households.ts.current("income_financial_assets").sum()]
         )
+        self.reconcile_realised_household_support()
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         if getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=False)
@@ -3565,6 +3737,7 @@ class Country:
         self.banks.ts.interest_received.append(
             self.banks.ts.current("interest_received_on_loans") + self.banks.ts.current("interest_received_on_deposits")
         )
+        self.banks.ts.mortgage_default_credit_loss.append(self.credit_market._mortgage_credit_loss_by_bank.copy())
         self.banks.ts.profits.append(self.banks.compute_profits())
         self.banks.ts.cash_distributable_profits.append(self.banks.compute_cash_distributable_profits())
         self.banks.ts.profits_histogram.append(get_histogram(self.banks.ts.current("profits"), self.scale))
@@ -3621,7 +3794,7 @@ class Country:
             else self.households.ts.current("income_financial_assets")
         )
         self.central_government.compute_taxes(
-            current_ind_employee_income=self.individuals.ts.current("employee_income"),
+            current_ind_employee_income=self.nominal_employee_income(),
             current_total_rent_paid=self.households.ts.current("rent")[
                 self.households.states["Tenure Status of the Main Residence"] == 3
             ].sum(),

@@ -1418,7 +1418,9 @@ class Firms(Agent):
         # the historical behaviour. The deflator is normalised so that psi has
         # no effect while the price level is at its base of 1.0.
         psi = float(getattr(self.configuration.parameters, "wage_cpi_indexation_elasticity", 1.0))
-        indexation = cpi if psi == 1.0 else float(np.power(max(cpi, 1e-12), psi))
+        from macromodel.util.wage_receipts import wage_price_factor
+
+        indexation = wage_price_factor(cpi, psi)
         return indexation * (
             (1.0 + employer_social_insurance_tax)
             / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))

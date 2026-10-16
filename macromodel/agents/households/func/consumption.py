@@ -1373,8 +1373,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         ratio_denominator_arr = (
             annual_spendable_income
             if ratio_denominator is None
-            else np.maximum(np.asarray(ratio_denominator, dtype=float), self.income_floor)
-            * annualization_factor
+            else np.maximum(np.asarray(ratio_denominator, dtype=float), self.income_floor) * annualization_factor
         )
         net_liquid_assets_ratio = current_period_net_liquid_assets / ratio_denominator_arr
         illiquid_assets_ratio = current_period_illiquid_financial_assets / ratio_denominator_arr

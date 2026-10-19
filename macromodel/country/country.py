@@ -80,6 +80,7 @@ from macromodel.markets.credit_market.func.clearing import compute_firm_borrower
 from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
+from macromodel.util.behavioural_income import reconcile_behavioural_income
 from macromodel.util.get_histogram import get_histogram
 
 
@@ -389,6 +390,11 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
+        # Both direct construction and from_pickled_country pass here. Seed
+        # aligned t0 income after all initial social components are in place.
+        if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
+            self._record_behavioural_income(expected=True, initial=True)
+            self._record_behavioural_income(expected=False, initial=True)
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
@@ -843,7 +849,7 @@ class Country:
             scale=scale,
         )
 
-        return cls(
+        country = cls(
             country_name=country_name,
             scale=scale,
             individuals=individuals,
@@ -872,6 +878,7 @@ class Country:
             permanent_income_forecast_inputs=permanent_income_forecast_inputs,
             permanent_income_design_matrix=permanent_income_design_matrix,
         )
+        return country
 
     @staticmethod
     def _select_net_smic_base(
@@ -1468,8 +1475,72 @@ class Country:
         else:
             self.households.ts.expected_income.append(expected_household_income)
 
+    def _record_behavioural_income(
+        self, *, expected: bool, replace_current: bool = False, initial: bool = False
+    ) -> None:
+        """Record aligned income without changing cash flows or earnings learning.
+
+        Append expected rows once, replace on the authoritative pass, and seed
+        t0 using the same definition. Realised diagnostics use settled interest;
+        initial diagnostics use the opening contractual schedule as a proxy.
+        """
+        hh = self.households
+        prefix = "expected_" if expected else ""
+        base = prefix + "behavioural_income"
+        if not initial and base not in hh.ts.dicts:
+            raise ValueError(
+                "Aligned income must be enabled before Country construction so its t0 history can be initialized. "
+                "Construct a fresh country with uses_aligned_behavioural_income=True; "
+                "do not switch an existing cash-income history in place."
+            )
+        non_property = hh.ts.current(prefix + "income_employee") + hh.ts.current(prefix + "income_social_transfers")
+        # A staged income intervention enters non-property income once. The
+        # existing cash-income route books it independently; this is a diagnostic.
+        non_property = self._apply_household_income_shock(non_property)
+        paper_returns = getattr(hh.functions["wealth"], "illiquid_returns_are_capital_gains", False)
+        financial_series = "income_dividend_distributions" if paper_returns else "income_financial_assets"
+        financial = hh.ts.current(prefix + financial_series)
+        if expected or initial:
+            deposit_paid = hh.compute_interest_paid_on_deposits(
+                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+            )
+            if initial or not replace_current:
+                loan_interest = self.credit_market.preview_opening_household_interest()
+            else:
+                # Servicing has already changed the loan balances. Reuse this
+                # period's first planning observation, refreshed on every append,
+                # rather than reading a closing balance or a prior-period snapshot.
+                loan_interest = hh.ts.current("expected_behavioural_income_loan_interest")
+        else:
+            deposit_paid = hh.ts.current("interest_paid_on_deposits")
+            loan_interest = hh.ts.current("interest_paid_on_loans")
+        parts = reconcile_behavioural_income(
+            non_property=non_property,
+            rental=hh.ts.current("income_rental"),
+            financial=financial,
+            deposit_receipts=np.maximum(-deposit_paid, 0.0),
+            borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
+            imputed_rent=hh.current_consumption_imputed_rent(),
+            subsistence=self.economy.ts.current("subsistence_consumption"),
+        )
+        # Keep loan interest separate from deposit/overdraft interest so only
+        # the contractual opening-loan amount is frozen across planning passes.
+        parts["loan_interest"] = loan_interest
+        for name, values in parts.items():
+            key = base if name == "income" else base + "_" + name
+            if initial:
+                hh.ts[key] = values.copy()
+            elif replace_current:
+                hh.ts.override_current(key, values.copy())
+            else:
+                hh.ts.dicts[key].append(values.copy())
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         self._update_subsistence_consumption(replace_current=replace_current)
+        aligned_income = getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False)
+        if aligned_income:
+            self._record_behavioural_income(expected=True, replace_current=replace_current)
 
         # Household target consumption
         # Note: For CES substitution, we track additional taxes (like carbon tax) similar to firms
@@ -1578,7 +1649,11 @@ class Country:
             n_periods_per_year,
         )
         annual_spendable_income = np.maximum(
-            n_periods_per_year * np.asarray(self.households.ts.current("expected_income"), dtype=float),
+            n_periods_per_year
+            * np.asarray(
+                self.households.ts.current("expected_behavioural_income" if aligned_income else "expected_income"),
+                dtype=float,
+            ),
             1e-12,
         )
         real_borrowing_rate = np.divide(
@@ -3379,6 +3454,8 @@ class Country:
             [self.households.ts.current("income_financial_assets").sum()]
         )
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
+        if getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False):
+            self._record_behavioural_income(expected=False)
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             cpi_series = self.economy.consumer_price_level_series_name()
             # Use non-property income (employment + social transfers), not the

@@ -58,29 +58,25 @@ class Config:
         )
 
 
-CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
-    # "households.functions.consumption.parameters.['paper_parameter_ref']": "desired_consumption.credit_augmented_v1",
-    "households.functions.consumption.parameters.['long_run_intercept']": -0.3,
-    # "households.functions.consumption.parameters.['permanent_income_propensity']": 0.55,
-    # "households.functions.consumption.parameters.['liquid_wealth_propensity']": 0.14,
-    # "households.functions.consumption.parameters.['illiquid_wealth_propensity']": 0.022,
-    # "households.functions.consumption.parameters.['housing_wealth_propensity']": 0.013,
-    # "households.functions.consumption.parameters.['income_growth_propensity']": 0.15,
-    # "households.functions.consumption.parameters.['interest_rate_cashflow_propensity']": -0.003,
-    # "households.functions.consumption.parameters.['uncertainty_propensity']": -0.005,
-    "households.functions.consumption.parameters.['partial_adjustment_speed']": 0.9,
-    # "households.functions.consumption.parameters.['long_run_mpc_lower_bound']": 0,
-    # "households.functions.consumption.parameters.['long_run_mpc_upper_bound']": 2,
-    # "firms.functions.wage_setter.parameters['labour_market_tightness_markup_scale']": 0.01,
-    # "firms.functions.wage_setter.parameters['markup_time_span']": 1,
-    # "central_bank.taylor_rule_overrides['rho']": 0.25,
-    # "central_government.tax_overrides['production_tax_vector_scale']": 1,
-    # "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
-}
+# Shared consumption settings are authoritative in
+# consumption_paper_parameters.yaml -> desired_consumption.credit_augmented.
+# Keep this public preset name for notebook compatibility; it adds no hidden
+# intercept, smoothing or residual-mode override to the country baseline.
+CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {}
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
 # separate so selecting one cannot silently alter the calibrated baseline.
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
+    # Paired income-definition comparison: both inherit exactly the same
+    # calibrated overrides. Only the behavioural-income input switch differs.
+    "calibrated_income_legacy": {
+        **CALIBRATED_CONSUMPTION_OVERRIDES,
+        "households.functions.consumption.parameters['uses_aligned_behavioural_income']": False,
+    },
+    "calibrated_income_reconciled": {
+        **CALIBRATED_CONSUMPTION_OVERRIDES,
+        "households.functions.consumption.parameters['uses_aligned_behavioural_income']": True,
+    },
     "no_target_inventory_buffer": {
         "firms.functions.target_production.parameters['target_inventory_to_demand_fraction']": 0.0,
     },
@@ -104,7 +100,7 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
         "firms.functions.target_production.parameters['inventory_adjustment_speed']": 0.75,
     },
     "income_growth_propensity_0_5_legacy_path": {
-        "households.parameters.desired_consumption.credit_augmented_v1.['income_growth_propensity']": 0.5,
+        "households.functions.consumption.parameters['income_growth_propensity']": 0.5,
     },
     "income_growth_propensity_0_5": {
         "households.functions.consumption.parameters.['income_growth_propensity']": 0.5,
@@ -151,6 +147,9 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     },
     "firm_dividend_payout_ratio": {
         "households.functions.wealth.parameters['dividend_fund_firm_payout_ratio']": 0.75,
+    },
+    "hiring_speed_1_0": {
+        "labour_market.functions.clearing.parameters['hiring_speed']": 1.0,
     },
 }
 

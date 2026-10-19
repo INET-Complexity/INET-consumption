@@ -1926,10 +1926,20 @@ class Households(Agent):
             )
             return target_consumption
         else:
-            income = self.ts.current("expected_income") if income_override is None else income_override
-            lagged_income = (
-                self.ts.prev("expected_income") if lagged_income_override is None else lagged_income_override
+            income_series = (
+                "expected_behavioural_income"
+                if getattr(self.functions["consumption"], "uses_aligned_behavioural_income", False)
+                else "expected_income"
             )
+            if income_series not in self.ts.dicts:
+                raise ValueError(
+                    "Reconciled consumption requires initialized expected_behavioural_income history. "
+                    "Construct the country with uses_aligned_behavioural_income=True, or provide "
+                    "a consistent behavioural-income history explicitly for standalone households. "
+                    "Use uses_aligned_behavioural_income=False for the previous cash-income contract."
+                )
+            income = self.ts.current(income_series) if income_override is None else income_override
+            lagged_income = self.ts.prev(income_series) if lagged_income_override is None else lagged_income_override
             mortgage_payment = (
                 np.zeros(self.ts.current("n_households")) if mortgage_payment is None else mortgage_payment
             )
@@ -1959,7 +1969,7 @@ class Households(Agent):
             # exactly one period short is the expected case, and the current price level
             # completes it. Anything else is a genuine misalignment and is left for the
             # consumption rule to reject rather than silently padded.
-            income_history = np.array(self.ts.historic("expected_income"))
+            income_history = np.array(self.ts.historic(income_series))
             deflator_history = None
             if historic_deflator is not None:
                 deflator_history = np.asarray(historic_deflator, dtype=float).reshape(-1)

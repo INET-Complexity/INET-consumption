@@ -64,7 +64,7 @@ stage_0:
 
 stage_2:
   implementation_contract:
-    paper_symbol_map:  # paper symbol → current calibrated value; source: Chauvin & Muellbauer (2018) Table 1
+    paper_symbol_map:  # historical Table 1 values, NOT current runtime settings
       alpha_0: 0.08    # long_run_intercept
       alpha_1: -0.72   # real_borrowing_rate_propensity
       alpha_2: 0.55    # permanent_income_propensity

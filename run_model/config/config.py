@@ -62,7 +62,9 @@ class Config:
 # consumption_paper_parameters.yaml -> desired_consumption.credit_augmented.
 # Keep this public preset name for notebook compatibility; it adds no hidden
 # intercept, smoothing or residual-mode override to the country baseline.
-CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {}
+CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
+    "households.functions.consumption.parameters['long_run_intercept']": 0.15,
+}
 
 # Formerly commented one-line alternatives in run_model.ipynb. They remain
 # separate so selecting one cannot silently alter the calibrated baseline.

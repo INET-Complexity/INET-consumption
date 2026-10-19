@@ -175,3 +175,43 @@ def test_large_signed_property_values_preserve_currency_invariance():
     assert reference["variance"][0] > 0
     for key in ("mean", "variance", "projected_floor_probability"):
         np.testing.assert_allclose(large[key], reference[key], atol=1e-10, rtol=1e-6)
+
+
+@pytest.mark.parametrize("mu", [0.0, 1e-16, -1e-16, 0.1, -0.1])
+def test_nearly_cancelling_property_receipts_match_high_precision_reference(mu):
+    from decimal import Decimal, localcontext
+
+    n, p, floor = 1e16, -9999999999999998.0, 1.0
+    with localcontext() as context:
+        context.prec = 80
+        dn, dp, ds, dm = map(Decimal.from_float, (n, p, floor, mu))
+        current = max(dn + dp, ds)
+        projected = max(dn * dm.exp() + dp, ds)
+        expected = float((projected / current).ln())
+    result = moments(n=n, p=p, floor=floor, mu=mu, variance=0.0)
+    assert result["current"][0] == 2.0
+    assert result["mean"][0] == pytest.approx(expected, abs=1e-12)
+    assert result["variance"][0] == 0.0
+
+
+def test_near_cancellation_with_uncertainty_preserves_floor_and_both_moments():
+    # At this scale, N*exp(1e-16*Z)+P equals 2+Z to double precision.
+    # This independent integral avoids cancellation in both income and cutoff.
+    result = moments(n=1e16, p=-9999999999999998.0, floor=1.0, mu=0.0, variance=1e-32)
+    floor_probability = ndtr(-1.0)
+    offset = -np.log(2.0)
+
+    def g(z):
+        return np.log(max(2.0 + z, 1.0) / 2.0)
+
+    def density(z):
+        return np.exp(-z * z / 2.0) / np.sqrt(2.0 * np.pi)
+
+    mean = floor_probability * offset + quad(lambda z: g(z) * density(z), -1.0, 12.0, epsabs=1e-12)[0]
+    variance = (
+        floor_probability * (offset - mean) ** 2
+        + quad(lambda z: (g(z) - mean) ** 2 * density(z), -1.0, 12.0, epsabs=1e-12)[0]
+    )
+    assert result["projected_floor_probability"][0] == pytest.approx(floor_probability, abs=1e-12)
+    assert result["mean"][0] == pytest.approx(mean, abs=1e-10)
+    assert result["variance"][0] == pytest.approx(variance, abs=1e-10)

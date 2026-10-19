@@ -16,14 +16,22 @@ def _quadrature(order):
     return np.polynomial.legendre.leggauss(order)
 
 
-def _log_income(log_non_property, property_income, log_floor):
-    """Stable log of a floored sum, including signed net property receipts."""
+def _log_income(non_property, property_income, log_floor, log_multiplier=0.0):
+    """Log of a floored signed sum, preserving nearly cancelling operands."""
     positive = property_income >= 0
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        added = np.logaddexp(log_non_property, np.log(np.maximum(property_income, 0)))
+        log_n = np.log(non_property)
+        projected_log_n = log_n + log_multiplier
+        added = np.logaddexp(projected_log_n, np.log(np.maximum(property_income, 0)))
         log_negative = np.log(np.maximum(-property_income, 0))
-        difference = log_non_property + np.log1p(-np.exp(log_negative - log_non_property))
-    result = np.where(positive, added, np.where(log_non_property > log_negative, difference, -np.inf))
+        # For N close to -P, log(N)-log(-P) discards the small residual.
+        # Form the relative gap from the original operands before taking logs.
+        relative_gap = (non_property + property_income) / (-property_income)
+        close = (~positive) & (np.abs(relative_gap) <= 0.5)
+        log_ratio = np.where(close, np.log1p(relative_gap), log_n - log_negative)
+        delta = log_ratio + log_multiplier
+        difference = projected_log_n + np.log(-np.expm1(-np.maximum(delta, 0.0)))
+    result = np.where(positive, added, difference)
     return np.maximum(result, log_floor)
 
 
@@ -47,10 +55,16 @@ def monetary_income_moments(*, non_property, property_income, income_floor, log_
     with np.errstate(divide="ignore"):
         log_n = np.log(n)
     log_floor = np.log(floor)
-    log_current = _log_income(log_n, p, log_floor)
-    mean = _log_income(log_n + mu, p, log_floor) - log_current
+    # Direct addition preserves cancellation of the original finite operands.
+    # Positive overflow remains an invalid current-income level, checked below.
+    with np.errstate(over="ignore"):
+        raw_current = n + p
+        current = np.maximum(raw_current, floor)
+    log_current = np.log(current)
+    projected_log_income = _log_income(n, p, log_floor, mu)
+    mean = projected_log_income - log_current
     result_variance = np.zeros_like(mean)
-    probability = ((_log_income(log_n + mu, p, log_floor)) <= log_floor).astype(float)
+    probability = (projected_log_income <= log_floor).astype(float)
     errors = np.zeros_like(mean)
     active = (n > 0) & (variance > 0)
     indices = np.flatnonzero(active)
@@ -69,7 +83,11 @@ def monetary_income_moments(*, non_property, property_income, income_floor, log_
                 np.logaddexp(lf[can_bind], np.log(np.maximum(-binding_property, 0))),
                 np.log(binding_floor - np.maximum(binding_property, 0)),
             )
-        threshold[can_bind] = (log_gap - ln[can_bind] - m[can_bind]) / sd[can_bind]
+        # Preserve the floor threshold when S-P is almost equal to N too.
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            relative_gap = (binding_floor - raw_current[indices][can_bind]) / n[indices][can_bind]
+            log_threshold = np.where(np.abs(relative_gap) <= 0.5, np.log1p(relative_gap), log_gap - ln[can_bind])
+        threshold[can_bind] = (log_threshold - m[can_bind]) / sd[can_bind]
         probability[indices] = ndtr(threshold)
         lower = np.minimum(np.maximum(threshold, -12.0), 12.0)
         left_mass = ndtr(threshold)
@@ -81,7 +99,10 @@ def monetary_income_moments(*, non_property, property_income, income_floor, log_
             half = (12.0 - lower) / 2
             z = lower[:, None] + half[:, None] * (nodes + 1)
             w = half[:, None] * weights * np.exp(-(z**2) / 2) / np.sqrt(2 * np.pi)
-            g = _log_income(ln[:, None] + m[:, None] + sd[:, None] * z, prop[:, None], lf[:, None]) - baseline[:, None]
+            g = (
+                _log_income(n[indices, None], prop[:, None], lf[:, None], m[:, None] + sd[:, None] * z)
+                - baseline[:, None]
+            )
             mass = left_mass + w.sum(axis=1)
             current_mean = (left_mass * offset + (w * g).sum(axis=1)) / mass
             current_variance = (
@@ -102,8 +123,6 @@ def monetary_income_moments(*, non_property, property_income, income_floor, log_
             previous = current_mean, current_variance
         if not converged.all():
             raise ValueError("Monetary-income moment integration did not converge.")
-    with np.errstate(over="ignore"):
-        current = np.exp(log_current)
     if any(not np.all(np.isfinite(value)) for value in (mean, result_variance, current)):
         raise ValueError("Monetary-income moments and current income must be finite.")
     return {
@@ -111,7 +130,7 @@ def monetary_income_moments(*, non_property, property_income, income_floor, log_
         "variance": result_variance,
         "current": current,
         "property": p.copy(),
-        "floor_used": ((n + p) < floor).astype(float),
+        "floor_used": (raw_current < floor).astype(float),
         "component_floor_used": (inputs[0] < 0).astype(float),
         "projected_floor_probability": probability,
         "integration_error": errors,

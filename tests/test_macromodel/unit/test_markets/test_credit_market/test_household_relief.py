@@ -159,3 +159,7 @@ def test_new_mortgage_rate_excludes_nonaccruing_opening_principal_arrears(shortf
     market.prepare_household_service_snapshot()
     assert market.current_household_service_snapshot().mortgage_interest_by_cell.sum() == pytest.approx(20.0)
     np.testing.assert_allclose(market.preview_opening_household_interest(), 20.0)
+    # The suspended final principal is collected as arrears, not through an
+    # additional opening annuity that would accelerate the new mortgage.
+    expected_due = shortfall + new[2].sum()
+    assert market.current_household_service_snapshot().mortgage_total_due[0] == pytest.approx(expected_due)

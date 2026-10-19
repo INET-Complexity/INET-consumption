@@ -1488,10 +1488,9 @@ class CreditMarket:
             out=np.where(loans[0] > 0.0, opening_loans[1], 0.0),
             where=performing_principal > 0.0,
         )
-        # Retire a fully repaid opening annuity without changing new terms.
-        loans[2] = new_loans[2] + np.where(
-            np.isclose(remaining_opening_principal, 0.0, atol=1e-2), 0.0, opening_loans[2]
-        )
+        # An opening balance entirely in arrears is due through the arrears
+        # ledger. Its old annuity must not also accelerate the new principal.
+        loans[2] = new_loans[2] + np.where(np.isclose(performing_opening, 0.0, atol=1e-2), 0.0, opening_loans[2])
         self._mortgage_principal_paid = (old_principal + principal).sum(axis=0)
         self._mortgage_interest_paid = (old_interest + interest).sum(axis=0)
         self._mortgage_unpaid_payment = unpaid.copy()

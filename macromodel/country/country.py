@@ -1505,7 +1505,13 @@ class Country:
                 bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
                 bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
             )
-            loan_interest = self.credit_market.preview_opening_household_interest()
+            if initial or not replace_current:
+                loan_interest = self.credit_market.preview_opening_household_interest()
+            else:
+                # Servicing has already changed the loan balances. Reuse this
+                # period's first planning observation, refreshed on every append,
+                # rather than reading a closing balance or a prior-period snapshot.
+                loan_interest = hh.ts.current("expected_behavioural_income_loan_interest")
         else:
             deposit_paid = hh.ts.current("interest_paid_on_deposits")
             loan_interest = hh.ts.current("interest_paid_on_loans")
@@ -1518,6 +1524,9 @@ class Country:
             imputed_rent=hh.current_consumption_imputed_rent(),
             subsistence=self.economy.ts.current("subsistence_consumption"),
         )
+        # Keep loan interest separate from deposit/overdraft interest so only
+        # the contractual opening-loan amount is frozen across planning passes.
+        parts["loan_interest"] = loan_interest
         for name, values in parts.items():
             key = base if name == "income" else base + "_" + name
             if initial:

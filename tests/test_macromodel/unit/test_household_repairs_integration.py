@@ -36,6 +36,23 @@ def test_production_household_receipts_credit_relief_and_support_reconcile(dataw
         country = simulation.countries["FRA"]
         hh = country.households
         market = country.credit_market
+        monetary = (
+            np.maximum(hh.ts.current("expected_behavioural_income_non_property_raw"), 0.0)
+            + hh.ts.current("expected_behavioural_income_rental")
+            + hh.ts.current("expected_behavioural_income_financial")
+            + hh.ts.current("expected_behavioural_income_deposit_receipts")
+        )
+        np.testing.assert_allclose(
+            hh.ts.current("income_bridge_current"),
+            np.maximum(monetary, country.economy.ts.current("subsistence_consumption")),
+        )
+        np.testing.assert_allclose(
+            hh.ts.current("target_consumption_permanent_income_log_ratio"),
+            hh.ts.current("target_consumption_permanent_income_log_ratio_individual")
+            + hh.ts.current("target_consumption_permanent_income_log_ratio_common"),
+        )
+        assert np.all(hh.ts.current("income_bridge_variance") >= 0)
+        assert len(hh.ts.dicts["income_bridge_current"]) == period + 2
         np.testing.assert_allclose(hh.ts.current("income_employee").sum(), country.nominal_employee_income().sum())
         np.testing.assert_allclose(
             hh.ts.current("mortgage_debt").sum(), market.compute_outstanding_mortgages_by_bank().sum()

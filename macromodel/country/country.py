@@ -1662,6 +1662,19 @@ class Country:
             else:
                 hh.ts.dicts[key].append(values.copy())
 
+        if initial and expected:
+            # Seed component diagnostics on the same t0 basis as future rows.
+            n = parts["non_property"]
+            p = parts["rental"] + parts["financial"] + parts["deposit_receipts"]
+            hh.ts.override_current(
+                "income_bridge_current", np.maximum(n + p, self.economy.ts.current("subsistence_consumption"))
+            )
+            hh.ts.override_current("income_bridge_property", p.copy())
+            hh.ts.override_current(
+                "income_bridge_floor_used", ((n + p) < self.economy.ts.current("subsistence_consumption")).astype(float)
+            )
+            hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         self._update_subsistence_consumption(replace_current=replace_current)
         aligned_income = getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False)
@@ -1687,10 +1700,31 @@ class Country:
         uncertainty_delta = None
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
             common_log_ratio, common_forecast_variance = self._common_permanent_income_terms()
+            bridge_arguments = {}
+            if aligned_income:
+                # Reuse the component snapshot recorded above: do not reapply
+                # shocks, add housing services or subtract borrower interest.
+                hh = self.households
+                bridge_arguments["monetary_income_components"] = {
+                    "non_property": hh.ts.current("expected_behavioural_income_non_property_raw"),
+                    "property_income": (
+                        hh.ts.current("expected_behavioural_income_rental")
+                        + hh.ts.current("expected_behavioural_income_financial")
+                        + hh.ts.current("expected_behavioural_income_deposit_receipts")
+                    ),
+                    "income_floor": self.economy.ts.current("subsistence_consumption"),
+                }
             learning_inputs = self.households.current_income_belief_learning_inputs(
                 common_permanent_income_log_ratio=common_log_ratio,
                 common_forecast_variance=common_forecast_variance,
+                **bridge_arguments,
             )
+            for name, values in learning_inputs.items():
+                if name.startswith("income_bridge_"):
+                    if replace_current:
+                        self.households.ts.override_current(name, values.copy())
+                    else:
+                        self.households.ts.dicts[name].append(values.copy())
             permanent_income_log_ratio = learning_inputs["permanent_income_log_ratio"]
             permanent_income_log_ratio_individual = learning_inputs["permanent_income_log_ratio_individual"]
             permanent_income_log_ratio_common = learning_inputs["permanent_income_log_ratio_common"]

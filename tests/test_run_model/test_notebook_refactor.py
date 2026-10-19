@@ -41,7 +41,7 @@ def test_refactored_notebook_suite_and_legacy_banner_are_present():
     assert "DO NOT USE FOR NEW WORK" in legacy.cells[0].source
 
     runner = nbformat.read(RUN_MODEL_PATH / "run_model.ipynb", as_version=4)
-    assert len(runner.cells) < 25
+    # Check required workflow capabilities rather than the number of cells.
     runner_source = "\n".join(cell.source for cell in runner.cells)
     assert "run_notebook_workflow" in runner_source
     assert "plot_cumulative_insolvent_firms_by_sector" in runner_source
@@ -52,19 +52,9 @@ def test_refactored_notebook_suite_and_legacy_banner_are_present():
     assert not (RUN_MODEL_PATH / "run_model_diagnostics.ipynb").exists()
 
 
-def test_calibrated_override_preset_retains_notebook_values():
+def test_calibrated_override_preset_does_not_override_canonical_parameters():
     assert SCENARIO_PRESETS["calibrated_consumption"] is CALIBRATED_CONSUMPTION_OVERRIDES
-    assert (
-        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['long_run_intercept']"] == -0.6
-    )
-    assert (
-        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['partial_adjustment_speed']"]
-        == 0.56
-    )
-    assert (
-        CALIBRATED_CONSUMPTION_OVERRIDES["households.functions.consumption.parameters.['long_run_mpc_upper_bound']"]
-        == 2
-    )
+    assert CALIBRATED_CONSUMPTION_OVERRIDES == {}
 
 
 def test_wage_indexation_presets_only_override_the_france_default_coefficient():

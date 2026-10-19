@@ -68,6 +68,8 @@ class HouseholdServiceSnapshot:
     mortgage_interest_by_cell: np.ndarray
     mortgage_principal_by_cell: np.ndarray
     mortgage_total_due: np.ndarray
+    mortgage_opening_interest_arrears_by_cell: np.ndarray
+    mortgage_opening_principal_arrears_by_cell: np.ndarray
     newly_granted_consumer_loans: np.ndarray
 
 
@@ -569,6 +571,12 @@ class CreditMarket:
         self._first_miss_rescheduling_maturity = np.zeros(self.states["cons_loans"].shape[2], dtype=int)
         self._mortgage_principal_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._mortgage_interest_paid = np.zeros(self.states["mort_loans"].shape[2])
+        self._mortgage_interest_arrears_by_cell = np.zeros_like(self.states["mort_loans"][0])
+        self._mortgage_principal_arrears_by_cell = np.zeros_like(self.states["mort_loans"][0])
+        self._mortgage_payments_settled = False
+        self._mortgage_credit_loss_by_bank = np.zeros(self.states["mort_loans"].shape[1])
+        self._mortgage_opening_arrears_collected_by_bank = np.zeros(self.states["mort_loans"].shape[1])
+        self._mortgage_interest_accrued_by_bank = np.zeros(self.states["mort_loans"].shape[1])
         self._consumer_opening_arrears_collected_by_bank = np.zeros(self.states["cons_loans"].shape[1])
         self._consumer_interest_accrued_by_bank = np.zeros(self.states["cons_loans"].shape[1])
         self._reset_firm_service_period_tracking()
@@ -798,6 +806,12 @@ class CreditMarket:
         self._first_miss_rescheduling_maturity = np.zeros(self.states["cons_loans"].shape[2], dtype=int)
         self._mortgage_principal_paid = np.zeros(self.states["mort_loans"].shape[2])
         self._mortgage_interest_paid = np.zeros(self.states["mort_loans"].shape[2])
+        self._mortgage_interest_arrears_by_cell = np.zeros_like(self.states["mort_loans"][0])
+        self._mortgage_principal_arrears_by_cell = np.zeros_like(self.states["mort_loans"][0])
+        self._mortgage_payments_settled = False
+        self._mortgage_credit_loss_by_bank = np.zeros(self.states["mort_loans"].shape[1])
+        self._mortgage_opening_arrears_collected_by_bank = np.zeros(self.states["mort_loans"].shape[1])
+        self._mortgage_interest_accrued_by_bank = np.zeros(self.states["mort_loans"].shape[1])
         self._consumer_opening_arrears_collected_by_bank = np.zeros(self.states["cons_loans"].shape[1])
         self._consumer_interest_accrued_by_bank = np.zeros(self.states["cons_loans"].shape[1])
         self._reset_firm_service_period_tracking()
@@ -897,6 +911,12 @@ class CreditMarket:
             - Outstanding loan balances
             - Bank portfolio composition
         """
+        if banks.parameters.requires_household_underwriting_snapshot and not hasattr(
+            households, "consumer_underwriting_income"
+        ):
+            raise RuntimeError(
+                "Household DSTI restriction requires a gross-cash underwriting snapshot before clearing."
+            )
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._serviceable_firm_loan_cohorts = {key: cohorts.copy() for key, cohorts in self._firm_loan_cohorts.items()}
@@ -912,6 +932,10 @@ class CreditMarket:
         self._first_miss_rescheduling_maturity.fill(0)
         self._mortgage_principal_paid.fill(0.0)
         self._mortgage_interest_paid.fill(0.0)
+        self._mortgage_payments_settled = False
+        self._mortgage_credit_loss_by_bank = np.zeros(self.states["mort_loans"].shape[1])
+        self._mortgage_opening_arrears_collected_by_bank.fill(0.0)
+        self._mortgage_interest_accrued_by_bank.fill(0.0)
         self._consumer_opening_arrears_collected_by_bank.fill(0.0)
         self._consumer_interest_accrued_by_bank.fill(0.0)
         self._reset_firm_service_period_tracking()
@@ -965,6 +989,9 @@ class CreditMarket:
             current_npl_mortgages=current_npl_mortgages,
         )
         self._validate_new_consumer_loans(new_cons_loans)
+        new_cons_loans, new_mort_loans = self.enforce_household_origination_dsti(
+            households, banks.parameters.household_consumption_loan_maturity, new_cons_loans, new_mort_loans
+        )
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
@@ -1065,7 +1092,7 @@ class CreditMarket:
             + self.states["lt_loans"][0].sum(axis=1)
             + self.states["cons_loans"][0].sum(axis=1)
             + (new_cons_loans[0].sum(axis=1) if households.uses_feasibility_resolver else 0.0)
-            + self.states["mort_loans"][0].sum(axis=1)
+            + (self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell).sum(axis=1)
         )
         banks.ts.new_loans_fraction_firms.append(
             np.divide(
@@ -1140,6 +1167,52 @@ class CreditMarket:
             where=total_principal > 0.0,
         )
         loans[2] += new_loans[2]
+
+    def enforce_household_origination_dsti(
+        self, households: Households, maturity: int, consumer_loans: np.ndarray, mortgage_loans: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Cap net grants against total service at actual offered contract rates.
+
+        Refinancing leaves each bank's existing principal claim in place and
+        remodulates it to the grant-weighted rate. Only net grants use bank
+        capital/supply. Rejected mortgage applications remain all-or-nothing.
+        """
+        if not hasattr(households, "consumer_underwriting_income"):
+            return consumer_loans, mortgage_loans
+        from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+        income = np.asarray(households.consumer_underwriting_income, dtype=float)
+        limit = float(households.consumer_underwriting_dsti_limit)
+        other = np.asarray(households.consumer_underwriting_other_service, dtype=float)
+        if income.shape != (self.states["cons_loans"].shape[2],) or not np.all(np.isfinite(income)):
+            raise ValueError("Gross cash underwriting requires a finite income per household.")
+        if other.shape != income.shape or not np.all(np.isfinite(other)) or np.any(other < 0):
+            raise ValueError("Other underwriting service must be finite and non-negative per household.")
+        if not np.isfinite(limit) or not 0 < limit <= 1 or isinstance(maturity, bool) or maturity <= 0:
+            raise ValueError("DSTI limit must lie in (0,1] and contract maturity must be positive.")
+        cons = consumer_loans.copy()
+        mort = mortgage_loans.copy()
+        grants = cons[0].sum(axis=0)
+        rate = np.divide((cons[0] * cons[1]).sum(axis=0), grants, out=np.zeros_like(grants), where=grants > 0)
+        factor = _annuity_payment_factor(rate, maturity)
+        balance = self.current_consumer_balance_by_household() + self.preview_opening_consumer_interest()
+        _, mortgage_service = self.preview_opening_household_service()
+        headroom = np.maximum(limit * income - mortgage_service - other, 0.0)
+        capacity = np.maximum(headroom / factor - balance, 0.0)
+        if households.uses_feasibility_resolver:
+            capacity = np.where(households.current_ficp_active(), 0.0, capacity)
+        permitted = np.minimum(grants, capacity)
+        scale = np.divide(permitted, grants, out=np.zeros_like(grants), where=grants > 0)
+        cons[0] *= scale[None, :]
+        cons[2] = cons[0] * factor[None, :]
+        cons[1] = np.where(cons[0] > 0, cons[1], 0.0)
+        has_new_consumer = permitted > 0
+        current_cons_service, _ = self.preview_opening_household_service()
+        future_cons_service = np.where(has_new_consumer, (balance + permitted) * factor, current_cons_service)
+        combined = future_cons_service + mortgage_service + mort[2].sum(axis=0) + other
+        reject_mortgage = (mort[0].sum(axis=0) > 0) & (combined > limit * income + 1e-8)
+        mort[:, :, reject_mortgage] = 0.0
+        return cons, mort
 
     def _validate_new_consumer_loans(self, new_loans: np.ndarray) -> None:
         """Reject malformed consumer-credit clearing output before it changes state."""
@@ -1245,19 +1318,27 @@ class CreditMarket:
             raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
         self._pending_consumer_loans_this_period = None
 
+    def preview_opening_consumer_interest(self) -> np.ndarray:
+        """Opening consumer interest reserved for refinancing, excluding mortgages."""
+        interest, _ = _scheduled_service_components(
+            self._serviceable_loans_this_period["cons_loans"],
+            opening_principal_arrears=self._consumer_principal_arrears_by_cell,
+            principal_arrears_accrue_interest=False,
+        )
+        return interest.sum(axis=0)
+
     def preview_opening_household_interest(self) -> np.ndarray:
         """Preview current contractual interest, excluding principal and old arrears.
 
         Reuses the frozen opening schedule. Same-period new loans are excluded,
         exactly as in service feasibility. This accessor mutates no credit state.
         """
-        consumer_interest, _ = _scheduled_service_components(
-            self._serviceable_loans_this_period["cons_loans"],
-            opening_principal_arrears=self._consumer_principal_arrears_by_cell,
+        mortgage_interest, _ = _scheduled_service_components(
+            self._serviceable_loans_this_period["mort_loans"],
+            self._mortgage_principal_arrears_by_cell,
             principal_arrears_accrue_interest=False,
         )
-        mortgage_interest, _ = _scheduled_service_components(self._serviceable_loans_this_period["mort_loans"])
-        return (consumer_interest + mortgage_interest).sum(axis=0)
+        return self.preview_opening_consumer_interest() + mortgage_interest.sum(axis=0)
 
     def preview_opening_household_service(self) -> tuple[np.ndarray, np.ndarray]:
         """Return non-mutating opening consumer and mortgage service by household."""
@@ -1268,14 +1349,21 @@ class CreditMarket:
             opening_principal_arrears=self._consumer_principal_arrears_by_cell,
             principal_arrears_accrue_interest=False,
         )
-        mort_interest, mort_principal = _scheduled_service_components(mort)
+        mort_interest, mort_principal = _scheduled_service_components(
+            mort, self._mortgage_principal_arrears_by_cell, principal_arrears_accrue_interest=False
+        )
         consumer = (
             cons_interest
             + cons_principal
             + self._consumer_interest_arrears_by_cell
             + self._consumer_principal_arrears_by_cell
         ).sum(axis=0)
-        return consumer, (mort_interest + mort_principal).sum(axis=0)
+        return consumer, (
+            mort_interest
+            + mort_principal
+            + self._mortgage_interest_arrears_by_cell
+            + self._mortgage_principal_arrears_by_cell
+        ).sum(axis=0)
 
     def prepare_household_service_snapshot(self) -> HouseholdServiceSnapshot:
         """Capture opening household service after consumer-credit booking."""
@@ -1300,11 +1388,18 @@ class CreditMarket:
             opening_principal_arrears=opening_principal_arrears,
             principal_arrears_accrue_interest=False,
         )
-        mort_interest, mort_principal = _scheduled_service_components(mort)
+        mort_interest, mort_principal = _scheduled_service_components(
+            mort, self._mortgage_principal_arrears_by_cell, principal_arrears_accrue_interest=False
+        )
         consumer_total = (opening_interest_arrears + opening_principal_arrears + cons_interest + cons_principal).sum(
             axis=0
         )
-        mortgage_total = (mort_interest + mort_principal).sum(axis=0)
+        mortgage_total = (
+            mort_interest
+            + mort_principal
+            + self._mortgage_interest_arrears_by_cell
+            + self._mortgage_principal_arrears_by_cell
+        ).sum(axis=0)
         snapshot = HouseholdServiceSnapshot(
             consumer_contractual_interest_by_cell=cons_interest.copy(),
             consumer_contractual_principal_by_cell=cons_principal.copy(),
@@ -1314,6 +1409,8 @@ class CreditMarket:
             mortgage_interest_by_cell=mort_interest.copy(),
             mortgage_principal_by_cell=mort_principal.copy(),
             mortgage_total_due=mortgage_total.copy(),
+            mortgage_opening_interest_arrears_by_cell=self._mortgage_interest_arrears_by_cell.copy(),
+            mortgage_opening_principal_arrears_by_cell=self._mortgage_principal_arrears_by_cell.copy(),
             newly_granted_consumer_loans=self._new_loans_this_period["cons_loans"].copy(),
         )
         for value in snapshot.__dict__.values():
@@ -1334,15 +1431,78 @@ class CreditMarket:
             raise RuntimeError("Household service has not been snapshotted for this period.")
         return self._household_service_snapshot
 
-    def pay_household_mortgage_installments(self) -> np.ndarray:
-        """Run legacy full mortgage service without committing household series."""
-        if self._household_service_snapshot is None:
-            raise RuntimeError("Household service must be snapshotted before mortgage servicing.")
-        principal, interest, interest_by_bank = self._service_loans(("mort_loans",))
-        self._mortgage_principal_paid = principal
-        self._mortgage_interest_paid = interest
-        self._last_interest_by_bank += interest_by_bank
-        return principal.copy()
+    def pay_household_mortgage_installments(self, remaining_shortfall: np.ndarray | None = None) -> np.ndarray:
+        """Settle mortgage service after consumer relief, carrying matched arrears."""
+        snapshot = self.current_household_service_snapshot()
+        if self._mortgage_payments_settled:
+            raise RuntimeError("Mortgage service has already been settled for this period.")
+        gap = (
+            np.zeros_like(snapshot.mortgage_total_due)
+            if remaining_shortfall is None
+            else np.asarray(remaining_shortfall, dtype=float)
+        )
+        if gap.shape != snapshot.mortgage_total_due.shape or not np.all(np.isfinite(gap)) or np.any(gap < 0):
+            raise ValueError("Mortgage shortfall must be a finite non-negative household vector.")
+        unpaid = np.minimum(gap, snapshot.mortgage_total_due)
+        available = snapshot.mortgage_total_due - unpaid
+        components = []
+        for due in (
+            snapshot.mortgage_opening_interest_arrears_by_cell,
+            snapshot.mortgage_opening_principal_arrears_by_cell,
+            snapshot.mortgage_interest_by_cell,
+            snapshot.mortgage_principal_by_cell,
+        ):
+            paid = _allocate_household_amount_pro_rata(available, due)
+            components.append(paid)
+            available -= paid.sum(axis=0)
+        old_interest, old_principal, interest, principal = components
+        loans = self.states["mort_loans"]
+        opening_loans = self._serviceable_loans_this_period["mort_loans"]
+        new_loans = self._new_loans_this_period["mort_loans"]
+        remaining_opening_principal = np.maximum(opening_loans[0] - old_principal - principal, 0.0)
+        loans[0] = np.maximum(loans[0] - old_principal - principal, 0.0)
+        self._mortgage_interest_arrears_by_cell = np.maximum(
+            snapshot.mortgage_opening_interest_arrears_by_cell
+            - old_interest
+            + snapshot.mortgage_interest_by_cell
+            - interest,
+            0.0,
+        )
+        self._mortgage_principal_arrears_by_cell = np.minimum(
+            loans[0],
+            np.maximum(
+                snapshot.mortgage_opening_principal_arrears_by_cell
+                - old_principal
+                + snapshot.mortgage_principal_by_cell
+                - principal,
+                0.0,
+            ),
+        )
+        # Arrears do not accrue interest. Weight the rate over surviving
+        # performing principal, including the new loan at its own rate.
+        performing_opening = np.maximum(remaining_opening_principal - self._mortgage_principal_arrears_by_cell, 0.0)
+        performing_principal = performing_opening + new_loans[0]
+        loans[1] = np.divide(
+            performing_opening * opening_loans[1] + new_loans[0] * new_loans[1],
+            performing_principal,
+            out=np.where(loans[0] > 0.0, opening_loans[1], 0.0),
+            where=performing_principal > 0.0,
+        )
+        # An opening balance entirely in arrears is due through the arrears
+        # ledger. Its old annuity must not also accelerate the new principal.
+        loans[2] = new_loans[2] + np.where(np.isclose(performing_opening, 0.0, atol=1e-2), 0.0, opening_loans[2])
+        self._mortgage_principal_paid = (old_principal + principal).sum(axis=0)
+        self._mortgage_interest_paid = (old_interest + interest).sum(axis=0)
+        self._mortgage_unpaid_payment = unpaid.copy()
+        self._mortgage_actual_payment = snapshot.mortgage_total_due - unpaid
+        self._mortgage_opening_arrears_collected_by_bank = old_interest.sum(axis=1)
+        self._mortgage_interest_accrued_by_bank = (snapshot.mortgage_interest_by_cell - interest).sum(axis=1)
+        self._last_interest_by_household += self._mortgage_interest_paid
+        self._last_interest_by_bank += (old_interest + interest).sum(axis=1)
+        self._mortgage_payments_settled = True
+        self._new_loans_this_period["mort_loans"] = np.zeros_like(loans)
+        self._serviceable_loans_this_period["mort_loans"] = loans.copy()
+        return self._mortgage_principal_paid.copy()
 
     def settle_consumer_payments(
         self,
@@ -1692,6 +1852,9 @@ class CreditMarket:
         self._consumer_debt_rate_delta_for_cacf[refinanced_existing_debt] = (
             settled_rate[refinanced_existing_debt] - self._consumer_refinancing_opening_rate[refinanced_existing_debt]
         )
+        loans[0][:, remodulated] += self._consumer_interest_arrears_by_cell[:, remodulated]
+        self._consumer_interest_arrears_by_cell[:, remodulated] = 0.0
+        self._consumer_principal_arrears_by_cell[:, remodulated] = 0.0
         aggregate_principal = loans[0].sum(axis=0)
         aggregate_payment = aggregate_principal * _annuity_payment_factor(
             settled_rate,
@@ -2261,6 +2424,10 @@ class CreditMarket:
             ind = np.isclose(loans[0], 0.0, atol=1e-2)
             if key == "cons_loans":
                 ind &= np.isclose(self._consumer_interest_arrears_by_cell, 0.0, atol=1e-2)
+            if key == "mort_loans":
+                ind &= np.isclose(self._mortgage_interest_arrears_by_cell, 0.0, atol=1e-2)
+                self._mortgage_interest_arrears_by_cell[ind] = 0.0
+                self._mortgage_principal_arrears_by_cell[ind] = 0.0
             loans[:, ind] = 0.0
             if key == "cons_loans":
                 self._consumer_interest_arrears_by_cell[ind] = 0.0
@@ -2286,7 +2453,9 @@ class CreditMarket:
         self.ts.total_outstanding_loans_granted_households_consumption.append(
             [(self.states["cons_loans"][0] + self._consumer_interest_arrears_by_cell).sum()]
         )
-        self.ts.total_outstanding_loans_granted_mortgages.append([self.states["mort_loans"][0].sum()])
+        self.ts.total_outstanding_loans_granted_mortgages.append(
+            [(self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell).sum()]
+        )
 
     def compute_outstanding_short_term_loans_by_firm(self) -> np.ndarray:
         """Calculate total short-term loans for each firm.
@@ -2318,7 +2487,7 @@ class CreditMarket:
         Returns:
             np.ndarray: Array of total mortgage balances by household
         """
-        return self.states["mort_loans"][0].sum(axis=0)
+        return (self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell).sum(axis=0)
 
     def compute_scheduled_mortgage_payments_by_household(self) -> np.ndarray:
         """Calculate scheduled mortgage service for each household."""
@@ -2367,7 +2536,7 @@ class CreditMarket:
             self.states["st_loans"][0].sum(axis=1)
             + self.states["lt_loans"][0].sum(axis=1)
             + (self.states["cons_loans"][0] + self._consumer_interest_arrears_by_cell).sum(axis=1)
-            + self.states["mort_loans"][0].sum(axis=1)
+            + (self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell).sum(axis=1)
         )
 
     def compute_outstanding_short_term_firm_loans_by_bank(self) -> np.ndarray:
@@ -2400,7 +2569,7 @@ class CreditMarket:
         Returns:
             np.ndarray: Array of mortgage balances by bank
         """
-        return self.states["mort_loans"][0].sum(axis=1)
+        return (self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell).sum(axis=1)
 
     def compute_interest_paid_by_firm(self) -> np.ndarray:
         """Calculate total interest paid by each firm.
@@ -2437,6 +2606,8 @@ class CreditMarket:
             self._last_interest_by_bank
             - self._consumer_opening_arrears_collected_by_bank
             + self._consumer_interest_accrued_by_bank
+            - self._mortgage_opening_arrears_collected_by_bank
+            + self._mortgage_interest_accrued_by_bank
         )
 
     def compute_defaulted_firm_loan_writeoff_by_bank(self, default_flag: np.ndarray) -> np.ndarray:
@@ -2543,9 +2714,15 @@ class CreditMarket:
                 raise ValueError("consumer_exclusion must match the bank-by-household consumer-loan shape.")
             consumer_selection &= ~consumer_exclusion
         cons_amount = self.states["cons_loans"][0][consumer_selection].sum()
-        mort_amount = self.states["mort_loans"][0][:, household_id].sum()
+        mortgage_claims = (self.states["mort_loans"][0] + self._mortgage_interest_arrears_by_cell)[:, household_id]
+        if mortgage_claims.ndim == 1:
+            mortgage_claims = mortgage_claims[:, None]
+        self._mortgage_credit_loss_by_bank += mortgage_claims.sum(axis=1)
+        mort_amount = mortgage_claims.sum()
         self.states["cons_loans"][:, consumer_selection] = 0.0
         self.states["mort_loans"][:, :, household_id] = 0.0
+        self._mortgage_interest_arrears_by_cell[:, household_id] = 0.0
+        self._mortgage_principal_arrears_by_cell[:, household_id] = 0.0
         self._consumer_principal_arrears_by_cell[consumer_selection] = 0.0
         return cons_amount, mort_amount
 
@@ -2566,6 +2743,8 @@ class CreditMarket:
             self._clear_staged_firm_service_selection(key, bank_id=bank_id)
         self.states["cons_loans"][:, bank_id] = 0.0
         self.states["mort_loans"][:, bank_id] = 0.0
+        self._mortgage_interest_arrears_by_cell[bank_id] = 0.0
+        self._mortgage_principal_arrears_by_cell[bank_id] = 0.0
         self._consumer_principal_arrears_by_cell[bank_id] = 0.0
         self._firm_interest_arrears_by_cell["st_loans"][bank_id] = 0.0
         self._firm_interest_arrears_by_cell["lt_loans"][bank_id] = 0.0

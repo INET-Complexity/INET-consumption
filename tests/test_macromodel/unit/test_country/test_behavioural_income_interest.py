@@ -75,6 +75,7 @@ def test_planned_interest_is_frozen_through_service_and_refreshed_next_period(re
             household_ts.current("expected_behavioural_income_borrower_interest"), expected_interest
         )
         market._household_service_snapshot = None
+        market._mortgage_payments_settled = False
         if case == "new" and period == 0:
             new_loan = empty.copy()
             new_loan[:, 0, 0] = [100.0, 0.1, 30.0]

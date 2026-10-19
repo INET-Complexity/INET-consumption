@@ -1092,7 +1092,7 @@ class Households(Agent):
         consumption = np.asarray(consumption_after_floor, dtype=float)
         mortgage = np.asarray(mortgage_service, dtype=float)
         scheduled = np.asarray(scheduled_consumer_service, dtype=float)
-        income = np.asarray(self.ts.current("expected_income"), dtype=float)
+        income = np.asarray(self.current_financing_income(), dtype=float)
         eligible = np.asarray(eligible_ficp, dtype=bool)
         for name, values in (
             ("consumption_after_floor", consumption),
@@ -2129,7 +2129,7 @@ class Households(Agent):
     def validate_legacy_mandatory_cash_uses(self) -> None:
         """The legacy path has no rent-support authority: reject an unfunded rent bill."""
         rent = self.current_consumption_cash_rent()
-        resources = np.asarray(self.ts.current("expected_income"), dtype=float).copy()
+        resources = np.asarray(self.current_financing_income(), dtype=float).copy()
         resources += np.maximum(self.ts.current("wealth_financial_assets"), 0.0)
         for key in ("received_consumption_loans", "received_mortgages"):
             resources += np.asarray(self.ts.current(key), dtype=float)
@@ -2143,11 +2143,19 @@ class Households(Agent):
                 "Legacy financing cannot fund mandatory cash rent; no rent-support authority is enabled."
             )
 
+    def current_financing_income(self) -> np.ndarray:
+        """Known current wages/benefits plus remaining cash-receipt forecasts."""
+        return (
+            self.ts.current("financing_income")
+            if getattr(self, "_known_receipts_ready", False)
+            else self.ts.current("expected_income")
+        )
+
     def refresh_post_labour_feasibility(self, scheduled_debt_service: np.ndarray) -> None:
         """Refresh cash needs without rebooking loans or authorising new sales."""
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Post-labour refresh requires a settled post-grant plan.")
-        income = np.asarray(self.ts.current("expected_income"), dtype=float)
+        income = np.asarray(self.current_financing_income(), dtype=float)
         uses = (
             self.consumption_cash_factor() * self.ts.current("target_consumption").sum(axis=1)
             + self.current_consumption_cash_rent()
@@ -2184,7 +2192,7 @@ class Households(Agent):
         Expected income is the same current-period cash-income basis used by
         the behavioural target. Imputed rent is never an additive cash use.
         """
-        income = self.ts.current("expected_income") if income_override is None else income_override
+        income = self.current_financing_income() if income_override is None else income_override
         n_households = self.ts.current("n_households")
         if np.asarray(target_consumption).ndim != 2 or np.asarray(target_consumption).shape[0] != n_households:
             raise ValueError("Target consumption must be a household-by-industry matrix.")
@@ -2305,6 +2313,8 @@ class Households(Agent):
         dsti_limit: float,
         current_ifa: np.ndarray,
         replace_current: bool = False,
+        existing_consumer_balance: np.ndarray | float = 0.0,
+        other_debt_service: np.ndarray | float = 0.0,
     ) -> ResidualCapacityFallbackResult:
         """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
 
@@ -2338,6 +2348,8 @@ class Households(Agent):
             consumer_loan_maturity=consumer_loan_maturity,
             dsti_limit=dsti_limit,
             current_ifa=np.asarray(current_ifa, dtype=float),
+            existing_consumer_balance=existing_consumer_balance,
+            other_debt_service=other_debt_service,
         )
         if replace_current:
             self.ts.override_current("dsti_headroom", result.dsti_headroom)

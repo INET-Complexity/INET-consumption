@@ -1461,17 +1461,6 @@ class CreditMarket:
         new_loans = self._new_loans_this_period["mort_loans"]
         remaining_opening_principal = np.maximum(opening_loans[0] - old_principal - principal, 0.0)
         loans[0] = np.maximum(loans[0] - old_principal - principal, 0.0)
-        # Only opening loans were serviced. Reweight the surviving contracts
-        # and retire a fully repaid opening annuity without changing new terms.
-        loans[1] = np.divide(
-            remaining_opening_principal * opening_loans[1] + new_loans[0] * new_loans[1],
-            loans[0],
-            out=np.zeros_like(loans[0]),
-            where=loans[0] > 0.0,
-        )
-        loans[2] = new_loans[2] + np.where(
-            np.isclose(remaining_opening_principal, 0.0, atol=1e-2), 0.0, opening_loans[2]
-        )
         self._mortgage_interest_arrears_by_cell = np.maximum(
             snapshot.mortgage_opening_interest_arrears_by_cell
             - old_interest
@@ -1488,6 +1477,20 @@ class CreditMarket:
                 - principal,
                 0.0,
             ),
+        )
+        # Arrears do not accrue interest. Weight the rate over surviving
+        # performing principal, including the new loan at its own rate.
+        performing_opening = np.maximum(remaining_opening_principal - self._mortgage_principal_arrears_by_cell, 0.0)
+        performing_principal = performing_opening + new_loans[0]
+        loans[1] = np.divide(
+            performing_opening * opening_loans[1] + new_loans[0] * new_loans[1],
+            performing_principal,
+            out=np.where(loans[0] > 0.0, opening_loans[1], 0.0),
+            where=performing_principal > 0.0,
+        )
+        # Retire a fully repaid opening annuity without changing new terms.
+        loans[2] = new_loans[2] + np.where(
+            np.isclose(remaining_opening_principal, 0.0, atol=1e-2), 0.0, opening_loans[2]
         )
         self._mortgage_principal_paid = (old_principal + principal).sum(axis=0)
         self._mortgage_interest_paid = (old_interest + interest).sum(axis=0)

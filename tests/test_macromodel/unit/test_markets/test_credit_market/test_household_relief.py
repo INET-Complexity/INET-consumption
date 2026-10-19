@@ -135,3 +135,27 @@ def test_mortgage_interest_preview_matches_contract_after_actual_payment_relief(
     before = market.states["mort_loans"].copy()
     np.testing.assert_allclose(market.preview_opening_household_interest(), expected)
     np.testing.assert_array_equal(market.states["mort_loans"], before)
+
+
+@pytest.mark.parametrize("shortfall", [5.0, 20.0, 110.0])
+def test_new_mortgage_rate_excludes_nonaccruing_opening_principal_arrears(shortfall):
+    from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
+
+    empty = np.zeros((3, 1, 1))
+    opening = empty.copy()
+    opening[:, 0, 0] = [100.0, 0.1, 110.0]
+    market = CreditMarket.from_data("TST", empty.copy(), empty.copy(), empty.copy(), opening)
+    new = empty.copy()
+    new[:, 0, 0] = [100.0, 0.2, 100.0 * _annuity_payment_factor(np.array([0.2]), 12)[0]]
+    market._add_new_loans("mort_loans", new)
+    market.prepare_household_service_snapshot()
+    market.settle_consumer_payments(np.zeros(1))
+    market.pay_household_mortgage_installments(np.array([shortfall]))
+    assert market._mortgage_principal_arrears_by_cell.sum() == pytest.approx(min(shortfall, 100.0))
+    # Every surviving opening-principal unit is in arrears; only the new
+    # principal accrues next-period interest, at its own contractual rate.
+    market._household_service_snapshot = None
+    market._mortgage_payments_settled = False
+    market.prepare_household_service_snapshot()
+    assert market.current_household_service_snapshot().mortgage_interest_by_cell.sum() == pytest.approx(20.0)
+    np.testing.assert_allclose(market.preview_opening_household_interest(), 20.0)

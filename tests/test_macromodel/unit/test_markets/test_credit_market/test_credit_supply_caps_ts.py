@@ -187,3 +187,27 @@ def test_append_credit_supply_caps_updates_banks_ts_vectors_and_totals():
     assert np.allclose(banks.ts.current("total_credit_supply_cap_firms_long_term")[0], 120.0)
     assert np.allclose(banks.ts.current("total_credit_supply_cap_households_consumption")[0], 90.0)
     assert np.allclose(banks.ts.current("total_credit_supply_cap_mortgages")[0], 60.0)
+
+
+def test_compute_credit_supply_caps_by_type_returns_zero_when_car_is_fully_binding():
+    banks = _make_banks_stub(
+        equity=np.array([10.0, 20.0]),
+        total_outstanding_loans=np.array([100.0, 100.0]),
+        firms_fraction=np.array([0.5, 0.5]),
+        hh_cons_fraction=np.array([0.3, 0.3]),
+        mortgage_fraction=np.array([0.2, 0.2]),
+        capital_adequacy_ratio=0.1,
+    )
+
+    caps = _compute_credit_supply_caps_by_type(
+        banks=banks,
+        current_npl_firm_loans=0.0,
+        current_npl_hh_cons_loans=0.0,
+        current_npl_mortgages=0.0,
+        credit_supply_temperature=0.0,
+        total_target_short_term_credit=100.0,
+        total_target_long_term_credit=0.0,
+    )
+
+    # Bank 0 has exactly exhausted CAR headroom; bank 1 retains 100 units.
+    assert np.allclose(caps["total"], np.array([0.0, 100.0]))

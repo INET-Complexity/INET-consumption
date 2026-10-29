@@ -978,6 +978,13 @@ class SyntheticCountry:
             weights_by_income=self.consumption_weights_by_income,
         )
 
+        # The reset argument can differ from the country configuration used by
+        # init_credit_market. Reapply its firm-only contract to the rebuilt books.
+        if zero_initial_debt:
+            for loan_book in (credit_market.longterm_loans, credit_market.shortterm_loans):
+                for field in ("principal", "interest", "installments"):
+                    getattr(loan_book, field)[...] = 0.0
+
         self.credit_market = credit_market
         self.housing_market = housing_market
 

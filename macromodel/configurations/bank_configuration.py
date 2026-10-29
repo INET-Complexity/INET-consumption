@@ -25,9 +25,9 @@ class BankParameters(BaseModel):
         firm_loans_return_on_equity_ratio (float): Target return on equity for firm lending
         firm_loans_return_on_assets_ratio (float): Target return on assets for firm lending
         enable_firm_loans_return_on_equity_restriction (bool): Whether to apply
-            the legacy ROE-style firm-loan restriction
+            the legacy ROE-style restriction (opt-in; defaults to False)
         enable_firm_loans_return_on_assets_restriction (bool): Whether to apply
-            the legacy ROA-style firm-loan restriction
+            the legacy ROA-style restriction (opt-in; defaults to False)
         enable_firm_loans_dscr_restriction (bool): Whether to apply the firm-loan
             debt-service coverage capacity restriction
         firm_loans_min_dscr (float): Minimum debt-service coverage ratio for
@@ -60,8 +60,8 @@ class BankParameters(BaseModel):
     )
     firm_loans_return_on_equity_ratio: float = Field(ge=0, le=1, default=0.05)
     firm_loans_return_on_assets_ratio: float = Field(ge=0, le=1, default=0.05)
-    enable_firm_loans_return_on_equity_restriction: bool = True
-    enable_firm_loans_return_on_assets_restriction: bool = True
+    enable_firm_loans_return_on_equity_restriction: bool = False
+    enable_firm_loans_return_on_assets_restriction: bool = False
     enable_firm_loans_dscr_restriction: bool = False
     firm_loans_min_dscr: float = Field(gt=0, default=1.25)
     firm_loans_cfads_window: int = Field(ge=1, default=4)

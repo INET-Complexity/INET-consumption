@@ -73,6 +73,13 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
             - interest_rates: Various product rates
             - new_loans_fraction: Portfolio composition
     """
+    preference_firm_loans = bank_data.get("Notional Loans to Firms", bank_data["Loans to Firms"]).values
+    preference_loan_total = (
+        preference_firm_loans
+        + bank_data["Consumption Loans to Households"].values
+        + bank_data["Mortgages to Households"].values
+    )
+
     return TimeSeries(
         n_banks=len(bank_data),
         #
@@ -168,37 +175,22 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         average_overdraft_rate_on_household_deposits=[bank_data["Overdraft Rate on Household Deposits"].values.mean()],
         #
         new_loans_fraction_firms=np.divide(
-            bank_data["Loans to Firms"].values,
-            bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values,
-            out=np.zeros(bank_data["Loans to Firms"].values.shape),
-            where=bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values
-            != 0.0,
+            preference_firm_loans,
+            preference_loan_total,
+            out=np.zeros(preference_firm_loans.shape),
+            where=preference_loan_total != 0.0,
         ),
         new_loans_fraction_hh_cons=np.divide(
             bank_data["Consumption Loans to Households"].values,
-            bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values,
+            preference_loan_total,
             out=np.zeros(bank_data["Consumption Loans to Households"].values.shape),
-            where=bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values
-            != 0.0,
+            where=preference_loan_total != 0.0,
         ),
         new_loans_fraction_mortgages=np.divide(
             bank_data["Mortgages to Households"].values,
-            bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values,
+            preference_loan_total,
             out=np.zeros(bank_data["Mortgages to Households"].values.shape),
-            where=bank_data["Loans to Firms"].values
-            + bank_data["Consumption Loans to Households"].values
-            + bank_data["Mortgages to Households"].values
-            != 0.0,
+            where=preference_loan_total != 0.0,
         ),
         #
         credit_supply_cap_total=np.full(len(bank_data), np.nan),

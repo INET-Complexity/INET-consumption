@@ -521,10 +521,12 @@ def function_parameters_dependent_initialisation(
                 weights = firm_data["Production"].values / firm_data["Production"].values.sum()
             firm_data["Deposits"] = weights * total_firm_deposits
     firm_data["Deposits"] = np.maximum(0.0, firm_data["Deposits"])
+    notional_firm_debt = capital_inputs_stock.sum(axis=1) / capital_inputs_stock.sum() * total_firm_debt
+    firm_data["Notional Debt"] = notional_firm_debt
     if assume_zero_initial_debt:
         firm_data["Debt"] = 0.0
     else:
-        firm_data["Debt"] = capital_inputs_stock.sum(axis=1) / capital_inputs_stock.sum() * total_firm_debt
+        firm_data["Debt"] = notional_firm_debt
     firm_data["Equity"] = (
         firm_data["Deposits"]
         + firm_data["Price"] * firm_data["Inventory"]

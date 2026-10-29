@@ -916,6 +916,7 @@ class SyntheticCountry:
             synthetic_population=population,
             firm_deposits=firms.firm_data["Deposits"].values,
             firm_debt=firms.firm_data["Debt"].values,
+            firm_preference_debt=firms.firm_data.get("Notional Debt", firms.firm_data["Debt"]).values,
         )
 
     def reset_firm_function_dependent(

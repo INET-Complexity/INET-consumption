@@ -236,9 +236,7 @@ class SyntheticBanks(ABC):
         pass
 
     @abstractmethod
-    def set_loans_to_firms(
-        self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None
-    ) -> None:
+    def set_loans_to_firms(self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None) -> None:
         """Set the initial loans to firms for each bank.
 
         Args:

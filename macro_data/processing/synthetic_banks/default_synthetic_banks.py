@@ -597,9 +597,7 @@ class DefaultSyntheticBanks(SyntheticBanks):
             initial_deposits_from_households[bank_id] += household_deposits[corr_households].sum()
         self.bank_data["Deposits from Households"] = initial_deposits_from_households
 
-    def set_loans_to_firms(
-        self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None
-    ) -> None:
+    def set_loans_to_firms(self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None) -> None:
         """Set actual and preference firm-loan amounts for each bank.
 
         Args:

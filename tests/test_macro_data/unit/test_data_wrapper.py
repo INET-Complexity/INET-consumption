@@ -8,6 +8,7 @@ import yaml
 from macro_data import DataWrapper, SyntheticCountry
 from macro_data.configuration import DataConfiguration
 from macro_data.configuration.countries import Country
+from macromodel.configurations.bank_configuration import BankParameters
 
 TEST_PATH = Path(__file__).parent.parent.resolve()
 
@@ -119,12 +120,21 @@ class TestCreator:
         before_loans = float(country.banks.bank_data["Loans to Households"].sum())
         before_mortgages = float(country.banks.bank_data["Mortgages to Households"].sum())
         before_population_deposits = float(country.population.household_data["Wealth in Deposits"].sum())
+        before_household_deposits = country.population.household_data["Wealth in Deposits"].to_numpy(copy=True)
+        household_loan_names = ("consumption_expansion_loans", "payday_loans", "mortgage_loans")
+        before_household_loans = {
+            name: {
+                field: getattr(getattr(country.credit_market, name), field).copy()
+                for field in ("principal", "interest", "installments")
+            }
+            for name in household_loan_names
+        }
 
         country.reset_firm_function_dependent(
             capital_inputs_utilisation_rate=0.1,
             initial_inventory_to_input_fraction=0.1,
             intermediate_inputs_utilisation_rate=0.2,
-            zero_initial_debt=False,
+            zero_initial_debt=True,
             zero_initial_deposits=False,
         )
 
@@ -137,6 +147,46 @@ class TestCreator:
         assert np.isclose(after_loans, before_loans)
         assert np.isclose(after_mortgages, before_mortgages)
         assert np.isclose(after_population_deposits, before_population_deposits)
+        np.testing.assert_allclose(
+            country.population.household_data["Wealth in Deposits"].to_numpy(),
+            before_household_deposits,
+        )
+        for loan_name, fields in before_household_loans.items():
+            for field, before_values in fields.items():
+                after_values = getattr(getattr(country.credit_market, loan_name), field)
+                np.testing.assert_allclose(after_values, before_values)
+                assert np.all(np.isfinite(after_values))
+                assert np.all(after_values >= 0.0)
+
+        # The flag zeros firm borrowing while preserving all household credit.
+        firm_loans = country.credit_market.longterm_loans
+        short_term_firm_loans = country.credit_market.shortterm_loans
+        assert np.isclose(country.firms.firm_data["Debt"].sum(), 0.0)
+        assert np.isclose(country.banks.bank_data["Loans to Firms"].sum(), 0.0)
+        for loan_book in (firm_loans, short_term_firm_loans):
+            for field in ("principal", "interest", "installments"):
+                assert np.isclose(getattr(loan_book, field).sum(), 0.0)
+
+        household_loan_book_total = sum(
+            float(getattr(country.credit_market, loan_name).principal.sum())
+            for loan_name in ("consumption_expansion_loans", "payday_loans", "mortgage_loans")
+        )
+        assert np.isclose(after_loans, household_loan_book_total)
+        assert np.isclose(
+            after_mortgages,
+            country.credit_market.mortgage_loans.principal.sum(),
+        )
+        assert np.isclose(
+            after_deposits,
+            country.population.household_data["Wealth in Deposits"].sum(),
+        )
+        car_ratio = BankParameters().capital_adequacy_ratio
+        total_outstanding_loans = after_loans + country.banks.bank_data["Loans to Firms"].sum()
+        independent_car_headroom = max(
+            0.0,
+            country.banks.bank_data["Equity"].sum() / car_ratio - total_outstanding_loans,
+        )
+        assert np.isfinite(independent_car_headroom) and independent_car_headroom > 0.0
 
     def test__single_banks(self, data_config_path):
         with open(data_config_path, "r") as f:

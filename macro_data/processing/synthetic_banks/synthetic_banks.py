@@ -165,7 +165,11 @@ class SyntheticBanks(ABC):
         self.mortgage_spread = mortgage_spread
 
     def initialise_deposits_and_loans(
-        self, synthetic_population: SyntheticPopulation, firm_deposits: np.ndarray, firm_debt: np.ndarray
+        self,
+        synthetic_population: SyntheticPopulation,
+        firm_deposits: np.ndarray,
+        firm_debt: np.ndarray,
+        firm_preference_debt: np.ndarray | None = None,
     ) -> None:
         """Initialize the deposits and loans for all banks in the system.
 
@@ -178,7 +182,9 @@ class SyntheticBanks(ABC):
         Args:
             synthetic_population (SyntheticPopulation): Population data including household wealth
             firm_deposits (np.ndarray): Array of firm deposit amounts
-            firm_debt (np.ndarray): Array of firm debt amounts
+            firm_debt (np.ndarray): Actual firm debt amounts used on opening balance sheets
+            firm_preference_debt (np.ndarray | None): Notional pre-reset firm debt used only
+                to initialize bank lending preference weights
         """
         # Set initial household deposits
         household_deposits = synthetic_population.household_data["Wealth in Deposits"].values
@@ -201,7 +207,7 @@ class SyntheticBanks(ABC):
         self.set_deposits_from_firms(firm_deposits=firm_deposits)
 
         # Set initial firm loans
-        self.set_loans_to_firms(firm_debt=firm_debt)
+        self.set_loans_to_firms(firm_debt=firm_debt, firm_preference_debt=firm_preference_debt)
 
         # Set initial bank deposits
         self.set_bank_deposits(
@@ -230,11 +236,12 @@ class SyntheticBanks(ABC):
         pass
 
     @abstractmethod
-    def set_loans_to_firms(self, firm_debt: np.ndarray) -> None:
+    def set_loans_to_firms(self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None) -> None:
         """Set the initial loans to firms for each bank.
 
         Args:
-            firm_debt (np.ndarray): Array of debt amounts by firm
+            firm_debt (np.ndarray): Actual debt amounts by firm
+            firm_preference_debt (np.ndarray | None): Notional debt amounts by firm
         """
         pass
 

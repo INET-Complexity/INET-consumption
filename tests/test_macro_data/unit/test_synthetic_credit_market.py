@@ -47,6 +47,9 @@ def test_zero_firm_debt_zeros_firm_loan_principals():
     assert np.isclose(credit_market_zero.longterm_loans.principal.sum(), 0.0)
     assert np.isclose(credit_market_zero.longterm_loans.interest.sum(), 0.0)
     assert np.isclose(credit_market_zero.longterm_loans.installments.sum(), 0.0)
+    assert np.isclose(credit_market_zero.shortterm_loans.principal.sum(), 0.0)
+    assert np.isclose(credit_market_zero.shortterm_loans.interest.sum(), 0.0)
+    assert np.isclose(credit_market_zero.shortterm_loans.installments.sum(), 0.0)
 
     credit_market_nonzero = SyntheticCreditMarket.create_from_agents(
         firms=firms,
@@ -64,6 +67,11 @@ def test_zero_firm_debt_zeros_firm_loan_principals():
         + household_data["Outstanding Balance of Mortgages on other Properties"]
     )
     np.testing.assert_allclose(credit_market_nonzero.mortgage_loans.principal.sum(axis=0), expected_mortgage_debt)
+    for loan_name in ("consumption_expansion_loans", "payday_loans", "mortgage_loans"):
+        zero_loans = getattr(credit_market_zero, loan_name)
+        loaded_loans = getattr(credit_market_nonzero, loan_name)
+        for field in ("principal", "interest", "installments"):
+            np.testing.assert_allclose(getattr(zero_loans, field), getattr(loaded_loans, field))
 
 
 def test_mortgage_loan_principals_include_other_property_mortgages():

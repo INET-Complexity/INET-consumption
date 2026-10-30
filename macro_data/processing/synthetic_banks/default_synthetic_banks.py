@@ -597,17 +597,23 @@ class DefaultSyntheticBanks(SyntheticBanks):
             initial_deposits_from_households[bank_id] += household_deposits[corr_households].sum()
         self.bank_data["Deposits from Households"] = initial_deposits_from_households
 
-    def set_loans_to_firms(self, firm_debt: np.ndarray) -> None:
-        """Set the initial loans to firms for each bank.
+    def set_loans_to_firms(self, firm_debt: np.ndarray, firm_preference_debt: np.ndarray | None = None) -> None:
+        """Set actual and preference firm-loan amounts for each bank.
 
         Args:
-            firm_debt (np.ndarray): Array of debt amounts by firm
+            firm_debt (np.ndarray): Actual debt amounts by firm
+            firm_preference_debt (np.ndarray | None): Notional debt amounts by firm
+                used only for the bank's initial loan-type preference share
         """
         initial_loans_to_firms = np.zeros(self.number_of_banks)
+        initial_preference_loans_to_firms = np.zeros(self.number_of_banks)
+        preference_debt = firm_debt if firm_preference_debt is None else firm_preference_debt
         for bank_id in range(self.number_of_banks):
             corr_firms = np.array(self.bank_data["Corresponding Firms ID"][bank_id])
             initial_loans_to_firms[bank_id] += firm_debt[corr_firms].sum()
+            initial_preference_loans_to_firms[bank_id] += preference_debt[corr_firms].sum()
         self.bank_data["Loans to Firms"] = initial_loans_to_firms
+        self.bank_data["Notional Loans to Firms"] = initial_preference_loans_to_firms
 
     def set_loans_to_households(
         self,

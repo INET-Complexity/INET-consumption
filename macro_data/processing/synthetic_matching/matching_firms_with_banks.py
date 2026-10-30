@@ -96,13 +96,34 @@ def match_firms_with_banks_optimal(
         firms (SyntheticFirms): Firm financial data
         banks (SyntheticBanks): Bank balance sheet data
     """
-    # rescale
+    # Preserve the bank-level loan mix before reconciling actual loans. With
+    # zero initial debt, the actual firm loan book is cleared below, but this
+    # shadow allocation still guides firm-bank matching and lending preference.
+    firm_preference_debt = firms.firm_data.get("Notional Debt", firms.firm_data["Debt"]).values
+    bank_preference_loans = banks.bank_data.get(
+        "Notional Loans to Firms", banks.bank_data["Loans to Firms"]
+    ).values.copy()
+
+    # Reconcile actual balance-sheet amounts independently of the preference
+    # allocation. In particular, this keeps actual bank firm loans at zero when
+    # firms start with zero debt.
     rescale(firms, "Deposits", banks, "Deposits from Firms")
     rescale(firms, "Debt", banks, "Loans to Firms")
 
+    preference_debt_total = firm_preference_debt.sum()
+    bank_preference_total = bank_preference_loans.sum()
+    if bank_preference_total > 0.0:
+        banks.bank_data["Notional Loans to Firms"] = (
+            bank_preference_loans * preference_debt_total / bank_preference_total
+        )
+    else:
+        banks.bank_data["Notional Loans to Firms"] = 0.0
+
     # create cost matrix
-    # sum of loans and deposits to firms
-    loans_and_deposits = banks.bank_data["Deposits from Firms"].values + banks.bank_data["Loans to Firms"].values
+    # Use shadow firm loans for matching, while actual loans remain unchanged.
+    loans_and_deposits = (
+        banks.bank_data["Deposits from Firms"].values + banks.bank_data["Notional Loans to Firms"].values
+    )
     # number of firms by bank
     number_of_firms_by_bank = (
         firms.number_of_firms * loans_and_deposits / loans_and_deposits.sum()
@@ -130,7 +151,8 @@ def match_firms_with_banks_optimal(
     bank_accounts = []
     for bank_id, number_of_firms in enumerate(number_of_firms_by_bank):
         book_value = (
-            banks.bank_data["Deposits from Firms"].values[bank_id] + banks.bank_data["Loans to Firms"].values[bank_id]
+            banks.bank_data["Deposits from Firms"].values[bank_id]
+            + banks.bank_data["Notional Loans to Firms"].values[bank_id]
         )
         extension = np.full(number_of_firms, book_value / number_of_firms) if number_of_firms > 0 else []
         bank_accounts.extend(extension)
@@ -142,7 +164,7 @@ def match_firms_with_banks_optimal(
     ).astype(int)
 
     cost = sp.spatial.distance_matrix(
-        (firms.firm_data["Deposits"].values + firms.firm_data["Debt"].values)[:, None],
+        (firms.firm_data["Deposits"].values + firm_preference_debt)[:, None],
         bank_accounts[:, None],
     )
 

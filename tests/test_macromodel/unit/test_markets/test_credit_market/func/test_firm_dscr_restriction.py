@@ -96,6 +96,10 @@ def test_roa_roe_switches_allow_lending_when_legacy_profitability_gate_would_blo
     clearer = _credit_market_clearer()
     _set_bank_supply_and_rates(test_banks)
     _set_single_firm_case(test_firms, target_long_term_credit=10_000.0, expected_profits=-1.0)
+    # These legacy screens are opt-in by default; enable them to exercise the
+    # blocked case, then disable them below to verify that lending resumes.
+    test_banks.parameters.enable_firm_loans_return_on_assets_restriction = True
+    test_banks.parameters.enable_firm_loans_return_on_equity_restriction = True
 
     n_banks = test_banks.ts.current("n_banks")
     n_firms = test_firms.ts.current("n_firms")

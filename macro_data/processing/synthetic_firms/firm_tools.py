@@ -521,10 +521,22 @@ def function_parameters_dependent_initialisation(
                 weights = firm_data["Production"].values / firm_data["Production"].values.sum()
             firm_data["Deposits"] = weights * total_firm_deposits
     firm_data["Deposits"] = np.maximum(0.0, firm_data["Deposits"])
+    capital_stock_by_firm = capital_inputs_stock.sum(axis=1)
+    total_capital_stock = capital_stock_by_firm.sum()
+    if total_capital_stock > 0.0:
+        notional_firm_debt = capital_stock_by_firm / total_capital_stock * total_firm_debt
+    elif assume_zero_initial_debt or total_firm_debt == 0.0:
+        # No capital stock means there is no basis for allocating a notional
+        # debt preference. Keep the preference finite and leave actual debt
+        # zero when the zero-debt initialization contract is active.
+        notional_firm_debt = np.zeros_like(capital_stock_by_firm, dtype=float)
+    else:
+        raise ValueError("Cannot allocate positive firm debt when aggregate capital stock is zero")
+    firm_data["Notional Debt"] = notional_firm_debt
     if assume_zero_initial_debt:
         firm_data["Debt"] = 0.0
     else:
-        firm_data["Debt"] = capital_inputs_stock.sum(axis=1) / capital_inputs_stock.sum() * total_firm_debt
+        firm_data["Debt"] = notional_firm_debt
     firm_data["Equity"] = (
         firm_data["Deposits"]
         + firm_data["Price"] * firm_data["Inventory"]

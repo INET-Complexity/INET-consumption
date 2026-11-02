@@ -36,4 +36,4 @@ jobs:
 
       - name: Test calibration pipeline
         run: |
-          uv run pytest --cov=macrocalib tests/test_macrocalib --cov-report xml
+          uv run pytest --cov=macrocalib tests/test_macrocalib --cov-report xml --durations=30

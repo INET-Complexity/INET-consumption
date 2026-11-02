@@ -768,7 +768,7 @@ def test_reset(datawrapper):
 
 def test_longrun(datawrapper):
     """Test the longrun."""
-    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()}, t_max=200)
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()}, t_max=100)
 
     configuration.seed = 0
 

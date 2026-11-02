@@ -120,6 +120,90 @@ def test_zero_growth_cacf_preserves_total_target_while_carving_out_housing(test_
     assert np.isnan(household.ts.current("target_consumption_total_mpc")).all()
 
 
+@pytest.mark.parametrize("housing_case", ["cash_rent", "imputed_rent", "rent_exceeds_target"])
+def test_cacf_target_realisation_and_gdp_identity_share_one_household_period(
+    test_households, test_economy, datawrapper, housing_case
+):
+    household = test_households
+    household.functions["consumption"] = CreditAugmentedConsumption()
+    ts = household.ts
+    n_households = int(ts.current("n_households"))
+    vat = datawrapper.synthetic_countries["FRA"].tax_data.value_added_tax
+    calibrated_total = ts.initial("cacf_real_consumption_budget")
+
+    rents = np.zeros(n_households)
+    imputed_rents = np.zeros(n_households)
+    if housing_case == "cash_rent":
+        rents[0] = 12.0
+    elif housing_case == "imputed_rent":
+        imputed_rents[min(1, n_households - 1)] = 20.0
+    else:
+        rents[0] = calibrated_total[0] + 1.0
+    ts.override_current("rent", rents)
+    ts.override_current("rent_imputed", imputed_rents)
+
+    target = household.compute_target_consumption(
+        expected_inflation=0.0,
+        current_cpi=1.0,
+        initial_cpi=1.0,
+        exogenous_total_consumption=0.0,
+        per_capita_unemployment_benefits=0.0,
+        tau_vat=vat,
+        assume_zero_growth=True,
+    )
+    expected_goods_budget = np.maximum(calibrated_total - rents - imputed_rents, 0.0)
+    np.testing.assert_allclose((1.0 + vat) * target.sum(axis=1), expected_goods_budget)
+
+    # Financing counts cash rent as a use but does not treat imputed rent as cash.
+    shortfall = household.compute_and_record_liquidity_shortfall(
+        target_consumption=target,
+        scheduled_debt_service=np.zeros(n_households),
+        income_override=np.zeros(n_households),
+    )
+    np.testing.assert_allclose(shortfall, expected_goods_budget + rents)
+
+    # Clear all target goods in this controlled one-period accounting check.
+    ts.override_current("target_consumption", target)
+    ts.override_current("nominal_amount_spent_in_lcu", target.copy())
+    household.update_consumption_and_investment(tau_vat=vat, tau_cf=0.0)
+    goods_cash = float(ts.current("total_consumption")[0])
+    cash_expenditure = float(ts.current("consumption_cash_expenditure").sum())
+    total_with_housing = float(ts.current("consumption_including_housing").sum())
+    np.testing.assert_allclose(
+        ts.current("consumption_including_housing"),
+        np.maximum(calibrated_total, rents + imputed_rents),
+    )
+    np.testing.assert_allclose(cash_expenditure, goods_cash + rents.sum())
+    np.testing.assert_allclose(total_with_housing, cash_expenditure + imputed_rents.sum())
+
+    economy = test_economy
+    n_industries = economy.n_industries
+    economy.compute_gdp(
+        total_output=goods_cash,
+        sectoral_sales=np.zeros(n_industries),
+        sectoral_intermediate_consumption=np.zeros(n_industries),
+        taxes_on_products=0.0,
+        taxes_on_production=0.0,
+        rent_paid=float(rents.sum()),
+        rent_imputed=float(imputed_rents.sum()),
+        hh_consumption=goods_cash,
+        gov_consumption=0.0,
+        change_in_inventories=0.0,
+        gross_fixed_capital_formation=0.0,
+        exports=0.0,
+        imports=0.0,
+        operating_surplus=goods_cash,
+        wages=0.0,
+        rent_received=float(rents.sum()),
+        central_government_rent_received=0.0,
+        running_multiple_countries=False,
+        always_adjust=False,
+    )
+    np.testing.assert_allclose(economy.ts.current("total_household_fce"), [total_with_housing])
+    for name in ("gdp_output", "gdp_expenditure", "gdp_income"):
+        np.testing.assert_allclose(economy.ts.current(name), [total_with_housing])
+
+
 def test_non_cacf_target_unavailable_in_both_passes(test_households):
     ts = test_households.ts
     test_households._append_target_consumption_diagnostics(None)

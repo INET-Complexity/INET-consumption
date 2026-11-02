@@ -20,6 +20,7 @@ class IRFVariable:
     h5_path: str
     transform: str = "sum"
     real_cpi_path: str | None = None
+    ratio_denominator_path: str | None = None
 
 
 DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
@@ -34,6 +35,12 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("gdp_expenditure", "{country}/economy/gdp_expenditure", "first"),
     IRFVariable("gdp_income", "{country}/economy/gdp_income", "first"),
     IRFVariable("unemployment_rate", "{country}/economy/unemployment_rate", "first"),
+)
+TFP_INVESTMENT_INTENSITY_IRF_VARIABLE = IRFVariable(
+    "tfp_investment_intensity",
+    "{country}/firms/executed_tfp_investment",
+    "sum",
+    ratio_denominator_path="{country}/firms/production_nominal",
 )
 RATE_IRF_VARIABLES = frozenset({"policy_rate", "unemployment_rate"})
 MONEY_IRF_VARIABLES = frozenset(
@@ -122,6 +129,40 @@ def build_irf_panel(
                 continue
             baseline = _as_series(baseline_raw, transform=variable.transform)
             shocked = _as_series(shock_raw, transform=variable.transform)
+            if variable.ratio_denominator_path is not None:
+                denominator_path = variable.ratio_denominator_path.format(country=country_code)
+                baseline_denominator_raw = _read_h5_array_from_handle(
+                    baseline_handle, variable.ratio_denominator_path, country_code=country_code
+                )
+                shock_denominator_raw = _read_h5_array_from_handle(
+                    shock_handle, variable.ratio_denominator_path, country_code=country_code
+                )
+                if baseline_denominator_raw is None or shock_denominator_raw is None:
+                    missing_sides = []
+                    if baseline_denominator_raw is None:
+                        missing_sides.append("baseline")
+                    if shock_denominator_raw is None:
+                        missing_sides.append("shock")
+                    missing.append(
+                        f"{variable.name} denominator at {denominator_path} missing from {', '.join(missing_sides)}"
+                    )
+                    continue
+                baseline_denominator = _as_series(baseline_denominator_raw, transform="sum")
+                shock_denominator = _as_series(shock_denominator_raw, transform="sum")
+                if baseline.shape != baseline_denominator.shape or shocked.shape != shock_denominator.shape:
+                    raise ValueError(f"{variable.name} numerator and denominator time dimensions do not match.")
+                baseline = np.divide(
+                    baseline,
+                    baseline_denominator,
+                    out=np.full_like(baseline, np.nan),
+                    where=baseline_denominator != 0.0,
+                )
+                shocked = np.divide(
+                    shocked,
+                    shock_denominator,
+                    out=np.full_like(shocked, np.nan),
+                    where=shock_denominator != 0.0,
+                )
             if baseline.shape != shocked.shape:
                 raise ValueError(f"{variable.name} shape mismatch: {baseline.shape} != {shocked.shape}.")
             stop = min(shock_period + horizon_periods, baseline.shape[0])

@@ -21,7 +21,13 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from src.irf_analysis import build_irf_panel, summarize_irf_panel, write_irf_plots  # noqa: E402
+from src.irf_analysis import (  # noqa: E402
+    DEFAULT_IRF_VARIABLES,
+    TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
+    build_irf_panel,
+    summarize_irf_panel,
+    write_irf_plots,
+)
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
 from macro_data import DataWrapper  # noqa: E402
@@ -294,6 +300,10 @@ def run_irf_experiment(
                 shock_mode=spec.mode,
                 horizon_periods=horizon_periods,
                 country_code=country_code,
+                variables=(
+                    *DEFAULT_IRF_VARIABLES,
+                    TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
+                ),
             )
         )
     panel = pd.concat(panels, ignore_index=True) if panels else pd.DataFrame()

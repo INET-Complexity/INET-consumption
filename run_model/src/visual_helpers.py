@@ -9,6 +9,11 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.helpers import unpack_cell
 
+try:
+    from config import series_label
+except ImportError:  # Support imports from the repository root.
+    from run_model.config import series_label
+
 
 def _categorical_colors(n_colors):
     if n_colors <= 0:
@@ -833,7 +838,8 @@ def build_macro_output_df(model, country_code):
     if gdp is not None:
         add_column("gdp_growth", gdp.pct_change())
     if gdp is not None and ppi is not None:
-        add_column("real_gdp", gdp / ppi)
+        real_gdp = add_column("real_gdp", gdp / ppi)
+        add_column("real_gdp_yoy_growth", real_gdp / real_gdp.shift(yoy_periods) - 1.0)
     if ppi is not None:
         add_column("ppi_yoy_change", ppi / ppi.shift(yoy_periods) - 1.0)
 
@@ -1024,6 +1030,20 @@ def build_macro_output_df(model, country_code):
 
     firms_ts = getattr(getattr(country, "firms", None), "ts", None)
     households_ts = getattr(getattr(country, "households", None), "ts", None)
+    employed_workers = add_column("employed_workers", aggregate_agent_ts(firms_ts, "number_of_employees"))
+    if employed_workers is not None:
+        # Assumes every employed worker is full-time at the French 1,607-hour annual benchmark.
+        estimated_hours_worked = add_column(
+            "estimated_hours_worked",
+            employed_workers * (1607.0 / periods_per_year),
+        )
+        real_gdp = get_column("real_gdp")
+        if real_gdp is not None:
+            productivity = pd.Series(np.nan, index=out_index, dtype=float)
+            valid_hours = estimated_hours_worked > 0.0
+            productivity.loc[valid_hours] = real_gdp.loc[valid_hours] / estimated_hours_worked.loc[valid_hours]
+            add_column("labour_productivity_proxy", productivity)
+
     add_aggregate_agent_ts_column("real_demand", firms_ts, "demand")
     add_aggregate_agent_ts_column("inventory", firms_ts, "inventory")
     add_aggregate_agent_ts_column("inventory_nominal", firms_ts, "inventory_nominal")
@@ -1285,7 +1305,14 @@ def build_macro_output_df(model, country_code):
         "sector_tfp_investment_desired_mb_mc_ratio",
     ]:
         add_firm_vector_columns(firm_column)
-    add_average_firm_timeseries_column("avg_tfp_multiplier", "tfp_multiplier")
+    avg_tfp_multiplier = add_average_firm_timeseries_column("avg_tfp_multiplier", "tfp_multiplier")
+    if avg_tfp_multiplier is not None:
+        # Realized growth in the economy-wide arithmetic mean firm TFP multiplier.
+        add_column("avg_tfp_multiplier_growth", avg_tfp_multiplier.pct_change())
+        add_column(
+            "avg_tfp_multiplier_yoy_growth",
+            avg_tfp_multiplier / avg_tfp_multiplier.shift(yoy_periods) - 1.0,
+        )
 
     try:
         wage_rate_by_sector = build_wage_rate_by_sector_df(model, country_code)
@@ -1304,6 +1331,11 @@ def build_macro_output_df(model, country_code):
     out.attrs["periods_per_year"] = periods_per_year
     out.attrs["interest_rate_observation_frequency"] = out.attrs["observation_frequency"]
     out.attrs["interest_rate_units"] = "Macro interest-rate columns are annualized."
+    out.attrs["labour_productivity_proxy_annual_hours_per_worker"] = 1607.0
+    out.attrs["labour_productivity_proxy_method"] = (
+        "PPI-deflated real GDP divided by employed-worker headcount times "
+        "1,607 assumed full-time hours per worker per year, prorated to the model period."
+    )
 
     return out
 
@@ -2325,7 +2357,7 @@ def plot_output(
     if df_compare is not None:
         columns_to_plot = [col for col in columns_to_plot if col in df_compare.columns]
 
-    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=columns_to_plot)
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=[series_label(name) for name in columns_to_plot])
 
     # choose x axis: explicit column, otherwise index
     if x_col is not None:
@@ -2799,7 +2831,8 @@ def plot_agent_timeseries(
 
     def _legend_label(spec: str) -> str:
         spec = str(spec).strip()
-        return spec.split(".", 1)[1] if "." in spec else spec
+        series_name = spec.split(".", 1)[1] if "." in spec else spec
+        return series_label(series_name)
 
     def _legend_swatch(color: str | None) -> str:
         if color is None:
@@ -3473,7 +3506,7 @@ def plot_housing_market_aggregates(
         if country_code is not None
         else "Housing market aggregate time series"
     )
-    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=df.columns.to_list())
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=[series_label(name) for name in df.columns])
 
     for idx, col_name in enumerate(df.columns):
         row = (idx // no_cols) + 1
@@ -3483,7 +3516,7 @@ def plot_housing_market_aggregates(
                 x=df.index,
                 y=df[col_name],
                 mode="lines",
-                name=col_name,
+                name=series_label(col_name),
                 showlegend=False,
                 line={"color": line_color},
             ),
@@ -3556,7 +3589,7 @@ def plot_mc(
     no_rows = int(np.ceil(n_plots / no_cols))
 
     seeds = combined.index.get_level_values(0).unique()
-    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=[series_label(name) for name in available_cols])
 
     for idx, col_name in enumerate(available_cols):
         row = (idx // no_cols) + 1
@@ -3652,7 +3685,7 @@ def plot_sensitivity(
     parameter_values = combined.index.get_level_values("value").unique()
     colors = [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, max(len(parameter_values), 1))]
     color_by_value = {value: color for value, color in zip(parameter_values, colors)}
-    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=[series_label(name) for name in available_cols])
 
     for idx, col_name in enumerate(available_cols):
         row = (idx // no_cols) + 1
@@ -3748,7 +3781,7 @@ def plot_sensitivity_summary(
 
     parameter_values = combined.index.get_level_values("value").unique()
     colors = [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, max(len(parameter_values), 1))]
-    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=available_cols)
+    fig = make_subplots(rows=no_rows, cols=no_cols, subplot_titles=[series_label(name) for name in available_cols])
 
     for idx, col_name in enumerate(available_cols):
         row = (idx // no_cols) + 1

@@ -104,7 +104,7 @@ desired_consumption:
     income_belief_growth_clip_bound: 1.0
     uses_continuous_wealth_calibration: true
     uses_aligned_behavioural_income: true
-    long_run_intercept: 0.25              # provisional runtime level, not a new HFCS estimate
+    long_run_intercept: 0.15              # provisional runtime level, not a new HFCS estimate
     real_borrowing_rate_propensity: -0.72  # alpha_1, unchanged (paper Table 1)
     # Under the continuous mapping, alpha_2/gamma_1/gamma_4 come from the
     # fitted maps below; these scalars are fallbacks when mapping is disabled.

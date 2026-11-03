@@ -5,6 +5,7 @@ from typing import Literal, overload
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.helpers import unpack_cell
@@ -19,6 +20,234 @@ def _categorical_colors(n_colors):
     if n_colors <= 0:
         return []
     return [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, n_colors)]
+
+
+IRF_PANEL_LABELS = {
+    "real_gdp": "Real GDP, %",
+    "real_cons": "Real household consumption, %",
+    "cpi": "CPI, %",
+    "unemp": "Unemployment rate, pp",
+    "policy_rate": "Policy rate, pp",
+    "gfcf": "Gross fixed capital formation, %",
+    "gfcf_intensity": "GFCF intensity (GFCF / GDP), %",
+    "tfp_investment_intensity": "TFP investment intensity, %",
+    "firm_production": "Firm production, %",
+    "firm_employees": "Firm employment, %",
+    "household_employment": "Employed individuals, %",
+    "firm_real_wage_per_employee": "Real wage per employee, %",
+    "household_real_employee_income": "Real employee income, %",
+    "real_household_income": "Real household income, %",
+    "firm_loan_rate": "Short-term firm loan rate, pp",
+    "firm_long_term_loan_rate": "Long-term firm loan rate, pp",
+    "household_consumption_loan_rate": "Household consumption loan rate, pp",
+    "household_mortgage_rate": "Mortgage rate, pp",
+    "household_deposit_rate": "Household deposit rate, pp",
+    "firm_deposit_rate": "Firm deposit rate, pp",
+    "firm_loan_interest_paid": "Firm interest paid, %",
+    "firm_received_credit": "New firm credit, %",
+    "firm_debt": "Firm debt, %",
+    "firm_deposits": "Firm deposits, %",
+    "household_deposits": "Household deposits, %",
+    "household_consumption_loan_interest": "Household loan interest paid, %",
+    "household_deposit_interest": "Household deposit interest received, %",
+}
+
+IRF_PCT_VARIABLES = {
+    "gross_fixed_capital_formation",
+    "tfp_investment_intensity",
+    "gfcf_intensity",
+    "firm_wage_per_employee",
+    "household_real_employee_income",
+    "household_income",
+    "firm_received_credit",
+    "firm_debt",
+    "firm_deposits",
+    "household_deposits",
+    "firm_loan_interest_paid",
+    "household_consumption_loan_interest",
+    "household_deposit_interest",
+}
+IRF_RATE_VARIABLES = {
+    "unemployment_rate",
+    "policy_rate",
+    "firm_loan_rate",
+    "firm_long_term_loan_rate",
+    "household_consumption_loan_rate",
+    "household_mortgage_rate",
+    "household_deposit_rate",
+    "firm_deposit_rate",
+}
+IRF_COUNT_VARIABLES = {
+    "firm_production",
+    "firm_employees",
+    "household_employment",
+}
+IRF_PANEL_GROUPS = {
+    "Macro and investment": (
+        "real_gdp",
+        "real_cons",
+        "cpi",
+        "unemp",
+        "policy_rate",
+        "gfcf",
+        "gfcf_intensity",
+        "tfp_investment_intensity",
+    ),
+    "Firm finance": (
+        "firm_loan_rate",
+        "firm_long_term_loan_rate",
+        "firm_deposit_rate",
+        "firm_loan_interest_paid",
+        "firm_received_credit",
+        "firm_debt",
+        "firm_deposits",
+    ),
+    "Firm activity": (
+        "firm_production",
+        "firm_employees",
+        "firm_real_wage_per_employee",
+    ),
+    "Households": (
+        "household_consumption_loan_rate",
+        "household_mortgage_rate",
+        "household_deposit_rate",
+        "real_household_income",
+        "household_employment",
+        "household_real_employee_income",
+        "household_consumption_loan_interest",
+        "household_deposit_interest",
+        "household_deposits",
+    ),
+}
+
+
+def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
+    """Convert stored IRF deltas to plot units and derive real aggregates."""
+    result = panel.copy()
+    result["plot_value"] = np.nan
+    result.loc[result.variable.isin(IRF_RATE_VARIABLES), "plot_value"] = (
+        100 * result.loc[result.variable.isin(IRF_RATE_VARIABLES), "delta"]
+    )
+    pct_mask = result.variable.isin(IRF_PCT_VARIABLES)
+    result.loc[pct_mask, "plot_value"] = 100 * result.loc[pct_mask, "pct_delta"]
+    count_mask = result.variable.isin(IRF_COUNT_VARIABLES)
+    result.loc[count_mask, "plot_value"] = 100 * result.loc[count_mask, "pct_delta"]
+
+    for variable, real_name in (
+        ("gdp_output", "real_gdp"),
+        ("household_consumption", "real_cons"),
+        ("household_income", "real_household_income"),
+    ):
+        nominal = result.loc[result.variable == variable]
+        cpi = result.loc[result.variable == "cpi", ["seed", "shock_name", "horizon", "pct_delta"]]
+        merged = nominal.merge(cpi, on=["seed", "shock_name", "horizon"], suffixes=("", "_cpi"))
+        real_change = 100 * ((1 + merged.pct_delta) / (1 + merged.pct_delta_cpi) - 1)
+        real_by_key = {
+            (seed, shock, int(horizon)): float(value)
+            for seed, shock, horizon, value in zip(
+                merged["seed"], merged["shock_name"], merged["horizon"], real_change
+            )
+        }
+        variable_mask = result.variable == variable
+        keys = zip(
+            result.loc[variable_mask, "seed"],
+            result.loc[variable_mask, "shock_name"],
+            result.loc[variable_mask, "horizon"].astype(int),
+        )
+        result.loc[variable_mask, "plot_value"] = [real_by_key.get(key, np.nan) for key in keys]
+        result.loc[variable_mask, "variable"] = real_name
+
+    cpi_by_key = {
+        (row.seed, row.shock_name, int(row.horizon)): float(row.pct_delta)
+        for row in result.loc[result.variable == "cpi", ["seed", "shock_name", "horizon", "pct_delta"]].itertuples(index=False)
+    }
+    for variable in ("firm_wage_per_employee",):
+        mask = result.variable == variable
+        keys = zip(
+            result.loc[mask, "seed"],
+            result.loc[mask, "shock_name"],
+            result.loc[mask, "horizon"].astype(int),
+        )
+        cpi_changes = np.asarray([cpi_by_key.get(key, np.nan) for key in keys], dtype=float)
+        nominal_changes = result.loc[mask, "pct_delta"].to_numpy(dtype=float)
+        result.loc[mask, "plot_value"] = 100 * ((1 + nominal_changes) / (1 + cpi_changes) - 1)
+    result.loc[result.variable == "firm_wage_per_employee", "variable"] = "firm_real_wage_per_employee"
+    result.loc[result.variable == "gross_fixed_capital_formation", "variable"] = "gfcf"
+    result.loc[result.variable == "unemployment_rate", "variable"] = "unemp"
+    result.loc[result.variable == "cpi", "plot_value"] = (
+        100 * result.loc[result.variable == "cpi", "pct_delta"]
+    )
+    return result
+
+
+def plot_irf_panels(
+    panel: pd.DataFrame,
+    shock_names: list[str] | tuple[str, ...],
+    *,
+    country: str = "FRA",
+    confidence: float = 0.10,
+    figsize: tuple[float, float] | None = None,
+    show: bool = True,
+):
+    """Plot seed-median impulse responses with central quantile bands.
+
+    The input is the long panel written by ``run_irf_experiment``. This helper
+    converts the stored deltas to percent or percentage-point responses,
+    derives real GDP, consumption and income responses, then summarizes seeds.
+    """
+    if not 0.0 < confidence < 0.5:
+        raise ValueError("confidence must be between 0 and 0.5.")
+    required = {"seed", "shock_name", "horizon", "variable", "pct_delta", "delta"}
+    missing = required.difference(panel.columns)
+    if missing:
+        raise ValueError(f"IRF panel is missing required columns: {sorted(missing)}")
+
+    plot_panel = _prepare_irf_plot_panel(panel)
+    available = set(plot_panel["variable"])
+    groups = {
+        name: [variable for variable in variables if variable in available]
+        for name, variables in IRF_PANEL_GROUPS.items()
+    }
+    groups = {name: variables for name, variables in groups.items() if variables}
+    if not groups:
+        raise ValueError("IRF panel contains no variables with configured plot labels.")
+    lower_q, upper_q = confidence, 1.0 - confidence
+    quantile_pct = int(round((1.0 - 2.0 * confidence) * 100))
+    figures = []
+    for group_name, variables in groups.items():
+        rows = max(len(shock_names), 1)
+        cols = len(variables)
+        group_figsize = figsize or (max(3.6 * cols, 12.0), max(2.8 * rows, 7.0))
+        fig, axs = plt.subplots(rows, cols, figsize=group_figsize, sharex=True, squeeze=False)
+        for row_idx, shock_name in enumerate(shock_names):
+            for col_idx, variable in enumerate(variables):
+                ax = axs[row_idx, col_idx]
+                subset = plot_panel.loc[
+                    (plot_panel["shock_name"] == shock_name) & (plot_panel["variable"] == variable)
+                ]
+                if subset.empty:
+                    ax.set_visible(False)
+                    continue
+                grouped = subset.groupby("horizon")["plot_value"]
+                median = grouped.median()
+                lower = grouped.quantile(lower_q)
+                upper = grouped.quantile(upper_q)
+                horizon = median.index.to_numpy()
+                ax.fill_between(horizon, lower.to_numpy(), upper.to_numpy(), alpha=0.2, lw=0)
+                ax.plot(horizon, median.to_numpy(), lw=2.2)
+                ax.axhline(0.0, color="grey", lw=1)
+                if row_idx == 0:
+                    ax.set_title(IRF_PANEL_LABELS[variable])
+                if col_idx == 0:
+                    ax.set_ylabel(shock_name, fontweight="bold")
+                if row_idx == rows - 1:
+                    ax.set_xlabel("Quarters after shock")
+        fig.suptitle(f"{group_name}: IRFs, seed median and {quantile_pct}% band ({country})")
+        fig.tight_layout()
+        figures.append(fig)
+        if show:
+            plt.show()
+    return None if show else figures
 
 
 SECTOR_CODE_TO_NAME = {

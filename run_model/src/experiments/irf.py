@@ -23,6 +23,10 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
 
 from src.irf_analysis import (  # noqa: E402
     DEFAULT_IRF_VARIABLES,
+    FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE,
+    FIRM_LOAN_RATE_IRF_VARIABLE,
+    GFCF_INTENSITY_IRF_VARIABLE,
+    IRF_CHANNEL_VARIABLES,
     TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
     build_irf_panel,
     summarize_irf_panel,
@@ -302,7 +306,11 @@ def run_irf_experiment(
                 country_code=country_code,
                 variables=(
                     *DEFAULT_IRF_VARIABLES,
+                    *IRF_CHANNEL_VARIABLES,
                     TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
+                    GFCF_INTENSITY_IRF_VARIABLE,
+                    FIRM_LOAN_RATE_IRF_VARIABLE,
+                    FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE,
                 ),
             )
         )

@@ -36,11 +36,51 @@ DEFAULT_IRF_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("gdp_income", "{country}/economy/gdp_income", "first"),
     IRFVariable("unemployment_rate", "{country}/economy/unemployment_rate", "first"),
 )
+IRF_CHANNEL_VARIABLES: tuple[IRFVariable, ...] = (
+    IRFVariable("gross_fixed_capital_formation", "{country}/economy/total_gross_fixed_capital_formation", "first"),
+    IRFVariable("firm_production", "{country}/firms/production", "sum"),
+    IRFVariable("firm_employees", "{country}/firms/number_of_employees", "sum"),
+    IRFVariable(
+        "firm_wage_per_employee",
+        "{country}/firms/total_wage",
+        "sum",
+        ratio_denominator_path="{country}/firms/number_of_employees",
+    ),
+    IRFVariable("household_real_employee_income", "{country}/individuals/employee_income", "mean"),
+    IRFVariable("firm_loan_interest_paid", "{country}/firms/interest_paid_on_loans", "sum"),
+    IRFVariable("firm_received_credit", "{country}/firms/received_credit", "sum"),
+    IRFVariable("firm_debt", "{country}/firms/debt", "sum"),
+    IRFVariable("firm_deposits", "{country}/firms/deposits", "sum"),
+    IRFVariable("household_deposits", "{country}/households/liquid_financial_assets", "sum"),
+    IRFVariable("household_consumption_loan_interest", "{country}/households/interest_paid_on_loans", "sum"),
+    IRFVariable("household_deposit_interest", "{country}/households/interest_paid_on_deposits", "sum"),
+    IRFVariable("household_employment", "{country}/labour_market/num_employed_individuals_by_sector", "sum"),
+    IRFVariable("household_consumption_loan_rate", "{country}/banks/average_interest_rates_on_household_consumption_loans", "first"),
+    IRFVariable("household_mortgage_rate", "{country}/banks/average_interest_rates_on_mortgages", "first"),
+    IRFVariable("household_deposit_rate", "{country}/banks/average_interest_rate_on_household_deposits", "first"),
+    IRFVariable("firm_deposit_rate", "{country}/banks/average_interest_rate_on_firm_deposits", "first"),
+)
 TFP_INVESTMENT_INTENSITY_IRF_VARIABLE = IRFVariable(
     "tfp_investment_intensity",
     "{country}/firms/executed_tfp_investment",
     "sum",
     ratio_denominator_path="{country}/firms/production_nominal",
+)
+GFCF_INTENSITY_IRF_VARIABLE = IRFVariable(
+    "gfcf_intensity",
+    "{country}/economy/total_gross_fixed_capital_formation",
+    "first",
+    ratio_denominator_path="{country}/economy/gdp_output",
+)
+FIRM_LOAN_RATE_IRF_VARIABLE = IRFVariable(
+    "firm_loan_rate",
+    "{country}/banks/interest_rates_on_short_term_firm_loans",
+    "mean",
+)
+FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE = IRFVariable(
+    "firm_long_term_loan_rate",
+    "{country}/banks/interest_rates_on_long_term_firm_loans",
+    "mean",
 )
 RATE_IRF_VARIABLES = frozenset({"policy_rate", "unemployment_rate"})
 MONEY_IRF_VARIABLES = frozenset(

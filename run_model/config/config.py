@@ -72,7 +72,7 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
     "tfp_investment_adjustment_cost": {
-         "firms.functions.productivity_investment_planner.parameters['adjustment_cost_lambda']": 0.25,
+         "firms.functions.productivity_investment_planner.parameters['adjustment_cost_lambda']": 0.75,
      },
     "calibrated_income_legacy": {
         **CALIBRATED_CONSUMPTION_OVERRIDES,

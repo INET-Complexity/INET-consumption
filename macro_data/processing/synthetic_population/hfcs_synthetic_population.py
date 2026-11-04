@@ -248,6 +248,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             Sets the housing-related fields in the household data.
     """
 
+    # national-accounts stock of other financial assets; None leaves the survey total unchanged
+    total_other_financial_assets: Optional[float] = None
+
     def __init__(
         self,
         country_name: str,
@@ -263,7 +266,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         consumption_weights_by_income: np.ndarray,
         investment: np.ndarray,
         yearly_factor: float = 4.0,
+        total_other_financial_assets: Optional[float] = None,
     ):
+        self.total_other_financial_assets = total_other_financial_assets
         saving_rates_model = LinearRegression()
         social_transfers_model = LinearRegression()
         wealth_distribution_model = LinearRegression()
@@ -444,6 +449,11 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             coefficient_fa_income=0.0,
             investment=investment,
             yearly_factor=yearly_factor,
+            total_other_financial_assets=(
+                readers.eurostat.household_non_deposit_financial_assets(country_name, year)
+                if proxied_country is None
+                else None
+            ),
         )
 
     def restrict(self) -> None:
@@ -575,6 +585,13 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
         self.household_data["Wealth in Other Financial Assets"] = positive_total_ifa
         self.household_data.loc[:, "Wealth in Other Financial Assets"] *= self.scale
+        survey_total = self.household_data["Wealth in Other Financial Assets"].sum()
+        if self.total_other_financial_assets is not None and survey_total > 0.0:
+            # Anchor the stock to the national accounts, so that it is consistent with the income
+            # from financial assets, which is anchored to the same accounts.
+            self.household_data.loc[:, "Wealth in Other Financial Assets"] *= (
+                self.total_other_financial_assets / survey_total
+            )
 
     def set_household_financial_assets(self) -> None:
         self.household_data["Wealth in Financial Assets"] = (

@@ -533,6 +533,11 @@ def check_country_initial_state_anchors(country: SyntheticCountry):
     household_data = country.population.household_data
     individual_data = country.population.individual_data
 
+    # Other financial assets are scaled to the household stock of F3 to F6 (3,035,365 mio EUR), and the
+    # yield on them is the anchored income over that stock
+    assert household_data["Wealth in Other Financial Assets"].sum() == pytest.approx(3035365e6, rel=1e-6)
+    assert country.population.coefficient_fa_income == pytest.approx(98614e6 / 4 / 3035365e6, rel=1e-6)
+
     # Eurostat D4 received by households: 98,614 mio EUR per year, quarterly in the model
     assert country.household_property_income == pytest.approx(98614e6)
     assert household_data["Income from Financial Assets"].sum() == pytest.approx(98614e6 / 4, rel=1e-6)

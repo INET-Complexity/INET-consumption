@@ -763,6 +763,42 @@ class EuroStatReader:
             return None
         return float(self.find_value(df, country, str(year))) * 1e6
 
+    def household_non_deposit_financial_assets(self, country: Country, year: int) -> Optional[float]:
+        """
+        Get the stock of household financial assets other than deposits from the national accounts.
+
+        Sums debt securities (F3), loans (F4), equity and investment fund shares (F5) and insurance,
+        pension and standardised guarantee schemes (F6) held by households (S14).
+
+        Args:
+            country (Country): Country to get the stock for
+            year (int): Year to get the stock for
+
+        Returns:
+            Optional[float]: Stock in national currency units, or None if any component is missing for
+            that country and year. No cross-country fallback is applied, because the value is an
+            absolute amount.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["financial_balance_sheets"]
+        if str(year) not in df.columns:
+            return None
+        matches = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values
+        if len(matches) == 0:
+            return None
+        key_column = r"unit,co_nco,sector,finpos,na_item,geo\time"
+        total = 0.0
+        for item in ("F3", "F4", "F5", "F6"):
+            row = df.loc[df[key_column] == f"MIO_NAC,NCO,S14,ASS,{item},{matches[0]}", str(year)].values
+            if len(row) == 0:
+                return None
+            try:
+                total += float(row[0])
+            except ValueError:
+                return None
+        return total * 1e6
+
     def taxrate_on_capital_formation(self, country: Country, year: int) -> float:
         """
         Get tax rate on capital formation for a specific country and year.

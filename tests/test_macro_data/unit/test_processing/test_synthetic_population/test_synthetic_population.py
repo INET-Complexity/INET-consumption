@@ -688,3 +688,39 @@ def test__rescale_rents_without_rent_paid_does_nothing():
     housing_df = pd.DataFrame({"Is Owner-Occupied": [False, False], "Rent": [10.0, 20.0]})
     rescale_rents(household_data, housing_df, total_actual_rent=100.0)
     assert housing_df["Rent"].tolist() == [10.0, 20.0]
+
+
+def _other_financial_assets_population(total_other_financial_assets):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 10
+    population.total_other_financial_assets = total_other_financial_assets
+    population.household_data = pd.DataFrame(
+        {
+            "Mutual Funds": [100.0, 0.0],
+            "Bonds": [0.0, 50.0],
+            "Value of Private Businesses": [0.0, 0.0],
+            "Shares": [100.0, 0.0],
+            "Managed Accounts": [0.0, 0.0],
+            "Money owed to Households": [0.0, 0.0],
+            "Other Assets": [0.0, 0.0],
+            "Voluntary Pension": [0.0, 50.0],
+        }
+    )
+    return population
+
+
+def test__other_financial_assets_are_anchored_to_the_national_accounts_stock():
+    population = _other_financial_assets_population(total_other_financial_assets=1_000.0)
+    population.set_household_other_financial_assets()
+    wealth = population.household_data["Wealth in Other Financial Assets"]
+    assert wealth.sum() == pytest.approx(1_000.0)
+    # survey stocks are 2,000 and 1,000 after scaling by 10, so the shares 2/3 and 1/3 are kept
+    assert wealth.tolist() == pytest.approx([2_000 / 3, 1_000 / 3])
+    # the direct-share fraction is a ratio and does not change
+    assert population.household_data["Initial Direct Share Fraction"].tolist() == pytest.approx([0.5, 0.0])
+
+
+def test__other_financial_assets_keep_the_survey_total_without_an_anchor():
+    population = _other_financial_assets_population(total_other_financial_assets=None)
+    population.set_household_other_financial_assets()
+    assert population.household_data["Wealth in Other Financial Assets"].tolist() == pytest.approx([2_000.0, 1_000.0])

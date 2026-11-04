@@ -41,6 +41,14 @@ class TestEuroStatReader:
         rentals = readers.eurostat.get_rental_services(["FRA", "USA"], 2014)
         assert set(rentals) == {"FRA"}
 
+    def test__household_non_deposit_financial_assets(self, readers):
+        # S14 assets, France 2014: F3 77,073 + F4 30,539 + F5 1,215,856 + F6 1,711,897 mio EUR
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 2014) == pytest.approx(3035365e6)
+
+    def test__household_non_deposit_financial_assets_has_no_fallback(self, readers):
+        assert readers.eurostat.household_non_deposit_financial_assets("USA", 2014) is None
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 1800) is None
+
     def test__cb_debt_ratios(self, readers):
         assert readers.eurostat.cb_debt_ratios("EST", 2003) == pytest.approx(0.003, abs=0.01)
         assert readers.eurostat.cb_debt_ratios("BGR", 2000) == pytest.approx(0.099, abs=0.01)

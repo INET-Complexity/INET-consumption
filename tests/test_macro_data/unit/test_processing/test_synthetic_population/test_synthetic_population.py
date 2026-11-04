@@ -589,3 +589,58 @@ def test__household_sampling(readers):
         assert individual_selection.loc[individuals, "Corresponding Household ID"].nunique() == 1
         assert np.all(individual_selection.loc[individuals, "Corresponding Household ID"] == i)
     assert True
+
+
+def _financial_income_population(yearly_factor=4.0, scale=10):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = scale
+    population.yearly_factor = yearly_factor
+    population.household_data = pd.DataFrame(
+        {
+            "Income from Financial Assets": [100.0, 300.0, 600.0],
+            "Wealth in Other Financial Assets": [1_000.0, 2_000.0, 7_000.0],
+            "Employee Income": [10.0, 20.0, 30.0],
+            "Regular Social Transfers": [1.0, 2.0, 3.0],
+            "Rental Income from Real Estate": [0.0, 5.0, 0.0],
+        }
+    )
+    return population
+
+
+def test__household_income_includes_financial_income_net_of_tax_and_keeps_the_gross_column():
+    population = _financial_income_population()
+    gross = population.household_data["Income from Financial Assets"].copy()
+
+    population.set_household_income(financial_income_tax=0.25)
+
+    expected = (
+        population.household_data["Employee Income"]
+        + population.household_data["Regular Social Transfers"]
+        + population.household_data["Rental Income from Real Estate"]
+        + 0.75 * gross
+    )
+    pd.testing.assert_series_equal(population.household_data["Income"], expected, check_names=False)
+    # the gross column is the government's tax base
+    pd.testing.assert_series_equal(population.household_data["Income from Financial Assets"], gross)
+
+
+def test__household_income_default_tax_rate_leaves_financial_income_gross():
+    population = _financial_income_population()
+    population.set_household_income()
+    assert population.household_data["Income"].tolist() == [111.0, 327.0, 633.0]
+
+
+def test__financial_income_without_anchor_keeps_survey_yield():
+    population = _financial_income_population()
+    population.set_household_income_from_financial_assets()
+    # survey total 1000 * scale 10 / yearly_factor 4 = 2500 spread by wealth (sum 10,000)
+    assert population.household_data["Income from Financial Assets"].sum() == pytest.approx(2_500.0)
+
+
+def test__financial_income_is_anchored_to_the_national_accounts_total():
+    population = _financial_income_population()
+    population.set_household_income_from_financial_assets(total_property_income=40_000.0)
+    income = population.household_data["Income from Financial Assets"]
+    assert income.sum() == pytest.approx(40_000.0 / 4.0)
+    # the survey wealth still sets the distribution
+    assert (income / population.household_data["Wealth in Other Financial Assets"]).nunique() == 1

@@ -302,6 +302,8 @@ class SyntheticPopulation(ABC):
         self,
         total_social_transfers: float,
         independents: Optional[list[str]] = None,
+        financial_income_tax: float = 0.0,
+        total_property_income: Optional[float] = None,
     ) -> None:
         """Compute and update household income from all sources.
 
@@ -317,6 +319,12 @@ class SyntheticPopulation(ABC):
                 across households based on their characteristics.
             independents (Optional[list[str]], optional): List of independent variables
                 to use in social transfer allocation models. Defaults to None.
+            financial_income_tax (float, optional): Income-tax rate levied on income
+                from financial assets. Household income includes that income net of
+                the tax, matching employee and rental income. Defaults to 0.0.
+            total_property_income (Optional[float], optional): Annual property income
+                received by households in national currency. If given, income from
+                financial assets is scaled to this total per period. Defaults to None.
         """
         pass
 

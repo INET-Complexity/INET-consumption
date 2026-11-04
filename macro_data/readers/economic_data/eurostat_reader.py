@@ -737,6 +737,27 @@ class EuroStatReader:
         df = self.data["number_of_households"].set_index("geo")
         return int(df.loc[country, str(year)] * 1000)
 
+    def household_property_income(self, country: Country, year: int) -> Optional[float]:
+        """
+        Get property income (D4) received by households (S14) in the national accounts.
+
+        Args:
+            country (Country): Country to get the aggregate for
+            year (int): Year to get the aggregate for
+
+        Returns:
+            Optional[float]: Annual property income received by households in national
+            currency units, or None if the country has no such series. No cross-country
+            fallback is applied, because the value is an absolute amount.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["nonfinancial_transactions"]
+        df = df[(df["na_item"] == "D4") & (df["direct"] == "RECV") & (df["sector"] == "S14")]
+        if df.loc[df["geo"] == country].empty:
+            return None
+        return float(self.find_value(df, country, str(year))) * 1e6
+
     def taxrate_on_capital_formation(self, country: Country, year: int) -> float:
         """
         Get tax rate on capital formation for a specific country and year.

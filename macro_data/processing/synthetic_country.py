@@ -175,6 +175,7 @@ class SyntheticCountry:
     emission_factors_ch4: Optional[CH4EmissionsDataCAN] = None
     historical_emissions_df: Optional[pd.DataFrame] = None
     firm_exo_prices: Optional[SectorExoPrices] = None
+    household_property_income: Optional[float] = None
 
     @classmethod
     def eu_synthetic_country(
@@ -332,6 +333,8 @@ class SyntheticCountry:
             emitting_industry_indices = None
             emission_factors_array = None
 
+        household_property_income = readers.eurostat.household_property_income(country, year)
+
         credit_market = cls.set_wealth_and_credit(
             banks=banks,
             central_government=central_government,
@@ -344,6 +347,7 @@ class SyntheticCountry:
             weights_by_income=weights_by_income,
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
+            household_property_income=household_property_income,
         )
 
         if readers.emission_fractions is not None:
@@ -395,6 +399,7 @@ class SyntheticCountry:
             firm_exo_prices=(
                 SectorExoPrices.from_reader(readers.exo_prices) if readers.exo_prices is not None else None
             ),
+            household_property_income=household_property_income,
         )
 
     @classmethod
@@ -565,6 +570,8 @@ class SyntheticCountry:
             emitting_industry_indices = None
             emission_factors_array = None
 
+        household_property_income = readers.eurostat.household_property_income(country, year)
+
         credit_market = cls.set_wealth_and_credit(
             banks=banks,
             central_government=central_government,
@@ -577,6 +584,7 @@ class SyntheticCountry:
             weights_by_income=weights_by_income,
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
+            household_property_income=household_property_income,
         )
 
         if readers.emission_fractions is not None:
@@ -628,6 +636,7 @@ class SyntheticCountry:
             firm_exo_prices=(
                 SectorExoPrices.from_reader(readers.exo_prices) if readers.exo_prices is not None else None
             ),
+            household_property_income=household_property_income,
         )
 
     @classmethod
@@ -644,6 +653,7 @@ class SyntheticCountry:
         weights_by_income: pd.DataFrame,
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_indices: Optional[np.ndarray] = None,
+        household_property_income: Optional[float] = None,
     ) -> SyntheticCreditMarket:
         """
         This function takes care of matching the different agents together and initialising the Credit
@@ -664,6 +674,8 @@ class SyntheticCountry:
             weights_by_income (pd.DataFrame): The weights by income for the country.
             emission_factors_array (np.ndarray): The emission factors for the country (tCO2 per LCU).
             emitting_indices (np.ndarray): The indices of emitting industries.
+            household_property_income (Optional[float]): Annual property income received by households in
+                national currency, used to anchor income from financial assets.
 
         Returns:
             tuple[SyntheticCreditMarket, SyntheticHousingMarket]: A tuple containing the synthetic credit market,
@@ -687,6 +699,7 @@ class SyntheticCountry:
             independents=independents,
             emission_factors_array=emission_factors_array,
             emitting_industry_indices=emitting_indices,
+            household_property_income=household_property_income,
         )
 
         credit_market = cls.init_credit_market(
@@ -856,6 +869,7 @@ class SyntheticCountry:
         independents: Optional[list[str]] = None,
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_industry_indices: Optional[np.ndarray] = None,
+        household_property_income: Optional[float] = None,
     ):
         """
         Initialize population wealth, income, and consumption patterns.
@@ -879,12 +893,16 @@ class SyntheticCountry:
             independents (Optional[list[str]]): Independent variables for wealth computation
             emission_factors_array (Optional[np.ndarray]): Emission factors by industry
             emitting_industry_indices (Optional[np.ndarray]): Indices of emitting industries
+            household_property_income (Optional[float]): Annual property income received by
+                households in national currency; anchors income from financial assets if given
         """
         population.set_wealth_distribution_function(independents=independents)
 
         population.compute_household_income(
             total_social_transfers=central_government.central_gov_data["Other Social Benefits"].values[0],
             independents=independents,
+            financial_income_tax=tax_data.income_tax,
+            total_property_income=household_property_income,
         )
         public_pensions = population.household_data["Allocated Public Pension Benefits"].sum()
         other_transfers = population.household_data["Allocated Other Social Transfers"].sum()
@@ -977,6 +995,7 @@ class SyntheticCountry:
             tax_data=self.tax_data,
             central_bank=self.central_bank,
             weights_by_income=self.consumption_weights_by_income,
+            household_property_income=self.household_property_income,
         )
 
         # The reset argument can differ from the country configuration used by

@@ -913,6 +913,48 @@ class EuroStatReader:
             + float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68B," + country_name_short, str(year)])
         )
 
+    def get_rental_services_of_country(self, country: Country, year: int) -> tuple[float, float]:
+        """
+        Get household consumption of imputed and actual rentals for a country and year.
+
+        Args:
+            country (Country): Country to get rentals for
+            year (int): Year to get rentals for
+
+        Returns:
+            tuple[float, float]: Annual imputed rentals (CPA_L68A) and actual rentals (CPA_L68B)
+            in national currency units.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["real_estate_services"].set_index("freq,unit,stk_flow,induse,prod_na,geo\\TIME_PERIOD")
+        country_name_short = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values[0]
+        imputed = float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68A," + country_name_short, str(year)]) * 1e6
+        actual = float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68B," + country_name_short, str(year)]) * 1e6
+        return imputed, actual
+
+    def get_rental_services(self, country_names: list[Country], year: int) -> dict[Country, tuple[float, float]]:
+        """
+        Get imputed and actual rentals for the countries that publish them for the given year.
+
+        Countries without a usable value for that year are left out, so that the caller falls back to
+        the imputed-rent fraction instead of applying another country's or year's absolute amount.
+
+        Args:
+            country_names (list[Country]): Countries to get rentals for
+            year (int): Year to get rentals for
+
+        Returns:
+            dict[Country, tuple[float, float]]: Annual (imputed, actual) rentals in national currency units
+        """
+        rentals = {}
+        for country in country_names:
+            try:
+                rentals[country] = self.get_rental_services_of_country(country, year)
+            except (KeyError, ValueError, IndexError):
+                continue
+        return rentals
+
     def get_investment_fractions_of_country(
         self,
         country_name: str,

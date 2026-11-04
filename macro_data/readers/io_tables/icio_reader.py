@@ -179,6 +179,7 @@ class ICIOReader:
         yearly_factor: float = 4.0,
         proxy_country_dict: Optional[dict[str | Country, str | Country]] = None,
         aggregation_type: Optional[Literal["All", "Aggregate"]] = None,
+        rental_services: Optional[dict[Country | str, tuple[float, float]]] = None,
     ) -> "ICIOReader":
         """Create an ICIOReader instance from CSV data with aggregation.
 
@@ -198,6 +199,11 @@ class ICIOReader:
                 Defaults to 4.0 (quarterly).
             proxy_country_dict (Optional[dict]): Country mapping for missing data
             aggregation_type (Optional[Literal["All", "Aggregate"]]): Aggregation method
+            rental_services (Optional[dict]): Annual (imputed, actual) rentals in national currency by
+                country. For these countries the published amounts are removed from the household
+                consumption of real estate, imputed rentals are credited to owner-occupiers and actual
+                rentals to the housing module (they enter through ``Rent Paid``). Other countries use
+                ``imputed_rent_fraction`` and keep actual rentals in the table.
 
         Returns:
             ICIOReader: Configured reader instance
@@ -240,9 +246,20 @@ class ICIOReader:
             else:
                 new_rent_fraction[c] = imputed_rent_fraction.get(proxy_country_dict[c], avg_imputed_rent_fraction)
 
+        if rental_services is None:
+            rental_services = {}
+
         imputed_rents = {}
         for country_name in considered_countries:
-            if country_name in new_rent_fraction.keys():
+            if country_name in rental_services:
+                imputed_lcu, actual_lcu = rental_services[country_name]
+                lcu_per_usd = exchange_rates.from_usd_to_lcu(country_name, year)
+                rent_cell = (country_name, "L"), (country_name, "Household Consumption")
+                removed = min((imputed_lcu + actual_lcu) / lcu_per_usd, agg_df.at[rent_cell])
+                imputed = min(imputed_lcu / lcu_per_usd, removed)
+                imputed_rents[country_name] = imputed / yearly_factor * lcu_per_usd
+                agg_df.at[rent_cell] -= removed
+            elif country_name in new_rent_fraction.keys():
                 imputed_rents[country_name] = (
                     (
                         new_rent_fraction[country_name]

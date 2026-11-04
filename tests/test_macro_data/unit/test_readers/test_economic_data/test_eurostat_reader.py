@@ -31,6 +31,15 @@ class TestEuroStatReader:
     def test__household_property_income_has_no_cross_country_fallback(self, readers):
         assert readers.eurostat.household_property_income("USA", 2014) is None
 
+    def test__rental_services_are_published_amounts_in_national_currency(self, readers):
+        imputed, actual = readers.eurostat.get_rental_services_of_country("FRA", 2014)
+        assert imputed == pytest.approx(168078e6)
+        assert actual == pytest.approx(54070.27e6)
+
+    def test__rental_services_leave_out_countries_without_data(self, readers):
+        rentals = readers.eurostat.get_rental_services(["FRA", "USA"], 2014)
+        assert set(rentals) == {"FRA"}
+
     def test__cb_debt_ratios(self, readers):
         assert readers.eurostat.cb_debt_ratios("EST", 2003) == pytest.approx(0.003, abs=0.01)
         assert readers.eurostat.cb_debt_ratios("BGR", 2000) == pytest.approx(0.099, abs=0.01)

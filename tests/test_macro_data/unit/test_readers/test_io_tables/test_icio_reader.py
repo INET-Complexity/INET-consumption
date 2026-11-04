@@ -36,6 +36,16 @@ class TestICIOAggReader:
     def test__hh_consumption(self, readers):
         assert readers.icio[2014].get_hh_consumption_weights("FRA").sum() == pytest.approx(1)
 
+    def test__imputed_rents_equal_the_published_imputed_rentals(self, readers):
+        # Eurostat CPA_L68A for France 2014: 168,078 mio EUR per year, quarterly in the reader
+        assert readers.icio[2014].imputed_rents["FRA"] == pytest.approx(168078e6 / 4)
+
+    def test__actual_rentals_are_not_left_in_real_estate_household_consumption(self, readers):
+        icio = readers.icio[2014]
+        real_estate_consumption = icio.get_hh_consumption_domestic("FRA")[icio.industries.index("L")]
+        # imputed plus actual rentals exceed the whole domestic cell, so none remains
+        assert real_estate_consumption == pytest.approx(0.0)
+
     def test__govt_cons(self, readers):
         assert readers.icio[2014].govt_consumption_weights("FRA").sum() == pytest.approx(1)
 

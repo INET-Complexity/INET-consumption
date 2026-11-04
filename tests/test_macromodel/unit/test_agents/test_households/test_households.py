@@ -3211,6 +3211,10 @@ class TestPopulatePostGrantFeasiblePlan:
     def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
         n_households = test_households.ts.current("n_households")
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        # The expected capacity of 40 assumes no cash rent and no investment, so set both
+        # explicitly instead of relying on the sample household's initial state.
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("target_investment", np.zeros(n_households))
         test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
             credit_granted=np.zeros(n_households),
             credit_rationing_gap=np.zeros(n_households),

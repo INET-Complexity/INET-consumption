@@ -248,6 +248,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             Sets the housing-related fields in the household data.
     """
 
+    # national-accounts stock of other financial assets; None leaves the survey total unchanged
+    total_other_financial_assets: Optional[float] = None
+
     def __init__(
         self,
         country_name: str,
@@ -263,7 +266,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         consumption_weights_by_income: np.ndarray,
         investment: np.ndarray,
         yearly_factor: float = 4.0,
+        total_other_financial_assets: Optional[float] = None,
     ):
+        self.total_other_financial_assets = total_other_financial_assets
         saving_rates_model = LinearRegression()
         social_transfers_model = LinearRegression()
         wealth_distribution_model = LinearRegression()
@@ -444,6 +449,11 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             coefficient_fa_income=0.0,
             investment=investment,
             yearly_factor=yearly_factor,
+            total_other_financial_assets=(
+                readers.eurostat.household_non_deposit_financial_assets(country_name, year)
+                if proxied_country is None
+                else None
+            ),
         )
 
     def restrict(self) -> None:
@@ -476,6 +486,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self,
         total_social_transfers: float,
         independents: Optional[list[str]] = None,
+        *,
+        financial_income_tax: float,
+        total_property_income: Optional[float] = None,
     ) -> None:
         """
         Computes the household income based on the given total social transfers.
@@ -496,8 +509,8 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             independents=independents,
         )
         self.set_household_employee_income()
-        self.set_household_income_from_financial_assets()
-        self.set_household_income()
+        self.set_household_income_from_financial_assets(total_property_income=total_property_income)
+        self.set_household_income(financial_income_tax=financial_income_tax)
 
     def set_household_other_real_assets_wealth(self) -> None:
         self.household_data.loc[
@@ -572,6 +585,13 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
         self.household_data["Wealth in Other Financial Assets"] = positive_total_ifa
         self.household_data.loc[:, "Wealth in Other Financial Assets"] *= self.scale
+        survey_total = self.household_data["Wealth in Other Financial Assets"].sum()
+        if self.total_other_financial_assets is not None and survey_total > 0.0:
+            # Anchor the stock to the national accounts, so that it is consistent with the income
+            # from financial assets, which is anchored to the same accounts.
+            self.household_data.loc[:, "Wealth in Other Financial Assets"] *= (
+                self.total_other_financial_assets / survey_total
+            )
 
     def set_household_financial_assets(self) -> None:
         self.household_data["Wealth in Financial Assets"] = (
@@ -799,13 +819,21 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.individual_data["Public Pension Weight"] = weights
         self.individual_data["Public Pension Benefits"] = public_pension_budget * weights
 
-    def set_household_income_from_financial_assets(self) -> None:
+    def set_household_income_from_financial_assets(self, total_property_income: Optional[float] = None) -> None:
         """
         Sets the household monthly income from financial assets based on the wealth in other financial assets.
 
         This method calculates the coefficient of income from financial assets based on the sum of income from financial
         assets divided by the sum of wealth in other financial assets. It then multiplies the coefficient with the wealth
         in other financial assets to determine the income from financial assets for each household.
+
+        If ``total_property_income`` is given, the coefficient is instead set so that the household
+        total equals that national-accounts aggregate per period, as is done for social transfers.
+        The survey is then used for the distribution only.
+
+        Args:
+            total_property_income (Optional[float]): Annual property income received by households
+                in national currency, e.g. Eurostat D4 received by S14.
 
         Returns:
             None
@@ -815,13 +843,29 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.coefficient_fa_income = (
             self.household_data["Income from Financial Assets"].values.astype(float)[fa_mask].sum() / self.yearly_factor
         ) / (self.household_data["Wealth in Other Financial Assets"].values.astype(float)[fa_mask]).sum()
+        total_wealth_in_other_financial_assets = np.nansum(
+            self.household_data["Wealth in Other Financial Assets"].values.astype(float)
+        )
+        if total_property_income is not None and total_wealth_in_other_financial_assets > 0.0:
+            self.coefficient_fa_income = (
+                total_property_income / self.yearly_factor
+            ) / total_wealth_in_other_financial_assets
         self.household_data["Income from Financial Assets"] = (
             self.coefficient_fa_income * self.household_data["Wealth in Other Financial Assets"].values
         )
 
-    def set_household_income(self) -> None:
+    def set_household_income(self, *, financial_income_tax: float) -> None:
         """
         Calculates the total household income by summing up different income sources.
+
+        Employee income is net of tax and contributions, and rental income is net of the
+        rental income tax. Financial income is added net of ``financial_income_tax`` so
+        that the tax collected by the government is not also counted as household income.
+        The ``Income from Financial Assets`` column itself stays gross, because it is
+        the government's tax base.
+
+        Args:
+            financial_income_tax (float): Income-tax rate on income from financial assets.
 
         Returns:
             None
@@ -830,7 +874,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             self.household_data["Employee Income"]
             + self.household_data["Regular Social Transfers"]
             + self.household_data["Rental Income from Real Estate"]
-            + self.household_data["Income from Financial Assets"]
+            + (1.0 - financial_income_tax) * self.household_data["Income from Financial Assets"]
         )
 
     @property

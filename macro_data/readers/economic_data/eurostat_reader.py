@@ -479,6 +479,11 @@ class EuroStatReader:
         """
         Get total bank equity for a specific country and year.
 
+        Equity is the banks' own equity: the liability-side row (LIAB) of shares (F51) of monetary
+        financial institutions (S122_S123). It is not the equity they hold as assets (ASS), and it
+        excludes investment-fund shares (F52, money-market-fund shares for S122_S123), which are not
+        bank own funds.
+
         Args:
             country (str): Country to get bank equity for
             year (int): Year to get bank equity for
@@ -496,7 +501,7 @@ class EuroStatReader:
         df = self.data["financial_balance_sheets"]
         country_name_short = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values[0]
         df = df.loc[
-            df[r"unit,co_nco,sector,finpos,na_item,geo\time"] == "MIO_NAC,NCO,S122_S123,ASS,F5," + country_name_short
+            df[r"unit,co_nco,sector,finpos,na_item,geo\time"] == "MIO_NAC,NCO,S122_S123,LIAB,F51," + country_name_short
         ]
         if str(year) in df.columns:
             val = df[str(year)].values
@@ -737,6 +742,63 @@ class EuroStatReader:
         df = self.data["number_of_households"].set_index("geo")
         return int(df.loc[country, str(year)] * 1000)
 
+    def household_property_income(self, country: Country, year: int) -> Optional[float]:
+        """
+        Get property income (D4) received by households (S14) in the national accounts.
+
+        Args:
+            country (Country): Country to get the aggregate for
+            year (int): Year to get the aggregate for
+
+        Returns:
+            Optional[float]: Annual property income received by households in national
+            currency units, or None if the country has no such series. No cross-country
+            fallback is applied, because the value is an absolute amount.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["nonfinancial_transactions"]
+        df = df[(df["na_item"] == "D4") & (df["direct"] == "RECV") & (df["sector"] == "S14")]
+        if df.loc[df["geo"] == country].empty:
+            return None
+        return float(self.find_value(df, country, str(year))) * 1e6
+
+    def household_non_deposit_financial_assets(self, country: Country, year: int) -> Optional[float]:
+        """
+        Get the stock of household financial assets other than deposits from the national accounts.
+
+        Sums debt securities (F3), loans (F4), equity and investment fund shares (F5) and insurance,
+        pension and standardised guarantee schemes (F6) held by households (S14).
+
+        Args:
+            country (Country): Country to get the stock for
+            year (int): Year to get the stock for
+
+        Returns:
+            Optional[float]: Stock in national currency units, or None if any component is missing for
+            that country and year. No cross-country fallback is applied, because the value is an
+            absolute amount.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["financial_balance_sheets"]
+        if str(year) not in df.columns:
+            return None
+        matches = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values
+        if len(matches) == 0:
+            return None
+        key_column = r"unit,co_nco,sector,finpos,na_item,geo\time"
+        total = 0.0
+        for item in ("F3", "F4", "F5", "F6"):
+            row = df.loc[df[key_column] == f"MIO_NAC,NCO,S14,ASS,{item},{matches[0]}", str(year)].values
+            if len(row) == 0:
+                return None
+            try:
+                total += float(row[0])
+            except ValueError:
+                return None
+        return total * 1e6
+
     def taxrate_on_capital_formation(self, country: Country, year: int) -> float:
         """
         Get tax rate on capital formation for a specific country and year.
@@ -888,6 +950,48 @@ class EuroStatReader:
             float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68A," + country_name_short, str(year)])
             + float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68B," + country_name_short, str(year)])
         )
+
+    def get_rental_services_of_country(self, country: Country, year: int) -> tuple[float, float]:
+        """
+        Get household consumption of imputed and actual rentals for a country and year.
+
+        Args:
+            country (Country): Country to get rentals for
+            year (int): Year to get rentals for
+
+        Returns:
+            tuple[float, float]: Annual imputed rentals (CPA_L68A) and actual rentals (CPA_L68B)
+            in national currency units.
+        """
+        if isinstance(country, Region):
+            country = country.parent_country
+        df = self.data["real_estate_services"].set_index("freq,unit,stk_flow,induse,prod_na,geo\\TIME_PERIOD")
+        country_name_short = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values[0]
+        imputed = float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68A," + country_name_short, str(year)]) * 1e6
+        actual = float(df.at["A,MIO_NAC,TOTAL,P3_S14,CPA_L68B," + country_name_short, str(year)]) * 1e6
+        return imputed, actual
+
+    def get_rental_services(self, country_names: list[Country], year: int) -> dict[Country, tuple[float, float]]:
+        """
+        Get imputed and actual rentals for the countries that publish them for the given year.
+
+        Countries without a usable value for that year are left out, so that the caller falls back to
+        the imputed-rent fraction instead of applying another country's or year's absolute amount.
+
+        Args:
+            country_names (list[Country]): Countries to get rentals for
+            year (int): Year to get rentals for
+
+        Returns:
+            dict[Country, tuple[float, float]]: Annual (imputed, actual) rentals in national currency units
+        """
+        rentals = {}
+        for country in country_names:
+            try:
+                rentals[country] = self.get_rental_services_of_country(country, year)
+            except (KeyError, ValueError, IndexError):
+                continue
+        return rentals
 
     def get_investment_fractions_of_country(
         self,

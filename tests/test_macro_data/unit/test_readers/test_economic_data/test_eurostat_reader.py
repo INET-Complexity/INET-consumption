@@ -21,7 +21,33 @@ class TestEuroStatReader:
         assert readers.eurostat.get_total_nonfin_firm_deposits("FRA", 2014) == pytest.approx(474690000000.0, abs=1e5)
 
     def test__total_bank_equity(self, readers):
-        assert readers.eurostat.get_total_bank_equity("FRA", 2014) == pytest.approx(588338000000.0, abs=1e5)
+        # shares issued (S122_S123, LIAB, F51): not equity held as an asset (ASS, F5: 588,338 mio)
+        # and not F5 (647,918 mio), which adds 288,902 mio of investment-fund shares (F52)
+        assert readers.eurostat.get_total_bank_equity("FRA", 2014) == pytest.approx(359016000000.0, abs=1e5)
+
+    def test__household_property_income(self, readers):
+        # Eurostat nasa_10_nf_tr, D4 received by S14, France 2014: 98,614 mio EUR
+        assert readers.eurostat.household_property_income("FRA", 2014) == pytest.approx(98614e6, rel=1e-9)
+
+    def test__household_property_income_has_no_cross_country_fallback(self, readers):
+        assert readers.eurostat.household_property_income("USA", 2014) is None
+
+    def test__rental_services_are_published_amounts_in_national_currency(self, readers):
+        imputed, actual = readers.eurostat.get_rental_services_of_country("FRA", 2014)
+        assert imputed == pytest.approx(168078e6)
+        assert actual == pytest.approx(54070.27e6)
+
+    def test__rental_services_leave_out_countries_without_data(self, readers):
+        rentals = readers.eurostat.get_rental_services(["FRA", "USA"], 2014)
+        assert set(rentals) == {"FRA"}
+
+    def test__household_non_deposit_financial_assets(self, readers):
+        # S14 assets, France 2014: F3 77,073 + F4 30,539 + F5 1,215,856 + F6 1,711,897 mio EUR
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 2014) == pytest.approx(3035365e6)
+
+    def test__household_non_deposit_financial_assets_has_no_fallback(self, readers):
+        assert readers.eurostat.household_non_deposit_financial_assets("USA", 2014) is None
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 1800) is None
 
     def test__cb_debt_ratios(self, readers):
         assert readers.eurostat.cb_debt_ratios("EST", 2003) == pytest.approx(0.003, abs=0.01)

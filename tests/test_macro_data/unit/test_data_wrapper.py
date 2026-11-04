@@ -36,6 +36,8 @@ class TestCreator:
 
         check_country_rent_consistency(creator.synthetic_countries["FRA"])
 
+        check_country_initial_state_anchors(creator.synthetic_countries["FRA"])
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
             tmp_file = tmp / "creator.pkl"
@@ -53,6 +55,9 @@ class TestCreator:
             zero_initial_debt=False,
             zero_initial_deposits=False,
         )
+
+        # the national-accounts anchors survive a reset, which rebuilds the households' income
+        check_country_initial_state_anchors(new_creator.synthetic_countries["FRA"])
 
         assert new_creator.emission_factors["coal"] > 0
         assert new_creator.emission_factors["oil"] > 0
@@ -521,6 +526,37 @@ def check_country_gdp(country: SyntheticCountry):
 
     assert gdp_output == pytest.approx(gdp_income, rel=1e-3)
     assert gdp_output == pytest.approx(gdp_expenditure, rel=1e-3)
+
+
+def check_country_initial_state_anchors(country: SyntheticCountry):
+    """Check that the initial state is anchored to the national accounts (France 2014 sample data)."""
+    household_data = country.population.household_data
+    individual_data = country.population.individual_data
+
+    # Other financial assets are scaled to the household stock of F3 to F6 (3,035,365 mio EUR), and the
+    # yield on them is the anchored income over that stock
+    assert household_data["Wealth in Other Financial Assets"].sum() == pytest.approx(3035365e6, rel=1e-6)
+    assert country.population.coefficient_fa_income == pytest.approx(98614e6 / 4 / 3035365e6, rel=1e-6)
+
+    # Eurostat D4 received by households: 98,614 mio EUR per year, quarterly in the model
+    assert country.household_property_income == pytest.approx(98614e6)
+    assert household_data["Income from Financial Assets"].sum() == pytest.approx(98614e6 / 4, rel=1e-6)
+
+    # Rent paid carries the actual rentals removed from the input-output table, once. For the France 2014
+    # sample the removed amount is 12,256.9 mio EUR per quarter (CPA_L68B alone is 13,517.6 mio, but the
+    # household consumption cell is smaller than imputed plus actual rentals).
+    assert household_data["Rent Paid"].sum() == pytest.approx(12256.86e6, rel=1e-5)
+    # and landlords receive it net of the rental income tax
+    tax = country.tax_data.income_tax
+    assert household_data["Rental Income from Real Estate"].sum() == pytest.approx(
+        (1 - tax) * household_data["Rent Paid"].sum(), rel=1e-6
+    )
+
+    # Participation and unemployment targets are met to within a person
+    adults = individual_data["Age"] >= 16
+    activity = individual_data["Activity Status"]
+    assert ((activity != 3) & adults).sum() / adults.sum() == pytest.approx(0.561, abs=0.005)
+    assert (activity == 2).sum() / activity.isin([1, 2]).sum() == pytest.approx(0.103, abs=0.005)
 
 
 def check_country_rent_consistency(country: SyntheticCountry):

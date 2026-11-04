@@ -7,6 +7,7 @@ import pytest
 import macro_data.processing.synthetic_population.hfcs_individual_tools as individual_tools
 import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
+from macro_data.processing.synthetic_matching.matching_households_with_houses import rescale_rents
 from macro_data.processing.synthetic_population.hfcs_individual_tools import initial_unemployment_benefit_per_recipient
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     CONVERT_HH_COLS,
@@ -589,3 +590,137 @@ def test__household_sampling(readers):
         assert individual_selection.loc[individuals, "Corresponding Household ID"].nunique() == 1
         assert np.all(individual_selection.loc[individuals, "Corresponding Household ID"] == i)
     assert True
+
+
+def _financial_income_population(yearly_factor=4.0, scale=10):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = scale
+    population.yearly_factor = yearly_factor
+    population.household_data = pd.DataFrame(
+        {
+            "Income from Financial Assets": [100.0, 300.0, 600.0],
+            "Wealth in Other Financial Assets": [1_000.0, 2_000.0, 7_000.0],
+            "Employee Income": [10.0, 20.0, 30.0],
+            "Regular Social Transfers": [1.0, 2.0, 3.0],
+            "Rental Income from Real Estate": [0.0, 5.0, 0.0],
+        }
+    )
+    return population
+
+
+def test__household_income_includes_financial_income_net_of_tax_and_keeps_the_gross_column():
+    population = _financial_income_population()
+    gross = population.household_data["Income from Financial Assets"].copy()
+
+    population.set_household_income(financial_income_tax=0.25)
+
+    expected = (
+        population.household_data["Employee Income"]
+        + population.household_data["Regular Social Transfers"]
+        + population.household_data["Rental Income from Real Estate"]
+        + 0.75 * gross
+    )
+    pd.testing.assert_series_equal(population.household_data["Income"], expected, check_names=False)
+    # the gross column is the government's tax base
+    pd.testing.assert_series_equal(population.household_data["Income from Financial Assets"], gross)
+
+
+def test__household_income_with_a_zero_tax_rate_leaves_financial_income_gross():
+    population = _financial_income_population()
+    population.set_household_income(financial_income_tax=0.0)
+    assert population.household_data["Income"].tolist() == [111.0, 327.0, 633.0]
+
+
+def test__financial_income_without_anchor_keeps_survey_yield():
+    population = _financial_income_population()
+    population.set_household_income_from_financial_assets()
+    # survey total 1000 * scale 10 / yearly_factor 4 = 2500 spread by wealth (sum 10,000)
+    assert population.household_data["Income from Financial Assets"].sum() == pytest.approx(2_500.0)
+
+
+def test__financial_income_is_anchored_to_the_national_accounts_total():
+    population = _financial_income_population()
+    population.set_household_income_from_financial_assets(total_property_income=40_000.0)
+    income = population.household_data["Income from Financial Assets"]
+    assert income.sum() == pytest.approx(40_000.0 / 4.0)
+    # the survey wealth still sets the distribution
+    assert (income / population.household_data["Wealth in Other Financial Assets"]).nunique() == 1
+    # the runtime uses this coefficient as the yield on financial wealth in every period
+    assert population.coefficient_fa_income == pytest.approx(40_000.0 / 4.0 / 10_000.0)
+
+
+def test__financial_income_anchor_ignores_households_without_wealth_data():
+    population = _financial_income_population()
+    population.household_data.loc[1, "Wealth in Other Financial Assets"] = np.nan
+    population.set_household_income_from_financial_assets(total_property_income=40_000.0)
+    income = population.household_data["Income from Financial Assets"]
+    assert income.sum(skipna=True) == pytest.approx(40_000.0 / 4.0)
+
+
+def test__household_income_requires_an_explicit_financial_income_tax():
+    population = _financial_income_population()
+    with pytest.raises(TypeError):
+        population.set_household_income()
+
+
+def test__rescale_rents_scales_rent_paid_landlord_income_and_rented_properties_by_one_factor():
+    household_data = pd.DataFrame(
+        {
+            "Rent Paid": [10.0, 30.0, 0.0],
+            "Rental Income from Real Estate": [0.0, 0.0, 36.0],  # 0.9 * 40 after a 10% rental income tax
+        }
+    )
+    housing_df = pd.DataFrame({"Is Owner-Occupied": [True, False, False], "Rent": [7.0, 10.0, 30.0]})
+
+    rescale_rents(household_data, housing_df, total_actual_rent=100.0)
+
+    assert household_data["Rent Paid"].tolist() == pytest.approx([25.0, 75.0, 0.0])
+    assert household_data["Rental Income from Real Estate"].tolist() == pytest.approx([0.0, 0.0, 90.0])
+    assert housing_df["Rent"].tolist() == pytest.approx([7.0, 25.0, 75.0])  # owner-occupied imputed rent untouched
+    # landlord income is still rent paid net of the tax
+    assert household_data["Rental Income from Real Estate"].sum() == pytest.approx(
+        0.9 * household_data["Rent Paid"].sum()
+    )
+
+
+def test__rescale_rents_without_rent_paid_does_nothing():
+    household_data = pd.DataFrame({"Rent Paid": [0.0, 0.0], "Rental Income from Real Estate": [0.0, 0.0]})
+    housing_df = pd.DataFrame({"Is Owner-Occupied": [False, False], "Rent": [10.0, 20.0]})
+    rescale_rents(household_data, housing_df, total_actual_rent=100.0)
+    assert housing_df["Rent"].tolist() == [10.0, 20.0]
+
+
+def _other_financial_assets_population(total_other_financial_assets):
+    population = SyntheticHFCSPopulation.__new__(SyntheticHFCSPopulation)
+    population.scale = 10
+    population.total_other_financial_assets = total_other_financial_assets
+    population.household_data = pd.DataFrame(
+        {
+            "Mutual Funds": [100.0, 0.0],
+            "Bonds": [0.0, 50.0],
+            "Value of Private Businesses": [0.0, 0.0],
+            "Shares": [100.0, 0.0],
+            "Managed Accounts": [0.0, 0.0],
+            "Money owed to Households": [0.0, 0.0],
+            "Other Assets": [0.0, 0.0],
+            "Voluntary Pension": [0.0, 50.0],
+        }
+    )
+    return population
+
+
+def test__other_financial_assets_are_anchored_to_the_national_accounts_stock():
+    population = _other_financial_assets_population(total_other_financial_assets=1_000.0)
+    population.set_household_other_financial_assets()
+    wealth = population.household_data["Wealth in Other Financial Assets"]
+    assert wealth.sum() == pytest.approx(1_000.0)
+    # survey stocks are 2,000 and 1,000 after scaling by 10, so the shares 2/3 and 1/3 are kept
+    assert wealth.tolist() == pytest.approx([2_000 / 3, 1_000 / 3])
+    # the direct-share fraction is a ratio and does not change
+    assert population.household_data["Initial Direct Share Fraction"].tolist() == pytest.approx([0.5, 0.0])
+
+
+def test__other_financial_assets_keep_the_survey_total_without_an_anchor():
+    population = _other_financial_assets_population(total_other_financial_assets=None)
+    population.set_household_other_financial_assets()
+    assert population.household_data["Wealth in Other Financial Assets"].tolist() == pytest.approx([2_000.0, 1_000.0])

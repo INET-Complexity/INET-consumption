@@ -47,6 +47,8 @@ Note:
     a category for social renters ('-1').
 """
 
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 import scipy as sp
@@ -61,11 +63,32 @@ from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 
+def rescale_rents(household_data: pd.DataFrame, housing_df: pd.DataFrame, total_actual_rent: float) -> None:
+    """Scale the rent flows of the matched rental market so that rent paid sums to ``total_actual_rent``.
+
+    One factor is applied to renters' rent paid, the rent of rented properties and landlords' rental
+    income, so that landlord income stays equal to rent paid net of the rental income tax.
+
+    Args:
+        household_data (pd.DataFrame): Household data after renters were matched to properties.
+        housing_df (pd.DataFrame): Housing market data after the match.
+        total_actual_rent (float): Target total rent paid per period.
+    """
+    current_total = household_data["Rent Paid"].sum()
+    if current_total <= 0.0:
+        return
+    factor = total_actual_rent / current_total
+    household_data["Rent Paid"] *= factor
+    household_data["Rental Income from Real Estate"] *= factor
+    housing_df.loc[~housing_df["Is Owner-Occupied"], "Rent"] *= factor
+
+
 def set_housing_df(
     synthetic_population: SyntheticPopulation,
     rental_income_taxes: float,
     social_housing_rent: float,
     total_imputed_rent: float,
+    total_actual_rent: Optional[float] = None,
 ) -> pd.DataFrame:
     """Create and harmonize the housing market dataset.
 
@@ -97,6 +120,9 @@ def set_housing_df(
         rental_income_taxes (float): Tax rate on rental income
         social_housing_rent (float): Standardized social housing rent
         total_imputed_rent (float): Total imputed rent for owned properties
+        total_actual_rent (Optional[float]): Actual rentals removed from the input-output table per
+            period. If given, rent paid, the rent of rented properties and landlord income are scaled
+            after the match so that rent paid sums to it, and the rentals enter the economy once.
 
     Returns:
         pd.DataFrame: Harmonized housing market data with consistent
@@ -166,6 +192,9 @@ def set_housing_df(
     match_renters_to_properties(
         synthetic_population=synthetic_population, housing_market_df=housing_df, rental_income_taxes=rental_income_taxes
     )
+
+    if total_actual_rent is not None:
+        rescale_rents(synthetic_population.household_data, housing_df, total_actual_rent)
 
     return housing_df
 

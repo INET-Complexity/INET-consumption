@@ -4,6 +4,8 @@ from itertools import product
 import numpy as np
 import pytest
 
+from macro_data.readers.io_tables.icio_reader import remove_rental_services
+
 
 class TestICIOAggReader:
     def test__countries_agg(self, readers):
@@ -40,11 +42,13 @@ class TestICIOAggReader:
         # Eurostat CPA_L68A for France 2014: 168,078 mio EUR per year, quarterly in the reader
         assert readers.icio[2014].imputed_rents["FRA"] == pytest.approx(168078e6 / 4)
 
-    def test__actual_rentals_are_not_left_in_real_estate_household_consumption(self, readers):
+    def test__actual_rents_are_what_was_removed_beyond_the_imputed_rents(self, readers):
         icio = readers.icio[2014]
-        real_estate_consumption = icio.get_hh_consumption_domestic("FRA")[icio.industries.index("L")]
-        # imputed plus actual rentals exceed the whole domestic cell, so none remains
-        assert real_estate_consumption == pytest.approx(0.0)
+        imputed, actual = icio.imputed_rents["FRA"], icio.actual_rents["FRA"]
+        # Eurostat CPA_L68A + CPA_L68B for France 2014 is 222,148 mio EUR per year. The domestic cell is
+        # smaller, so the removed actual rentals fall short of CPA_L68B (54,070 mio) but are positive.
+        assert 0.0 < actual < 54070.27e6 / 4
+        assert (imputed + actual) * 4 <= (168078e6 + 54070.27e6) * (1 + 1e-9)
 
     def test__govt_cons(self, readers):
         assert readers.icio[2014].govt_consumption_weights("FRA").sum() == pytest.approx(1)
@@ -96,3 +100,18 @@ class TestICIODisagg:
         output_series = icio.get_total_output_series("FRA")
         assert np.all(output_series > 0)
         icio.get_output_shares_dict("FRA")
+
+
+@pytest.mark.parametrize(
+    "cell, imputed_lcu, actual_lcu, expected",
+    [
+        (1_000.0, 200.0, 100.0, (100.0, 50.0)),  # rentals fit in the cell: both removed in full
+        (120.0, 200.0, 100.0, (100.0, 20.0)),  # cell is smaller than the rentals: actual is squeezed first
+        (40.0, 200.0, 100.0, (40.0, 0.0)),  # imputed rentals alone exceed the cell
+        (0.0, 200.0, 100.0, (0.0, 0.0)),
+    ],
+)
+def test__remove_rental_services_never_exceeds_the_cell(cell, imputed_lcu, actual_lcu, expected):
+    imputed, actual = remove_rental_services(cell, imputed_lcu, actual_lcu, lcu_per_usd=2.0)
+    assert (imputed, actual) == pytest.approx(expected)
+    assert imputed + actual <= cell

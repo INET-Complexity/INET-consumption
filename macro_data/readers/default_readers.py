@@ -414,6 +414,12 @@ class DataReaders:
                         icio[simulation_year].imputed_rents[large_country] * renorm_output[region]
                     )
                 del icio[simulation_year].imputed_rents[large_country]
+                if large_country in icio[simulation_year].actual_rents:
+                    for region in regions:
+                        icio[simulation_year].actual_rents[region] = (
+                            icio[simulation_year].actual_rents[large_country] * renorm_output[region]
+                        )
+                    del icio[simulation_year].actual_rents[large_country]
 
             # country_names = all_countries
         else:

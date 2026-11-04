@@ -176,6 +176,7 @@ class SyntheticCountry:
     historical_emissions_df: Optional[pd.DataFrame] = None
     firm_exo_prices: Optional[SectorExoPrices] = None
     household_property_income: Optional[float] = None
+    total_actual_rent: Optional[float] = None
 
     @classmethod
     def eu_synthetic_country(
@@ -301,6 +302,7 @@ class SyntheticCountry:
         tax_data = TaxData.from_readers(readers, country, year)
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
+        total_actual_rent = readers.icio[year].actual_rents.get(country)
 
         dividend_payout_ratio = readers.eurostat.dividend_payout_ratio(country=country, year=year)
         long_term_interest_rate = readers.oecd_econ.read_long_term_interest_rates(country=country, year=year)
@@ -320,6 +322,7 @@ class SyntheticCountry:
             rental_income_taxes=tax_data.income_tax,
             social_housing_rent=population.social_housing_rent,
             total_imputed_rent=total_imputed_rent,
+            total_actual_rent=total_actual_rent,
         )
 
         housing_market = DefaultSyntheticHousingMarket(country, housing_data)
@@ -400,6 +403,7 @@ class SyntheticCountry:
                 SectorExoPrices.from_reader(readers.exo_prices) if readers.exo_prices is not None else None
             ),
             household_property_income=household_property_income,
+            total_actual_rent=total_actual_rent,
         )
 
     @classmethod
@@ -538,6 +542,7 @@ class SyntheticCountry:
         tax_data = TaxData.from_readers(readers, country, year)
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
+        total_actual_rent = readers.icio[year].actual_rents.get(country)
 
         dividend_payout_ratio = readers.eurostat.dividend_payout_ratio(country=country, year=year)
         long_term_interest_rate = readers.oecd_econ.read_long_term_interest_rates(country=country, year=year)
@@ -557,6 +562,7 @@ class SyntheticCountry:
             rental_income_taxes=tax_data.income_tax,
             social_housing_rent=population.social_housing_rent,
             total_imputed_rent=total_imputed_rent,
+            total_actual_rent=total_actual_rent,
         )
 
         housing_market = DefaultSyntheticHousingMarket(country, housing_data)
@@ -637,6 +643,7 @@ class SyntheticCountry:
                 SectorExoPrices.from_reader(readers.exo_prices) if readers.exo_prices is not None else None
             ),
             household_property_income=household_property_income,
+            total_actual_rent=total_actual_rent,
         )
 
     @classmethod
@@ -981,6 +988,7 @@ class SyntheticCountry:
             rental_income_taxes=self.tax_data.income_tax,
             social_housing_rent=self.population.social_housing_rent,
             total_imputed_rent=total_rent,
+            total_actual_rent=self.total_actual_rent,
         )
 
         housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)

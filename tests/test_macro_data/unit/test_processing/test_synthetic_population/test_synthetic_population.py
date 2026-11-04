@@ -7,6 +7,7 @@ import pytest
 import macro_data.processing.synthetic_population.hfcs_individual_tools as individual_tools
 import macro_data.processing.synthetic_population.hfcs_synthetic_population as hfcs_population_module
 from macro_data.configuration.countries import Country
+from macro_data.processing.synthetic_matching.matching_households_with_houses import rescale_rents
 from macro_data.processing.synthetic_population.hfcs_individual_tools import initial_unemployment_benefit_per_recipient
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     CONVERT_HH_COLS,
@@ -624,9 +625,9 @@ def test__household_income_includes_financial_income_net_of_tax_and_keeps_the_gr
     pd.testing.assert_series_equal(population.household_data["Income from Financial Assets"], gross)
 
 
-def test__household_income_default_tax_rate_leaves_financial_income_gross():
+def test__household_income_with_a_zero_tax_rate_leaves_financial_income_gross():
     population = _financial_income_population()
-    population.set_household_income()
+    population.set_household_income(financial_income_tax=0.0)
     assert population.household_data["Income"].tolist() == [111.0, 327.0, 633.0]
 
 
@@ -644,83 +645,46 @@ def test__financial_income_is_anchored_to_the_national_accounts_total():
     assert income.sum() == pytest.approx(40_000.0 / 4.0)
     # the survey wealth still sets the distribution
     assert (income / population.household_data["Wealth in Other Financial Assets"]).nunique() == 1
+    # the runtime uses this coefficient as the yield on financial wealth in every period
+    assert population.coefficient_fa_income == pytest.approx(40_000.0 / 4.0 / 10_000.0)
 
 
-def _individuals(labour_status, age):
-    n = len(labour_status)
-    return pd.DataFrame(
+def test__financial_income_anchor_ignores_households_without_wealth_data():
+    population = _financial_income_population()
+    population.household_data.loc[1, "Wealth in Other Financial Assets"] = np.nan
+    population.set_household_income_from_financial_assets(total_property_income=40_000.0)
+    income = population.household_data["Income from Financial Assets"]
+    assert income.sum(skipna=True) == pytest.approx(40_000.0 / 4.0)
+
+
+def test__household_income_requires_an_explicit_financial_income_tax():
+    population = _financial_income_population()
+    with pytest.raises(TypeError):
+        population.set_household_income()
+
+
+def test__rescale_rents_scales_rent_paid_landlord_income_and_rented_properties_by_one_factor():
+    household_data = pd.DataFrame(
         {
-            "Labour Status": labour_status,
-            "Age": age,
-            "Gender": np.ones(n),
-            "Employment Industry": ["A"] * n,
-            "Employee Income": np.full(n, 10.0),
-            "Income from Unemployment Benefits": np.zeros(n),
-            "Income": np.full(n, 10.0),
+            "Rent Paid": [10.0, 30.0, 0.0],
+            "Rental Income from Real Estate": [0.0, 0.0, 36.0],  # 0.9 * 40 after a 10% rental income tax
         }
     )
+    housing_df = pd.DataFrame({"Is Owner-Occupied": [True, False, False], "Rent": [7.0, 10.0, 30.0]})
 
+    rescale_rents(household_data, housing_df, total_actual_rent=100.0)
 
-@pytest.mark.parametrize(
-    "labour_status, activity_status",
-    [(1, 1), (2, 1), (3, 2), (4, 3), (5, 3), (6, 3), (7, 1), (8, 3), (9, 3)],
-)
-def test__labour_status_maps_to_activity_status(labour_status, activity_status):
-    assert individual_tools.convert_labour_status_to_activity_status(labour_status) == activity_status
-
-
-def test__missing_labour_status_only_changes_the_labour_status_column():
-    individuals = _individuals([np.nan, 1.0, np.nan], [30.0, 40.0, 10.0])
-    before = individuals.copy()
-
-    result = individual_tools.fill_individual_labour_status(individuals)
-
-    assert result["Labour Status"].tolist() == [3.0, 1.0, 4.0]  # unemployed, unchanged, student under 16
-    pd.testing.assert_frame_equal(result.drop(columns="Labour Status"), before.drop(columns="Labour Status"))
-
-
-def test__decrease_participation_rate_is_not_capped_by_the_number_of_unemployed():
-    np.random.seed(0)
-    n = 1_000
-    age = np.full(n, 40.0)
-    age[:100] = 70.0
-    activity = np.full(n, 1)  # employed
-    activity[100:150] = 2  # only 50 unemployed
-    individuals = _individuals(np.full(n, 1.0), age)
-    individuals["Activity Status"] = activity
-
-    individual_tools.decrease_participation_rate(individuals, participation_rate=0.56)
-
-    n_active = (individuals["Activity Status"] != 3).sum()
-    assert abs(n_active - 0.56 * n) <= 1
-    # active people at retirement age leave the labour force first
-    assert (individuals.loc[:99, "Activity Status"] == 3).all()
-    # demoted people lose their job income
-    assert individuals.loc[individuals["Activity Status"] == 3, "Employee Income"].isna().all()
-
-
-def test__decrease_participation_rate_without_excess_does_nothing():
-    individuals = _individuals(np.full(10, 1.0), np.full(10, 40.0))
-    individuals["Activity Status"] = 1
-    individual_tools.decrease_participation_rate(individuals, participation_rate=1.0)
-    assert (individuals["Activity Status"] == 1).all()
-
-
-def test__set_individual_activity_status_reaches_participation_and_unemployment_targets():
-    np.random.seed(1)
-    n = 2_000
-    # 80% of adults report a status that counts as active
-    labour_status = np.r_[
-        np.full(1_000, 1.0), np.full(300, 3.0), np.full(300, 2.0), np.full(200, 9.0), np.full(200, 5.0)
-    ]
-    age = np.random.randint(16, 90, n).astype(float)
-    individuals = _individuals(labour_status, age)
-
-    result = individual_tools.set_individual_activity_status(
-        individuals, unemployment_rate=0.10, participation_rate=0.56
+    assert household_data["Rent Paid"].tolist() == pytest.approx([25.0, 75.0, 0.0])
+    assert household_data["Rental Income from Real Estate"].tolist() == pytest.approx([0.0, 0.0, 90.0])
+    assert housing_df["Rent"].tolist() == pytest.approx([7.0, 25.0, 75.0])  # owner-occupied imputed rent untouched
+    # landlord income is still rent paid net of the tax
+    assert household_data["Rental Income from Real Estate"].sum() == pytest.approx(
+        0.9 * household_data["Rent Paid"].sum()
     )
 
-    n_active = (result["Activity Status"] != 3).sum()
-    n_unemployed = (result["Activity Status"] == 2).sum()
-    assert abs(n_active - 0.56 * n) <= 1
-    assert abs(n_unemployed - 0.10 * n_active) <= 1
+
+def test__rescale_rents_without_rent_paid_does_nothing():
+    household_data = pd.DataFrame({"Rent Paid": [0.0, 0.0], "Rental Income from Real Estate": [0.0, 0.0]})
+    housing_df = pd.DataFrame({"Is Owner-Occupied": [False, False], "Rent": [10.0, 20.0]})
+    rescale_rents(household_data, housing_df, total_actual_rent=100.0)
+    assert housing_df["Rent"].tolist() == [10.0, 20.0]

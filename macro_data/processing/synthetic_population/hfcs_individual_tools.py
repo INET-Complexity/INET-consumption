@@ -280,14 +280,14 @@ def _report_missed_activity_targets(
 ) -> None:
     """Log a warning if the realised rates are more than one person away from their targets."""
     adults = individual_data["Age"] >= 16
-    active = individual_data["Activity Status"].isin([1, 2])
+    labour_force = individual_data["Activity Status"].isin([1, 2])
     n_adults = adults.sum()
-    n_active = (active & adults).sum()
+    n_active_adults = (labour_force & adults).sum()
+    n_labour_force = labour_force.sum()
     n_unemployed = (individual_data["Activity Status"] == 2).sum()
-    n_labour_force = individual_data["Activity Status"].isin([1, 2]).sum()
-    if n_adults > 0 and abs(n_active - participation_rate * n_adults) > 1.0:
+    if n_adults > 0 and abs(n_active_adults - participation_rate * n_adults) > 1.0:
         logging.warning(
-            "Participation rate target %.3f not reached: realised %.3f", participation_rate, n_active / n_adults
+            "Participation rate target %.3f not reached: realised %.3f", participation_rate, n_active_adults / n_adults
         )
     if n_labour_force > 0 and abs(n_unemployed - unemployment_rate * n_labour_force) > 1.0:
         logging.warning(

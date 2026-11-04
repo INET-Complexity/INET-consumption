@@ -59,6 +59,26 @@ from macro_data.readers.io_tables.util import aggregate_df
 from macro_data.readers.util.capital_depreciation import build_cfc_output_replacement_matrix
 
 
+def remove_rental_services(
+    household_consumption_usd: float, imputed_lcu: float, actual_lcu: float, lcu_per_usd: float
+) -> tuple[float, float]:
+    """Split the published rentals out of the domestic household consumption of real estate.
+
+    Args:
+        household_consumption_usd (float): Domestic household consumption of real estate (USD).
+        imputed_lcu (float): Published imputed rentals (national currency).
+        actual_lcu (float): Published actual rentals (national currency).
+        lcu_per_usd (float): Exchange rate.
+
+    Returns:
+        tuple[float, float]: Imputed and actual rentals removed from the cell (USD). Their sum never
+        exceeds the cell, and imputed rentals are removed first.
+    """
+    removed = min((imputed_lcu + actual_lcu) / lcu_per_usd, household_consumption_usd)
+    imputed = min(imputed_lcu / lcu_per_usd, removed)
+    return imputed, removed - imputed
+
+
 class ICIOReader:
     """Reader and processor for OECD Inter-Country Input Output Tables.
 
@@ -142,6 +162,7 @@ class ICIOReader:
         imputed_rents: dict[str, float],
         year: int,
         yearly_factor: float = 4.0,
+        actual_rents: Optional[dict[str, Optional[float]]] = None,
     ):
         """Initialize the ICIOReader.
 
@@ -153,11 +174,14 @@ class ICIOReader:
             year (int): Reference year
             yearly_factor (float, optional): Factor to convert annual to sub-annual values.
                 Defaults to 4.0 (quarterly).
+            actual_rents (Optional[dict[str, Optional[float]]]): Actual rentals removed from the table, per
+                period in national currency, by country. Absent for countries using the imputed-rent fraction.
         """
         self.iot = iot
         self.considered_countries = considered_countries
         self.industries = industries
         self.imputed_rents = imputed_rents
+        self.actual_rents = actual_rents if actual_rents is not None else {}
         self.year = year
         self.investment_matrices = {}
         self.yearly_factor = yearly_factor
@@ -250,15 +274,16 @@ class ICIOReader:
             rental_services = {}
 
         imputed_rents = {}
+        actual_rents = {}
         for country_name in considered_countries:
             if country_name in rental_services:
                 imputed_lcu, actual_lcu = rental_services[country_name]
                 lcu_per_usd = exchange_rates.from_usd_to_lcu(country_name, year)
                 rent_cell = (country_name, "L"), (country_name, "Household Consumption")
-                removed = min((imputed_lcu + actual_lcu) / lcu_per_usd, agg_df.at[rent_cell])
-                imputed = min(imputed_lcu / lcu_per_usd, removed)
+                imputed, actual = remove_rental_services(agg_df.at[rent_cell], imputed_lcu, actual_lcu, lcu_per_usd)
                 imputed_rents[country_name] = imputed / yearly_factor * lcu_per_usd
-                agg_df.at[rent_cell] -= removed
+                actual_rents[country_name] = actual / yearly_factor * lcu_per_usd
+                agg_df.at[rent_cell] -= imputed + actual
             elif country_name in new_rent_fraction.keys():
                 imputed_rents[country_name] = (
                     (
@@ -295,6 +320,7 @@ class ICIOReader:
             imputed_rents=imputed_rents,
             year=year,
             yearly_factor=yearly_factor,
+            actual_rents=actual_rents,
         )
 
     @staticmethod

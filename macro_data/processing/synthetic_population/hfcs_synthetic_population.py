@@ -476,7 +476,8 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self,
         total_social_transfers: float,
         independents: Optional[list[str]] = None,
-        financial_income_tax: float = 0.0,
+        *,
+        financial_income_tax: float,
         total_property_income: Optional[float] = None,
     ) -> None:
         """
@@ -836,7 +837,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             self.coefficient_fa_income * self.household_data["Wealth in Other Financial Assets"].values
         )
 
-    def set_household_income(self, financial_income_tax: float = 0.0) -> None:
+    def set_household_income(self, *, financial_income_tax: float) -> None:
         """
         Calculates the total household income by summing up different income sources.
 

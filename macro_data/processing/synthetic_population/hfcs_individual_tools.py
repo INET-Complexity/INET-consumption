@@ -6,6 +6,10 @@ import pandas as pd
 from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
+# Age from which active people are removed from the labour force first when the participation rate
+# has to be lowered
+RETIREMENT_AGE = 65
+
 
 def initial_unemployment_benefit_per_recipient(
     total_unemployment_benefits: float,
@@ -201,21 +205,22 @@ def fill_individual_education(individual_data: pd.DataFrame) -> pd.DataFrame:
 
 def fill_individual_labour_status(individual_data: pd.DataFrame) -> pd.DataFrame:
     individual_data.loc[individual_data["Age"] < 16, "Labour Status"] = 4  # student
-    individual_data.loc[individual_data["Labour Status"].isna(), "Labour Status"] = 2  # unemployed
+    # A missing status is left to the participation and unemployment rate adjustments.
+    individual_data.loc[individual_data["Labour Status"].isna(), "Labour Status"] = 3  # unemployed
     return individual_data
 
 
 def convert_labour_status_to_activity_status(ls: int) -> int:
     individual_activity_status_map = {
         1: 1,  # REGULAR_WORK -> EMPLOYED
-        2: 2,  # ON_LEAVE -> UNEMPLOYED
+        2: 1,  # ON_LEAVE -> EMPLOYED (on leave from a job)
         3: 2,  # UNEMPLOYED -> UNEMPLOYED
         4: 3,  # STUDENT -> NOT_ECONOMICALLY_ACTIVE
         5: 3,  # RETIREE -> NOT_ECONOMICALLY_ACTIVE
         6: 3,  # DISABLED -> NOT_ECONOMICALLY_ACTIVE
         7: 1,  # MILITARY_SOCIAL_SERVICE -> EMPLOYED
-        8: 2,  # DOMESTIC_TASKS -> UNEMPLOYED
-        9: 2,  # OTHER_NOT_FOR_PAY -> UNEMPLOYED
+        8: 3,  # DOMESTIC_TASKS -> NOT_ECONOMICALLY_ACTIVE
+        9: 3,  # OTHER_NOT_FOR_PAY -> NOT_ECONOMICALLY_ACTIVE
     }
     return individual_activity_status_map[ls]
 
@@ -265,7 +270,29 @@ def set_individual_activity_status(
     else:
         decrease_unemployment_rate(individual_data, n_employed, n_unemployed, unemployment_rate)
 
+    _report_missed_activity_targets(individual_data, unemployment_rate, participation_rate)
+
     return individual_data
+
+
+def _report_missed_activity_targets(
+    individual_data: pd.DataFrame, unemployment_rate: float, participation_rate: float
+) -> None:
+    """Log a warning if the realised rates are more than one person away from their targets."""
+    adults = individual_data["Age"] >= 16
+    active = individual_data["Activity Status"].isin([1, 2])
+    n_adults = adults.sum()
+    n_active = (active & adults).sum()
+    n_unemployed = (individual_data["Activity Status"] == 2).sum()
+    n_labour_force = individual_data["Activity Status"].isin([1, 2]).sum()
+    if n_adults > 0 and abs(n_active - participation_rate * n_adults) > 1.0:
+        logging.warning(
+            "Participation rate target %.3f not reached: realised %.3f", participation_rate, n_active / n_adults
+        )
+    if n_labour_force > 0 and abs(n_unemployed - unemployment_rate * n_labour_force) > 1.0:
+        logging.warning(
+            "Unemployment rate target %.3f not reached: realised %.3f", unemployment_rate, n_unemployed / n_labour_force
+        )
 
 
 def decrease_unemployment_rate(
@@ -338,7 +365,10 @@ def increase_unemployment_rate(
 
 def decrease_participation_rate(individual_data: pd.DataFrame, participation_rate: float) -> None:
     """
-    Decreases the participation rate of economically active individuals in the given DataFrame.
+    Decreases the participation rate by moving economically active individuals out of the labour force.
+
+    Active individuals aged RETIREMENT_AGE or more are removed first, at random. If more are needed, the
+    remainder is drawn at random from the other active individuals, employed or unemployed.
 
     Args:
         individual_data (pd.DataFrame): The DataFrame containing individual data.
@@ -347,22 +377,19 @@ def decrease_participation_rate(individual_data: pd.DataFrame, participation_rat
     Returns:
         None
     """
-    economically_active = np.logical_and(
-        individual_data["Activity Status"] != 3,
-        individual_data["Age"] >= 16,
-    )
+    adults = individual_data["Age"] >= 16
+    economically_active = np.logical_and(individual_data["Activity Status"] != 3, adults)
 
-    n_additional_nea = int(economically_active.sum() - participation_rate * np.sum(individual_data["Age"] >= 16))
-    unemployed = np.logical_and(
-        individual_data["Activity Status"] == 2,
-        individual_data["Age"] >= 16,
-    )
+    n_additional_nea = max(0, int(economically_active.sum() - participation_rate * adults.sum()))
 
-    rnd_ind = np.random.choice(
-        np.flatnonzero(unemployed),
-        min(n_additional_nea, np.count_nonzero(unemployed)),
-        replace=False,
-    )
+    older = np.flatnonzero(np.logical_and(economically_active, individual_data["Age"] >= RETIREMENT_AGE))
+    younger = np.flatnonzero(np.logical_and(economically_active, individual_data["Age"] < RETIREMENT_AGE))
+
+    rnd_older = np.random.choice(older, min(n_additional_nea, older.size), replace=False)
+    n_remaining = n_additional_nea - rnd_older.size
+    rnd_younger = np.random.choice(younger, min(n_remaining, younger.size), replace=False)
+    rnd_ind = np.concatenate([rnd_older, rnd_younger]).astype(int)
+
     individual_data.loc[rnd_ind, "Activity Status"] = 3
     individual_data.loc[
         rnd_ind,

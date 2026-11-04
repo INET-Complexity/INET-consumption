@@ -644,3 +644,83 @@ def test__financial_income_is_anchored_to_the_national_accounts_total():
     assert income.sum() == pytest.approx(40_000.0 / 4.0)
     # the survey wealth still sets the distribution
     assert (income / population.household_data["Wealth in Other Financial Assets"]).nunique() == 1
+
+
+def _individuals(labour_status, age):
+    n = len(labour_status)
+    return pd.DataFrame(
+        {
+            "Labour Status": labour_status,
+            "Age": age,
+            "Gender": np.ones(n),
+            "Employment Industry": ["A"] * n,
+            "Employee Income": np.full(n, 10.0),
+            "Income from Unemployment Benefits": np.zeros(n),
+            "Income": np.full(n, 10.0),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "labour_status, activity_status",
+    [(1, 1), (2, 1), (3, 2), (4, 3), (5, 3), (6, 3), (7, 1), (8, 3), (9, 3)],
+)
+def test__labour_status_maps_to_activity_status(labour_status, activity_status):
+    assert individual_tools.convert_labour_status_to_activity_status(labour_status) == activity_status
+
+
+def test__missing_labour_status_only_changes_the_labour_status_column():
+    individuals = _individuals([np.nan, 1.0, np.nan], [30.0, 40.0, 10.0])
+    before = individuals.copy()
+
+    result = individual_tools.fill_individual_labour_status(individuals)
+
+    assert result["Labour Status"].tolist() == [3.0, 1.0, 4.0]  # unemployed, unchanged, student under 16
+    pd.testing.assert_frame_equal(result.drop(columns="Labour Status"), before.drop(columns="Labour Status"))
+
+
+def test__decrease_participation_rate_is_not_capped_by_the_number_of_unemployed():
+    np.random.seed(0)
+    n = 1_000
+    age = np.full(n, 40.0)
+    age[:100] = 70.0
+    activity = np.full(n, 1)  # employed
+    activity[100:150] = 2  # only 50 unemployed
+    individuals = _individuals(np.full(n, 1.0), age)
+    individuals["Activity Status"] = activity
+
+    individual_tools.decrease_participation_rate(individuals, participation_rate=0.56)
+
+    n_active = (individuals["Activity Status"] != 3).sum()
+    assert abs(n_active - 0.56 * n) <= 1
+    # active people at retirement age leave the labour force first
+    assert (individuals.loc[:99, "Activity Status"] == 3).all()
+    # demoted people lose their job income
+    assert individuals.loc[individuals["Activity Status"] == 3, "Employee Income"].isna().all()
+
+
+def test__decrease_participation_rate_without_excess_does_nothing():
+    individuals = _individuals(np.full(10, 1.0), np.full(10, 40.0))
+    individuals["Activity Status"] = 1
+    individual_tools.decrease_participation_rate(individuals, participation_rate=1.0)
+    assert (individuals["Activity Status"] == 1).all()
+
+
+def test__set_individual_activity_status_reaches_participation_and_unemployment_targets():
+    np.random.seed(1)
+    n = 2_000
+    # 80% of adults report a status that counts as active
+    labour_status = np.r_[
+        np.full(1_000, 1.0), np.full(300, 3.0), np.full(300, 2.0), np.full(200, 9.0), np.full(200, 5.0)
+    ]
+    age = np.random.randint(16, 90, n).astype(float)
+    individuals = _individuals(labour_status, age)
+
+    result = individual_tools.set_individual_activity_status(
+        individuals, unemployment_rate=0.10, participation_rate=0.56
+    )
+
+    n_active = (result["Activity Status"] != 3).sum()
+    n_unemployed = (result["Activity Status"] == 2).sum()
+    assert abs(n_active - 0.56 * n) <= 1
+    assert abs(n_unemployed - 0.10 * n_active) <= 1

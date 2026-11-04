@@ -1806,6 +1806,23 @@ class Households(Agent):
             model=self.states["saving_rates_model"],
         )
 
+    def _consumption_housing_wealth(self, lagged_housing_wealth=None):
+        """Select the housing concept explicitly requested by the consumption calibration."""
+        main_residence_only = (
+            getattr(
+                self.functions["consumption"], "continuous_wealth_calibration_housing_asset_concept", "all_properties"
+            )
+            == "main_residence"
+        )
+        current = self.ts.current("wealth_main_residence").copy()
+        if not main_residence_only:
+            current = current + self.ts.current("wealth_other_properties")
+        if lagged_housing_wealth is None:
+            lagged_housing_wealth = self.ts.prev("wealth_main_residence").copy()
+            if not main_residence_only:
+                lagged_housing_wealth = lagged_housing_wealth + self.ts.prev("wealth_other_properties")
+        return current, lagged_housing_wealth
+
     def compute_target_consumption(
         self,
         expected_inflation: float,
@@ -1959,8 +1976,7 @@ class Households(Agent):
             tenure_status = self.states["Tenure Status of the Main Residence"]
             owner_occupied = np.isin(tenure_status, [1, 2, 4]).astype(float)
             mortgagor = (self.ts.current("mortgage_debt") > 0.0).astype(float)
-            if lagged_housing_wealth is None:
-                lagged_housing_wealth = self.ts.prev("wealth_main_residence") + self.ts.prev("wealth_other_properties")
+            housing_wealth, lagged_housing_wealth = self._consumption_housing_wealth(lagged_housing_wealth)
             # Income history, and the price-level path aligned to it period-for-period.
             # The household income row for the CURRENT period already exists here, while
             # the economy's consumer-price row for it does not yet -- which is why
@@ -2009,7 +2025,7 @@ class Households(Agent):
                 bundle_matrix=self.bundle_matrix,
                 liquid_wealth=self.ts.current("liquid_financial_assets"),
                 illiquid_wealth=self.ts.current("illiquid_financial_assets"),
-                housing_wealth=self.ts.current("wealth_main_residence") + self.ts.current("wealth_other_properties"),
+                housing_wealth=housing_wealth,
                 lagged_housing_wealth=lagged_housing_wealth,
                 rent=self.ts.current("rent"),
                 rent_imputed=self.ts.current("rent_imputed"),
@@ -2677,6 +2693,20 @@ class Households(Agent):
             "target_consumption_alpha_2",
             "target_consumption_gamma_1",
             "target_consumption_wealth_drag_clipped",
+            "target_consumption_liquid_assets_ratio",
+            "target_consumption_net_liquid_assets_ratio",
+            "target_consumption_illiquid_assets_ratio",
+            "target_consumption_housing_wealth_ratio",
+            "target_consumption_raw_net_liquid_assets_ratio",
+            "target_consumption_raw_illiquid_assets_ratio",
+            "target_consumption_raw_housing_wealth_ratio",
+            "target_consumption_raw_liquid_assets_ratio",
+            "target_consumption_nla_ratio_winsorized",
+            "target_consumption_ifa_ratio_winsorized",
+            "target_consumption_ha_ratio_winsorized",
+            "target_consumption_lfa_ratio_winsorized",
+            "target_consumption_wealth_logarithmic_tail",
+            "target_consumption_wealth_contribution",
             "target_consumption_cash_rent",
             "target_consumption_imputed_rent",
             "target_consumption_non_goods_housing",

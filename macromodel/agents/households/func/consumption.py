@@ -740,6 +740,40 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             calibration.get("weight_illiquid_financial_assets", 0.502),
             calibration.get("weight_housing_assets", 0.287),
         )
+        self.continuous_wealth_calibration_gamma_1_input = calibration.get("gamma_1_input", "accessibility")
+        if self.continuous_wealth_calibration_gamma_1_input not in ("accessibility", "lfa_y"):
+            raise ValueError("gamma_1_input must be accessibility or lfa_y.")
+        self.continuous_wealth_calibration_housing_asset_concept = calibration.get(
+            "housing_asset_concept", "all_properties"
+        )
+        if self.continuous_wealth_calibration_housing_asset_concept not in ("all_properties", "main_residence"):
+            raise ValueError("housing_asset_concept must be all_properties or main_residence.")
+        self.winsorize_wealth_ratios = calibration.get("winsorize_wealth_ratios", False)
+        self.clip_accessibility_index = calibration.get("clip_accessibility_index", True)
+        if not isinstance(self.winsorize_wealth_ratios, bool) or not isinstance(self.clip_accessibility_index, bool):
+            raise ValueError("Wealth winsorization and index clipping controls must be boolean.")
+        self.liquid_financial_assets_ratio_bounds = calibration.get("liquid_financial_assets_ratio_bounds")
+        self.lfa_raw_bounds = (calibration.get("lfa_raw_min"), calibration.get("lfa_raw_max"))
+        if self.continuous_wealth_calibration_gamma_1_input == "lfa_y" or self.winsorize_wealth_ratios:
+            for name, bounds in (
+                ("liquid_financial_assets_ratio_bounds", self.liquid_financial_assets_ratio_bounds),
+                ("lfa_raw bounds", self.lfa_raw_bounds),
+            ):
+                if (
+                    bounds is None
+                    or len(bounds) != 2
+                    or any(v is None for v in bounds)
+                    or not np.isfinite(bounds).all()
+                    or not bounds[0] < bounds[1]
+                ):
+                    raise ValueError(f"{name} must contain finite increasing bounds for the LFA map.")
+        self.wealth_saturation_tau = calibration.get("wealth_saturation_tau")
+        if self.wealth_saturation_tau is not None and (
+            isinstance(self.wealth_saturation_tau, bool)
+            or not np.isfinite(self.wealth_saturation_tau)
+            or not 0 < self.wealth_saturation_tau <= 1
+        ):
+            raise ValueError("wealth_saturation_tau must be in (0, 1].")
         # v1 shared ONE steepness and ONE midpoint between alpha_2 and gamma_1. v2
         # estimates them separately and the restriction is rejected decisively
         # (k_alpha = 2.01 against k_gamma = 148.4). The legacy `steepness`/`b0` keys
@@ -845,7 +879,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # mapping (alpha_2/gamma_1 ranges) -- these are config-driven and only checked
         # once per object lifetime here.
         for lo, hi in self.continuous_wealth_calibration_ratio_bounds:
-            if hi <= lo:
+            if not np.isfinite([lo, hi]).all() or hi <= lo:
                 raise ValueError(f"Wealth-ratio calibration bounds must satisfy hi > lo, got ({lo}, {hi}).")
         b_raw_min, b_raw_max = self.continuous_wealth_calibration_b_raw_bounds
         if b_raw_max <= b_raw_min:
@@ -853,6 +887,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         alpha_2_lo, alpha_2_hi = self.continuous_wealth_calibration_alpha_2_range
         if alpha_2_hi <= alpha_2_lo:
             raise ValueError(f"alpha_2 calibration range must satisfy high > low, got ({alpha_2_lo}, {alpha_2_hi}).")
+        if self.wealth_saturation_tau is not None and not 0 <= alpha_2_lo < alpha_2_hi < 1:
+            raise ValueError("Logarithmic wealth saturation requires 0 <= alpha_2_low < alpha_2_high < 1.")
         gamma_1_lo, gamma_1_hi = self.continuous_wealth_calibration_gamma_1_range
         if gamma_1_hi <= gamma_1_lo:
             raise ValueError(f"gamma_1 calibration range must satisfy high > low, got ({gamma_1_lo}, {gamma_1_hi}).")
@@ -969,8 +1005,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         net_liquid_assets_ratio: np.ndarray,
         illiquid_financial_assets_ratio: np.ndarray,
         housing_assets_ratio: np.ndarray,
+        liquid_financial_assets_ratio: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Per-household alpha_2(B)/gamma_1(B)/gamma_4(B) via the fitted accessibility mapping.
+        """Map bounded wealth ratios to alpha and gamma using configured training references.
+
+        gamma_1_input=lfa_y selects the separate LFA map; accessibility retains
+        the older shared-index behavior. Housing is fixed unless its range is configured.
 
         B is built from the three balance-sheet ratios, each first clipped to the
         HFCS-fitted support bound configured for it (the issue #90 explosion
@@ -1002,10 +1042,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         else:
             b_raw = weight_nla * nla_norm + weight_ifa * ifa_norm + weight_ha * ha_norm
         b_min, b_max = self.continuous_wealth_calibration_b_raw_bounds
-        # Clipped to [0,1]: b_raw_min/max are frozen calibration constants, so a
-        # simulated household outside the HFCS range would otherwise extrapolate the
-        # logistic beyond the domain the mapping was fitted on.
-        b_tilde = np.clip((b_raw - b_min) / (b_max - b_min), 0.0, 1.0)
+        # The old map clips the normalized index. The retained fit instead uses
+        # the full sigmoid after explicit ratio winsorization; references stay fixed.
+        b_tilde = (b_raw - b_min) / (b_max - b_min)
+        if self.clip_accessibility_index:
+            b_tilde = np.clip(b_tilde, 0.0, 1.0)
 
         # INDEPENDENT logistics: alpha_2 rises in B while gamma_1 and gamma_4 fall in
         # B, each with its own slope and midpoint. Under a v1 config every slope and
@@ -1019,12 +1060,24 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             self.continuous_wealth_calibration_alpha_2_steepness,
             self.continuous_wealth_calibration_alpha_2_midpoint,
         )
-        logistic_gamma = _logistic(
-            self.continuous_wealth_calibration_gamma_1_steepness,
-            self.continuous_wealth_calibration_gamma_1_midpoint,
-        )
+        if self.continuous_wealth_calibration_gamma_1_input == "lfa_y":
+            if liquid_financial_assets_ratio is None:
+                raise ValueError("The LFA gamma map requires liquid_financial_assets_ratio.")
+            lo, hi = self.liquid_financial_assets_ratio_bounds
+            liquidity = np.clip(liquid_financial_assets_ratio, lo, hi)
+            lmin, lmax = self.lfa_raw_bounds
+            normalized_liquidity = (liquidity - lmin) / (lmax - lmin)
+            argument = self.continuous_wealth_calibration_gamma_1_steepness * (
+                normalized_liquidity - self.continuous_wealth_calibration_gamma_1_midpoint
+            )
+            logistic_gamma = 1.0 / (1.0 + np.exp(np.clip(-argument, -700.0, 700.0)))
+        else:
+            logistic_gamma = _logistic(
+                self.continuous_wealth_calibration_gamma_1_steepness,
+                self.continuous_wealth_calibration_gamma_1_midpoint,
+            )
         alpha_2 = alpha_2_lo + (alpha_2_hi - alpha_2_lo) * logistic_alpha
-        # gamma_1 falls (not rises) as B rises, mirroring alpha_2's increase.
+        # Gamma falls with the selected index: accessibility or separate liquidity.
         gamma_1 = gamma_1_hi - (gamma_1_hi - gamma_1_lo) * logistic_gamma
         if self.continuous_wealth_calibration_gamma_4_range is None:
             # v1/v2: gamma_4 is homogeneous. Returned as a full array anyway so the
@@ -1414,16 +1467,40 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # house_price_term combines both unit fixes: per-household descaling (population
         # scale factor, GH issue #90) and annualization (main), since house prices are
         # quoted per household, not per the model's scaled synthetic population.
+        liquid_financial_assets_ratio = (lagged_liquid_wealth / current_deflator) / ratio_denominator_arr
+        raw_wealth_ratios = np.column_stack(
+            (net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio, liquid_financial_assets_ratio)
+        )
+        if self.uses_continuous_wealth_calibration and self.winsorize_wealth_ratios:
+            bounds = list(self.continuous_wealth_calibration_ratio_bounds)
+            if self.liquid_financial_assets_ratio_bounds is None:
+                raise ValueError("Winsorizing all wealth ratios requires liquid_financial_assets_ratio_bounds.")
+            bounds.append(self.liquid_financial_assets_ratio_bounds)
+            clipped_ratios = np.column_stack(
+                [np.clip(raw_wealth_ratios[:, j], lo, hi) for j, (lo, hi) in enumerate(bounds)]
+            )
+            net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio, liquid_financial_assets_ratio = (
+                clipped_ratios.T
+            )
+        else:
+            clipped_ratios = raw_wealth_ratios.copy()
+        # Do not report floating-point reconstruction noise at an exact boundary as a cap hit.
+        boundary_roundoff = 64 * np.finfo(float).eps * np.maximum(1.0, np.abs(clipped_ratios))
+        ratio_winsorized = (np.abs(clipped_ratios - raw_wealth_ratios) > boundary_roundoff).astype(float)
         house_price_term = self.house_price_propensity * np.log(
             real_lagged_house_price / annual_lagged_income_per_household
         )
         permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
         real_borrowing_rate_term = self.real_borrowing_rate_propensity * real_borrowing_rate_arr
 
+        wealth_tail_flag = np.zeros_like(real_spendable_income)
         wealth_drag_clipped_flag = np.zeros_like(real_spendable_income)
         if self.uses_continuous_wealth_calibration:
             alpha_2, gamma_1, gamma_4 = self._compute_continuous_wealth_calibration(
-                net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio
+                net_liquid_assets_ratio,
+                illiquid_assets_ratio,
+                housing_wealth_ratio,
+                liquid_financial_assets_ratio=liquid_financial_assets_ratio,
             )
             permanent_income_term = alpha_2 * permanent_income_log_ratio_arr
             wealth_drag = (
@@ -1443,13 +1520,21 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             # on an algebraic cancellation a future edit could silently break).
             annual_lagged_consumption = real_lagged_consumption * annualization_factor
             income_to_consumption_ratio = ratio_denominator_arr / annual_lagged_consumption
-            wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
-                wealth_drag, alpha_2, income_to_consumption_ratio
-            )
-            # These three diagnostics are the PRE-clip sub-terms (for transparency
-            # into each wealth channel's unclipped contribution); they will not sum
-            # to the post-clip `wealth_drag` below when the clip has fired -- use
-            # target_consumption_wealth_drag_clipped to detect that case.
+            if self.wealth_saturation_tau is None:
+                wealth_drag, wealth_drag_clipped_flag = self._clip_wealth_drag(
+                    wealth_drag, alpha_2, income_to_consumption_ratio
+                )
+                wealth_tail_flag = np.zeros_like(wealth_drag)
+            else:
+                # F(W,d) is linear below tau*d and logarithmic above; no legacy wealth clip.
+                threshold = self.wealth_saturation_tau * (1.0 - alpha_2)
+                in_tail = wealth_drag > threshold
+                wealth_drag = wealth_drag.copy()
+                wealth_drag[in_tail] = threshold[in_tail] * (1.0 + np.log(wealth_drag[in_tail] / threshold[in_tail]))
+                wealth_tail_flag = in_tail.astype(float)
+            # Direct subterms use the same winsorized ratios as the maps.
+            # Their sum precedes the configured logarithmic tail or legacy clip;
+            # target_consumption_wealth_contribution records the term actually used.
             net_liquid_assets_term = gamma_1 * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
             housing_wealth_term = gamma_4 * housing_wealth_ratio
@@ -1467,6 +1552,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             net_liquid_assets_term = self.liquid_wealth_propensity * net_liquid_assets_ratio
             illiquid_assets_term = self.illiquid_wealth_propensity * illiquid_assets_ratio
             housing_wealth_term = self.housing_wealth_propensity * housing_wealth_ratio
+            wealth_drag = net_liquid_assets_term + illiquid_assets_term + housing_wealth_term
             permanent_income_term = self.permanent_income_propensity * permanent_income_log_ratio_arr
             long_run_log_consumption_to_income = (
                 self.long_run_intercept
@@ -1541,6 +1627,17 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             # wealth-drag clip is inspectable after a run instead of only
             # reconstructible by approximation.
             "target_consumption_ratio_denominator": ratio_denominator_arr,
+            "target_consumption_liquid_assets_ratio": liquid_financial_assets_ratio,
+            "target_consumption_raw_net_liquid_assets_ratio": raw_wealth_ratios[:, 0],
+            "target_consumption_raw_illiquid_assets_ratio": raw_wealth_ratios[:, 1],
+            "target_consumption_raw_housing_wealth_ratio": raw_wealth_ratios[:, 2],
+            "target_consumption_raw_liquid_assets_ratio": raw_wealth_ratios[:, 3],
+            "target_consumption_nla_ratio_winsorized": ratio_winsorized[:, 0],
+            "target_consumption_ifa_ratio_winsorized": ratio_winsorized[:, 1],
+            "target_consumption_ha_ratio_winsorized": ratio_winsorized[:, 2],
+            "target_consumption_lfa_ratio_winsorized": ratio_winsorized[:, 3],
+            "target_consumption_wealth_logarithmic_tail": wealth_tail_flag,
+            "target_consumption_wealth_contribution": wealth_drag,
             "target_consumption_net_liquid_assets_ratio": net_liquid_assets_ratio,
             "target_consumption_illiquid_assets_ratio": illiquid_assets_ratio,
             "target_consumption_housing_wealth_ratio": housing_wealth_ratio,

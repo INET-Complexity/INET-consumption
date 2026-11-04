@@ -479,6 +479,9 @@ class EuroStatReader:
         """
         Get total bank equity for a specific country and year.
 
+        Equity is the banks' own equity, the liability-side row (LIAB) of shares and other equity
+        (F5) of monetary financial institutions (S122_S123), not the equity they hold as assets.
+
         Args:
             country (str): Country to get bank equity for
             year (int): Year to get bank equity for
@@ -496,7 +499,7 @@ class EuroStatReader:
         df = self.data["financial_balance_sheets"]
         country_name_short = self.c_map.loc[self.c_map["Alpha-3 code"] == country, "Alpha-2 code"].values[0]
         df = df.loc[
-            df[r"unit,co_nco,sector,finpos,na_item,geo\time"] == "MIO_NAC,NCO,S122_S123,ASS,F5," + country_name_short
+            df[r"unit,co_nco,sector,finpos,na_item,geo\time"] == "MIO_NAC,NCO,S122_S123,LIAB,F5," + country_name_short
         ]
         if str(year) in df.columns:
             val = df[str(year)].values

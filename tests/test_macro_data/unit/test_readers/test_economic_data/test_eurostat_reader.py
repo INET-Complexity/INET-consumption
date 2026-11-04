@@ -21,8 +21,9 @@ class TestEuroStatReader:
         assert readers.eurostat.get_total_nonfin_firm_deposits("FRA", 2014) == pytest.approx(474690000000.0, abs=1e5)
 
     def test__total_bank_equity(self, readers):
-        # own equity (S122_S123, LIAB, F5), not equity held as an asset (ASS: 588,338 mio)
-        assert readers.eurostat.get_total_bank_equity("FRA", 2014) == pytest.approx(647918000000.0, abs=1e5)
+        # shares issued (S122_S123, LIAB, F51): not equity held as an asset (ASS, F5: 588,338 mio)
+        # and not F5 (647,918 mio), which adds 288,902 mio of investment-fund shares (F52)
+        assert readers.eurostat.get_total_bank_equity("FRA", 2014) == pytest.approx(359016000000.0, abs=1e5)
 
     def test__household_property_income(self, readers):
         # Eurostat nasa_10_nf_tr, D4 received by S14, France 2014: 98,614 mio EUR

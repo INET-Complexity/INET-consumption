@@ -864,6 +864,7 @@ class Country:
             fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],
             country_name=country_name,
             smic_path=data_paths.insee_smic_path if data_paths is not None else None,
+            population_scale_factor=scale,
         )
         economy.ts.override_current("net_smic_base", [net_smic_base])
         economy.ts.override_current(
@@ -1000,7 +1001,20 @@ class Country:
         fallback_net_smic: float,
         country_name: str,
         smic_path: Optional[str | Path] = None,
+        population_scale_factor: float = 1.0,
     ) -> float:
+        """Return the canonical SMIC base in model monetary units.
+
+        INSEE supplies ordinary-household monthly currency levels, whereas the
+        model's income and asset vectors are population-expanded. Convert this
+        external source exactly once here; per-pass floor refreshes reuse the
+        stored model-unit base. The legacy benefit-based fallback already uses
+        model monetary units, so retain its existing proxy/frequency treatment
+        without multiplying it again.
+        """
+        scale = float(population_scale_factor)
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("SMIC population scale must be finite and positive.")
         if country_name != "FRA":
             return float(fallback_net_smic)
         try:
@@ -1011,7 +1025,7 @@ class Country:
             value = annual_smic.loc[initial_year]
             if pd.isna(value):
                 return float(fallback_net_smic)
-            return float(value)
+            return float(value) * scale
         return float(fallback_net_smic)
 
     @staticmethod
@@ -1025,8 +1039,10 @@ class Country:
     ) -> np.ndarray:
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
         net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
-        # net_smic_base (and therefore net_smic_monthly_t) is a MONTHLY level
-        # (macro_data/readers/insee_smic.py's net_monthly_smic), and time_unit is
+        # net_smic_base is already in model monetary units: INSEE's monthly
+        # level is population-expanded once by _select_net_smic_base. Do not
+        # expand it again on refresh. The benefit fallback keeps its legacy
+        # proxy convention. For the INSEE monthly source, time_unit is
         # months per model period -- so a period's worth is time_unit MONTHS summed,
         # i.e. net_smic_monthly_t * time_unit. The previous `* (time_unit / 12.0)`
         # applied the annual-RATE-to-period conversion used elsewhere in this file

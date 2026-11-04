@@ -1,6 +1,6 @@
 # Consumption inputs and planning dates
 
-Source trace: 4 November 2026, INET `fff0e869`, active FRA CreditAugmentedConsumption with aligned behavioural income, income learning and feasibility resolver. Documentation only. Approved contracts describe the required implementation; the current accessors are recorded separately.
+Source trace: 4 November 2026, originally at INET `fff0e869`; current implementation baseline `b1db808e` includes the committed floor-unit repair. Final consistency review completed on 4 November. Active FRA uses CreditAugmentedConsumption, aligned behavioural income, income learning and the feasibility resolver. The income/state adapter is the first implementation increment after this preparation review and is still pending. Approved contracts describe requirements; source and historical evidence are distinguished below.
 
 ## Definitions and units
 
@@ -16,7 +16,7 @@ Historical normalization must be consistent with current conversion: normalize t
 |---|---|---|---|
 | Quarterly behavioural income B | HH expected_behavioural_income; Country._record_behavioural_income -> reconcile_behavioural_income | t expectation appended before first target, overwritten after labour before second; t0 seeded at construction | y_s=B_s/d_s. Use the history of this expected series, not realised cash income or financing_income. |
 | Behavioural income components | N_raw=expected_income_employee+expected_income_social_transfers; P=income_rental+expected dividend/financial cash receipts+positive deposit receipts; borrower interest I; imputed rent R | Pass-specific income component snapshot. Opening loan interest preview is reused on second pass; deposit receipts/rent may be refreshed | B=max(sqrt(max(N_raw,0)*max(N_raw+P,0))-I+R,S). Component and final-floor flags already exist. The floor creates no cash receipt. |
-| Quarterly subsistence floor S | Economy subsistence_consumption from half net monthly SMIC * time_unit * household consumption units, indexed by C/C_0 | t0 initialized; append alongside first expected-income row, replace on second pass | s_s=S_s/d_s. Pass the full period-aligned floor history, not today's floor broadcast backward. Current target API passes only today's vector. Preserve existing floor units; verify common population scaling at the adapter boundary. |
+| Quarterly subsistence floor S | Economy subsistence_consumption from half net monthly SMIC * time_unit * household consumption units, indexed by C/C_0 | t0 initialized; append alongside first expected-income row, replace on second pass | s_s=S_s/d_s. Pass the full period-aligned floor history, not today's floor broadcast backward. Current target API passes only today's vector. The committed floor is already in model monetary units; preserve it without another expansion and verify scale compatibility in adapter fixtures. |
 | Smoothed quarterly base b | Currently _geometric_average_income(expected-income history) | Window through the current pass's t observation; previous entries unchanged by replanning | Required b=exp(mean(log(max(B_s,S_s)/d_s))) over latest min(4,available) quarters. Reject nonfinite operands; preserve every available quarter. Quarterly Y_annual=4*b; generic a*b. |
 | Monetary current income M | current_income_belief_learning_inputs -> monetary_income_moments -> income_bridge_current | Reconstructed from that pass's same component snapshot | M_nom=max(max(N_raw,0)+P,S); M_real=M_nom/d_t. Excludes imputed rent and separate borrower-interest subtraction. This is NOT B. |
 | Existing PI signal q | permanent_income_log_ratio = bridge mean + common forecast once | Same-date planning signal; posterior comes from completed-income learning state, common forecast may be refreshed | q=E[log(M_projected/M)]+q_common. Preserve the bridge's implied log-income level by p_new=q+log(M_real)-log(b). Do not substitute B as the old denominator. |
@@ -62,7 +62,7 @@ Current active-path financial/housing prev values can therefore be t-2 at BOTH p
 ## Implementation changes and checks
 
 - Expose aligned expected B, historical S and selected price paths with a single documented d=C/C_0 convention. The aligned FRA income path already floors every recorded B and rejects nonfinite components; applying the same per-date floor during smoothing is idempotent there. Preserve raw-income and floor-hit diagnostics so smoothing does not conceal upstream binding.
-- Keep the supplied subsistence source; do not introduce another economic floor. Currency/population-scale tests must scale income, S, PI components and stocks together. The SMIC/CU helper has no explicit population_scale_factor operand, whereas synthetic monetary builders contain scale operations: this trace does not certify end-to-end population-scale invariance of the floor. Verify on the resolved initial state before implementing any unit correction; do not silently multiply an already scaled array.
+- Keep the repaired canonical subsistence source; do not introduce another economic floor or multiply the stored model-unit base again. INSEE expansion occurs once in _select_net_smic_base, before the floor helper. The resolved-state check and 809-test repair verification are complete in b1db808e. Adapter currency/population-scale tests still scale income, S, PI components and stocks together to verify the new construction.
 - Pass M (or log_yp_proxy) explicitly into the adapter so it can form the correct p. Do not reinterpret the monetary q as a behavioural-income ratio. Preserve learner/common forecast, uncertainty variance and financing receipts.
 - Build real rate weights and cashflow indices after b is known, or pass their unnormalized opening numerators. Dividing an already income-normalized index by another income would double-normalize it. Keep principal rate exposures distinct from arrears-inclusive NLA debt.
 - Capture opening H-vector copies, not references or post-housing tenure filters. Preserve main-residence-only HA and rental accounting. Retain existing pass-aware ECM budget persistence.
@@ -86,28 +86,28 @@ Paths are relative to INET. Line anchors refer to source at fff0e869, not this d
 - macromodel/timeseries.py:80,101 — current/prev semantics.
 - macro_data/util/rates.py:43; macro_data/processing/synthetic_population/hfcs_household_tools.py:189,259 — rate conversion and synthetic monetary scaling.
 
-GitNexus context/query and its named process resource confirmed Country -> current_income_belief_learning_inputs -> monetary_income_moments -> _log_income; current source supplies the definitions above. A direct numeric check using the actual pure bridge/reconciliation helpers passed PI log-level preservation and common currency-scale invariance, and demonstrated M != B. No new fit, macro experiment or runtime implementation; no claim that the pending adapter has passed tests.
+GitNexus context/query and its named process resource confirmed Country -> current_income_belief_learning_inputs -> monetary_income_moments -> _log_income; current source supplies the definitions above. A direct numeric check using the actual pure bridge/reconciliation helpers passed PI log-level preservation and common currency-scale invariance, and demonstrated M != B. The source-tracing step itself performed no new fit or runtime implementation. The subsequent floor repair is committed as recorded below; no registered macro experiment was run and the adapter has not been tested or implemented.
 
-## Subsequent resolved-state floor check
+## Historical floor finding before b1db808e
 
-The previously pending scale check is now complete. Initializing the existing
+Before the repair, the resolved-state scale check found the following. Initializing the existing
 2014 FRA cache with active resolved configuration gives scale=5000, H=5760,
 monthly SMIC=1128.70 and a quarterly floor per CU=1693.05. Income/assets are in
 expanded monetary units; that same floor must be 8465250 per CU in those units.
-The canonical helper has no expansion at initialization or refresh. This confirms
-a unit mismatch; earlier statements above that it was uncertified are historical.
+At that baseline there was no expansion before the canonical floor helper.
+This established the unit mismatch that was subsequently fixed in b1db808e.
 
 The same raw initial behavioural-income rows bind for 65 households at the old
 threshold and 218 at the expanded threshold. This is a mechanical comparison,
 not a corrected-model simulation. GitNexus marks the canonical-floor change HIGH
 risk, with construction and per-pass refresh as direct callers. The shared floor
-also affects PI, support and goods shortfall. PLAN now puts a reviewed canonical
-unit repair before the income/state adapter; no runtime change has been made.
+also affects PI, support and goods shortfall. The canonical repair was completed
+before the pending adapter; this paragraph records the historical diagnosis.
 Evidence/reproduction: vault outputs/implementation/2026-11-04-floor-units/.
 
 ## Floor repair implemented and verified
 
-The separate floor-unit increment now passes the population scale to
+The floor-unit increment committed as b1db808e passes the population scale to
 _select_net_smic_base at construction. It expands only the external INSEE monthly
 source; net_smic_base thereafter carries model monetary units, so floor refreshes
 reuse it without another multiplication. Already-expanded benefit fallbacks keep
@@ -119,3 +119,5 @@ CPI/fallback/planning/reset regressions and the two-period accounting integratio
 Production-config initialized FRA now has model-unit quarterly floor8465250 per CU
 and ordinary-unit floor1693.05. No adapter implementation or registered macro run.
 Evidence: vault outputs/implementation/2026-11-04-floor-unit-repair/.
+Experiment sizes/accounts/seeds/horizon/criteria and the residual comparison remain
+deferred as specified in PLAN. This document does not authorize the next increment.

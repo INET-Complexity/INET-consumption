@@ -1,7 +1,8 @@
 # Implement the retained consumption rule in INET
 
 Branch: `feature/spec4-consumption-rule`, created from main `a3d48e5c`.
-Plan re-audited against the working code on 4 November 2026.
+Final preparation/consistency review: 4 November 2026, against INET b1db808e.
+This review changes documentation only; the adapter has not been implemented.
 
 Update the existing `CreditAugmentedConsumption` and
 `run_model/config/consumption_paper_parameters.yaml:desired_consumption.credit_augmented`
@@ -9,9 +10,9 @@ directly. The earlier separate calibration-block/alternate-selector proposal is
 superseded. Work remains on this branch, one reviewed step at a time. No automatic
 refitting, push, merge or changes to policy assumptions.
 
-## Floor-unit increment completed — 4 November 2026
+## Current status and next implementation increment
 
-Canonical floor repair implemented locally in country.py: from_pickled_country
+Canonical floor repair is committed in b1db808e. In country.py, from_pickled_country
 passes the population scale to _select_net_smic_base, which expands the external
 INSEE monthly level once. net_smic_base is stored in model monetary units;
 initialization and both planning-pass refreshes reuse it without another scale.
@@ -21,19 +22,33 @@ No household debt, benefit-payment formula, consumption coefficient or YAML edit
 809 country/household/credit-market tests pass, including 15 new scale/frequency/
 CPI/fallback/two-pass/reset regressions and the existing two-period production
 household accounting integration. Ruff lint/format and whitespace pass. An
-initialized production-config FRA check yields model monthly base5643500 and
-quarterly floor8465250 per CU, or1693.05 in ordinary currency units, with218 initial
+initialized production-config FRA check yields model monthly base 5643500 and
+quarterly floor 8465250 per CU, or 1693.05 in ordinary currency units, with 218 initial
 raw behavioural-income observations below the corrected threshold. No registered
-macro experiment, fit, commit/push/merge. GitNexus refreshed/change scope reviewed.
+macro experiment or new fit. User-requested local commits: INET b1db808e and vault
+17e835f6; no push or merge. GitNexus change scope was reviewed before committing.
 Evidence: vault outputs/implementation/2026-11-04-floor-unit-repair/.
 
-Review this increment before starting the income/state adapter. The agreed
-smoothed-base, PI-rebase and opening-snapshot implementation remains pending.
+**The income/state adapter is the first implementation increment afterward.**
+Here, afterward means after this final plan consistency review. The floor-unit prerequisite is complete
+and committed. The adapter is pending and is distinct from target integration.
+See the deliverables and acceptance gates under section 3. Detailed planning
+for this increment is in [INCREMENT-1.md](INCREMENT-1.md). Its three audit
+clarifications are now confirmed and recorded: explicit current-price matching,
+once-per-period capture with duplicate/stale rejection, and same-pass M/q payload.
+Implementation remains pending.
+PLAN remains the governing guide; expand later increments one at a time after
+the preceding review. No adapter implementation is started by creating its plan.
 
-## 1. Implemented and verified
+Source tracing and the input/timing table are complete. No further core policy
+discussion is required before adapter work; return to the user if implementation
+reveals a substantive ambiguity. Experiment registration and the later residual
+comparison remain deferred. This documentation review does not start the adapter.
 
-The active block supplies the retained notebook fit:9679 French households,
-notebook commit4783467, result results-a8932a0a7eeb.
+## 1. Existing calibration wiring and its verification limits
+
+The active block supplies the retained notebook fit: 9679 French households,
+notebook commit 4783467, result results-a8932a0a7eeb.
 
 - Fitted intercept, consumption residual SD, accessibility weights/midpoint and
   separate LFA gamma-map endpoints/midpoint.
@@ -63,7 +78,9 @@ regressors instead. The LFA cap remains as currently coded following the user's
 that a cap is necessary for the bounded logistic map. No LFA policy change is
 made by this re-audit.
 
-**Evidence already obtained:**529 household/configuration tests and Ruff pass.
+**Earlier calibration-wiring evidence (fff0e869):** 529 household/configuration
+tests and Ruff passed. The floor-unit increment's 809-test result is recorded
+separately above; neither result establishes pending adapter equivalence.
 With identical annual-income states, supplied PI log ratios and epsilon=0,
 raw alpha/gamma/log propensity match the notebook for all9679 retained
 households (maximum errors about7e-16). No retained household is clipped in
@@ -76,18 +93,20 @@ probe, residual initialization, ECM dynamics or realised macro spending. The
 replay directly calls `_evaluate_target` with an explicit annual/current-income
 state; it does not exercise the active rolling-denominator pipeline.
 
-## 2. Existing runtime choices still in force
+## 2. Current runtime versus agreed requirements
 
-These settings/mechanisms have not been estimated by the static fit:
+The table describes code at b1db808e. It is not a list of undecided policies.
+Sections 3 and 4 contain the agreed requirements still to implement or verify;
+the static fit does not estimate the temporal/dynamic policies.
 
 | Mechanism | Current behavior | What must be established |
 |---|---|---|
-| Income ratios | Annualized four-quarter geometric runtime income | Match economic definitions and distinguish ordinary transitions from conditional experiments |
+| Income base | Current income in level/rate terms; positive-only four-period geometric history for wealth ratios | Implement the agreed common smoothed base, historical floors and consistent deflation |
 | Runtime formula-MPC probe | Reuses the baseline ratio denominator AND supplied PI log ratio in the perturbed evaluation | A notebook fixed-Yp experiment instead changes p=log(Yp/Y) when Y changes; define and label both response objects |
-| Coefficient timing | `_evaluate_target` recomputes alpha/gamma from the ratios it receives | Specify which maps are held fixed inside probes and which update between simulation dates |
-| Financial/housing stock timing | Caller passes `prev` stocks; planning-pass comments identify financial wealth terms as t-2 | Trace actual series positions; do not assume that every `prev` is the desired economic t-1 |
+| Coefficient timing | `_evaluate_target` recomputes alpha/gamma from supplied ratios | Retain ordinary per-evaluation updates; implement the explicitly conditioned probe operators separately |
+| Financial/housing stock timing | Traced `prev` wealth inputs can read t-2 at both target passes | Implement shared copies of the opening t-1 stocks; preserve debt coverage and main-residence selection |
 | Residuals | `idiosyncratic_persistence: initial_state` backs out epsilon from the initial budget and deterministic target | The configured sigma does NOT enforce the initial residual dispersion; the intercept is offset at the initial anchor |
-| Dynamics | ECM speed .56, real-rate coefficient -.72, cashflow -.003, uncertainty -.005, growth bound ±.5 log units | Keep these additions distinct from the calibrated static target; decide explicitly whether they remain |
+| Dynamics | ECM .56, real-rate level -.72, cashflow -.003, uncertainty -.005, beta1=0, growth guard ±.5 | Retain these agreed policies; integrate common-base denominators and verify/report each contribution |
 | Accounting | Gross total target, existing real-budget state, housing carve-outs, goods VAT conversion, financing/settlement | Verify unchanged identities with the newly wired target |
 
 HFCS `disp_geom_avg_income` is a same-year component blend, not evidence for a
@@ -100,7 +119,7 @@ Source anchors: `consumption.py` `_evaluate_target`, `compute_target_consumption
 `_initial_state_epsilon` and `_geometric_average_income`; `households.py`
 `compute_target_consumption`. Refresh impact analysis before changing symbols.
 
-## 3. Next step — agree and test the income/state contract
+## 3. Agreed income/state contract and implementation sequence
 
 Source tracing is recorded in [INPUT-TIMING.md](INPUT-TIMING.md), including the
 source ledger, both planning passes, income definitions, units, stock dates and
@@ -124,30 +143,12 @@ Opening HH debt includes interest arrears, while contractual borrowing-rate
 weights use principal only. Preserve these existing coverage definitions and
 align their dates; do not silently force them to the same numeric exposure.
 
-Resolved-state floor check completed on 4 November: with the existing 2014 FRA
-cache and active resolved configuration, scale=5000 and H=5760. The canonical
-quarterly floor is 1693.05 per CU, unexpanded; income/assets are expanded. Its
-consistent value in model monetary units is 8465250 per CU. This is a confirmed
-unit mismatch, not a new subsistence policy. Evidence and reproduction:
-`vault-starter-kit/knowledge-vault/outputs/implementation/2026-11-04-floor-units/`.
-
-User approved this repair in the plan on 4 November 2026, after the independent
-double-check. Precede adapter work with a separate reviewed canonical-floor unit
-repair. This approval records planned scope; runtime implementation followed in the separately verified floor-unit
-increment recorded above.
-Apply population expansion exactly once at initialization and per-pass refresh;
-preserve the .5 SMIC/CU/time-frequency policy. The shared floor also feeds the
-monetary bridge, financing support and goods subsistence checks, so a local
-consumption-only rescaling would leave inconsistent definitions. GitNexus reports
-HIGH upstream impact (2 direct callers, 5 affected symbols at depth 3). Required
-checks include scale=1/5000, both planning passes, initial income/PI, support/fiscal
-identities and no duplicate scaling. Verify monthly/quarterly/annual conversion,
-nonunit initial CPI, and reset behavior. Check other-country/fixture fallback
-SMIC units explicitly so already-expanded fallback values are not scaled twice.
-Keep the physical floor .5 * monthly_net_SMIC * months_per_period * CU unchanged;
-expand its monetary representation once. Review the repair and its regression
-results before beginning the income/state adapter. This repair is now implemented and verified as recorded above; adapter work
-remains pending.
+The floor-unit prerequisite is complete in b1db808e: external INSEE SMIC is
+expanded once at selection and stored in model monetary units; initialization
+and refresh reuse that base. Already-expanded benefit fallbacks retain their
+existing proxy/frequency treatment. Scale, frequency, CPI, fallback, both-pass,
+reset and affected accounting checks passed. Historical floor-array alignment
+is still part of the adapter; do not rescale the repaired base again.
 
 ### Agreed opening-stock contract — 4 November 2026
 
@@ -166,8 +167,8 @@ exposures consistently in the borrowing-rate weighting and cashflow index;
 rate/repricing inputs retain their separately declared timing. This fixes stock
 exposures, not all current-period income, belief or rate inputs between passes.
 
-Trace actual append/replace behavior and document each source series/date before
-changing accessors. Do not mechanically replace every prev with current. Capture
+Follow the completed append/replace trace in INPUT-TIMING.md and verify it with
+fixtures when changing accessors. Do not replace every prev with current. Capture
 or retrieve the opening snapshot so intervening current-period balance updates
 cannot contaminate the authoritative pass. At startup identify the supplied
 initial balance sheet as the opening state. Main-residence selection must remain
@@ -203,26 +204,30 @@ p_(i,t) = log(yp_quarterly_(i,t) / b_(i,t))
 - Use b for the quarterly consumption-level multiplier and 4*b for all wealth
   ratios and the real-borrowing-rate debt/income weights. Keep fixed training
   references and the existing regressor bounds.
-- Rebase the supplied permanent-income log ratio to b while preserving the
-  intended permanent-income level. Verify that level's frequency, income concept
-  and bridge to the supplied ratio; this decision does not re-estimate beliefs.
+- Rebase the supplied permanent-income log ratio using the resolved monetary
+  M-based formula above. Preserve its implied real quarterly log-income proxy,
+  with the common forecast added once. Do not re-estimate beliefs.
 - Unemployment benefits should normally keep income positive. The floor is a
   fallback; persist/report its binding frequency rather than assume it never binds.
 
-The intended quarterly raw target, before existing numerical guards, is:
+The intended quarterly raw target, before existing numerical guards, is below.
+All stocks/debts in these equations are opening nominal values divided by the
+current planning deflator d_t=C_t/C_0. NLA uses arrears-inclusive ledger debts;
+D_principal uses the separate contractual-principal exposures for rate weights.
+Apply configured wealth-ratio bounds before maps and W.
 
 ```
 W = gamma * NLA/(4*b) + .022 * IFA/(4*b) + .013 * HA/(4*b)
-r = (real_rate_consumer * debt_consumer
-     + real_rate_mortgage * debt_mortgage) / (4*b)
+r = (real_rate_consumer * D_consumer_principal
+     + real_rate_mortgage * D_mortgage_principal) / (4*b)
 log(C_star) = log(b) + alpha0 - .72*r + alpha*p
               + F(W, 1-alpha) + epsilon
 ```
 
 Apply the configured ratio winsorization before maps and W. Preserve the real
 borrowing-rate term in the long-run target, including annualized real-rate units;
-it is distinct from the short-run rate-change cashflow term. Debt dates still
-require the input/timing trace. CM supports debt/income weighting; annual-income
+it is distinct from the short-run rate-change cashflow term. Use the traced
+opening dates and coverage above. CM supports debt/income weighting; annual-income
 normalization and household contractual rates are runtime conventions, and exact
 coefficient-scale equivalence to CM has not been established. Using smoothed
 income in those weights is an explicit adaptation.
@@ -272,7 +277,10 @@ NLA. Use one-sided checks at kinks. The original common-scaling income-elasticit
 formula and its nonnegativity argument cannot simply be assumed for every capped
 state. A sign difference must be decomposed, not hidden by an extra MPC clip.
 
-**Acceptance gate:**
+**Target-integration acceptance gate (increment 2):**
+
+The adapter-specific gate is defined in the increment list below. These response
+and live-target checks follow adapter review, before experiment registration.
 
 - The input/timing table and conditioning decisions are explicit.
 - The agreed smoothed-base contract is exercised through both planning passes,
@@ -300,29 +308,50 @@ state. A sign difference must be decomposed, not hidden by an extra MPC clip.
 
 ### Reviewed implementation increments
 
-0. **Canonical floor units — implemented, review pending:** expand the external
-   INSEE base once; preserve existing model-unit fallback conventions. 809 tests,
-   initialized FRA check and Ruff pass. Review before adapter work.
-1. **Income/state adapter:** implement the traced B/S/price history alignment,
-   M-based PI rebase and copied opening-stock/principal exposures. Verify
-   corrected subsistence units, initialization/reset and both passes.
-   Deliver the explicit input object/diagnostics and meaningful timing/unit tests.
-2. **Target/dynamic integration:** use b consistently in level, wealth and rate
-   terms; preserve agreed map updates, residuals, ECM/extra channels, guards and
-   accounting. Add conditional probe operators distinct from ordinary runtime
-   updates; reproduce frozen-sample responses and calibration-only .14. Verify
-   existing configurations and accounting regressions.
-3. **Registered paired validation:** after reviewing increments 1 and 2, specify
-   shocks/accounts/seeds/horizon/budget and numerical/economic criteria, smoke,
-   then the agreed run. Compare within-revision responses before revisions.
-   Report caps, floors, growth-guard binding and financing/realized paths.
+The canonical floor-unit prerequisite is completed and committed as b1db808e;
+it is not a pending increment. The remaining order is:
 
-Review each increment before advancing. Later once-drawn-residual sensitivity
-remains deferred; no runtime implementation or simulation is started by the
-source-tracing/documentation step. Refresh GitNexus impact analysis before symbol
-edits and run the required change analysis before any directed commit.
+1. **Income/state adapter — first implementation increment after this review.**
+   Detailed scope, interfaces, lifetime and tests: [INCREMENT-1.md](INCREMENT-1.md).
+   Construct an inspectable input object and diagnostics from aligned behavioural
+   income B, historical nominal floors S, selected CPI/C_0 histories, the M-based
+   PI rebase and copied opening-stock/principal exposures. Preserve reset and
+   both-pass lifetimes. Deliver the adapter, source/caller mapping and tests.
+   **Acceptance:** independent arithmetic checks for b and PI log-level
+   preservation; matched history/floor/price dates; nonunit C_0; startup and
+   invalid/missing input cases; distinct t-2/t-1/t stock fixtures; revised
+   second-pass income; unchanged opening arrays despite intervening mutations;
+   debt coverage, currency-scale and reset checks. Existing relevant regressions
+   pass. Adapter construction does not itself establish active target parity;
+   activation of its inputs in all target/rate terms belongs to increment 2.
+2. **Target/dynamic integration — after adapter review.** Wire the approved
+   adapter outputs into the existing CreditAugmentedConsumption; use b in the
+   level and a*b in wealth/rate/cashflow ratios, with a=12/time_unit. Preserve the
+   agreed map/residual/ECM/extra-channel/guard and accounting policies. Deliver
+   active caller/evaluator wiring and separately named conditional probe operators.
+   **Acceptance:** the response gate above, residual/channel decomposition in
+   section 4 and equation/accounting checks in section 5 pass. Reproduce the
+   frozen-sample calibration-only .14 operator, never enforce it in simulation.
+   Run relevant household/configuration regressions before review.
+3. **Register and run paired validation — after integration review.** Record
+   transfer/stock sizes, affected households, units, accounts/counterparts, shock
+   timing, seeds, horizon, resource budget, abort conditions and numerical/economic
+   assessment criteria before any run. These details remain deliberately unset
+   until equation and accounting checks pass. Deliver the registered specification,
+   smoke results, then the agreed full-budget evidence.
+   **Acceptance:** section 5's paired-state protocol, accounting and declared
+   numerical/economic criteria; report caps/floors/growth-guard binding and
+   target/desired/financed/realised paths with all failures disclosed.
 
-## 4. Then review residuals and the dynamic wrapper
+Review each increment before advancing. Source tracing and this final consistency
+review are preparation; they do not implement the adapter or start experiments.
+The queued once-drawn-residual sensitivity is outside these increments and waits
+until income/transmission validation. Refresh GitNexus impact analysis before
+symbol edits and run change analysis before any directed commit. For monthly/
+annual unit fixtures use a=12/time_unit; this is a units check, not a decision to
+re-estimate quarterly dynamics or change the four-quarter runtime window.
+
+## 4. Retained residual and dynamic policies: integration checks
 
 Deliver the exact initialization equation and a decomposition of raw target,
 residual, real-rate term, ECM gap, cashflow/uncertainty additions and growth guard.
@@ -342,7 +371,7 @@ coefficient zero. These additions are existing runtime policies, not coefficient
 estimated by the retained static calibration.
 
 ```
-cashflow_index = delta_nominal_consumer_debt_rate * lagged_consumer_debt / (4*b)
+cashflow_index = delta_nominal_consumer_debt_rate * D_consumer_ledger_real_open / (4*b)
 delta_log_C_desired = .56 * (log(C_star) - log(C_desired_previous))
                       - .003 * cashflow_index - .005 * delta_uncertainty
 ```
@@ -363,33 +392,32 @@ change to [-.5, .5]. Report its binding frequency in baseline and shock runs;
 it is a guard on desired consumption growth, not a bound on realised spending.
 Keep its diagnostics separate from wealth-ratio caps and logarithmic-tail entry.
 
-After validating the income contract and runtime transmission, compare this
-policy with a once-drawn fixed residual, epsilon_i ~ N(0, fitted_sigma^2), as a
-separate registered initialization sensitivity. Assess initial target gaps,
+After validating the income contract and runtime transmission, compare the
+retained initial_state residual policy with a once-drawn fixed residual,
+epsilon_i ~ N(0, fitted_sigma^2), as a separate registered initialization sensitivity. Assess initial target gaps,
 transition paths, consumption dispersion and financing effects with controlled
 random seeds. This later comparison is queued, not authorized to run now; no
 quarterly iid residual is selected. The static fit does not identify persistence.
 
-**Acceptance gate:** residual mean/dispersion and the effect of changing the
-intercept/sigma are shown under the chosen policy. Baseline/shock evaluations
+**Integration acceptance gate:** residual mean/dispersion and the effect of
+changing the intercept/sigma are shown under the chosen policy. Baseline/shock evaluations
 reuse the intended residual/state. Pure target changes are distinguished from
 new dynamic-policy changes. Existing policies remain until explicitly revised.
 
-The active initial_state policy computes epsilon once from the initial budget
-and deterministic target, then holds it fixed for that household. It is not a
-random draw or a quarterly innovation; fitted sigma does not impose its
-cross-sectional dispersion. This is the retained policy for the present
-integration; a later initialization comparison will inform any revision.
+The retained epsilon is not a random draw or quarterly innovation; fitted sigma
+does not impose its cross-sectional dispersion. A later initialization comparison
+may inform a revision; it is not a prerequisite for adapter/integration work.
 
-## 5. Accounting checks and registered paired runs
+## 5. Accounting checks, then registered paired runs
 
 First verify the existing total-consumption/rent/imputed-rent/VAT/credit identities
 on the changed function, including initial and later periods and the two planning
 passes. Main-residence wealth selection must not silently remove other-property
 rental income or duplicate an existing housing carve-out.
 
-Then register a small paired baseline/transfer/stock experiment: pinned main
-baseline `a3d48e5c` versus the branch, identical inputs/seeds, stated shock,
+Only after these equation/accounting checks pass, register a small paired
+baseline/transfer/stock experiment: pinned main baseline `a3d48e5c` versus the
+branch, identical inputs/seeds, stated shock,
 horizon, budgets and predeclared plausibility criteria. Run a short smoke before
 the agreed full budget. Compare raw target, desired budget, requested goods,
 realised goods/total/cash spending, financing and subsequent paths separately.
@@ -427,8 +455,9 @@ MPC is not required to equal first-quarter realised MPC. No automatic refit.
 
 ## 6. Final review and merge decision
 
-Review the complete effective credit_augmented YAML and code diff against main,
-including live input definitions, all active guards and initial-state policies.
+This is the later production/merge review, not the completed preparation review.
+Review the complete effective credit_augmented YAML and code diff against pinned
+main a3d48e5c, including live input definitions, all active guards and initial-state policies.
 Report exactly what changed, unchanged mechanisms, reproduction commands,
 failures and limitations. Keep the previous main commit as the rollback reference;
 no extra active parameter block is needed. Commit/push/merge only as directed.

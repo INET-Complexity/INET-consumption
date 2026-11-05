@@ -45,6 +45,7 @@ from macro_data.processing.synthetic_firms.firm_tools import (
     function_parameters_dependent_initialisation,
     initialise_basic_firm_fields,
     initialise_basic_firm_fields_compustat,
+    productivity_of_installed_capital,
 )
 from macro_data.processing.synthetic_firms.synthetic_firms import SyntheticFirms
 from macro_data.readers.default_readers import DataReaders
@@ -232,7 +233,10 @@ class DefaultSyntheticFirms(SyntheticFirms):
         )
         total_firm_debt = readers.eurostat.get_total_nonfin_firm_debt(country_name, year) * exchange_rate_from_eur
 
-        capital_inputs_productivity_matrix = industry_data["capital_inputs_productivity_matrix"].values
+        capital_inputs_productivity_matrix = productivity_of_installed_capital(
+            industry_data["capital_inputs_productivity_matrix"].values,
+            firm_configuration.capital_inputs_utilisation_rate,
+        )
         intermediate_inputs_productivity_matrix = industry_data["intermediate_inputs_productivity_matrix"].values
         if "capital_input_use_matrix" in industry_data:
             capital_input_use_matrix = industry_data["capital_input_use_matrix"].values

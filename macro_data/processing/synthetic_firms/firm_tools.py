@@ -438,6 +438,17 @@ def initialise_basic_firm_fields(
     return firm_data
 
 
+def productivity_of_installed_capital(
+    capital_inputs_productivity_matrix: np.ndarray, capital_inputs_utilisation_rate: float
+) -> np.ndarray:
+    """Rescale capital productivity from output per unit of used capital to output per unit of installed capital.
+
+    The capital stock data is already the installed stock. With this productivity, the initial stock
+    (production / productivity / utilisation) equals the data, and capacity stays at production / utilisation.
+    """
+    return capital_inputs_productivity_matrix / capital_inputs_utilisation_rate
+
+
 def function_parameters_dependent_initialisation(
     firm_data: pd.DataFrame,
     intermediate_inputs_productivity_matrix: np.ndarray,

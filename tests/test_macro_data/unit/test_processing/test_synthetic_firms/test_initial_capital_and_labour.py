@@ -2,10 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from macro_data.configuration.region import Region
 from macro_data.processing.synthetic_firms.firm_tools import (
     function_parameters_dependent_initialisation,
     productivity_of_installed_capital,
 )
+from macro_data.readers.util.industry_extraction import _labour_compensation_lcu
 
 
 def _initialise(capital_productivity: np.ndarray, utilisation: float) -> np.ndarray:
@@ -42,3 +44,25 @@ def test__initial_stock_equals_installed_capital_and_capacity_keeps_slack():
 
 def test__infinite_productivity_stays_infinite():
     assert productivity_of_installed_capital(np.array([[np.inf]]), 0.85)[0, 0] == np.inf
+
+
+def _vectors() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "Labour Output Ratio": [0.5, 0.05],
+            "Output in LCU": [100.0, 80.0],
+            "Labour Compensation": [200.0, 16.0],
+        },
+        index=["K", "L"],
+    )
+
+
+def test__real_estate_labour_keeps_d1_level_after_rents_leave_output():
+    labour = _labour_compensation_lcu("FRA", _vectors(), yearly_factor=4.0)
+    assert labour == pytest.approx([50.0, 16.0e6 / 4.0])
+
+
+def test__regions_keep_the_labour_ratio():
+    region = Region.from_code("FRA_FR1")
+    labour = _labour_compensation_lcu(region, _vectors(), yearly_factor=4.0)
+    assert labour == pytest.approx([50.0, 4.0])

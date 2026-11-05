@@ -11,6 +11,24 @@ from macro_data.readers.socioeconomic_data.wiod_sea_data import WIODSEAReader
 from macro_data.readers.util.capital_depreciation import load_eurostat_capital_depreciation_data
 
 
+def _labour_compensation_lcu(
+    country_name: Country | Region,
+    industry_vectors: pd.DataFrame,
+    yearly_factor: float,
+) -> np.ndarray:
+    """Labour compensation per period from Eurostat ratios, with real estate kept at its D1 level.
+
+    The ratios are computed on Eurostat output. Real estate output in the model excludes imputed and
+    actual rents, which employ nobody, so applying the ratio would shrink its wage bill with them
+    (macro-main #115). Regions keep the ratio because the D1 level is national.
+    """
+    labour_lcu = industry_vectors["Labour Output Ratio"].values * industry_vectors["Output in LCU"].values
+    if not isinstance(country_name, Region) and "L" in industry_vectors.index:
+        real_estate = industry_vectors.index.get_loc("L")
+        labour_lcu[real_estate] = industry_vectors["Labour Compensation"].iloc[real_estate] * 1e6 / yearly_factor
+    return labour_lcu
+
+
 def compile_industry_data(
     year: int,
     readers: DataReaders,
@@ -96,7 +114,7 @@ def compile_industry_data(
             for column in capital_depreciation_data.columns:
                 industry_vectors[column] = capital_depreciation_data[column].reindex(industry_vectors.index).values
         if depreciation_mode == "eurostat_cfc":
-            labour_lcu = industry_vectors["Labour Output Ratio"].values * industry_vectors["Output in LCU"].values
+            labour_lcu = _labour_compensation_lcu(country_name, industry_vectors, yearly_factor)
             production_taxes_lcu = (
                 industry_vectors["Production Tax Output Ratio"].values * industry_vectors["Output in LCU"].values
             )

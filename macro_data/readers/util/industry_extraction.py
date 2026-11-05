@@ -29,6 +29,15 @@ def _labour_compensation_lcu(
     return labour_lcu
 
 
+def _production_taxes_lcu(industry_vectors: pd.DataFrame) -> np.ndarray:
+    """Firm taxes per period: the input-output tax on intermediate use plus D29X39.
+
+    The input-output row sits outside value added and D29X39 inside it, so firms pay both.
+    """
+    d29x39_lcu = industry_vectors["Production Tax Output Ratio"].values * industry_vectors["Output in LCU"].values
+    return d29x39_lcu + industry_vectors["Taxes Less Subsidies in LCU"].values
+
+
 def compile_industry_data(
     year: int,
     readers: DataReaders,
@@ -115,14 +124,14 @@ def compile_industry_data(
                 industry_vectors[column] = capital_depreciation_data[column].reindex(industry_vectors.index).values
         if depreciation_mode == "eurostat_cfc":
             labour_lcu = _labour_compensation_lcu(country_name, industry_vectors, yearly_factor)
-            production_taxes_lcu = (
-                industry_vectors["Production Tax Output Ratio"].values * industry_vectors["Output in LCU"].values
-            )
+            production_taxes_lcu = _production_taxes_lcu(industry_vectors)
             industry_vectors["Labour Compensation in LCU"] = labour_lcu
             industry_vectors["Labour Compensation in USD"] = labour_lcu / exchange_rate
             industry_vectors["Taxes Less Subsidies in LCU"] = production_taxes_lcu
             industry_vectors["Taxes Less Subsidies in USD"] = production_taxes_lcu / exchange_rate
-            industry_vectors["Taxes Less Subsidies Rates"] = industry_vectors["Production Tax Output Ratio"]
+            industry_vectors["Taxes Less Subsidies Rates"] = (
+                production_taxes_lcu / industry_vectors["Output in LCU"].values
+            )
 
         # Record all
         industry_data[country_name] = {

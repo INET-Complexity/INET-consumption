@@ -493,23 +493,14 @@ FRA:
       household_capital_formation_rate: 0.0
       # Provisional firm-side rate applied once to realised capital-goods purchases.
       firm_capital_formation_rate: 0.24856698371134814
-      # Scale factor on the shared production-tax vector. 5.683422794 matches
-      # France's 15.8% 2014 S13 products/production-tax benchmark at period 1,
-      # but production tax is deducted before corporate taxable profit, so
-      # that scale erodes corporate tax revenue with nothing offsetting it:
-      # a full t_max=50 run diverges to a 51%-of-GDP deficit and 4.4x annual
-      # GDP debt by period 50 (single-seed 68; see
-      # knowledge-vault/wiki/debugging/2026-08-27-fiscal-and-consumption-boundary-reconciliation.md).
-      # 2.0 is the best full-horizon candidate found in a 4-point sweep
-      # (1.0/2.0/3.5/5.683422794): deficit 24.9%->21.0% and debt 1.09x->2.84x
-      # annual GDP, both improving over the horizon rather than exploding.
-      # It only reaches a 9.82% products/production-tax share, well short of
-      # the 15.8% target -- that gap is open, not resolved, and the target is
-      # not reachable by this scale alone without offsetting the corporate-tax
-      # erosion. Multi-seed validated (seeds 15/68/232, t_max=50): deficit
-      # converges to 21.0-21.2% of GDP and debt to 2.84-2.93x annual GDP in
-      # all three, no seed-to-seed divergence.
-      production_tax_vector_scale: 2.0
+      # Scale factor on the shared production-tax vector. The vector now holds
+      # both the input-output tax on intermediate use and D29X39, so the 2.0
+      # that stood in for the missing tax is no longer needed. Tested on 20
+      # seeds, t_max=50: deficit 13.7% of GDP and debt 2.53x annual GDP at
+      # the end of the run, corporate tax 5.1% of GDP, against 17.6%, 3.03x
+      # and 4.6% before the initial-state fixes. See working doc C17-C19 in
+      # knowledge-vault/wiki/debugging/2026-11-05-initial-state-working-doc.md.
+      production_tax_vector_scale: 1.0
     functions:
       social_benefits:
         name: ConstantSocialBenefitsSetter

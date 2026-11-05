@@ -7,7 +7,7 @@ from macro_data.processing.synthetic_firms.firm_tools import (
     function_parameters_dependent_initialisation,
     productivity_of_installed_capital,
 )
-from macro_data.readers.util.industry_extraction import _labour_compensation_lcu
+from macro_data.readers.util.industry_extraction import _labour_compensation_lcu, _production_taxes_lcu
 
 
 def _initialise(capital_productivity: np.ndarray, utilisation: float) -> np.ndarray:
@@ -66,3 +66,14 @@ def test__regions_keep_the_labour_ratio():
     region = Region.from_code("FRA_FR1")
     labour = _labour_compensation_lcu(region, _vectors(), yearly_factor=4.0)
     assert labour == pytest.approx([50.0, 4.0])
+
+
+def test__firms_pay_intermediate_use_tax_and_production_tax():
+    vectors = pd.DataFrame(
+        {
+            "Production Tax Output Ratio": [0.1, -0.05],
+            "Output in LCU": [100.0, 80.0],
+            "Taxes Less Subsidies in LCU": [3.0, 2.0],
+        }
+    )
+    assert _production_taxes_lcu(vectors) == pytest.approx([13.0, -2.0])

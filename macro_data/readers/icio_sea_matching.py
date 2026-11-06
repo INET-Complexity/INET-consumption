@@ -196,7 +196,7 @@ def _reconcile_value_added(
     )
     sea_reader.df.loc[mask, "Labour Compensation"] *= va_factor
     sea_reader.df.loc[mask, "Capital Compensation"] *= va_factor
-    sea_reader.df.loc[mask, "Capital Stock"] *= va_factor * va_factor
+    sea_reader.df.loc[mask, "Capital Stock"] *= va_factor
 
 
 def _match_country_iot_with_sea2(

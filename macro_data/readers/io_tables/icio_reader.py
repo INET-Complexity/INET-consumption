@@ -58,17 +58,21 @@ from macro_data.readers.io_tables.mappings import ICIO_AGGREGATE, ICIO_ALL
 from macro_data.readers.io_tables.util import aggregate_df
 from macro_data.readers.util.capital_depreciation import build_cfc_output_replacement_matrix
 
+# Share of L's inputs that belongs to housing rents. Set so that L's inputs are 46% of its output
+# once rents are removed, the Orbis ratio for French real estate firms in 2014.
+HOUSING_INPUT_SHARE = 0.27
+
 
 def move_housing_inputs(iot: pd.DataFrame, country: str, rental_share: float, industries: list[str]) -> pd.Series:
     """Move the inputs of rental services from sector L to household consumption.
 
     Rents are gross, so part of each rent pays for intermediate inputs. Each of L's input rows moves
-    by ``rental_share``, the share of L's output that is rentals.
+    by ``rental_share``.
 
     Args:
         iot (pd.DataFrame): Aggregated input-output table, changed in place.
         country (str): Country whose households buy the inputs.
-        rental_share (float): Rentals as a share of L's output before they are removed.
+        rental_share (float): Share of L's inputs that belongs to housing rents.
         industries (list[str]): Industry codes, which identify the input rows.
 
     Returns:
@@ -306,11 +310,10 @@ class ICIOReader:
                 imputed_lcu, actual_lcu = rental_services[country_name]
                 lcu_per_usd = exchange_rates.from_usd_to_lcu(country_name, year)
                 rent_cell = (country_name, "L"), (country_name, "Household Consumption")
-                sector_output = agg_df.loc[(country_name, "L"), agg_df.columns.get_level_values(0) != "TOTAL"].sum()
                 imputed, actual = remove_rental_services(agg_df.at[rent_cell], imputed_lcu, actual_lcu, lcu_per_usd)
                 agg_df.at[rent_cell] -= imputed + actual
                 housing_inputs[country_name] = move_housing_inputs(
-                    agg_df, country_name, (imputed + actual) / sector_output, industries
+                    agg_df, country_name, HOUSING_INPUT_SHARE, industries
                 )
                 imputed_rents[country_name] = imputed / yearly_factor * lcu_per_usd
                 actual_rents[country_name] = actual / yearly_factor * lcu_per_usd

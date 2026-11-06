@@ -85,18 +85,10 @@ asset_returns:
 
 desired_consumption:
   credit_augmented:
-    # Single authoritative runtime consumption configuration.
-    # Wealth mapping and sigma_eps retain the previously active ten-moment
-    # HFCS fit (former v3); no alternative v1/v2 parameter blocks remain.
-    # Historical estimates remain available through Git history.
-    # Runtime choices below carry forward the user's intercept 0.25 and
-    # four-quarter smoothing. These are provisional, not a re-estimation.
-    # alpha_0=long_run_intercept, alpha_1=real_borrowing_rate_propensity,
-    # alpha_2=permanent_income_propensity; gamma_1=NLA, gamma_2=IFA,
-    # gamma_3=housing_wealth_propensity, gamma_4=house_price_propensity;
-    # beta_1=income_growth, beta_2=rate_cashflow, beta_3=uncertainty.
-    # Original mapping provenance: consumption_parameters_calibration.ipynb,
-    # 2014 n=9,859; objective 8.832928e+02; original intercept -0.3813.
+    # Retained MPC-notebook fit, 2014 France, n=9,679; results-a8932a0a7eeb.
+    # alpha0, accessibility weights/midpoints, gamma endpoints and sigma fitted
+    # jointly. Fixed IFA=.022, HA=.013; combined-W logarithmic tail tau=.95.
+    # Existing dynamic/learning/accounting settings remain explicit below.
     consumption_smoothing_fraction: 0.0
     consumption_smoothing_window: 12
     elasticity_of_substitution: 1.0
@@ -104,32 +96,30 @@ desired_consumption:
     income_belief_growth_clip_bound: 1.0
     uses_continuous_wealth_calibration: true
     uses_aligned_behavioural_income: true
-    long_run_intercept: 0.15              # provisional runtime level, not a new HFCS estimate
+    long_run_intercept: -0.3536169894042738
     real_borrowing_rate_propensity: -0.72  # alpha_1, unchanged (paper Table 1)
-    # Under the continuous mapping, alpha_2/gamma_1/gamma_4 come from the
-    # fitted maps below; these scalars are fallbacks when mapping is disabled.
+    # Alpha/gamma scalars are fallbacks when their maps are disabled.
+    # IFA and housing slopes below remain active fixed coefficients.
     permanent_income_propensity: 0.55      # alpha_2 fallback
     liquid_wealth_propensity: 0.14         # gamma_1 fallback
-    illiquid_wealth_propensity: 0.02       # gamma_2, STILL FIXED, not estimated
-    housing_wealth_propensity: 0.009       # gamma_4 fallback -- inert under mapping
+    illiquid_wealth_propensity: 0.022       # Fixed IFA slope in the retained calibration.
+    housing_wealth_propensity: 0.013        # Fixed main-residence housing slope; no housing map.
     rent_propensity: 1.0
     mortgage_debt_propensity: 0.03
     mortgage_payment_propensity: 1.0
     house_price_propensity: 0.0
     # gamma_3 stays disabled: the base-1.0-vs-base-100 HPI units problem
     # (issue #90) is unchanged by this recalibration.
-    income_growth_propensity: 0.15
+    income_growth_propensity: 0.0          # beta1 fixed at zero in the retained calibration.
     interest_rate_cashflow_propensity: -0.003
     uncertainty_propensity: -0.005
     partial_adjustment_speed: 0.56
+    # Legacy linear-wealth clip only; the logarithmic tail below replaces it.
     long_run_mpc_lower_bound: 0.0
     long_run_mpc_upper_bound: 2.0
-    # Idiosyncratic term, ESTIMATED JOINTLY with the maps. Larger than v2's
-    # historical 0.3308: it explains 74.6% of Var log(C/Y), leaving 25.4% to balance
-    # sheets plus permanent income. Still a FIXED HOUSEHOLD EFFECT -- the
-    # cross-section identifies the variance but not its persistence, so this
-    # remains a recorded modelling decision, not an estimate.
-    idiosyncratic_sd: 0.4256
+    # Estimated consumption residual SD. Persistence/initial anchoring below
+    # remains an existing runtime policy, not identified by the cross-section.
+    idiosyncratic_sd: 0.2887146213259912
     idiosyncratic_persistence: initial_state  # supported modes: fixed_effect, iid, initial_state
     price_floor: 1.0e-12
     income_floor: 1.0e-12
@@ -143,67 +133,39 @@ desired_consumption:
     income_denominator_window: 4           # quarterly periods: one year
     continuous_wealth_calibration:
       index_construction: raw_ratio
-      # FIXED by specification, not estimated. They multiply the RAW ratios, so
-      # they are coefficients on unnormalised regressors, NOT shares of the
-      # index: housing still contributes the largest average share of B despite
-      # carrying a smaller coefficient than NLA.
-      weight_net_liquid_assets: 0.70
-      weight_illiquid_financial_assets: 0.10
-      weight_housing_assets: 0.20
-      # One shared slope, three separately estimated midpoints. k = 43.9445 is
-      # implied by the fixed 10%-90% transition width of 0.10, not fitted.
-      alpha_2_steepness: 43.9445
-      alpha_2_midpoint: 0.3951            # c_alpha, interior (v2 pinned at 1.000)
-      gamma_1_steepness: 43.9445
-      gamma_1_midpoint: 0.1466            # c_gamma1
-      gamma_4_steepness: 43.9445
-      gamma_4_midpoint: 0.2771            # c_gamma4
-      alpha_2_low: 0.25
-      alpha_2_high: 0.70
-      gamma_1_low: 0.007                  # v2 used 0.05
-      gamma_1_high: 0.25
-      # NEW in v3, and the range SPANS ZERO. Like gamma_1 the map DECREASES in
-      # B, so the endpoints read high-B -> min, low-B -> max: the least
-      # accessible households carry the largest positive housing response, the
-      # most accessible a negative one. Weighted mean on the training wave is
-      # -0.0168.
-      gamma_4_low: -0.021
-      gamma_4_high: 0.021
-      # Realised support of each ratio on the 2014 CALIBRATION SAMPLE
-      # (n = 9,859) after the flag1 hard bounds and the flag2 [p1, p99] trim --
-      # the same sample, and the same construction, that produced the b_raw
-      # reference below. Derived by running the notebook's own
-      # prepare_household_frame() under its production SETTINGS, not
-      # reconstructed by hand; that derivation reproduces the notebook's
-      # reported b_raw reference [-4.2232, 7.6982] exactly, which is what
-      # pins these to the fit.
-      #
-      # An earlier revision took these from the POOLED sample (n = 29,688,
-      # all waves) while keeping the 2014 b_raw reference, so the clip and the
-      # normalisation came from different populations. They now share one.
-      #
-      # In the calibration these are TRIM outcomes (households outside are
-      # dropped); at runtime households cannot be dropped, so they become clip
-      # bounds. That is the intended translation, but it is a translation, not
-      # an identity.
-      #
-      # These are MARGINAL bounds, so the box they define is necessarily wider
-      # than the JOINT b_raw range below (0.7*-6.7304 = -4.71 against a b_raw
-      # min of -4.22): no single household attains all three extremes at once.
-      # That gap is intrinsic, not a mismatch, and the b_tilde clip to [0,1] is
-      # what reconciles the marginal box with the joint range.
-      net_liquid_assets_ratio_bounds: [-6.7304, 4.1814]
-      illiquid_financial_assets_ratio_bounds: [0.0, 8.5902]
-      housing_assets_ratio_bounds: [0.0, 23.5064]
-      # Fitted raw-score reference on the 2014 calibration sample
-      # (accessibility_normalization: calibration_sample) -- the same sample as
-      # the ratio bounds above. Frozen, never recomputed from the live household
-      # batch: a per-batch min/max would make a household's coefficients depend
-      # on which other households happen to be evaluated in the same call,
-      # including the income-perturbed MPC probe that compute_target_consumption
-      # runs to difference out the MPC.
-      b_raw_min: -4.2232
-      b_raw_max: 7.6982
+      housing_asset_concept: main_residence
+      weight_net_liquid_assets: 0.1469333869545077
+      weight_illiquid_financial_assets: 0.6007076736481923
+      weight_housing_assets: 0.2523589393972999
+      alpha_2_low: 0.1
+      alpha_2_high: 0.9
+      alpha_2_midpoint: 0.24438476276450258
+      alpha_2_steepness: 12.206803207423443  # 2*log(9)/0.36; fixed width.
+      gamma_1_input: lfa_y                 # Separate liquidity index, NOT accessibility.
+      gamma_1_low: 1.878422623867957e-17    # Saved zero-endpoint estimate.
+      gamma_1_high: 0.16063971874263064
+      gamma_1_midpoint: 0.4207298101555259
+      gamma_1_steepness: 12.206803207423443
+      # Frozen training references. Normalize after winsorizing wealth ratios.
+      b_raw_min: -0.9211417822265068
+      b_raw_max: 8.584034223960857
+      lfa_raw_min: 0.0
+      lfa_raw_max: 4.515874225190635
+      clip_accessibility_index: false      # The calibrated sigmoid itself is not clipped.
+      wealth_saturation_tau: 0.95          # Linear W <= tau*(1-alpha); logarithmic above.
+      # These bounds constrain ALL wealth-ratio uses: maps AND wealth terms.
+      # Weighted p1/p99 thresholds from the valid pre-trim 2014 pool, after
+      # hard bounds: NLA/Y [-10,10], IFA/Y [0,20], HA/Y [0,30].
+      # Calibration drops households outside any threshold; runtime instead
+      # winsorizes each ratio to the same explicit interval. No live quantiles.
+      winsorize_wealth_ratios: true
+      net_liquid_assets_ratio_bounds: [-7.1160503836326745, 3.9198632665924547]
+      illiquid_financial_assets_ratio_bounds: [0.0, 8.178091110827788]
+      housing_assets_ratio_bounds: [0.0, 16.139471789828157]
+      # LFA/Y was NOT directly percentile-trimmed. This is its retained-sample
+      # support, also used by the separate liquidity map's normalization.
+      liquid_financial_assets_ratio_bounds: [0.0, 4.515874225190635]
+
 
 income_belief_learning:
   observed_income_growth_lag_quarters: 4  # hardcoded as index [-5] in country.py

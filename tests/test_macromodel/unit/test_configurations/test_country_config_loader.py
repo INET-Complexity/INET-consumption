@@ -382,30 +382,24 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     assert params["elasticity_of_substitution"] == 1.0
     assert params["minimum_consumption_fraction"] == 1.0
     assert params["income_belief_learning_horizon"] == {"delta": 0.95, "S": 40}
-    # Provisional runtime intercept; retain the previously active fitted sigma.
-    assert params["long_run_intercept"] == 0.25
-    assert params["idiosyncratic_sd"] == 0.4256
+    assert params["long_run_intercept"] == -0.3536169894042738
+    assert params["idiosyncratic_sd"] == 0.2887146213259912
     assert params["idiosyncratic_persistence"] == "initial_state"
     assert params["income_denominator"] == "geometric_average"
     assert params["income_denominator_window"] == 4
     assert params["uses_continuous_wealth_calibration"] is True
-    # Three logistics sharing one FIXED transition width (k = 43.9445 for each),
-    # with separately estimated midpoints. v2's pinned c_alpha (1.000) and
-    # ceiling-bound k_gamma (148.413) are both gone.
+    assert params["illiquid_wealth_propensity"] == 0.022
+    assert params["housing_wealth_propensity"] == 0.013
     calibration = params["continuous_wealth_calibration"]
-    assert calibration["index_construction"] == "raw_ratio"
-    assert calibration["alpha_2_steepness"] == 43.9445
-    assert calibration["gamma_1_steepness"] == 43.9445
-    assert calibration["gamma_4_steepness"] == 43.9445
-    assert calibration["alpha_2_midpoint"] == 0.3951
-    assert calibration["gamma_1_midpoint"] == 0.1466
-    assert calibration["gamma_4_midpoint"] == 0.2771
-    # Weights are FIXED by specification in v3, not estimated.
-    assert calibration["weight_net_liquid_assets"] == 0.70
-    # gamma_4(B) is new in v3 and its range spans zero, so housing wealth can
-    # reduce consumption for high-accessibility households.
-    assert calibration["gamma_4_low"] == -0.021
-    assert calibration["gamma_4_high"] == 0.021
+    assert calibration["gamma_1_input"] == "lfa_y"
+    assert calibration["housing_asset_concept"] == "main_residence"
+    assert calibration["alpha_2_steepness"] == 12.206803207423443
+    assert calibration["alpha_2_midpoint"] == 0.24438476276450258
+    assert calibration["weight_net_liquid_assets"] == 0.1469333869545077
+    assert calibration["wealth_saturation_tau"] == 0.95
+    assert calibration["winsorize_wealth_ratios"] is True
+    assert "gamma_4_low" not in calibration
+    assert "spec4_calibration" not in paper_parameters["desired_consumption"]
 
 
 def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():

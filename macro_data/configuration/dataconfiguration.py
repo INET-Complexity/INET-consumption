@@ -191,6 +191,8 @@ class CountryDataConfiguration(BaseModel):
         eu_proxy_country (Country, optional): EU country to use as proxy for non-EU countries
         carbon_price (float): Carbon price per tonne of CO2 in local currency units
         worker_productivity (WorkerProductivityConfiguration, optional): Fixed worker labour inputs
+        employer_social_insurance_rate (float, optional): Build rate replacing the OECD reader value.
+            Must equal the runtime central government override when one is set.
     """
 
     firms_configuration: FirmsDataConfiguration
@@ -203,6 +205,7 @@ class CountryDataConfiguration(BaseModel):
     eu_proxy_country: Optional[Country] = None
     carbon_price: float = 0.0
     worker_productivity: Optional[WorkerProductivityConfiguration] = None
+    employer_social_insurance_rate: Optional[float] = None
 
 
 class ROWDataConfiguration(BaseModel):

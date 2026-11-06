@@ -500,3 +500,12 @@ def test__load_country_configuration_rejects_circular_paper_parameter_ref(tmp_pa
 
     with pytest.raises(ValueError, match="Circular paper parameter reference detected"):
         load_country_configuration(country_path, country_iso3="FRA")
+
+
+def test__fra_build_employer_rate_equals_runtime_override():
+    data_config = yaml.safe_load((_REPO_ROOT / "run_model/config/data_config_FRA.yaml").read_text())
+    country_config = load_country_configuration(_REPO_ROOT / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+
+    build_rate = data_config["country_configs"]["FRA"]["employer_social_insurance_rate"]
+
+    assert build_rate == country_config.central_government.tax_overrides.employer_social_insurance_rate

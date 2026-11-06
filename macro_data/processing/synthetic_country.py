@@ -274,6 +274,7 @@ class SyntheticCountry:
         population.worker_productivity = country_configuration.worker_productivity
 
         firms = DefaultSyntheticFirms.from_readers(
+            employer_social_insurance_rate=country_configuration.employer_social_insurance_rate,
             readers=readers,
             country_name=country,
             year=year,
@@ -301,7 +302,9 @@ class SyntheticCountry:
             country_name=country, year=year, quarter=quarter, readers=readers, exogenous_data=exogenous_country_data
         )
 
-        tax_data = TaxData.from_readers(readers, country, year)
+        tax_data = TaxData.from_readers(
+            readers, country, year, employer_social_insurance_rate=country_configuration.employer_social_insurance_rate
+        )
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
         total_actual_rent = readers.icio[year].actual_rents.get(country)
@@ -514,6 +517,7 @@ class SyntheticCountry:
         population.worker_productivity = country_configuration.worker_productivity
 
         firms = DefaultSyntheticFirms.from_readers(
+            employer_social_insurance_rate=country_configuration.employer_social_insurance_rate,
             readers=readers,
             country_name=country,
             year=year,
@@ -543,7 +547,9 @@ class SyntheticCountry:
             country_name=country, year=year, quarter=quarter, readers=readers, exogenous_data=exogenous_country_data
         )
 
-        tax_data = TaxData.from_readers(readers, country, year)
+        tax_data = TaxData.from_readers(
+            readers, country, year, employer_social_insurance_rate=country_configuration.employer_social_insurance_rate
+        )
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
         total_actual_rent = readers.icio[year].actual_rents.get(country)

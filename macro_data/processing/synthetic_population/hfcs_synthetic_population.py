@@ -357,6 +357,13 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         participation_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Participation Rate (Value)"].iloc[0]
 
         n_firms_by_industry = industry_data["industry_vectors"]["Number of Firms"].values
+        queried_employment_country = proxied_country if proxied_country is not None else country_name
+
+        try:
+            employee_shares = readers.wiod_sea.get_employee_shares(queried_employment_country)
+        except KeyError:
+            logging.warning("No WIOD SEA employee shares for %s; using survey frequencies.", country_name)
+            employee_shares = None
 
         individual_data = process_individual_data(
             individual_data,
@@ -367,6 +374,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             participation_rate,
             n_firms_by_industry,
             yearly_factor=yearly_factor,
+            employee_shares=employee_shares,
         )
         unemployment_benefits_by_capita = individual_data["Unemployment Benefit Entitlement"].iloc[0]
 

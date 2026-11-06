@@ -83,8 +83,8 @@ class WIODSEAReader:
         stacked = raw_df[str(year)].reset_index()
         stacked.rename(columns={str(year): "Value"}, inplace=True)
 
-        # Don't include indices or employment info
-        stacked = stacked[stacked["variable"].isin(["VA", "COMP", "CAP", "K"])]
+        # Don't include indices or other employment info
+        stacked = stacked[stacked["variable"].isin(["VA", "COMP", "CAP", "K", "EMPE"])]
 
         # Convert to USD
         stacked["Value"] = np.maximum(1.0, stacked["Value"])  # minimum value
@@ -179,6 +179,19 @@ class WIODSEAReader:
             np.ndarray: An array of values in USD.
         """
         return self.df.loc[country].loc[self.industries, field].values
+
+    def get_employee_shares(self, country: str) -> np.ndarray:
+        """
+        Get each industry's share of employees (EMPE) for a given country.
+
+        Args:
+            country (str): The name of the country.
+
+        Returns:
+            np.ndarray: Shares by industry, summing to one.
+        """
+        employees = self.get_values_in_usd(country, "EMPE")
+        return employees / employees.sum()
 
     def set_values_in_usd(self, country: str, field: str, values: np.ndarray) -> None:
         """

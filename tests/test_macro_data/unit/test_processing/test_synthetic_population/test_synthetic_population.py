@@ -36,6 +36,22 @@ def test__initial_unemployment_benefit_preserves_the_recipient_budget():
     assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
 
 
+def test__fill_individual_nace_fills_employee_share_shortfall():
+    industries = ["A", "B"]
+    individual_data = pd.DataFrame(
+        {
+            "Activity Status": [1] * 10,
+            "Employment Industry": ["A"] * 5 + [np.nan] * 5,
+        }
+    )
+
+    filled = individual_tools.fill_individual_nace(
+        individual_data, industries, [1, 1], n_industries=2, employee_shares=np.array([0.5, 0.5])
+    )
+
+    assert filled["Employment Industry"].value_counts().to_dict() == {0: 5, 1: 5}
+
+
 def test__process_individual_data_rejects_population_without_children():
     individual_data = pd.DataFrame({"Age": [40.0, 50.0]})
     with pytest.raises(ValueError, match="no person under 16"):
@@ -66,7 +82,7 @@ def test__unemployment_benefit_fallback_uses_active_labour_force(monkeypatch):
     monkeypatch.setattr(
         individual_tools,
         "fill_individual_nace",
-        lambda data, *_: data.assign(**{"Employment Industry": 0}),
+        lambda data, *_, **__: data.assign(**{"Employment Industry": 0}),
     )
     monkeypatch.setattr(individual_tools, "fill_individual_employee_income", lambda data, **_: data)
     monkeypatch.setattr(

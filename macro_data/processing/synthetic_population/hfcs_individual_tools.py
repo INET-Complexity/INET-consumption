@@ -40,6 +40,7 @@ def process_individual_data(
     participation_rate: float,
     n_firms_by_industry: list[int] | np.ndarray,
     yearly_factor: float = 4.0,
+    employee_shares: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Process individual data by performing various data cleaning and transformation steps.
@@ -80,7 +81,9 @@ def process_individual_data(
         unemployment_rate=unemployment_rate,
         participation_rate=participation_rate,
     )
-    individual_data = fill_individual_nace(individual_data, industries, n_firms_by_industry, n_industries)
+    individual_data = fill_individual_nace(
+        individual_data, industries, n_firms_by_industry, n_industries, employee_shares=employee_shares
+    )
     n_unemployed = np.sum(individual_data["Activity Status"] == 2)
     n_active = np.sum(individual_data["Activity Status"].isin([1, 2]))
 
@@ -440,6 +443,7 @@ def fill_individual_nace(
     industries: list[str],
     n_firms_by_industry: list[int] | np.ndarray,
     n_industries: int = 43,
+    employee_shares: np.ndarray | None = None,
 ) -> pd.DataFrame:
     """
     Fill in missing values in the 'Employment Industry' column of the individual_data DataFrame
@@ -449,6 +453,9 @@ def fill_individual_nace(
         individual_data (pd.DataFrame): DataFrame containing individual data.
         industries (list[str]): List of industries.
         n_firms_by_industry (list[int] | np.ndarray): Number of firms by industry.
+        employee_shares (np.ndarray, optional): Target employee shares by industry. Employed
+            people without an industry fill the shortfall from these shares, and unemployed
+            people follow them. Without them both groups follow survey frequencies.
 
     Returns:
         pd.DataFrame: DataFrame with missing values in the 'Employment Industry' column filled.
@@ -506,17 +513,34 @@ def fill_individual_nace(
     frequencies = (
         individual_data.groupby("Employment Industry")
         .apply(lambda x: (x["Activity Status"] < 3).sum(), include_groups=False)
+        .reindex(range(len(industries)), fill_value=0)
         .values
     )
     frequencies = frequencies / np.sum(frequencies)
 
-    # fill in missing sector of unemployed people
-    mask = np.logical_and(individual_data["Activity Status"] < 3, pd.isnull(individual_data["Employment Industry"]))
-    individuals_without_industry = np.flatnonzero(mask)
+    no_industry = pd.isnull(individual_data["Employment Industry"])
+    employed_probabilities = frequencies
+    unemployed_probabilities = frequencies
+    if employee_shares is not None:
+        is_employed = individual_data["Activity Status"] == 1
+        n_known = (
+            individual_data.loc[is_employed & ~no_industry, "Employment Industry"]
+            .astype(int)
+            .value_counts()
+            .reindex(range(len(industries)), fill_value=0)
+            .values
+        )
+        shortfall = np.maximum(employee_shares * is_employed.sum() - n_known, 0.0)
+        unemployed_probabilities = employee_shares
+        if shortfall.sum() > 0.0:
+            employed_probabilities = shortfall / shortfall.sum()
 
-    new_industries = np.random.choice(range(len(industries)), len(individuals_without_industry), replace=True)
-
-    individual_data.loc[individuals_without_industry, "Employment Industry"] = new_industries
+    # fill in missing sector of employed and unemployed people
+    for status, probabilities in ((1, employed_probabilities), (2, unemployed_probabilities)):
+        individuals_without_industry = np.flatnonzero((individual_data["Activity Status"] == status) & no_industry)
+        individual_data.loc[individuals_without_industry, "Employment Industry"] = np.random.choice(
+            range(len(industries)), len(individuals_without_industry), replace=True, p=probabilities
+        )
 
     # # Fill-in missing sectors
     # sectors_missing = np.where(frequencies == 0)[0]

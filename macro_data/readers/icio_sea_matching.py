@@ -133,7 +133,8 @@ def _match_country_iot_with_sea(
         yearly_factor * icio_reader.investment_matrices[country_name].values.sum(axis=0),
     )
     new_va = yearly_factor * icio_reader.get_value_added(country_name)
-    va_factor = new_va / get_sea(country_name, "Value Added", sea_reader)
+    capital_va = yearly_factor * icio_reader.get_capital_scaling_value_added_series(country_name).values
+    va_factor = capital_va / get_sea(country_name, "Value Added", sea_reader)
     # sea_reader.df.loc[
     #     sea_reader.df.index.get_level_values(0) == country_name,
     #     "Value Added",
@@ -180,7 +181,7 @@ def reconcile_value_added(
 def _reconcile_value_added(
     country_name: Country | Region, icio_reader: ICIOReader, sea_reader: WIODSEAReader, yearly_factor: float = 4.0
 ):
-    new_va = yearly_factor * icio_reader.get_value_added_series(country_name)
+    new_va = yearly_factor * icio_reader.get_capital_scaling_value_added_series(country_name)
     old_va = sea_reader.df.loc[country_name, "Value Added"]
 
     va_factor = new_va.loc[old_va.index] / old_va

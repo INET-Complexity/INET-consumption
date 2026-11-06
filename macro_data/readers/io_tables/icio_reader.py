@@ -59,6 +59,29 @@ from macro_data.readers.io_tables.util import aggregate_df
 from macro_data.readers.util.capital_depreciation import build_cfc_output_replacement_matrix
 
 
+def move_housing_inputs(iot: pd.DataFrame, country: str, rental_share: float, industries: list[str]) -> pd.Series:
+    """Move the inputs of rental services from sector L to household consumption.
+
+    Rents are gross, so part of each rent pays for intermediate inputs. Each of L's input rows moves
+    by ``rental_share``, the share of L's output that is rentals.
+
+    Args:
+        iot (pd.DataFrame): Aggregated input-output table, changed in place.
+        country (str): Country whose households buy the inputs.
+        rental_share (float): Rentals as a share of L's output before they are removed.
+        industries (list[str]): Industry codes, which identify the input rows.
+
+    Returns:
+        pd.Series: Inputs moved by industry, summed over source countries, in the units of the table.
+    """
+    sector, buyer = (country, "L"), (country, "Household Consumption")
+    input_rows = [row for row in iot.index if row[1] in industries]
+    moved = iot.loc[input_rows, sector] * rental_share
+    iot.loc[input_rows, sector] -= moved
+    iot.loc[input_rows, buyer] += moved
+    return moved.groupby(level=1).sum().reindex(industries).fillna(0.0)
+
+
 def remove_rental_services(
     household_consumption_usd: float, imputed_lcu: float, actual_lcu: float, lcu_per_usd: float
 ) -> tuple[float, float]:
@@ -163,6 +186,7 @@ class ICIOReader:
         year: int,
         yearly_factor: float = 4.0,
         actual_rents: Optional[dict[str, Optional[float]]] = None,
+        housing_inputs: Optional[dict[str, pd.Series]] = None,
     ):
         """Initialize the ICIOReader.
 
@@ -182,6 +206,7 @@ class ICIOReader:
         self.industries = industries
         self.imputed_rents = imputed_rents
         self.actual_rents = actual_rents if actual_rents is not None else {}
+        self.housing_inputs = housing_inputs if housing_inputs is not None else {}
         self.year = year
         self.investment_matrices = {}
         self.yearly_factor = yearly_factor
@@ -275,15 +300,20 @@ class ICIOReader:
 
         imputed_rents = {}
         actual_rents = {}
+        housing_inputs = {}
         for country_name in considered_countries:
             if country_name in rental_services:
                 imputed_lcu, actual_lcu = rental_services[country_name]
                 lcu_per_usd = exchange_rates.from_usd_to_lcu(country_name, year)
                 rent_cell = (country_name, "L"), (country_name, "Household Consumption")
+                sector_output = agg_df.loc[(country_name, "L"), agg_df.columns.get_level_values(0) != "TOTAL"].sum()
                 imputed, actual = remove_rental_services(agg_df.at[rent_cell], imputed_lcu, actual_lcu, lcu_per_usd)
+                agg_df.at[rent_cell] -= imputed + actual
+                housing_inputs[country_name] = move_housing_inputs(
+                    agg_df, country_name, (imputed + actual) / sector_output, industries
+                )
                 imputed_rents[country_name] = imputed / yearly_factor * lcu_per_usd
                 actual_rents[country_name] = actual / yearly_factor * lcu_per_usd
-                agg_df.at[rent_cell] -= imputed + actual
             elif country_name in new_rent_fraction.keys():
                 imputed_rents[country_name] = (
                     (
@@ -321,6 +351,7 @@ class ICIOReader:
             year=year,
             yearly_factor=yearly_factor,
             actual_rents=actual_rents,
+            housing_inputs=housing_inputs,
         )
 
     @staticmethod
@@ -646,6 +677,22 @@ class ICIOReader:
             / self.yearly_factor
         )
 
+    def get_capital_scaling_value_added_series(self, country_name: str) -> pd.Series:
+        """Get value added for scaling factor data, before housing inputs left sector L.
+
+        Moving an input bill raises L's value added but does not change its installed capital.
+        """
+        series = self.get_value_added_series(country_name).copy()
+        series.loc["L"] -= self.get_housing_input_demand(country_name).sum()
+        return series
+
+    def get_housing_input_demand(self, country_name: str) -> np.ndarray:
+        """Get the household demand for housing inputs by industry, per period, in USD."""
+        inputs = self.housing_inputs.get(country_name)
+        if inputs is None:
+            return np.zeros(len(self.industries))
+        return inputs.loc[self.industries].values / self.yearly_factor
+
     def get_value_added_series(self, country_name: str) -> pd.Series:
         """Get value added by industry as a pandas Series.
 
@@ -750,7 +797,7 @@ class ICIOReader:
         Returns:
             np.ndarray: Household consumption weights by industry
         """
-        hh_cons = self.get_hh_consumption(country_name)
+        hh_cons = self.get_hh_consumption(country_name) - self.get_housing_input_demand(country_name)
         return hh_cons / hh_cons.sum()
 
     def get_govt_consumption(self, country_name: str) -> np.ndarray:

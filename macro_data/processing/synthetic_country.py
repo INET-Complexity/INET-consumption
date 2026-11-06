@@ -96,6 +96,7 @@ from macro_data.processing.synthetic_matching.matching_households_with_banks imp
     match_households_with_banks_optimal,
 )
 from macro_data.processing.synthetic_matching.matching_households_with_houses import (
+    rents_net_of_housing_inputs,
     set_housing_df,
 )
 from macro_data.processing.synthetic_matching.matching_individuals_with_firms import (
@@ -303,6 +304,12 @@ class SyntheticCountry:
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
         total_actual_rent = readers.icio[year].actual_rents.get(country)
+        housing_input_demand = country_industry_data["industry_vectors"]["Housing Input Demand in LCU"].values
+        population.housing_input_demand = housing_input_demand
+        if total_actual_rent is not None:
+            total_imputed_rent, total_actual_rent = rents_net_of_housing_inputs(
+                total_imputed_rent, total_actual_rent, housing_input_demand.sum(), tax_data.value_added_tax
+            )
 
         dividend_payout_ratio = readers.eurostat.dividend_payout_ratio(country=country, year=year)
         long_term_interest_rate = readers.oecd_econ.read_long_term_interest_rates(country=country, year=year)
@@ -543,6 +550,12 @@ class SyntheticCountry:
 
         total_imputed_rent = readers.icio[year].imputed_rents[country]
         total_actual_rent = readers.icio[year].actual_rents.get(country)
+        housing_input_demand = country_industry_data["industry_vectors"]["Housing Input Demand in LCU"].values
+        population.housing_input_demand = housing_input_demand
+        if total_actual_rent is not None:
+            total_imputed_rent, total_actual_rent = rents_net_of_housing_inputs(
+                total_imputed_rent, total_actual_rent, housing_input_demand.sum(), tax_data.value_added_tax
+            )
 
         dividend_payout_ratio = readers.eurostat.dividend_payout_ratio(country=country, year=year)
         long_term_interest_rate = readers.oecd_econ.read_long_term_interest_rates(country=country, year=year)
@@ -918,7 +931,10 @@ class SyntheticCountry:
         population.set_household_saving_rates(independents=independents)
 
         population.set_household_investment_rates(capital_formation_taxrate=tax_data.capital_formation_tax)
-        iot_consumption = country_industry_data["industry_vectors"]["Household Consumption in LCU"]
+        iot_consumption = (
+            country_industry_data["industry_vectors"]["Household Consumption in LCU"]
+            - country_industry_data["industry_vectors"]["Housing Input Demand in LCU"]
+        )
         population.normalise_household_consumption(
             iot_hh_consumption=iot_consumption, vat=tax_data.value_added_tax, independents=independents
         )

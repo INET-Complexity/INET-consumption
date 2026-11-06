@@ -63,6 +63,27 @@ from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 
+def rents_net_of_housing_inputs(
+    total_imputed_rent: float, total_actual_rent: float, housing_input_demand: float, vat: float
+) -> tuple[float, float]:
+    """Split the housing inputs out of gross rents.
+
+    Households pay for the inputs and their VAT through goods demand, so their total housing
+    consumption does not change. Landlord income falls with the net rent.
+
+    Args:
+        total_imputed_rent (float): Gross imputed rent per period.
+        total_actual_rent (float): Gross actual rent per period.
+        housing_input_demand (float): Inputs moved to households per period, before VAT.
+        vat (float): Value added tax rate.
+
+    Returns:
+        tuple[float, float]: Imputed and actual rent net of the inputs.
+    """
+    factor = 1.0 - (1.0 + vat) * housing_input_demand / (total_imputed_rent + total_actual_rent)
+    return factor * total_imputed_rent, factor * total_actual_rent
+
+
 def rescale_rents(household_data: pd.DataFrame, housing_df: pd.DataFrame, total_actual_rent: float) -> None:
     """Scale the rent flows of the matched rental market so that rent paid sums to ``total_actual_rent``.
 

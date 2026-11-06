@@ -38,6 +38,11 @@ from macromodel.agents.households.func.consumer_distress import (
     compute_stage6_consumer_distress_state,
 )
 from macromodel.agents.households.func.consumption import validate_consumption_weights
+from macromodel.agents.households.func.housing_inputs import (
+    add_housing_input_goods,
+    housing_input_base,
+    initial_housing_inputs,
+)
 from macromodel.agents.households.func.financial_feasibility import (
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
@@ -337,6 +342,9 @@ class Households(Agent):
         self.investment_weights = investment_weights
 
         self.use_consumption_weights_by_income = use_consumption_weights_by_income
+        self.housing_input_rate = 0.0
+        self.housing_input_weights = np.zeros(n_industries)
+        self.initial_housing_input_goods = 0.0
         self.uses_feasibility_resolver = uses_feasibility_resolver
         self.financial_feasibility = HouseholdFinancialFeasibility()
         self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
@@ -569,6 +577,20 @@ class Households(Agent):
         tau_vat = synthetic_country.tax_data.value_added_tax
 
         consumption_by_industry_hh = 1 / (1 + tau_vat) * synthetic_population.industry_consumption_before_vat
+        housing_input_rate, housing_input_weights, initial_housing_input_goods = initial_housing_inputs(
+            housing_input_demand=getattr(
+                synthetic_population, "housing_input_demand", np.zeros(consumption_by_industry_hh.shape[1])
+            ),
+            housing_flows=housing_input_base(
+                hh_data["Rent Paid"].values,
+                hh_data["Rent Imputed"].values,
+                states["Corresponding Inhabited House ID"],
+            ),
+            vat=tau_vat,
+        )
+        consumption_by_industry_hh = consumption_by_industry_hh + np.outer(
+            initial_housing_input_goods, housing_input_weights
+        )
 
         if add_emissions:
             consumption_emissions = synthetic_population.household_data["Consumption Emissions"].values
@@ -613,6 +635,7 @@ class Households(Agent):
             initial_hh_consumption=consumption_by_industry_hh,
             scale=scale,
             vat=value_added_tax,
+            initial_housing_input_goods=initial_housing_input_goods,
             tau_cf=tau_cf,
             consumption_emissions=consumption_emissions,
             investment_emissions=investment_emissions,
@@ -703,6 +726,9 @@ class Households(Agent):
             configuration.substitution_bundles,
             emission_fractions=emission_fractions,
         )
+        households.housing_input_rate = housing_input_rate
+        households.housing_input_weights = housing_input_weights
+        households.initial_housing_input_goods = initial_housing_input_goods
         households.refresh_consumption_units_if_needed(individual_ages)
         return households
 
@@ -1806,7 +1832,26 @@ class Households(Agent):
             model=self.states["saving_rates_model"],
         )
 
-    def compute_target_consumption(
+    def housing_input_cash(self) -> np.ndarray:
+        """Return each household's current payment for housing inputs, including VAT."""
+        flows = housing_input_base(
+            self.ts.current("rent"),
+            self.ts.current("rent_imputed"),
+            self.states["Corresponding Inhabited House ID"],
+        )
+        return self.housing_input_rate * flows
+
+    def compute_target_consumption(self, *args, **kwargs) -> np.ndarray:
+        """Return target goods, including the housing inputs that owners and private tenants buy."""
+        target_consumption = self._compute_market_target_consumption(*args, **kwargs)
+        return add_housing_input_goods(
+            target_consumption,
+            self.housing_input_cash() / self.consumption_cash_factor(),
+            self.housing_input_weights,
+            within_goods_budget=getattr(self.functions["consumption"], "uses_housing_carve_out", False),
+        )
+
+    def _compute_market_target_consumption(
         self,
         expected_inflation: float,
         current_cpi: float,
@@ -1915,7 +1960,7 @@ class Households(Agent):
                 consumption_function.last_real_consumption_budget = initial_real_budget.copy()
             else:
                 target_consumption = np.outer(
-                    self.ts.initial("consumption"),
+                    self.ts.initial("consumption") - self.initial_housing_input_goods,
                     self.consumption_weights,
                 ).astype(float)
             self._append_target_consumption_diagnostics(None, replace_current=replace_current_diagnostics)

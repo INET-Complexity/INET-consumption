@@ -2,9 +2,10 @@ from functools import reduce
 from itertools import product
 
 import numpy as np
+import pandas as pd
 import pytest
 
-from macro_data.readers.io_tables.icio_reader import remove_rental_services
+from macro_data.readers.io_tables.icio_reader import move_housing_inputs, remove_rental_services
 
 
 class TestICIOAggReader:
@@ -115,3 +116,22 @@ def test__remove_rental_services_never_exceeds_the_cell(cell, imputed_lcu, actua
     imputed, actual = remove_rental_services(cell, imputed_lcu, actual_lcu, lcu_per_usd=2.0)
     assert (imputed, actual) == pytest.approx(expected)
     assert imputed + actual <= cell
+
+
+def test_move_housing_inputs_keeps_totals_out_of_the_move():
+    labels = [("FRA", "C"), ("FRA", "L"), ("TOTAL", "OUT")]
+    columns = pd.MultiIndex.from_tuples(labels + [("FRA", "Household Consumption")])
+    iot = pd.DataFrame(
+        [[1.0, 10.0, 0.0, 5.0], [0.0, 20.0, 0.0, 2.0], [50.0, 100.0, 0.0, 0.0]],
+        index=pd.MultiIndex.from_tuples(labels),
+        columns=columns,
+    )
+
+    moved = move_housing_inputs(iot, "FRA", 0.5, ["C", "L"])
+
+    assert moved.sum() == pytest.approx(15.0)
+    assert moved["C"] == pytest.approx(5.0)
+    assert iot.at[("FRA", "C"), ("FRA", "L")] == pytest.approx(5.0)
+    assert iot.at[("FRA", "L"), ("FRA", "L")] == pytest.approx(10.0)
+    assert iot.at[("FRA", "C"), ("FRA", "Household Consumption")] == pytest.approx(10.0)
+    assert iot.at[("TOTAL", "OUT"), ("FRA", "L")] == pytest.approx(100.0)

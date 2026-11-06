@@ -2913,6 +2913,7 @@ class TestCountry:
             lambda: np.zeros(test_country.households.ts.current("n_households")),
         )
 
+        monkeypatch.setattr(test_country.households, "housing_input_rate", 0.0)
         test_country._set_household_target_demand(replace_current=False)
 
         # Disabled rule: both terms stay None (identical to pre-Increment-5).

@@ -427,13 +427,13 @@ class DataReaders:
 
         if countries_and_regions is None:
             value_added_dict = {
-                country_name: icio[simulation_year].get_value_added_series(country_name)
+                country_name: icio[simulation_year].get_capital_scaling_value_added_series(country_name)
                 * icio[simulation_year].yearly_factor
                 for country_name in country_names
             }
         else:
             value_added_dict = {
-                country_name: icio[simulation_year].get_value_added_series(country_name)
+                country_name: icio[simulation_year].get_capital_scaling_value_added_series(country_name)
                 * icio[simulation_year].yearly_factor
                 for country_name in countries_and_regions
             }

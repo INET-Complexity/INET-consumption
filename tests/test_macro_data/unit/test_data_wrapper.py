@@ -545,7 +545,14 @@ def check_country_initial_state_anchors(country: SyntheticCountry):
     # Rent paid carries the actual rentals removed from the input-output table, once. For the France 2014
     # sample the removed amount is 12,256.9 mio EUR per quarter (CPA_L68B alone is 13,517.6 mio, but the
     # household consumption cell is smaller than imputed plus actual rentals).
-    assert household_data["Rent Paid"].sum() == pytest.approx(12256.86e6, rel=1e-5)
+    # Rent paid is net of the housing inputs and their VAT, which households buy as goods.
+    gross_rent = 12256.86e6
+    net_factor = household_data["Rent Paid"].sum() / gross_rent
+    gross_rentals = household_data["Rent Imputed"].sum() / net_factor + gross_rent
+    housing_inputs = country.industry_data["industry_vectors"]["Housing Input Demand in LCU"].sum()
+    assert (1 - net_factor) * gross_rentals == pytest.approx(
+        (1 + country.tax_data.value_added_tax) * housing_inputs, rel=1e-5
+    )
     # and landlords receive it net of the rental income tax
     tax = country.tax_data.income_tax
     assert household_data["Rental Income from Real Estate"].sum() == pytest.approx(

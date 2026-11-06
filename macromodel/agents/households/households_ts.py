@@ -93,6 +93,7 @@ def create_households_timeseries(
     gas_investment_emissions: Optional[np.ndarray] = None,
     oil_investment_emissions: Optional[np.ndarray] = None,
     refined_products_investment_emissions: Optional[np.ndarray] = None,
+    initial_housing_input_goods: Optional[np.ndarray] = None,
 ) -> TimeSeries:
     """Create time series for tracking household economic variables.
 
@@ -153,7 +154,15 @@ def create_households_timeseries(
     initial_debt = initial_mortgage_debt + initial_consumption_loan_debt
     initial_wealth = initial_wealth_real_assets + initial_wealth_financial_assets
 
-    initial_goods = align_initial_goods_consumption(data["Consumption"].values, initial_consumption_by_industry.sum())
+    housing_input_goods = (
+        np.zeros(len(data)) if initial_housing_input_goods is None else np.asarray(initial_housing_input_goods)
+    )
+    initial_goods = (
+        align_initial_goods_consumption(
+            data["Consumption"].values, initial_consumption_by_industry.sum() - housing_input_goods.sum()
+        )
+        + housing_input_goods
+    )
     initial_cash, initial_total = realised_consumption_outcomes(
         initial_goods, vat, data["Rent Paid"].values, data["Rent Imputed"].values
     )

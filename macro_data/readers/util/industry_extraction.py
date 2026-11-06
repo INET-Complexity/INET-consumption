@@ -201,6 +201,7 @@ def get_industry_vectors(
             "Domestic Household Consumption in LCU": exchange_rate
             * current_icio_reader.get_hh_consumption_domestic(country_name),
             "Household Consumption Weights": current_icio_reader.get_hh_consumption_weights(country_name),
+            "Housing Input Demand in LCU": exchange_rate * current_icio_reader.get_housing_input_demand(country_name),
             "Government Consumption in USD": current_icio_reader.get_govt_consumption(country_name),
             "Government Consumption in LCU": exchange_rate * current_icio_reader.get_govt_consumption(country_name),
             "Government Consumption Weights": current_icio_reader.govt_consumption_weights(country_name),
@@ -365,6 +366,7 @@ def get_country_industry_data(
             "Domestic Household Consumption in LCU": exchange_rate
             * current_icio_reader.get_hh_consumption_domestic(country_name),
             "Household Consumption Weights": current_icio_reader.get_hh_consumption_weights(country_name),
+            "Housing Input Demand in LCU": exchange_rate * current_icio_reader.get_housing_input_demand(country_name),
             "Government Consumption in USD": current_icio_reader.get_govt_consumption(country_name),
             "Government Consumption in LCU": exchange_rate * current_icio_reader.get_govt_consumption(country_name),
             "Government Consumption Weights": current_icio_reader.govt_consumption_weights(country_name),

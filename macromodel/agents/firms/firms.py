@@ -154,6 +154,19 @@ class Firms(Agent):
 
         self.substitution_bundles = bundle_matrix
         self.emission_fractions = emission_fractions
+        self._seed_initial_cash_flow_history()
+
+    def _seed_initial_cash_flow_history(self) -> None:
+        """Set t=0 sales and goods spending from the initial accounts.
+
+        Credit at t=1 reads these before any market has cleared. Purchases
+        are assumed equal to use, so input stocks are constant at t=0.
+        """
+        sales = self.ts.current("price") * self.ts.current("production")
+        used_inputs = self.ts.current("used_intermediate_inputs") + self.ts.current("used_capital_inputs")
+        spending = used_inputs * np.asarray(self.average_initial_price, dtype=float)[None, :]
+        self.ts.override_current("nominal_amount_sold_in_lcu", sales)
+        self.ts.override_current("nominal_amount_spent_in_lcu", spending)
 
     @property
     def base_capital_inputs_depreciation_matrix(self) -> np.ndarray:
@@ -591,6 +604,7 @@ class Firms(Agent):
         self.states["capital_tech_multipliers"] = np.ones_like(self.states["capital_tech_multipliers"])
 
         self.configuration = deepcopy(configuration)
+        self._seed_initial_cash_flow_history()
 
     def update_number_of_firms(self) -> None:
         """Update the time series tracking number of firms.

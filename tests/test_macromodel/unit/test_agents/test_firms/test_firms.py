@@ -5,10 +5,33 @@ from macromodel.agents.firms.firms import Firms
 from macromodel.agents.firms.func.production import CriticalAndImportantLeontief
 from macromodel.configurations.firms_configuration import FirmsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
-from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
+from macromodel.markets.credit_market.func.clearing import _compute_firm_cfads, compute_firm_borrower_credit_room
 
 
 class TestFirms:
+    def test__initial_cash_flow_history_follows_initial_accounts(self, test_firms):
+        price = test_firms.ts.current("price")
+        production = test_firms.ts.current("production")
+        used_inputs = test_firms.ts.current("used_intermediate_inputs") + test_firms.ts.current("used_capital_inputs")
+
+        assert np.array_equal(test_firms.ts.current("nominal_amount_sold_in_lcu"), price * production)
+        assert np.allclose(
+            test_firms.ts.current("nominal_amount_spent_in_lcu"),
+            used_inputs * np.asarray(test_firms.average_initial_price)[None, :],
+        )
+
+    def test__first_credit_decision_reads_initial_accounts(self, test_firms):
+        ts = test_firms.ts
+        cash_flow = (
+            ts.current("nominal_amount_sold_in_lcu")
+            - ts.current("total_wage")
+            - ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - ts.current("taxes_paid_on_production")
+            - ts.current("corporate_taxes_paid")
+        )
+
+        assert np.allclose(_compute_firm_cfads(test_firms, window=4, haircut=1.0), np.maximum(0.0, cash_flow))
+
     def test__realised_productivity_ratio_uses_valid_smoothed_output_per_labour(self):
         class FakeTimeSeries:
             def current(self, key):

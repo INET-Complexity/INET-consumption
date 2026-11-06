@@ -16,11 +16,25 @@ The implementation handles:
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, replace
 
 import numpy as np
 from numba import njit
 
+from macromodel.agents.households.consumption_inputs import ConsumptionInputs, OpeningStockValues
 from macromodel.util.housing_flows import normalise_housing_flows
+
+
+@dataclass(frozen=True)
+class _ConsumptionProbe:
+    """Internal counterfactual operands; never a runtime policy configuration."""
+
+    income_base_real: np.ndarray
+    ratio_denominator_real: np.ndarray
+    pi_log_ratio: np.ndarray
+    opening_real: OpeningStockValues
+    alpha: np.ndarray | None = None
+    gamma: np.ndarray | None = None
 
 
 def validate_consumption_weights(
@@ -1114,6 +1128,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             return
         self._idiosyncratic_rng = np.random.default_rng(0x00C0FFEE if seed is None else int(seed))
         self._household_epsilon = None
+        self._prepared_residual_layout = None
 
     def _epsilon(self, n_households: int) -> np.ndarray:
         """Idiosyncratic term in log(C/Y), as a fixed household effect.
@@ -1170,12 +1185,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         return self._household_epsilon[:n_households]
 
     def _initial_state_epsilon(self, income: np.ndarray, target_inputs: dict) -> np.ndarray:
-        """Back out the fixed effect so each household starts at its long-run target.
+        """Anchor each household's fixed effect to its previous desired real budget.
 
-        eps_i = log(C_i / y_i) - x_i, with x_i the deterministic long-run log
-        consumption-to-income ratio. The observed initial consumption is then the
-        steady state of the rule, and E[eps] = 0 identifies the intercept.
-        Households with non-finite residuals (zero income or consumption) get 0.
+        eps_i = log(C_previous_i / b_i) - x_i on the prepared path, where x_i
+        is the deterministic long-run log ratio before numerical target guards.
+        This back-out does not impose zero residual mean, fitted-sigma dispersion
+        or a random draw. The intercept offsets at the initial anchor. Legacy
+        calls retain their supplied income base. Non-finite residuals get zero.
         """
         components, _ = self._evaluate_target(income=income, epsilon=None, **target_inputs)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1294,6 +1310,208 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         clipped_flag = (~np.isclose(wealth_drag, clipped)).astype(float)
         return clipped, clipped_flag
 
+    @staticmethod
+    def _validate_prepared_inputs(prepared, shape, current_cpi, initial_cpi, time_unit):
+        if not isinstance(prepared, ConsumptionInputs):
+            raise ValueError("consumption_inputs must be a validated ConsumptionInputs record.")
+        if prepared.income_base_real.shape != shape or prepared.histories.months_per_period != time_unit:
+            raise ValueError("Prepared household dimensions/period length do not match target inputs.")
+        for name in (
+            "income_base_real",
+            "annual_income_base_real",
+            "pi_log_ratio_rebased",
+            "pi_log_denominator_adjustment",
+            "log_permanent_income_proxy_real",
+        ):
+            values = getattr(prepared, name)
+            if values.shape != shape or not np.all(np.isfinite(values)):
+                raise ValueError(f"Prepared {name} household dimensions/values do not match.")
+        if not np.allclose(
+            prepared.annual_income_base_real, prepared.income_base_real * (12.0 / time_unit), rtol=1e-12, atol=0
+        ):
+            raise ValueError("Prepared annual income base must annualize the same period base.")
+        for name, actual in (("current_consumer_price", current_cpi), ("initial_consumer_price", initial_cpi)):
+            if not np.isclose(getattr(prepared.histories, name), actual, rtol=1e-12, atol=0):
+                raise ValueError(f"Prepared {name} does not match target price.")
+        for record in (prepared.opening_snapshot, prepared.pi_payload):
+            if (record.period_id, record.household_layout_key) != (prepared.period_id, prepared.household_layout_key):
+                raise ValueError("Prepared period/layout identity does not match snapshot/PI payload.")
+            if record.units != prepared.histories.income_units:
+                raise ValueError("Prepared monetary unit metadata does not match.")
+        if prepared.pi_payload.pass_kind != prepared.pass_kind:
+            raise ValueError("Prepared PI pass identity does not match.")
+
+    def evaluate_prepared_target(
+        self,
+        consumption_inputs: ConsumptionInputs,
+        *,
+        lagged_real_consumption_budget,
+        epsilon=None,
+        real_borrowing_rate=0.0,
+        consumer_debt_rate_delta=0.0,
+        uncertainty_delta=0.0,
+        expected_inflation=0.0,
+        _probe=None,
+    ):
+        """Pure target/budget evaluation: no residual initialization, learning or RNG.
+
+        The supplied rate input is already principal-weighted and income-normalized.
+        epsilon=None denotes a zero fixed effect for explicit equation/probe replays.
+        """
+        if not isinstance(consumption_inputs, ConsumptionInputs):
+            raise ValueError("consumption_inputs must be a validated ConsumptionInputs record.")
+        prepared = consumption_inputs
+        nominal = prepared.opening_snapshot.nominal
+        income = prepared.histories.behavioural_income_nominal_history[-1]
+        zero = np.zeros_like(income)
+        epsilon = self._as_array(income, epsilon, default=0.0)
+        if not np.all(np.isfinite(epsilon)):
+            raise ValueError("epsilon must be finite.")
+        return self._evaluate_target(
+            income=income,
+            lagged_income=income,
+            lagged_consumption=lagged_real_consumption_budget,
+            liquid_wealth=nominal.liquid_financial_assets,
+            illiquid_wealth=nominal.illiquid_financial_assets,
+            housing_wealth=nominal.main_residence_wealth,
+            lagged_housing_wealth=nominal.main_residence_wealth,
+            rent=zero,
+            mortgage_debt=nominal.mortgage_ledger_debt,
+            mortgage_payment=zero,
+            lagged_liquid_wealth=nominal.liquid_financial_assets,
+            lagged_illiquid_wealth=nominal.illiquid_financial_assets,
+            lagged_mortgage_debt=nominal.mortgage_ledger_debt,
+            lagged_consumption_loan_debt=nominal.consumer_ledger_debt,
+            cashflow_consumer_debt=nominal.consumer_ledger_debt,
+            owner_occupied=zero,
+            mortgagor=zero,
+            house_price_index=None,
+            lagged_house_price_index=None,
+            real_borrowing_rate=real_borrowing_rate,
+            permanent_income_log_ratio=prepared.pi_log_ratio_rebased,
+            consumer_debt_rate_delta=consumer_debt_rate_delta,
+            uncertainty_delta=uncertainty_delta,
+            current_cpi=prepared.histories.current_consumer_price,
+            lagged_cpi=prepared.histories.current_consumer_price,
+            initial_cpi=prepared.histories.initial_consumer_price,
+            expected_inflation=expected_inflation,
+            population_scale_factor=prepared.histories.income_units.population_scale,
+            time_unit=prepared.histories.months_per_period,
+            lagged_real_consumption_budget=lagged_real_consumption_budget,
+            epsilon=epsilon,
+            consumption_inputs=prepared,
+            _probe=_probe,
+        )
+
+    def probe_prepared_target(
+        self,
+        consumption_inputs: ConsumptionInputs,
+        *,
+        kind,
+        step_real,
+        stock_field="liquid_financial_assets",
+        consumption_anchor_real=None,
+        lagged_real_consumption_budget=None,
+        epsilon=None,
+        real_consumer_rate=0.0,
+        real_mortgage_rate=0.0,
+        consumer_debt_rate_delta=0.0,
+        uncertainty_delta=0.0,
+    ):
+        """Explicit fixed-Yp income, fixed-gamma asset, or historical formula probe.
+
+        step_real has period-flow units for income, stock units for assets. Rates
+        here are annual real contractual levels, not the normalized runtime r.
+        A supplied consumption anchor changes only the reported static level MPC;
+        it never initializes/replaces epsilon or adds a lognormal runtime correction.
+        Zero individual steps report NaN MPCs and an exact zero log response.
+        """
+        if not isinstance(consumption_inputs, ConsumptionInputs):
+            raise ValueError("consumption_inputs must be a validated ConsumptionInputs record.")
+        base = consumption_inputs.income_base_real
+        step = self._as_array(base, step_real)
+        if step.shape != base.shape or not np.all(np.isfinite(step)):
+            raise ValueError("step_real must be a finite scalar or household vector.")
+        stocks = consumption_inputs.opening_real
+        annual = consumption_inputs.annual_income_base_real
+        consumer_rate = self._as_array(base, real_consumer_rate)
+        mortgage_rate = self._as_array(base, real_mortgage_rate)
+        if not np.all(np.isfinite(consumer_rate)) or not np.all(np.isfinite(mortgage_rate)):
+            raise ValueError("Real contractual rates must be finite.")
+
+        def weighted_rate(opening, annual_income):
+            return (
+                consumer_rate * opening.consumer_principal + mortgage_rate * opening.mortgage_principal
+            ) / annual_income
+
+        budget = base if lagged_real_consumption_budget is None else lagged_real_consumption_budget
+        kwargs = dict(
+            lagged_real_consumption_budget=budget,
+            epsilon=epsilon,
+            consumer_debt_rate_delta=consumer_debt_rate_delta,
+            uncertainty_delta=uncertainty_delta,
+        )
+        baseline, _ = self.evaluate_prepared_target(
+            consumption_inputs, real_borrowing_rate=weighted_rate(stocks, annual), **kwargs
+        )
+        new_base, denominator, p = base, annual, consumption_inputs.pi_log_ratio_rebased
+        alpha, gamma = None, baseline["target_consumption_gamma_1"]
+        if kind == "conditional_income":
+            new_base = base + step
+            if np.any(new_base <= 0) or not np.all(np.isfinite(new_base)):
+                raise ValueError("Perturbed income base must be positive and finite.")
+            denominator = annual * (new_base / base)
+            p = p - np.log1p(step / base)
+            alpha = baseline["target_consumption_alpha_2"]
+            rate = weighted_rate(stocks, denominator)
+            conditioning = "fixed log Yp, alpha, gamma1, opening stocks and epsilon; updated income ratios"
+        elif kind == "conditional_asset":
+            if stock_field not in OpeningStockValues.__dataclass_fields__:
+                raise ValueError("stock_field must name one opening stock or exposure.")
+            stocks = replace(stocks, **{stock_field: getattr(stocks, stock_field) + step})
+            rate = weighted_rate(stocks, annual)
+            conditioning = "fixed income, log Yp, gamma1 and epsilon; alpha updates after ratio clipping"
+        elif kind == "historical_formula":
+            new_base = base + step
+            if np.any(new_base <= 0) or not np.all(np.isfinite(new_base)):
+                raise ValueError("Perturbed income base must be positive and finite.")
+            rate = weighted_rate(stocks, annual)
+            alpha = baseline["target_consumption_alpha_2"]
+            conditioning = "fixed ratio denominator, supplied PI ratio and normalized rate; dynamic budget response"
+        else:
+            raise ValueError("Unknown prepared-target probe kind.")
+        probe = _ConsumptionProbe(new_base, denominator, p, stocks, alpha, gamma)
+        perturbed, _ = self.evaluate_prepared_target(
+            consumption_inputs, real_borrowing_rate=rate, _probe=probe, **kwargs
+        )
+        log_change = np.clip(perturbed["target_consumption_raw_log_target"], -50, 50) - np.clip(
+            baseline["target_consumption_raw_log_target"], -50, 50
+        )
+        anchor = (
+            baseline["target_consumption_raw_target_real"]
+            if consumption_anchor_real is None
+            else self._as_array(base, consumption_anchor_real)
+        )
+        if anchor.shape != base.shape or not np.all(np.isfinite(anchor)) or np.any(anchor <= 0):
+            raise ValueError("consumption_anchor_real must be positive and finite.")
+        return dict(
+            kind=kind,
+            conditioning=conditioning,
+            step_real=step.copy(),
+            baseline=baseline,
+            perturbed=perturbed,
+            delta_log_raw_target=log_change,
+            raw_target_mpc=np.divide(
+                anchor * np.expm1(log_change), step, out=np.full_like(base, np.nan), where=step != 0
+            ),
+            desired_budget_mpc=np.divide(
+                perturbed["target_consumption_real_budget"] - baseline["target_consumption_real_budget"],
+                step,
+                out=np.full_like(base, np.nan),
+                where=step != 0,
+            ),
+        )
+
     def _evaluate_target(
         self,
         income: np.ndarray,
@@ -1328,8 +1546,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         lagged_real_consumption_budget: np.ndarray | None = None,
         ratio_denominator: np.ndarray | None = None,
         epsilon: np.ndarray | None = None,
+        consumption_inputs: ConsumptionInputs | None = None,
+        _probe: _ConsumptionProbe | None = None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
+        if consumption_inputs is not None:
+            self._validate_prepared_inputs(consumption_inputs, income.shape, current_cpi, initial_cpi, time_unit)
+        elif _probe is not None:
+            raise ValueError("A probe requires prepared consumption inputs.")
         lagged_income = np.asarray(lagged_income, dtype=float)
         lagged_consumption = np.asarray(lagged_consumption, dtype=float)
         liquid_wealth = np.asarray(liquid_wealth, dtype=float)
@@ -1370,9 +1594,26 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
         current_deflator = max(float(current_cpi) / initial_cpi, self.price_floor)
         lagged_deflator = max(float(current_cpi if lagged_cpi is None else lagged_cpi) / initial_cpi, self.price_floor)
+        if consumption_inputs is not None:
+            for name, values in (
+                ("real_borrowing_rate", real_borrowing_rate_arr),
+                ("consumer_debt_rate_delta", consumer_debt_rate_delta_arr),
+                ("uncertainty_delta", uncertainty_delta_arr),
+            ):
+                if values.shape != income.shape or not np.all(np.isfinite(values)):
+                    raise ValueError(f"{name} must be finite with one value per prepared household.")
+            if not np.isfinite(expected_inflation) or expected_inflation <= -1:
+                raise ValueError("expected_inflation must be finite and greater than -1.")
+            current_deflator = consumption_inputs.current_deflator
+            lagged_deflator = current_deflator
+            permanent_income_log_ratio_arr = (
+                consumption_inputs.pi_log_ratio_rebased if _probe is None else _probe.pi_log_ratio
+            )
         nominalizer = current_deflator * (1.0 + expected_inflation)
 
         real_spendable_income = np.maximum(income / current_deflator, self.income_floor)
+        if consumption_inputs is not None:
+            real_spendable_income = consumption_inputs.income_base_real if _probe is None else _probe.income_base_real
         real_lagged_income = np.maximum(lagged_income / lagged_deflator, self.income_floor)
         # The ECM's state variable is the previous period's *real consumption
         # budget* produced by this rule -- the same concept the current period
@@ -1458,6 +1699,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             if ratio_denominator is None
             else np.maximum(np.asarray(ratio_denominator, dtype=float), self.income_floor) * annualization_factor
         )
+        if consumption_inputs is not None:
+            opening = consumption_inputs.opening_real if _probe is None else _probe.opening_real
+            annual_spendable_income = annualization_factor * real_spendable_income
+            ratio_denominator_arr = (
+                consumption_inputs.annual_income_base_real if _probe is None else _probe.ratio_denominator_real
+            )
+            real_net_liquid_assets = current_period_net_liquid_assets = opening.net_liquid_assets
+            real_illiquid_financial_assets = current_period_illiquid_financial_assets = (
+                opening.illiquid_financial_assets
+            )
+            real_housing_wealth = real_lagged_housing_wealth = current_period_lagged_housing_wealth = (
+                opening.main_residence_wealth
+            )
+            real_consumer_debt = opening.consumer_ledger_debt
         net_liquid_assets_ratio = current_period_net_liquid_assets / ratio_denominator_arr
         illiquid_assets_ratio = current_period_illiquid_financial_assets / ratio_denominator_arr
         # Lagged (t-1), not current-period, housing wealth: main fixed a stale
@@ -1467,7 +1722,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # house_price_term combines both unit fixes: per-household descaling (population
         # scale factor, GH issue #90) and annualization (main), since house prices are
         # quoted per household, not per the model's scaled synthetic population.
-        liquid_financial_assets_ratio = (lagged_liquid_wealth / current_deflator) / ratio_denominator_arr
+        liquid_financial_assets_ratio = (
+            lagged_liquid_wealth / current_deflator if consumption_inputs is None else opening.liquid_financial_assets
+        ) / ratio_denominator_arr
         raw_wealth_ratios = np.column_stack(
             (net_liquid_assets_ratio, illiquid_assets_ratio, housing_wealth_ratio, liquid_financial_assets_ratio)
         )
@@ -1502,6 +1759,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 housing_wealth_ratio,
                 liquid_financial_assets_ratio=liquid_financial_assets_ratio,
             )
+            if _probe is not None:
+                if _probe.alpha is not None:
+                    alpha_2 = _probe.alpha
+                if _probe.gamma is not None:
+                    gamma_1 = _probe.gamma
             permanent_income_term = alpha_2 * permanent_income_log_ratio_arr
             wealth_drag = (
                 gamma_1 * net_liquid_assets_ratio
@@ -1669,6 +1931,62 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_delta_log_consumption": delta_log_consumption_clipped,
             "target_consumption_growth_clipped": growth_clipped_flag,
         }
+        components.update(
+            {
+                "target_consumption_epsilon": np.zeros_like(income)
+                if epsilon is None
+                else np.asarray(epsilon, dtype=float),
+                "target_consumption_raw_log_target": log_long_run_target,
+                "target_consumption_raw_target_real": long_run_target_real,
+                "target_consumption_raw_target_log_guarded": (np.abs(log_long_run_target) > 50).astype(float),
+                "target_consumption_unguarded_delta_log_consumption": delta_log_consumption,
+                # Keep the native legacy inputs visible as well as the prepared
+                # path operands below. These diagnostics let paired runs check
+                # initialization and target construction without replaying the
+                # evaluator from reconstructed data.
+                "target_consumption_income_base": real_spendable_income,
+                "target_consumption_annual_income_base": annual_spendable_income,
+                "target_consumption_pi_original": permanent_income_log_ratio_arr,
+                "target_consumption_monetary_income_nominal": income,
+            }
+        )
+        if consumption_inputs is not None:
+            prepared = consumption_inputs
+            h = prepared.histories
+            n = prepared.window_row_count
+
+            def upstream_count(values):
+                return np.full_like(income, np.nan) if values is None else values[-n:].sum(axis=0)
+
+            components.update(
+                {
+                    "target_consumption_income_base": real_spendable_income,
+                    "target_consumption_annual_income_base": annual_spendable_income,
+                    "target_consumption_pi_original": prepared.pi_payload.pi_log_ratio_original,
+                    "target_consumption_monetary_income_nominal": prepared.pi_payload.monetary_income_nominal,
+                    "target_consumption_pi_denominator_adjustment": permanent_income_log_ratio_arr
+                    - prepared.pi_payload.pi_log_ratio_original,
+                    "target_consumption_log_permanent_income_proxy_real": np.log(real_spendable_income)
+                    + permanent_income_log_ratio_arr,
+                    "target_consumption_income_window_rows": np.full_like(income, n),
+                    "target_consumption_smoothing_floor_hits": prepared.floor_hit_counts,
+                    "target_consumption_upstream_floor_hits": upstream_count(h.upstream_floor_used_history),
+                    "target_consumption_upstream_component_floor_hits": upstream_count(
+                        h.upstream_component_floor_used_history
+                    ),
+                    "target_consumption_upstream_raw_income": np.full_like(income, np.nan)
+                    if h.upstream_raw_history is None
+                    else h.upstream_raw_history[-1],
+                    "target_consumption_opening_period_id": np.full_like(income, prepared.period_id),
+                    "target_consumption_opening_liquid_assets": opening.liquid_financial_assets,
+                    "target_consumption_opening_illiquid_assets": opening.illiquid_financial_assets,
+                    "target_consumption_opening_main_residence": opening.main_residence_wealth,
+                    "target_consumption_opening_consumer_ledger_debt": opening.consumer_ledger_debt,
+                    "target_consumption_opening_mortgage_ledger_debt": opening.mortgage_ledger_debt,
+                    "target_consumption_opening_consumer_principal": opening.consumer_principal,
+                    "target_consumption_opening_mortgage_principal": opening.mortgage_principal,
+                }
+            )
         return components, target_total
 
     def compute_target_consumption(
@@ -1722,7 +2040,24 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         historic_income: np.ndarray = None,
         historic_deflator: np.ndarray = None,
         subsistence_income: np.ndarray | float | None = None,
+        consumption_inputs: ConsumptionInputs | None = None,
     ) -> np.ndarray:
+        if self.uses_aligned_behavioural_income and self.uses_income_belief_learning and consumption_inputs is None:
+            raise ValueError("Aligned monetary learning consumption requires consumption_inputs.")
+        if consumption_inputs is not None:
+            self._validate_prepared_inputs(
+                consumption_inputs, np.asarray(income).shape, current_cpi, initial_cpi, time_unit
+            )
+            previous_layout = getattr(self, "_prepared_residual_layout", None)
+            if previous_layout is not None and previous_layout != consumption_inputs.household_layout_key:
+                raise ValueError("Prepared residual layout changed; reset consumption state before a new run/layout.")
+            if previous_layout is None and self._household_epsilon is not None:
+                raise ValueError("Prepared consumption cannot reuse legacy residuals; reset consumption state.")
+            if (
+                self._household_epsilon is not None
+                and self._household_epsilon.shape != consumption_inputs.income_base_real.shape
+            ):
+                raise ValueError("Prepared household layout changed; reset consumption residual state.")
         tau_vat_array = np.asarray(tau_vat, dtype=float)
         if tau_vat_array.shape != () or not np.isfinite(tau_vat_array) or float(tau_vat_array) < 0.0:
             raise ValueError("tau_vat must be a finite nonnegative scalar.")
@@ -1768,7 +2103,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # evaluation perturbs income to difference out the MPC; anything that is
         # redrawn or recomputed between the two calls contaminates that derivative.
         epsilon = self._epsilon(income.size)
-        if self.income_denominator == "geometric_average":
+        if consumption_inputs is not None:
+            ratio_denominator = consumption_inputs.income_base_real
+        elif self.income_denominator == "geometric_average":
             if historic_income is None:
                 # The configured temporal denominator requires an explicit
                 # history. Missing history is a wiring error, not permission to
@@ -1814,20 +2151,37 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             time_unit=time_unit,
             lagged_real_consumption_budget=lagged_real_consumption_budget,
             ratio_denominator=ratio_denominator,
+            consumption_inputs=consumption_inputs,
         )
         if self.idiosyncratic_persistence == "initial_state" and self._household_epsilon is None:
             self._household_epsilon = self._initial_state_epsilon(income, target_inputs)
             epsilon = self._household_epsilon
         components, target_total = self._evaluate_target(income=income, epsilon=epsilon, **target_inputs)
+        if consumption_inputs is not None:
+            self._prepared_residual_layout = consumption_inputs.household_layout_key
 
         current_deflator = max(
             float(current_cpi) / (float(initial_cpi) if initial_cpi != 0.0 else 1.0), self.price_floor
         )
-        real_income_perturbation = np.maximum(1.0, np.abs(income / current_deflator) * 1e-4)
-        nominal_income_perturbation = real_income_perturbation * current_deflator
-        _, perturbed_target = self._evaluate_target(
-            income=income + nominal_income_perturbation, epsilon=epsilon, **target_inputs
+        formula_income_real = (
+            income / current_deflator if consumption_inputs is None else consumption_inputs.income_base_real
         )
+        real_income_perturbation = np.maximum(1.0, np.abs(formula_income_real) * 1e-4)
+        nominal_income_perturbation = real_income_perturbation * current_deflator
+        if consumption_inputs is None:
+            _, perturbed_target = self._evaluate_target(
+                income=income + nominal_income_perturbation, epsilon=epsilon, **target_inputs
+            )
+        else:
+            formula_probe = _ConsumptionProbe(
+                formula_income_real + real_income_perturbation,
+                consumption_inputs.annual_income_base_real,
+                consumption_inputs.pi_log_ratio_rebased,
+                consumption_inputs.opening_real,
+            )
+            _, perturbed_target = self._evaluate_target(
+                income=income, epsilon=epsilon, _probe=formula_probe, **target_inputs
+            )
 
         # ``target_total`` is the calibrated consumption budget. Cash rent is
         # and imputed rent are removed from goods below; the legacy MPC remains

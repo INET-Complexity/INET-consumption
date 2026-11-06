@@ -1,8 +1,9 @@
 # Increment 1 — income/state adapter
 
-Status: detailed plan; the three audit clarifications below are confirmed and
-recorded on 4 November 2026. Implementation has not started.
-Baseline: INET b1db808e on feature/spec4-consumption-rule, 4 November 2026.
+Status: implemented locally on 4 November 2026; review and approval pending.
+The three confirmed audit clarifications are implemented below.
+Implementation baseline: INET cef2bff0 on feature/spec4-consumption-rule, following
+the floor-unit prerequisite b1db808e. See the implementation record at the end.
 
 ## Authority and review boundary
 
@@ -34,7 +35,7 @@ The exact fields, transitions and acceptance cases below implement this contract
 
 | File / symbol | Increment 1 work |
 |---|---|
-| `macromodel/agents/households/consumption_inputs.py` (new) | Typed input/result records, pure history/PI arithmetic, copied opening snapshot and an explicitly invoked collector/lifecycle API. Names below are proposed local interfaces, not existing symbols. |
+| `macromodel/agents/households/consumption_inputs.py` (new) | Typed input/result records, pure history/PI arithmetic, copied opening snapshot and an explicitly invoked collector/lifecycle API. Implemented interfaces are recorded at the end. |
 | `tests/test_macromodel/unit/test_agents/test_households/test_consumption_inputs.py` (new) | Independent arithmetic, input-error, snapshot-lifetime and source-collection regressions. |
 | `docs/implementation/spec4-consumption-rule/INCREMENT-1.md` | Record implemented interfaces, verification commands and deviations after review. |
 | `Country._set_household_target_demand`, `Country.reset`, `Households.compute_target_consumption` | Source/integration seams to inspect and exercise explicitly in fixtures; do not hook the adapter into these active methods in increment 1. Hook and reset integration are increment 2 work. |
@@ -151,7 +152,7 @@ series, another common-forecast addition or learner update is required here.
 
 ## Opening snapshot and two-pass lifetime
 
-The proposed adapter has an explicit `capture_opening`, `prepare` and `reset`
+The adapter has an explicit `capture_opening`, `prepare` and `reset`
 lifecycle. Keep it owned by one run; no module-global cache or RNG. Runtime hooks
 will be added only in increment 2.
 
@@ -227,3 +228,92 @@ examples, test commands/results, error/lifetime behavior and any remaining limit
 Review against PLAN and INPUT-TIMING. Resolve substantive ambiguities before code
 that depends on them. Later-increment plans are expanded one at a time after the
 preceding review; this file does not authorize their implementation.
+
+## Implementation record — 4 November 2026
+
+Implemented locally against cef2bff0. Result: PASS for the increment's implementation
+and validation gate; user review/approval remains pending. No policy deviations.
+PLAN and INPUT-TIMING remain the economic/source authorities; their preparation-era
+pending-status statements are historical. Active target and reset wiring remain
+increment 2 work.
+
+### Implemented interfaces
+
+- `MonetaryUnits(currency, population_scale)` declares common source units. The
+  owner supplies matching metadata for income, floors, stocks, principal and PI;
+  the adapter never infers compatibility from numeric size.
+- `OpeningStockValues` holds separate H-vectors for liquid/illiquid assets,
+  main-residence wealth, mortgage/consumer ledger debt and principal. Its
+  `net_liquid_assets` property subtracts the ledger debts, retaining signed NLA.
+- `OpeningSnapshot(period_id, household_layout_key, units, nominal)` owns the
+  immutable opening stock record.
+- `PermanentIncomePayload.from_learning_inputs(result, period_id=..., pass_kind=...,
+  household_layout_key=..., units=...)` copies M/q from the one ready producer result.
+- `IncomeHistories` validates complete B/S/price shapes and optional matching row
+  labels before window selection. The quarterly window must be four. Optional raw
+  and floor-flag histories remain available under `upstream_*_history` fields.
+- `prepare_inputs(histories, opening_snapshot, pi_payload, *, period_id, pass_kind,
+  household_layout_key) -> ConsumptionInputs` performs only smoothing, annualization,
+  M-based log rebasing and current-price opening-stock deflation. Original M/q remain
+  in `pi_payload`; floors/counts in `floor_hit_mask`/`floor_hit_counts` cover the selected
+  window, with counts per household. Full supplied upstream diagnostics stay in
+  `histories`, without reconstructing unavailable observations.
+- `ConsumptionSources(households, economy, credit_market, income_units,
+  subsistence_units, stock_units, principal_units)` declares production objects.
+- `ConsumptionInputAdapter.capture_opening(sources, *, period_id,
+  household_layout_key, pass_kind="first")` captures explicitly. `prepare(...)`
+  uses the stored snapshot; `collect_inputs(sources, pi_payload, *, period_id,
+  pass_kind, household_layout_key, current_consumer_price, price_history_layout,
+  history_window=4)` reads ready histories and delegates to preparation.
+  `opening_snapshot` is inspectable; `reset()` clears it. Neither preparation nor
+  collection implicitly captures or replaces opening stocks.
+
+Produced records are frozen; arrays are copied onto immutable byte buffers. They
+cannot be mutated or made writable. Deep-copying an adapter preserves independent
+lifecycle state while safely sharing immutable input records.
+
+### Verified source mapping
+
+Opening household `ts.current`: `liquid_financial_assets`,
+`illiquid_financial_assets`, `wealth_main_residence`, `mortgage_debt`,
+`consumption_loan_debt`. Principal comes from tuple positions 1/3 of
+`CreditMarket.household_contractual_debt_rate_components(use_opening_schedule=False)`.
+No other-property wealth or post-transaction tenure mask is used.
+
+Flow histories: household `expected_behavioural_income`, Economy
+`subsistence_consumption`, and the price series selected by
+`consumer_price_level_series_name()`. C0 uses `initial_consumer_price_level()`;
+period length uses `time_unit`. Scalar price rows `(K,1)` are validated/converted to
+`(K,)`; multicolumn rows are rejected. Optional upstream raw/floor/component flags
+use the existing `expected_behavioural_income_*` series. Same-pass PI is supplied
+explicitly, never reconstructed from stale target diagnostics or a producer rerun.
+
+### Verification
+
+With `PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1`,
+`MPLCONFIGDIR=/private/tmp/inet-inputs-mpl` and
+`NUMBA_CACHE_DIR=/private/tmp/inet-inputs-numba`:
+
+```sh
+.venv/bin/python -m pytest -q -p no:cacheprovider \
+  tests/test_macromodel/unit/test_country \
+  tests/test_macromodel/unit/test_agents/test_households \
+  tests/test_macromodel/unit/test_markets/test_credit_market \
+  tests/test_macromodel/unit/test_household_repairs_integration.py
+```
+
+881 passed (72 new adapter cases), 106 warnings, 126.63 seconds. This includes the
+floor-unit, monetary-income bridge, behavioural-interest and two-period accounting
+regressions. A focused adapter/floor/bridge/interest run also passed all 120 cases.
+Warnings come from existing pandas concatenation and legacy CES NumPy calls.
+Ruff `check --no-cache`, `format --check --no-cache` on both new files and whitespace
+checks pass. New-file whitespace was also inspected with `git diff --no-index --check`.
+
+GitNexus refreshed with `analyze --index-only`; adapter impact is LOW, one importer
+(the new tests), zero affected execution flows. `detect_changes(scope="all")` cannot
+report these untracked new files, so its empty result was supplemented by indexed
+context/impact and direct file/status review. INET changes are exactly the new
+adapter, new tests and this implementation record. No commit, push, branch creation,
+PR, experiment or recalibration. No live-target/MPC/.14/spending acceptance claimed.
+
+Next action: review and approval of increment 1. Do not advance to increment 2.

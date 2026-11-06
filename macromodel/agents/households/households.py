@@ -30,6 +30,7 @@ from macro_data import SyntheticCountry, SyntheticPopulation
 from macro_data.readers.emission_fraction.emission_fraction_reader import EmissionFractions
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.households.consumption_inputs import ConsumptionInputs
 from macromodel.agents.households.func.borrow_vs_sell import (
     compute_borrow_vs_sell_choice,
 )
@@ -37,7 +38,7 @@ from macromodel.agents.households.func.consumer_distress import (
     FICPForgivenessEvent,
     compute_stage6_consumer_distress_state,
 )
-from macromodel.agents.households.func.consumption import validate_consumption_weights
+from macromodel.agents.households.func.consumption import CreditAugmentedConsumption, validate_consumption_weights
 from macromodel.agents.households.func.financial_feasibility import (
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
@@ -715,7 +716,18 @@ class Households(Agent):
             configuration (HouseholdsConfiguration): New household config
         """
         self.gen_reset()
-        update_functions(functions=self.functions, model=configuration.functions, loc="macromodel.agents.households")
+        consumption = self.functions["consumption"]
+        reset_integrated_rule = (
+            isinstance(consumption, CreditAugmentedConsumption)
+            and consumption.uses_aligned_behavioural_income
+            and consumption.uses_income_belief_learning
+        )
+        update_functions(
+            functions=self.functions,
+            model=configuration.functions,
+            loc="macromodel.agents.households",
+            force_reset=["consumption"] if reset_integrated_rule else None,
+        )
         self.use_consumption_weights_by_income = configuration.take_consumption_weights_by_income_quantile
         self.configure_feasibility_resolver(configuration.parameters.uses_feasibility_resolver)
 
@@ -1855,6 +1867,7 @@ class Households(Agent):
         replace_current_diagnostics: bool = False,
         time_unit: int = 12,
         subsistence_income: Optional[np.ndarray] = None,
+        consumption_inputs: ConsumptionInputs | None = None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -1907,6 +1920,30 @@ class Households(Agent):
         Returns:
             np.ndarray: Target consumption by household
         """
+        integrated = (
+            isinstance(self.functions["consumption"], CreditAugmentedConsumption)
+            and self.functions["consumption"].uses_aligned_behavioural_income
+            and self.functions["consumption"].uses_income_belief_learning
+            and not assume_zero_growth
+        )
+        if integrated:
+            if income_override is not None or lagged_income_override is not None:
+                raise ValueError(
+                    "Integrated income overrides require rebuilt prepared histories; use the explicit probe API."
+                )
+            if not isinstance(consumption_inputs, ConsumptionInputs):
+                raise ValueError("Aligned monetary consumption requires prepared consumption_inputs.")
+            expected_pass = "replacement" if replace_current_diagnostics else "first"
+            if consumption_inputs.pass_kind != expected_pass or consumption_inputs.period_id != len(
+                self.ts.historic("income")
+            ):
+                raise ValueError("consumption_inputs period/pass must match the household planning call.")
+            if consumption_inputs.income_base_real.shape != (self.ts.current("n_households"),):
+                raise ValueError("consumption_inputs household dimensions must match the planning population.")
+            if not np.isclose(
+                consumption_inputs.current_deflator, float(current_cpi) / float(initial_cpi), rtol=1e-12, atol=0
+            ):
+                raise ValueError("consumption_inputs current deflator must match the planning price.")
         self.consumption_vat_rate = float(tau_vat)
         if not np.isfinite(tau_vat) or tau_vat < 0.0:
             raise ValueError("Consumption VAT must be finite and non-negative.")
@@ -2054,6 +2091,7 @@ class Households(Agent):
                 uncertainty_delta=uncertainty_delta,
                 population_scale_factor=self.states.get("population_scale_factor"),
                 time_unit=time_unit,
+                **({"consumption_inputs": consumption_inputs} if integrated else {}),
             )
             components = getattr(self.functions["consumption"], "last_target_consumption_components", None)
             if components is not None:
@@ -2714,6 +2752,29 @@ class Households(Agent):
             "target_consumption_total_mpc",
             "target_consumption_goods_total",
             "target_consumption_market_total",
+            "target_consumption_income_base",
+            "target_consumption_annual_income_base",
+            "target_consumption_pi_original",
+            "target_consumption_monetary_income_nominal",
+            "target_consumption_pi_denominator_adjustment",
+            "target_consumption_log_permanent_income_proxy_real",
+            "target_consumption_income_window_rows",
+            "target_consumption_smoothing_floor_hits",
+            "target_consumption_upstream_floor_hits",
+            "target_consumption_upstream_component_floor_hits",
+            "target_consumption_upstream_raw_income",
+            "target_consumption_opening_period_id",
+            "target_consumption_opening_liquid_assets",
+            "target_consumption_opening_illiquid_assets",
+            "target_consumption_opening_main_residence",
+            "target_consumption_opening_consumer_ledger_debt",
+            "target_consumption_opening_mortgage_ledger_debt",
+            "target_consumption_opening_consumer_principal",
+            "target_consumption_opening_mortgage_principal",
+            "target_consumption_epsilon",
+            "target_consumption_raw_log_target",
+            "target_consumption_raw_target_log_guarded",
+            "target_consumption_unguarded_delta_log_consumption",
         ]
 
     def _append_target_consumption_diagnostics(
@@ -4230,7 +4291,9 @@ class Households(Agent):
         households_group = group["households"]
         for key in self._RATIO_DIAGNOSTIC_KEYS:
             history = self._ratio_diagnostics_history[key]
-            if history:
+            # The net-liquid/illiquid/housing ratios are also TimeSeries diagnostics
+            # and are already written by save_to_h5; only add what is missing.
+            if history and key not in households_group:
                 households_group.create_dataset(key, data=np.asarray(history, dtype=float))
 
     def total_consumption(self) -> np.ndarray:

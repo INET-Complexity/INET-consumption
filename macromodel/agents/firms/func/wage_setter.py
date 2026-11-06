@@ -517,6 +517,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         realised_productivity_window: int = 4,
         incumbent_indexation_pass_through: float = 0.0,
         new_hire_offer_pass_through: float = 1.0,
+        offer_base: str = "per_head",
         slack_response_up: float = 0.0,
         slack_response_down: float = 0.0,
         max_offer_log_cut: float = 0.02,
@@ -548,6 +549,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         self.realised_productivity_window = int(realised_productivity_window)
         self.incumbent_indexation_pass_through = float(incumbent_indexation_pass_through)
         self.new_hire_offer_pass_through = float(new_hire_offer_pass_through)
+        if offer_base not in ("per_head", "per_labour_input"):
+            raise ValueError(f"offer_base must be 'per_head' or 'per_labour_input', got {offer_base!r}")
+        self.offer_base = offer_base
         self.slack_response_up = float(slack_response_up)
         self.slack_response_down = float(slack_response_down)
         self.max_offer_log_cut = float(max_offer_log_cut)
@@ -810,7 +814,16 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         employed = corresponding_firm >= 0
         employed_firm = corresponding_firm[employed]
         rate_sum = np.bincount(employed_firm, weights=carried_wage_rate[employed], minlength=n_firms)
-        headcount = np.bincount(employed_firm, minlength=n_firms).astype(float)
+        if self.offer_base == "per_labour_input":
+            # Workers differ in labour input, so the firm's rate is per unit of input.
+            # A per-head base would count the firm's mean input twice in offers.
+            headcount = np.bincount(
+                employed_firm,
+                weights=current_individual_labour_inputs[employed],
+                minlength=n_firms,
+            ).astype(float)
+        else:
+            headcount = np.bincount(employed_firm, minlength=n_firms).astype(float)
         has_workforce = headcount > 0
 
         # Firms with no current workforce have no carried rates to average, so

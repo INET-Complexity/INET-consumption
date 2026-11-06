@@ -523,3 +523,44 @@ def test__missing_labour_inputs_leave_offers_unchanged():
     carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
     f = _offer_slack(setter, carried, None, None)
     np.testing.assert_allclose(f(0, 1.0), 15.0)
+
+
+def test__per_labour_input_base_removes_firm_mean_input_from_offers():
+    """Rate per unit of input: same rates per unit give the same offer per unit."""
+    setter = _setter(offer_base="per_labour_input")
+    inputs = np.array([2.0, 2.0, 0.5, 1.0, 0.0])
+    carried = 10.0 * inputs
+    f = setter.get_offered_wage_given_labour_inputs_function(
+        corresponding_firm=CORRESPONDING_FIRM,
+        current_individual_labour_inputs=inputs,
+        previous_employee_income=np.full(5, 999.0),
+        current_target_production=np.full(N_FIRMS, 10.0),
+        current_limiting_intermediate_inputs=np.full(N_FIRMS, 10.0),
+        current_limiting_capital_inputs=np.full(N_FIRMS, 10.0),
+        industry_labour_productivity_by_firm=np.full(N_FIRMS, 1.0),
+        initial_wage_per_capita=INITIAL_WAGE,
+        current_wage_per_capita=np.full(N_FIRMS, 55.0),
+        current_labour_productivity_factor=np.ones(N_FIRMS),
+        prev_labour_productivity_factor=np.ones(N_FIRMS),
+        current_wage_tightness_markup=np.zeros(N_FIRMS),
+        income_taxes=INCOME_TAX,
+        employee_social_insurance_tax=EMPLOYEE_SI,
+        employer_social_insurance_tax=EMPLOYER_SI,
+        unemployment_benefits_by_individual=0.0,
+        current_tfp_multiplier=np.ones(N_FIRMS),
+        prev_tfp_multiplier=np.ones(N_FIRMS),
+        carried_wage_rate=carried,
+    )
+    np.testing.assert_allclose([f(0, 1.0), f(1, 1.0), f(2, 1.0)], 10.0)
+
+
+def test__offer_floor_accepts_a_benefit_per_person():
+    benefits = np.array([1.0, 1.0, 1.0, 1.0, 1000.0])
+    f = _offer(_setter(), np.array([10.0, 20.0, 30.0, 40.0, 5.0]), benefits=benefits)
+    offers = f(0, np.ones(5))
+    assert offers[4] == 1000.0 and offers[0] < 1000.0
+
+
+def test__unknown_offer_base_raises():
+    with pytest.raises(ValueError, match="offer_base"):
+        _setter(offer_base="per_hour")

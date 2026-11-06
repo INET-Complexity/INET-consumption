@@ -40,6 +40,7 @@ import scipy as sp
 from scipy.optimize import linear_sum_assignment as lsa
 
 from macro_data.processing.synthetic_firms.synthetic_firms import SyntheticFirms
+from macro_data.processing.synthetic_matching.worker_productivity import match_workers_by_productivity
 from macro_data.processing.synthetic_population.synthetic_population import (
     SyntheticPopulation,
 )
@@ -213,6 +214,7 @@ def match_individuals_with_firms_country(
     employee_social_contribution_taxes: float,
     firms: SyntheticFirms,
     population: SyntheticPopulation,
+    worker_productivity=None,
 ):
     """Harmonize employment data across all industries in a country.
 
@@ -234,7 +236,21 @@ def match_individuals_with_firms_country(
         employee_social_contribution_taxes (float): Social security tax rate
         firms (SyntheticFirms): Firm labor expense data
         population (SyntheticPopulation): Individual employment data
+        worker_productivity (WorkerProductivityConfiguration, optional): If set, workers keep
+            fixed labour inputs built from survey income, and pay follows those inputs.
     """
+    if worker_productivity is not None:
+        match_workers_by_productivity(
+            n_industries=len(industries),
+            labour_taxrate=1
+            - employee_social_contribution_taxes
+            - income_taxes * (1 - employee_social_contribution_taxes),
+            firms=firms,
+            population=population,
+            configuration=worker_productivity,
+        )
+        return
+
     for industry_index in range(len(industries)):
         wage_offered, pos_corr_firm = preprocess(
             synthetic_population=population,

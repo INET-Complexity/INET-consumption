@@ -261,6 +261,7 @@ class CentralGovernment(Agent):
     def distribute_unemployment_benefits_to_individuals(
         self,
         current_individual_activity_status: np.ndarray,
+        benefit_weights: np.ndarray | None = None,
     ) -> np.ndarray:
         """Distribute unemployment benefits to eligible individuals.
 
@@ -270,14 +271,15 @@ class CentralGovernment(Agent):
         Args:
             current_individual_activity_status (np.ndarray): Activity status
                 for each individual
+            benefit_weights (np.ndarray, optional): Fixed person weights on the benefit level
 
         Returns:
             np.ndarray: Unemployment benefits by individual (zero for employed)
         """
         unemployment_benefits = np.zeros(current_individual_activity_status.shape)
-        unemployment_benefits[current_individual_activity_status == ActivityStatus.UNEMPLOYED] = self.ts.current(
-            "unemployment_benefits_by_individual"
-        )[0]
+        unemployed = current_individual_activity_status == ActivityStatus.UNEMPLOYED
+        level = self.ts.current("unemployment_benefits_by_individual")[0]
+        unemployment_benefits[unemployed] = level if benefit_weights is None else level * benefit_weights[unemployed]
         return unemployment_benefits.astype(float)
 
     def distribute_public_pension_benefits_to_individuals(

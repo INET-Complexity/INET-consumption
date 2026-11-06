@@ -66,6 +66,7 @@ var_mapping = {
     "PA0200": "Education",  # Education level
     "PE0100a": "Labour Status",  # Employment status
     "PE0400": "Employment Industry",  # Industry of employment
+    "PE0600": "Weekly Hours",  # Hours per week in main job
     "PG0110": "Employee Income",  # Income from employment
     "PG0210": "Self-Employment Income",  # Income from self-employment
     "DI1300": "Rental Income from Real Estate",  # Income from property
@@ -137,6 +138,7 @@ var_mapping = {
 var_numerical = [
     "Income",  # Total income
     "Employee Income",  # Employment earnings
+    "Weekly Hours",  # Hours per week in main job
     "Self-Employment Income",  # Business income
     "Rental Income from Real Estate",  # Property income
     "Income from Financial Assets",  # Investment returns

@@ -3,10 +3,11 @@ import logging
 import numpy as np
 import pandas as pd
 
-from macro_data.util.imputation import apply_iterative_imputer
-
 # Age from which active people are removed from the labour force first when the participation rate
 # has to be lowered
+from macro_data.processing.synthetic_matching.worker_productivity import apply_wage_floor
+from macro_data.util.imputation import apply_iterative_imputer
+
 RETIREMENT_AGE = 65
 
 
@@ -41,6 +42,7 @@ def process_individual_data(
     n_firms_by_industry: list[int] | np.ndarray,
     yearly_factor: float = 4.0,
     employee_shares: np.ndarray | None = None,
+    worker_productivity=None,
 ) -> pd.DataFrame:
     """
     Process individual data by performing various data cleaning and transformation steps.
@@ -53,6 +55,8 @@ def process_individual_data(
         unemployment_rate (float): The unemployment rate.
         participation_rate (float): The participation rate.
         n_firms_by_industry (list[int] | np.ndarray): The number of firms by industry.
+        worker_productivity (WorkerProductivityConfiguration, optional): If set, income is floored
+            at the hours-adjusted wage floor, not at the unemployment benefit.
 
     Returns:
         pd.DataFrame: The processed individual data.
@@ -101,10 +105,12 @@ def process_individual_data(
 
     individual_data = fill_individual_employee_income(
         individual_data,
-        unemployment_benefits_by_individual=unemployment_benefits_by_individual,
+        unemployment_benefits_by_individual=0.0 if worker_productivity else unemployment_benefits_by_individual,
         scale=scale,
         yearly_factor=yearly_factor,
     )
+    if worker_productivity:
+        individual_data = apply_wage_floor(individual_data, worker_productivity, scale, yearly_factor)
     individual_data = set_individual_unemployed_income(
         individual_data, unemployment_benefits_by_individual=unemployment_benefits_by_individual
     )
@@ -128,6 +134,7 @@ def process_individual_data(
             "Income",
             "Corresponding Household ID",
             "Relation to Reference Person",
+            *(["Effective Hours"] if worker_productivity else []),
         ]
     ].copy()
 

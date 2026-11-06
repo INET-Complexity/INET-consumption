@@ -1173,11 +1173,15 @@ class Country:
         # Individuals set reservation wages
         self.individuals.ts.reservation_wages.append(
             self.individuals.compute_reservation_wages(
-                unemployment_benefits_by_individual=self.central_government.ts.current(
-                    "unemployment_benefits_by_individual"
-                )[0],
+                unemployment_benefits_by_individual=self._unemployment_benefit_by_individual(),
             )
         )
+
+    def _unemployment_benefit_by_individual(self) -> float | np.ndarray:
+        """Benefit each person would receive if unemployed."""
+        level = self.central_government.ts.current("unemployment_benefits_by_individual")[0]
+        weights = self.individuals.states.get("Benefit Weight")
+        return level if weights is None else level * weights
 
     def update_firm_wage_offers(self, *, replace_current: bool) -> None:
         """Set firm wage markup/offers from the current operative labour demand."""
@@ -1192,9 +1196,7 @@ class Country:
             current_individual_labour_inputs=self.individuals.ts.current("labour_inputs"),
             previous_employee_income=self.individuals.ts.current("employee_income"),
             carried_wage_rate=self.individuals.states["Wage Rate"],
-            unemployment_benefits_by_individual=self.central_government.ts.current(
-                "unemployment_benefits_by_individual"
-            )[0],
+            unemployment_benefits_by_individual=self._unemployment_benefit_by_individual(),
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
@@ -1467,6 +1469,7 @@ class Country:
         self.individuals.ts.income_from_unemployment_benefits.append(
             self.central_government.distribute_unemployment_benefits_to_individuals(
                 current_individual_activity_status=self.individuals.states["Activity Status"],
+                benefit_weights=self.individuals.states.get("Benefit Weight"),
             )
         )
         self.individuals.ts.public_pension_benefits.append(
@@ -3592,6 +3595,7 @@ class Country:
             "income_from_unemployment_benefits",
             self.central_government.distribute_unemployment_benefits_to_individuals(
                 current_individual_activity_status=self.individuals.states["Activity Status"],
+                benefit_weights=self.individuals.states.get("Benefit Weight"),
             ),
         )
         # Update individual income components

@@ -269,7 +269,9 @@ class SyntheticCountry:
             country_name_short=country.to_two_letter_code(),
             exogenous_data=exogenous_country_data,
             yearly_factor=yearly_factor,
+            worker_productivity=country_configuration.worker_productivity,
         )
+        population.worker_productivity = country_configuration.worker_productivity
 
         firms = DefaultSyntheticFirms.from_readers(
             readers=readers,
@@ -507,7 +509,9 @@ class SyntheticCountry:
             quarter=quarter,
             exogenous_data=exogenous_country_data,
             yearly_factor=yearly_factor,
+            worker_productivity=country_configuration.worker_productivity,
         )
+        population.worker_productivity = country_configuration.worker_productivity
 
         firms = DefaultSyntheticFirms.from_readers(
             readers=readers,
@@ -757,6 +761,7 @@ class SyntheticCountry:
             employee_social_contribution_taxes=employee_social_contribution_taxes,
             firms=firms,
             population=population,
+            worker_productivity=getattr(population, "worker_productivity", None),
         )
         match_firms_with_banks_optimal(firms=firms, banks=banks)
         population.ensure_household_wealth(independents=independents)

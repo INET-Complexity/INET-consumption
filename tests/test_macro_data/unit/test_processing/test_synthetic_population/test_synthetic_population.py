@@ -36,11 +36,17 @@ def test__initial_unemployment_benefit_preserves_the_recipient_budget():
     assert initial_unemployment_benefit_per_recipient(total_unemployment_benefits=12.0, n_unemployed=3) == 4.0
 
 
+def test__process_individual_data_rejects_population_without_children():
+    individual_data = pd.DataFrame({"Age": [40.0, 50.0]})
+    with pytest.raises(ValueError, match="no person under 16"):
+        individual_tools.process_individual_data(individual_data, [], 1, 0.0, 0.1, 0.5, [])
+
+
 def test__unemployment_benefit_fallback_uses_active_labour_force(monkeypatch):
     individual_data = pd.DataFrame(
         {
             "Gender": [1, 2] * 4,
-            "Age": [40] * 8,
+            "Age": [40] * 7 + [10],
             "Education": [3] * 8,
             "Labour Status": [1] * 4 + [5] * 4,
             "Employee Income": [0.0] * 8,
@@ -48,7 +54,6 @@ def test__unemployment_benefit_fallback_uses_active_labour_force(monkeypatch):
             "Relation to Reference Person": [1] * 8,
         }
     )
-    monkeypatch.setattr(individual_tools, "remove_outliers", lambda data, **_: data)
     monkeypatch.setattr(individual_tools, "fill_missing_gender", lambda data: data)
     monkeypatch.setattr(individual_tools, "fill_individual_age", lambda data: data)
     monkeypatch.setattr(individual_tools, "fill_individual_education", lambda data: data)

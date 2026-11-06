@@ -3,7 +3,6 @@ import logging
 import numpy as np
 import pandas as pd
 
-from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
 
 # Age from which active people are removed from the labour force first when the participation rate
@@ -64,11 +63,8 @@ def process_individual_data(
     no_age = individual_data["Age"].isna()
     individual_data.loc[no_age, "Age"] = np.random.choice(range(0, 100), no_age.sum(), replace=True)
 
-    individual_data = remove_outliers(
-        data=individual_data,
-        cols=["Employee Income", "Gender", "Age", "Education", "Labour Status"],
-        use_logpdf=False,
-    )
+    if not (individual_data["Age"] < 16).any():
+        raise ValueError("Synthetic population has no person under 16: age data were lost before this step.")
     individual_data = fill_missing_gender(individual_data)
     individual_data = fill_individual_age(individual_data)
     individual_data = fill_individual_education(individual_data)

@@ -139,6 +139,17 @@ def test__new_hire_adopts_the_offered_rate_and_keeps_it():
     np.testing.assert_allclose(carried[1], 77.0 * (2.20 / 1.10))
 
 
+def test__hire_without_an_offer_takes_the_incumbent_mean_rate():
+    """A wage-blind clearer records an offer of zero. The hire must still be paid."""
+    setter = _setter(incumbent_indexation_pass_through=0.0, initial_rate_source="individual")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 0.0])
+    new_job = np.array([False, True, False, False, False])
+
+    _run(setter, carried, new_job=new_job, offered=np.zeros(5))
+
+    assert carried[1] == pytest.approx(10.0)
+
+
 def test__firm_anchor_arm_overwrites_dispersion_once():
     carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
     _run(_setter(initial_rate_source="firm_anchor"), carried)

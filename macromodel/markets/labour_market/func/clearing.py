@@ -1067,6 +1067,7 @@ class PolednaLabourMarketClearer(LabourMarketClearer):
             firing_cost_fraction=self.firing_cost_fraction,
         )
         # Hiring
+        individuals.states["Started New Job"] = np.full(len(current_individuals_activity), False)
         individuals.states["Offered Wage of Accepted Job"] = np.zeros(len(current_individuals_activity))
         hiring_costs_regular, num_newly_joining, new_hires = hiring(
             firm_industries=firm_industries,
@@ -1087,6 +1088,7 @@ class PolednaLabourMarketClearer(LabourMarketClearer):
         for employment, hires in zip(firm_employments, new_hires):
             employment.extend(hires)
             current_individuals_activity[hires] = ActivityStatus.EMPLOYED
+            individuals.states["Started New Job"][hires] = True
 
         # Sanity check
         no_zero_employees = np.all(

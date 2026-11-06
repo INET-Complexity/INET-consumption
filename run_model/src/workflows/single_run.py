@@ -32,7 +32,7 @@ DEFAULT_SEED = 15
 DEFAULT_T_MAX = 50
 DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "ExpectedGrowthGovernmentConsumptionSetter"
 DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "initial_fixed"
-DEFAULT_LABOUR_MARKET_CLEARER = "PolednaLabourMarketClearer"
+DEFAULT_LABOUR_MARKET_CLEARER = "ReservationWageBindingDefaultLabourMarketClearer"
 GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",

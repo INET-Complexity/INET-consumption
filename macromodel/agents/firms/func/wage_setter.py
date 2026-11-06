@@ -729,9 +729,10 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         )
         new_hire_reference = incumbent_reference[corresponding_firm[new_hire]]
         accepted_offer = current_individual_offered_wage[new_hire]
-        carried_wage_rate[new_hire] = new_hire_reference + self.new_hire_offer_pass_through * (
-            accepted_offer - new_hire_reference
-        )
+        # Wage-blind clearers make no offer (recorded as zero). Those hires take
+        # the incumbent reference, otherwise they would be paid nothing.
+        offer_premium = np.where(accepted_offer > 0.0, accepted_offer - new_hire_reference, 0.0)
+        carried_wage_rate[new_hire] = new_hire_reference + self.new_hire_offer_pass_through * offer_premium
 
         self.last_new_hire_reference_rate = new_hire_reference.copy()
         self.last_new_hire_accepted_offer = accepted_offer.copy()

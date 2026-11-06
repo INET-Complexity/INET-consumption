@@ -37,6 +37,7 @@ DEFAULT_GOVERNMENT_CONSISTENCY_INITIAL_WEIGHTS_LABEL = (
 )
 DEFAULT_GOVERNMENT_CONSUMPTION_SETTER = "ExpectedGrowthGovernmentConsumptionSetter"
 DEFAULT_GOVERNMENT_SECTORAL_WEIGHTS = "initial_fixed"
+DEFAULT_LABOUR_MARKET_CLEARER = "ReservationWageBindingDefaultLabourMarketClearer"
 GOVERNMENT_CONSUMPTION_SETTER_CHOICES = (
     "AutoregressiveGovernmentConsumptionSetter",
     "AutoregressiveGrowthGovernmentConsumptionSetter",
@@ -336,7 +337,7 @@ def main(
 
     country_cfg = country_configurations[cfg.country_iso3]
     country_cfg.firms.functions.productivity_growth.name = "SimpleTFPGrowth"
-    country_cfg.labour_market.functions.clearing.name = "PolednaLabourMarketClearer"
+    country_cfg.labour_market.functions.clearing.name = DEFAULT_LABOUR_MARKET_CLEARER
     country_cfg.central_bank.functions.policy_rate.name = "SmoothTaylorRule"
     country_cfg.government_entities.functions.consumption.name = government_consumption_setter
     if government_consumption_consistency is not None:

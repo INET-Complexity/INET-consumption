@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.housing_inputs import (
     add_housing_input_goods,
     housing_input_base,

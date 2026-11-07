@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import numpy as np
+from numba.typed import List
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.markets.labour_market.func.clearing import DefaultLabourMarketClearer, PolednaLabourMarketClearer
@@ -178,3 +179,38 @@ class TestLabourMarket:
         clearer.clear(firms=firms, households=households, individuals=individuals)
 
         assert individuals.states["Started New Job"].tolist() == [False, True]
+
+    def test_default_clear_flags_new_hires_and_clears_old_flags(self):
+        clearer = self._default_clearer(allow_switching_industries=True)
+        employments = List([List([0])])
+        firms = SimpleNamespace(
+            ts=_DummyTS({"labour_inputs": np.array([1.0]), "desired_labour_inputs": np.array([2.0])}),
+            states={
+                "Employments": employments,
+                "Industry": np.array([0]),
+                "Labour Productivity by Industry": np.array([1.0]),
+                "offered_wage_function": lambda firm_id, productivity: np.ones_like(productivity),
+            },
+        )
+        households = SimpleNamespace(ts=_DummyTS({"wealth": np.array([0.0, 0.0])}))
+        individuals = SimpleNamespace(
+            ts=_DummyTS(
+                {
+                    "labour_inputs": np.array([1.0, 1.0]),
+                    "employee_income": np.array([1.0, 0.0]),
+                    "reservation_wages": np.array([0.0, 0.0]),
+                }
+            ),
+            states={
+                "Activity Status": np.array([ActivityStatus.EMPLOYED, ActivityStatus.UNEMPLOYED]),
+                "Corresponding Firm ID": np.array([0, -1]),
+                "Corresponding Household ID": np.array([0, 1]),
+                "Employment Industry": np.array([0, 0]),
+                "Started New Job": np.array([True, False]),
+            },
+        )
+
+        clearer.clear(firms=firms, households=households, individuals=individuals)
+
+        assert individuals.states["Started New Job"].tolist() == [False, True]
+        assert individuals.states["Offered Wage of Accepted Job"][1] == 1.0

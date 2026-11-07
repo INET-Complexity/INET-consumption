@@ -232,6 +232,8 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         offered_wage_function = firms.states["offered_wage_function"]
         individual_reservation_wages = individuals.ts.current("reservation_wages")
 
+        individuals.states["Started New Job"] = np.full(len(current_individuals_activity), False)
+
         # Individuals are fired at random
         firing_costs_random_firing, num_newly_randomly_fired = random_firing(
             number_of_firms=prev_labour_inputs.shape[0],
@@ -286,6 +288,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             individual_reservation_wages=individual_reservation_wages,
             current_individual_wages=current_individual_wages,
             average_industry_productivity=firms.states["Labour Productivity by Industry"],
+            current_individual_started_new_job=individuals.states["Started New Job"],
         )
 
         return (

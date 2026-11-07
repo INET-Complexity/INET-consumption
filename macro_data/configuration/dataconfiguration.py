@@ -156,6 +156,23 @@ class CentralBankDataConfiguration(BaseModel):
     inflation_target: float = Field(0.02, ge=0.0, le=1.0)
 
 
+class WorkerProductivityConfiguration(BaseModel):
+    """
+    Build fixed worker labour inputs from survey income.
+
+    Attributes:
+        annual_wage_floor (float): Full-time annual income floor, in survey currency
+        full_time_hours (float): Weekly hours of a full-time worker
+        min_hours (float): Lowest weekly hours used to convert income to full time
+        top_quantile (float): Quantile at which full-time equivalent productivity is capped
+    """
+
+    annual_wage_floor: float
+    full_time_hours: float = 35.0
+    min_hours: float = 8.0
+    top_quantile: float = 0.999
+
+
 class CountryDataConfiguration(BaseModel):
     """
     Comprehensive configuration for a single country's economic agents and parameters.
@@ -173,6 +190,9 @@ class CountryDataConfiguration(BaseModel):
         scale (int): Number of agents represented by each synthetic agent
         eu_proxy_country (Country, optional): EU country to use as proxy for non-EU countries
         carbon_price (float): Carbon price per tonne of CO2 in local currency units
+        worker_productivity (WorkerProductivityConfiguration, optional): Fixed worker labour inputs
+        employer_social_insurance_rate (float, optional): Build rate replacing the OECD reader value.
+            Must equal the runtime central government override when one is set.
     """
 
     firms_configuration: FirmsDataConfiguration
@@ -184,6 +204,8 @@ class CountryDataConfiguration(BaseModel):
     scale: int
     eu_proxy_country: Optional[Country] = None
     carbon_price: float = 0.0
+    worker_productivity: Optional[WorkerProductivityConfiguration] = None
+    employer_social_insurance_rate: Optional[float] = None
 
 
 class ROWDataConfiguration(BaseModel):

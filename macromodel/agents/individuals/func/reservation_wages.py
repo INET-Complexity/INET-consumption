@@ -119,6 +119,12 @@ class DefaultReservationWageSetter(ReservationWageSetter):
             np.ndarray: Reservation wages by individual
         """
         reservation_wages = np.zeros_like(current_individuals_activity)
+        unemployed = current_individuals_activity == ActivityStatus.UNEMPLOYED
+        unemployed_benefits = (
+            current_unemployment_benefits_by_individual[unemployed]
+            if isinstance(current_unemployment_benefits_by_individual, np.ndarray)
+            else current_unemployment_benefits_by_individual
+        )
 
         # For employed individuals
         reservation_wages[current_individuals_activity == ActivityStatus.EMPLOYED] = historic_wages[-1][
@@ -127,13 +133,11 @@ class DefaultReservationWageSetter(ReservationWageSetter):
 
         # For unemployed individuals
         if self.unemployed_reservation_wage_timespan == 0:
-            reservation_wages[current_individuals_activity == ActivityStatus.UNEMPLOYED] = (
-                current_unemployment_benefits_by_individual
-            )
+            reservation_wages[unemployed] = unemployed_benefits
         else:
             if np.sum(current_individuals_activity == ActivityStatus.UNEMPLOYED) > 0:
                 reservation_wages[current_individuals_activity == ActivityStatus.UNEMPLOYED] = np.maximum(
-                    current_unemployment_benefits_by_individual,
+                    unemployed_benefits,
                     np.array(historic_wages[-self.unemployed_reservation_wage_timespan :])[
                         :,
                         current_individuals_activity == ActivityStatus.UNEMPLOYED,

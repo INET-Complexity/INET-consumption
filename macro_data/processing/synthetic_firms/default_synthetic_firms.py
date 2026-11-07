@@ -175,6 +175,7 @@ class DefaultSyntheticFirms(SyntheticFirms):
         exchange_rate_from_eur: float = 1.0,
         proxy_country: Optional[Country] = None,
         emission_factors: Optional[EmissionsData] = None,
+        employer_social_insurance_rate: Optional[float] = None,
     ) -> "DefaultSyntheticFirms":
         n_firms_per_industry = industry_data["industry_vectors"]["Number of Firms"].values
         # number of firms per industry is at most the number of employees per industry
@@ -184,7 +185,11 @@ class DefaultSyntheticFirms(SyntheticFirms):
         firm_data = pd.DataFrame(index=range(n_firms))
 
         exchange_rate = readers.exchange_rates.from_usd_to_lcu(country_name, year)
-        tau_sif = readers.oecd_econ.read_tau_sif(country_name, year)
+        tau_sif = (
+            readers.oecd_econ.read_tau_sif(country_name, year)
+            if employer_social_insurance_rate is None
+            else employer_social_insurance_rate
+        )
 
         total_firm_deposits = (
             readers.eurostat.get_total_nonfin_firm_deposits(proxy_country, year) * exchange_rate_from_eur

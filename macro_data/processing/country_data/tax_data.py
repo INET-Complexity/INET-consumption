@@ -6,6 +6,7 @@ World Bank, OECD, and Eurostat to provide a comprehensive view of a country's ta
 """
 
 from dataclasses import dataclass
+from typing import Optional
 
 from macro_data.configuration.countries import Country
 from macro_data.readers import DataReaders
@@ -41,13 +42,20 @@ class TaxData:
     risk_premium: float
 
     @classmethod
-    def from_readers(cls, readers: DataReaders, country: Country, year: int):
+    def from_readers(
+        cls,
+        readers: DataReaders,
+        country: Country,
+        year: int,
+        employer_social_insurance_rate: Optional[float] = None,
+    ):
         """Create a TaxData instance by fetching data from various data readers.
 
         Args:
             readers (DataReaders): Collection of data readers for accessing different data sources.
             country (Country): Country for which to fetch tax data.
             year (int): Year for which to fetch tax data.
+            employer_social_insurance_rate (float, optional): Replaces the OECD reader rate.
 
         Returns:
             TaxData: Instance containing tax rates and financial metrics for the specified
@@ -56,7 +64,11 @@ class TaxData:
         return cls(
             value_added_tax=readers.world_bank.get_tau_vat(country, year),
             export_tax=readers.get_export_taxes(country, year),
-            employer_social_insurance_tax=readers.oecd_econ.read_tau_sif(country, year),
+            employer_social_insurance_tax=(
+                readers.oecd_econ.read_tau_sif(country, year)
+                if employer_social_insurance_rate is None
+                else employer_social_insurance_rate
+            ),
             employee_social_insurance_tax=readers.oecd_econ.read_tau_siw(country, year),
             profit_tax=readers.oecd_econ.read_tau_firm(country, year),
             income_tax=readers.oecd_econ.read_tau_income(country, year),

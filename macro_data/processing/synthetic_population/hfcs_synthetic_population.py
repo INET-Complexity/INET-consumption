@@ -311,6 +311,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         exch_rate: float = 1.0,
         proxied_country: str | Country = None,
         yearly_factor: float = 4.0,
+        worker_productivity=None,
     ) -> "SyntheticHFCSPopulation":
         """
         Creates a synthetic population from data readers.
@@ -375,6 +376,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             n_firms_by_industry,
             yearly_factor=yearly_factor,
             employee_shares=employee_shares,
+            worker_productivity=worker_productivity,
         )
         unemployment_benefits_by_capita = individual_data["Unemployment Benefit Entitlement"].iloc[0]
 

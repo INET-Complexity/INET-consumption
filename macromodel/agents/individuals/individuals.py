@@ -177,6 +177,9 @@ class Individuals(Agent):
             # Pandas 3.x can return non-writeable numpy views; these states are mutated during simulation.
             states[state_name] = data[state_name].to_numpy(copy=True)
 
+        if "Benefit Weight" in data.columns:
+            states["Benefit Weight"] = data["Benefit Weight"].to_numpy(copy=True)
+
         # Update the activity status
         states["Activity Status"] = np.array(map_to_enum(states["Activity Status"], ActivityStatus))
 

@@ -32,6 +32,13 @@ class TestEuroStatReader:
     def test__household_property_income_has_no_cross_country_fallback(self, readers):
         assert readers.eurostat.household_property_income("USA", 2014) is None
 
+    def test__household_cash_social_benefits(self, readers):
+        # Eurostat nasa_10_nf_tr, D62 received by S14_S15, France 2014: 473,039 mio EUR
+        assert readers.eurostat.household_cash_social_benefits("FRA", 2014) == pytest.approx(473039e6, rel=1e-9)
+
+    def test__household_cash_social_benefits_has_no_cross_country_fallback(self, readers):
+        assert readers.eurostat.household_cash_social_benefits("USA", 2014) is None
+
     def test__rental_services_are_published_amounts_in_national_currency(self, readers):
         imputed, actual = readers.eurostat.get_rental_services_of_country("FRA", 2014)
         assert imputed == pytest.approx(168078e6)

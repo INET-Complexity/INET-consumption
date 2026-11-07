@@ -163,6 +163,7 @@ class EuroStatReader:
             "gdp": "namq_10_gdp",
             "general_gov_debt_ratio": "eurostat_general_govdebt_ratios",
             "nonfinancial_transactions": "nasa_10_nf_tr",
+            "cash_social_benefits": "nasa_10_nf_tr_d62",
             "longterm_central_gov_bond_rates": "eurostat_longterm_govbond_rates",
             "shortterm_interest_rates": "irt_st_a",
             "financial_balance_sheets": "nasa_10_f_bs",
@@ -759,6 +760,25 @@ class EuroStatReader:
             country = country.parent_country
         df = self.data["nonfinancial_transactions"]
         df = df[(df["na_item"] == "D4") & (df["direct"] == "RECV") & (df["sector"] == "S14")]
+        if df.loc[df["geo"] == country].empty:
+            return None
+        return float(self.find_value(df, country, str(year))) * 1e6
+
+    def household_cash_social_benefits(self, country: Country, year: int) -> Optional[float]:
+        """
+        Get cash social benefits (D62) received by households and NPISH (S14_S15) in the national accounts.
+
+        Args:
+            country (Country): Country to get the aggregate for
+            year (int): Year to get the aggregate for
+
+        Returns:
+            Optional[float]: Annual benefits in national currency units, or None for a region or a
+            country with no such series. No fallback is applied, because the value is an absolute amount.
+        """
+        if isinstance(country, Region):
+            return None
+        df = self.data["cash_social_benefits"]
         if df.loc[df["geo"] == country].empty:
             return None
         return float(self.find_value(df, country, str(year))) * 1e6

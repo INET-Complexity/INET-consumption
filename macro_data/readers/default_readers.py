@@ -648,9 +648,7 @@ class DataReaders:
             for year in years
         ]
         other = [
-            self.oecd_econ.all_benefits_gdp_pct(country_name, year)
-            * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
-            - unemp[i]
+            self._all_benefits_lcu(country_name, year, yearly_factor) - unemp[i]
             for i, year in enumerate(years)
         ]
 
@@ -688,6 +686,16 @@ class DataReaders:
         Returns:
             float: Total benefits in local currency units
         """
+        return self._all_benefits_lcu(country_name, year, yearly_factor)
+
+    def _all_benefits_lcu(self, country_name: Country, year: int, yearly_factor: float) -> float:
+        """Benefits paid in cash per period: national accounts D62, or the SOCX share of GDP without that series.
+
+        SOCX includes benefits in kind, which government consumption already contains.
+        """
+        cash_benefits = self.eurostat.household_cash_social_benefits(country_name, year)
+        if cash_benefits is not None:
+            return cash_benefits / yearly_factor
         return self.oecd_econ.all_benefits_gdp_pct(country_name, year) * self.world_bank.get_current_scaled_gdp(
             country_name, year, rescale_factor=yearly_factor
         )

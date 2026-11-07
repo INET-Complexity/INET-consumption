@@ -142,7 +142,8 @@ class TwoPassDiagnosticCapture:
         return tuple(self._records)
 
     def _wrap(self, code, country, original):
-        call_signature = signature(original)
+        # The real method forwards *args, **kwargs to the market target, so bind its named parameters.
+        call_signature = signature(getattr(country.households, "_compute_market_target_consumption", original))
 
         @wraps(original)
         def observed(*args, **kwargs):

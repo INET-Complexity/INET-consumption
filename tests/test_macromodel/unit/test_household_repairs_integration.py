@@ -49,7 +49,8 @@ def test_production_household_receipts_credit_relief_and_support_reconcile(dataw
         np.testing.assert_allclose(
             hh.ts.current("target_consumption_permanent_income_log_ratio"),
             hh.ts.current("target_consumption_permanent_income_log_ratio_individual")
-            + hh.ts.current("target_consumption_permanent_income_log_ratio_common"),
+            + hh.ts.current("target_consumption_permanent_income_log_ratio_common")
+            + hh.ts.current("target_consumption_pi_denominator_adjustment"),
         )
         assert np.all(hh.ts.current("income_bridge_variance") >= 0)
         assert len(hh.ts.dicts["income_bridge_current"]) == period + 2

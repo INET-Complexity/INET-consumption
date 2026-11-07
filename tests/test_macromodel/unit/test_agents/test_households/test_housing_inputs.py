@@ -49,3 +49,7 @@ def test_inputs_stay_within_a_carved_out_goods_budget():
     assert result.sum(axis=1).tolist() == pytest.approx([10.0, 2.0, 0.0])
     assert result[0].tolist() == pytest.approx([6.8, 3.2])
     assert result[1].tolist() == pytest.approx([2.0, 0.0])
+
+
+def test_calibrated_rule_keeps_inputs_inside_its_goods_budget():
+    assert CreditAugmentedConsumption.uses_housing_carve_out is True

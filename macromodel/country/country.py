@@ -30,6 +30,7 @@ with each iteration updating all agents and markets in sequence according
 to their behavioral rules and interactions.
 """
 
+import hashlib
 import logging
 from copy import deepcopy
 from pathlib import Path
@@ -66,6 +67,13 @@ from macromodel.agents.central_bank.central_bank import CentralBank
 from macromodel.agents.central_government.central_government import CentralGovernment
 from macromodel.agents.firms import Firms
 from macromodel.agents.government_entities.government_entities import GovernmentEntities
+from macromodel.agents.households.consumption_inputs import (
+    ConsumptionInputAdapter,
+    ConsumptionSources,
+    MonetaryUnits,
+    PermanentIncomePayload,
+)
+from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.households import Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -80,6 +88,7 @@ from macromodel.markets.credit_market.func.clearing import compute_firm_borrower
 from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
+from macromodel.timeseries import TimeSeries
 from macromodel.util.behavioural_income import reconcile_behavioural_income
 from macromodel.util.get_histogram import get_histogram
 
@@ -335,6 +344,19 @@ class Country:
         # Agents
         self.individuals = individuals
         self.households = households
+        # Priors are installed by from_pickled_country after the household's
+        # initial Agent snapshot. Retain that same initial record for reset;
+        # otherwise the first post-reset planning producer has no priors.
+        consumption = households.functions["consumption"]
+        if (
+            isinstance(consumption, CreditAugmentedConsumption)
+            and consumption.uses_aligned_behavioural_income
+            and consumption.uses_income_belief_learning
+            and "income_belief_priors" in households.states
+        ):
+            households.initial_states["income_belief_priors"] = deepcopy(households.states["income_belief_priors"])
+        self._consumption_input_adapter = ConsumptionInputAdapter()
+        self._consumption_run_id = 0
         self.firms = firms
         self.central_government = central_government
         self.government_entities = government_entities
@@ -397,6 +419,31 @@ class Country:
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=True, initial=True)
             self._record_behavioural_income(expected=False, initial=True)
+
+    def __deepcopy__(self, memo):
+        """Clone a run while preserving TimeSeries aliases and independent state.
+
+        TimeSeries exposes series through __getattr__, which raises KeyError for
+        Python's copy-protocol lookup. Adapt only this Country ownership boundary:
+        seed copies of the directly owned containers, then use ordinary deepcopy.
+        """
+        cloned = type(self).__new__(type(self))
+        memo[id(self)] = cloned
+        containers = {}
+        for owner in self.__dict__.values():
+            if isinstance(owner, TimeSeries):
+                containers[id(owner)] = owner
+            else:
+                for value in getattr(owner, "__dict__", {}).values():
+                    if isinstance(value, TimeSeries):
+                        containers[id(value)] = value
+        new_containers = {identity: series for identity, series in containers.items() if identity not in memo}
+        for identity, series in new_containers.items():
+            memo[identity] = type(series).__new__(type(series))
+        for identity, series in new_containers.items():
+            memo[identity].__dict__.update(deepcopy(series.__dict__, memo))
+        cloned.__dict__.update(deepcopy(self.__dict__, memo))
+        return cloned
 
     def nominal_employee_income(self) -> np.ndarray:
         """Current wage-only nominal receipts, on the payroll price basis."""
@@ -864,6 +911,7 @@ class Country:
             fallback_net_smic=central_government.ts.current("unemployment_benefits_by_individual")[0],
             country_name=country_name,
             smic_path=data_paths.insee_smic_path if data_paths is not None else None,
+            population_scale_factor=scale,
         )
         economy.ts.override_current("net_smic_base", [net_smic_base])
         economy.ts.override_current(
@@ -1000,7 +1048,20 @@ class Country:
         fallback_net_smic: float,
         country_name: str,
         smic_path: Optional[str | Path] = None,
+        population_scale_factor: float = 1.0,
     ) -> float:
+        """Return the canonical SMIC base in model monetary units.
+
+        INSEE supplies ordinary-household monthly currency levels, whereas the
+        model's income and asset vectors are population-expanded. Convert this
+        external source exactly once here; per-pass floor refreshes reuse the
+        stored model-unit base. The legacy benefit-based fallback already uses
+        model monetary units, so retain its existing proxy/frequency treatment
+        without multiplying it again.
+        """
+        scale = float(population_scale_factor)
+        if not np.isfinite(scale) or scale <= 0.0:
+            raise ValueError("SMIC population scale must be finite and positive.")
         if country_name != "FRA":
             return float(fallback_net_smic)
         try:
@@ -1011,7 +1072,7 @@ class Country:
             value = annual_smic.loc[initial_year]
             if pd.isna(value):
                 return float(fallback_net_smic)
-            return float(value)
+            return float(value) * scale
         return float(fallback_net_smic)
 
     @staticmethod
@@ -1025,8 +1086,10 @@ class Country:
     ) -> np.ndarray:
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
         net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
-        # net_smic_base (and therefore net_smic_monthly_t) is a MONTHLY level
-        # (macro_data/readers/insee_smic.py's net_monthly_smic), and time_unit is
+        # net_smic_base is already in model monetary units: INSEE's monthly
+        # level is population-expanded once by _select_net_smic_base. Do not
+        # expand it again on refresh. The benefit fallback keeps its legacy
+        # proxy convention. For the INSEE monthly source, time_unit is
         # months per model period -- so a period's worth is time_unit MONTHS summed,
         # i.e. net_smic_monthly_t * time_unit. The previous `* (time_unit / 12.0)`
         # applied the annual-RATE-to-period conversion used elsewhere in this file
@@ -1083,6 +1146,8 @@ class Country:
         self.exogenous.reset()
 
         self.configuration = deepcopy(configuration)
+        self._consumption_input_adapter.reset()
+        self._consumption_run_id += 1
         self._clear_household_income_shock()
 
     def _clear_household_income_shock(self) -> None:
@@ -1675,7 +1740,49 @@ class Country:
             )
             hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
 
+    def _consumption_input_sources_and_layout(self) -> tuple[ConsumptionSources, str]:
+        """Declare source units and ordered household membership for this run."""
+        h = self.households.ts.current("n_households")
+        members = self.households.states["corr_individuals"]
+        if len(members) != h:
+            raise ValueError("Consumption household layout must have one membership row per household.")
+        ordered_members = tuple(tuple(int(member) for member in row) for row in members)
+        signature = hashlib.sha256(repr(ordered_members).encode("utf-8")).hexdigest()
+        layout = f"{self.country_name}:{self._consumption_run_id}:{h}:{signature}"
+        currency = f"{self.country_name}:LCU"
+        household_units = MonetaryUnits(currency, self.households.states["population_scale_factor"])
+        country_units = MonetaryUnits(currency, self.scale)
+        sources = ConsumptionSources(
+            self.households,
+            self.economy,
+            self.credit_market,
+            household_units,
+            country_units,
+            household_units,
+            country_units,
+        )
+        return sources, layout
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
+        consumption_function = self.households.functions["consumption"]
+        integrate_inputs = (
+            isinstance(consumption_function, CreditAugmentedConsumption)
+            and consumption_function.uses_aligned_behavioural_income
+            and consumption_function.uses_income_belief_learning
+            and not self.assume_zero_growth
+        )
+        consumption_inputs = None
+        if integrate_inputs:
+            input_sources, input_layout = self._consumption_input_sources_and_layout()
+            input_period = len(self.households.ts.historic("income"))
+            input_pass = "replacement" if replace_current else "first"
+            if not replace_current:
+                self._consumption_input_adapter.capture_opening(
+                    input_sources,
+                    period_id=input_period,
+                    pass_kind=input_pass,
+                    household_layout_key=input_layout,
+                )
         self._update_subsistence_consumption(replace_current=replace_current)
         aligned_income = getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False)
         if aligned_income:
@@ -1729,6 +1836,28 @@ class Country:
             permanent_income_log_ratio_individual = learning_inputs["permanent_income_log_ratio_individual"]
             permanent_income_log_ratio_common = learning_inputs["permanent_income_log_ratio_common"]
             uncertainty_delta = learning_inputs["uncertainty_delta"]
+
+        if integrate_inputs:
+            payload = PermanentIncomePayload.from_learning_inputs(
+                learning_inputs,
+                period_id=input_period,
+                pass_kind=input_pass,
+                household_layout_key=input_layout,
+                units=input_sources.income_units,
+            )
+            income_rows = len(self.households.ts.historic("expected_behavioural_income"))
+            price_rows = len(self.economy.ts.historic(self.economy.consumer_price_level_series_name()))
+            if price_rows not in (income_rows, income_rows - 1):
+                raise ValueError("Consumption price history must be aligned or exactly one current row short.")
+            consumption_inputs = self._consumption_input_adapter.collect_inputs(
+                input_sources,
+                payload,
+                period_id=input_period,
+                pass_kind=input_pass,
+                household_layout_key=input_layout,
+                current_consumer_price=self.economy.current_consumer_price_level(),
+                price_history_layout="aligned" if price_rows == income_rows else "missing_current",
+            )
 
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
         self.households.consumption_vat_rate = float(self.central_government.states["Value-added Tax"])
@@ -1822,6 +1951,13 @@ class Country:
             out=np.zeros(expected_household_shape),
             where=np.isfinite(annual_spendable_income) & (annual_spendable_income > 0.0),
         )
+        if consumption_inputs is not None:
+            # Rate levels retain the existing pass-specific selection. Only opening
+            # principal exposures and the common real annual-income base change.
+            opening = consumption_inputs.opening_real
+            real_borrowing_rate = (
+                real_consumer_rate * opening.consumer_principal + real_mortgage_rate * opening.mortgage_principal
+            ) / consumption_inputs.annual_income_base_real
         # Existing consumer debt is fixed-rate until new borrowing remodulates
         # the aggregate balance. The CACF cashflow input therefore uses only
         # the realized contractual repricing from that event, not an
@@ -1886,6 +2022,7 @@ class Country:
             # floor for a household with no positive income anywhere in its
             # history window (PR #138 review finding 1); ignored otherwise.
             subsistence_income=self.economy.ts.current("subsistence_consumption"),
+            consumption_inputs=consumption_inputs,
         )
 
         if replace_current:

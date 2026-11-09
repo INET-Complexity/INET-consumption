@@ -2415,6 +2415,8 @@ class Households(Agent):
             r_kappa=borrow_vs_sell_inputs["r_kappa"],
             phi_1=getattr(self.functions["wealth"], "phi_1", np.nan),
             lambda_kappa=getattr(self.functions["wealth"], "lambda_kappa", np.nan),
+            # Selling pays the illiquid-trade cost once (increment a).
+            fixed_cost_share=float(getattr(self.functions["wealth"], "fixed_cost_share", 0.0) or 0.0),
         )
         if replace_current:
             self.ts.override_current("preferred_margin_after_lfa", result.preferred_margin)

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from macromodel.agents.households.func.borrow_vs_sell import (
     PREFERRED_MARGIN_BORROW,
@@ -118,3 +119,27 @@ def test__returns_typed_result_without_side_effects():
 
     assert isinstance(result, BorrowVsSellResult)
     np.testing.assert_allclose(residual, [10.0])
+
+
+def test__fixed_trade_cost_raises_the_cost_of_selling_by_upsilon_per_unit_shortfall():
+    """Increment (a): selling pays Upsilon = share * TFA once, i.e. share / l_tilde per unit."""
+    without_cost = _compute(r_b=[0.2])
+    with_cost = _compute(r_b=[0.2], fixed_cost_share=0.01)
+
+    np.testing.assert_allclose(without_cost.borrow_vs_sell_threshold, [0.12])
+    np.testing.assert_allclose(with_cost.borrow_vs_sell_threshold, [0.12 + 0.01 / 0.1])
+    np.testing.assert_array_equal(without_cost.preferred_margin, [PREFERRED_MARGIN_SELL])
+    np.testing.assert_array_equal(with_cost.preferred_margin, [PREFERRED_MARGIN_BORROW])
+
+
+def test__fixed_trade_cost_matters_less_for_a_large_shortfall():
+    # Same household, shortfall 10x larger: the per-unit fee falls to 0.01 and selling still wins.
+    result = _compute(residual_shortfall_after_lfa=[100.0], post_return_ifa=[200.0], r_b=[1.5], fixed_cost_share=0.01)
+
+    np.testing.assert_allclose(result.borrow_vs_sell_threshold, [0.02 + 1.0 + 0.01])
+    np.testing.assert_array_equal(result.preferred_margin, [PREFERRED_MARGIN_SELL])
+
+
+def test__negative_fixed_trade_cost_is_rejected():
+    with pytest.raises(ValueError, match="fixed_cost_share"):
+        _compute(fixed_cost_share=-0.01)

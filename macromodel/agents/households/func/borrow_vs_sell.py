@@ -33,13 +33,22 @@ def compute_borrow_vs_sell_choice(
     lambda_kappa: float,
     *,
     epsilon: float = BORROW_VS_SELL_EPSILON,
+    fixed_cost_share: float = 0.0,
 ) -> BorrowVsSellResult:
     """Choose the preferred non-liquid repair margin in shadow mode.
 
     The comparison uses the Stage 4 handoff quantities as the authoritative
     source for the target-gap term and normalization scale. Invalid positive-
     shortfall rows fall back deterministically to ``borrow``.
+
+    Selling pays the fixed illiquid-trade cost ``Upsilon = fixed_cost_share *
+    opening_tfa_scale`` once. Per unit of shortfall this adds
+    ``fixed_cost_share / l_tilde`` (= ``Upsilon / L``) to the cost of selling,
+    so a household whose shortfall is small relative to its wealth borrows.
     """
+    fixed_cost_share = float(fixed_cost_share)
+    if not np.isfinite(fixed_cost_share) or fixed_cost_share < 0.0:
+        raise ValueError(f"fixed_cost_share must be finite and non-negative, got {fixed_cost_share}.")
     residual_shortfall_after_lfa = np.asarray(residual_shortfall_after_lfa, dtype=float)
     delta_tilde = np.asarray(delta_tilde, dtype=float)
     opening_tfa_scale = np.asarray(opening_tfa_scale, dtype=float)
@@ -68,9 +77,12 @@ def compute_borrow_vs_sell_choice(
         residual_shortfall_after_lfa / safe_scale,
         0.0,
     )
+    safe_l_tilde = np.where(comparison_valid_flag, borrow_vs_sell_l_tilde, 1.0)
     borrow_vs_sell_threshold = np.where(
         comparison_valid_flag,
-        r_kappa + (phi_1 / (2.0 * lambda_kappa)) * (2.0 * lambda_kappa * delta_tilde + borrow_vs_sell_l_tilde),
+        r_kappa
+        + (phi_1 / (2.0 * lambda_kappa)) * (2.0 * lambda_kappa * delta_tilde + borrow_vs_sell_l_tilde)
+        + fixed_cost_share / safe_l_tilde,
         0.0,
     )
     borrow_vs_sell_spread = np.where(

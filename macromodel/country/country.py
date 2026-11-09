@@ -600,6 +600,10 @@ class Country:
         liquidation = hh.post_grant_feasible_plan.reserved_liquidation_total
         if liquidation is None:
             raise RuntimeError("Final support requires an executable liquidation reservation.")
+        # Only the sale net of the illiquid-trade cost is cash.
+        sale_cost = hh.post_grant_feasible_plan.liquidation_sale_cost
+        if sale_cost is not None:
+            liquidation = liquidation - sale_cost
         resources = income_without_support + hh.ts.current("liquid_financial_assets") + liquidation
         resources += hh.ts.current("received_consumption_loans") + hh.ts.current("received_mortgages")
         resources += hh.current_net_property_sale_proceeds()
@@ -2299,6 +2303,19 @@ class Country:
             self._compute_mortgage_sale_repayment(pre_sale_owner=pre_sale_owner, pre_sale_value=pre_sale_value)
         )
 
+    def household_trade_fee_income_by_bank(self) -> np.ndarray:
+        """Households' illiquid-trade cost paid this period, as fee income of their bank.
+
+        Summed with ``np.bincount`` by corresponding bank (deterministic order),
+        so total fee income equals total cost paid.
+        """
+        bank_ids = np.asarray(self.households.states["Corresponding Bank ID"], dtype=int)
+        cost_paid = np.asarray(self.households.ts.current("illiquid_trade_cost_paid"), dtype=float)
+        n_banks = int(self.banks.ts.current("n_banks"))
+        if bank_ids.shape != cost_paid.shape or np.any(bank_ids < 0) or np.any(bank_ids >= n_banks):
+            raise ValueError("Every household paying a trade cost needs a valid corresponding bank.")
+        return np.bincount(bank_ids, weights=cost_paid, minlength=n_banks)
+
     def _compute_mortgage_sale_repayment(self, *, pre_sale_owner: pd.Series, pre_sale_value: pd.Series) -> np.ndarray:
         """Mortgage principal each seller repays from sale proceeds this period.
 
@@ -3960,6 +3977,7 @@ class Country:
             self.banks.ts.current("interest_received_on_loans") + self.banks.ts.current("interest_received_on_deposits")
         )
         self.banks.ts.mortgage_default_credit_loss.append(self.credit_market._mortgage_credit_loss_by_bank.copy())
+        self.banks.ts.household_sale_fee_income.append(self.household_trade_fee_income_by_bank())
         self.banks.ts.profits.append(self.banks.compute_profits())
         self.banks.ts.cash_distributable_profits.append(self.banks.compute_cash_distributable_profits())
         self.banks.ts.profits_histogram.append(get_histogram(self.banks.ts.current("profits"), self.scale))

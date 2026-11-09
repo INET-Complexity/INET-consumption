@@ -9,14 +9,25 @@ from macromodel.timeseries import TimeSeries
 
 
 @pytest.mark.parametrize(
-    "receipt,sale_proceeds,expected_support",
-    [(80.0, 0.0, 20.0), (70.0, 0.0, 30.0), (120.0, 0.0, 0.0), (80.0, 15.0, 5.0)],
+    "receipt,sale_proceeds,liquidation,sale_cost,expected_support",
+    [
+        (80.0, 0.0, 0.0, 0.0, 20.0),
+        (70.0, 0.0, 0.0, 0.0, 30.0),
+        (120.0, 0.0, 0.0, 0.0, 0.0),
+        (80.0, 15.0, 0.0, 0.0, 5.0),
+        # A forced sale of 10 that pays a trade cost of 5 brings only 5 of cash.
+        (80.0, 0.0, 10.0, 5.0, 15.0),
+    ],
 )
-def test_final_support_uses_actual_receipts_and_posts_once(receipt, sale_proceeds, expected_support):
-    """Property-sale proceeds are a realised cash resource that reduces support one for one."""
+def test_final_support_uses_actual_receipts_and_posts_once(
+    receipt, sale_proceeds, liquidation, sale_cost, expected_support
+):
+    """Sale proceeds and the forced sale net of its trade cost are realised cash resources."""
     hh = Households.__new__(Households)
     hh.uses_feasibility_resolver = True
-    hh.post_grant_feasible_plan = SimpleNamespace(reserved_liquidation_total=np.zeros(1))
+    hh.post_grant_feasible_plan = SimpleNamespace(
+        reserved_liquidation_total=np.array([liquidation]), liquidation_sale_cost=np.array([sale_cost])
+    )
     hh.functions = {"wealth": SimpleNamespace(), "investment": SimpleNamespace()}
     hh.ts = TimeSeries(
         n_households=1,
@@ -55,5 +66,5 @@ def test_final_support_uses_actual_receipts_and_posts_once(receipt, sale_proceed
     # Proceeds are financing, not income: income is receipts plus support only,
     # and income together with proceeds covers spending.
     assert hh.compute_income()[0] == pytest.approx(receipt + expected_support)
-    assert hh.compute_income()[0] + sale_proceeds >= 100
+    assert hh.compute_income()[0] + sale_proceeds + liquidation - sale_cost >= 100
     assert len(hh.ts.dicts["income_social_transfers"]) == 1

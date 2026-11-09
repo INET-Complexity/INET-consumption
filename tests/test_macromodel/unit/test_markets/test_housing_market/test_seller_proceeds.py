@@ -182,3 +182,86 @@ def test_self_sale_requests_no_mortgage(test_households, monkeypatch):
 
     assert captured["price"][0] == 0.0
     assert captured["price"][1] == 300.0
+
+
+def test_self_sale_of_current_home_changes_nothing(test_config):
+    """Staying in one's own home must not mark it vacant (review finding on PR #173)."""
+    market = _two_property_owner_market(test_config)
+    vacant_before = int(market.ts.current("total_number_of_houses_unoccupied")[0])
+    market.states["current_sales"] = _sales([("Sell", 10, 0, 0, 120.0)])
+    household_states = {
+        "Corresponding Inhabited House ID": np.array([10]),
+        "Tenure Status of the Main Residence": np.array([1]),
+        "Corresponding Property Owner": np.array([0]),
+        "corr_renters": [[]],
+    }
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(1),
+        household_financial_wealth=np.zeros(1),
+    )
+
+    properties = market.states["properties"]
+    assert household_states["Corresponding Inhabited House ID"][0] == 10
+    assert properties.loc[10, "Corresponding Inhabitant Household ID"] == 0
+    assert properties.loc[10, "Corresponding Owner Household ID"] == 0
+    assert properties.loc[10, "Value"] == 100.0
+    assert market.ts.current("total_number_of_houses_unoccupied")[0] == vacant_before
+    assert market.ts.current("total_number_of_self_sales")[0] == 1
+
+
+def test_prefiltered_sales_without_type_column_drop_self_sales(test_households, monkeypatch):
+    captured = {}
+
+    class TargetCreditStub:
+        @staticmethod
+        def compute_target_consumption_loans(**_kwargs):
+            return np.zeros(test_households.ts.current("n_households"))
+
+        @staticmethod
+        def compute_target_mortgage(*, target_house_price, **_kwargs):
+            captured["price"] = np.asarray(target_house_price, dtype=float).copy()
+            return np.zeros_like(captured["price"])
+
+    monkeypatch.setitem(test_households.functions, "target_credit", TargetCreditStub())
+    test_households.uses_feasibility_resolver = False
+    prefiltered = _sales([("Sell", 1, 0, 0, 500.0), ("Sell", 2, 1, 2, 300.0)]).drop(columns="sales_types")
+
+    test_households.compute_target_credit(current_sales=prefiltered)
+
+    assert captured["price"][0] == 0.0
+    assert captured["price"][1] == 300.0
+
+
+@pytest.mark.parametrize("proceeds", [0.0, 30.0])
+def test_post_labour_refresh_counts_sale_proceeds_as_cash(test_households, proceeds):
+    """Support base before goods settlement: proceeds cut the residual need one for one."""
+    from macromodel.agents.households.func.financial_feasibility import PostGrantFeasiblePlan
+
+    hh = test_households
+    n = hh.ts.current("n_households")
+    zeros = np.zeros(n)
+    hh.post_grant_feasible_plan = PostGrantFeasiblePlan(
+        credit_granted=zeros.copy(),
+        credit_rationing_gap=zeros.copy(),
+        planned_liquidation_total=zeros.copy(),
+        reserved_liquidation_total=zeros.copy(),
+        residual_shortfall_after_granted_credit=zeros.copy(),
+    )
+    hh._known_receipts_ready = False
+    hh.ts.override_current("expected_income", zeros.copy())
+    hh.ts.override_current("target_consumption", np.zeros_like(hh.ts.current("target_consumption")))
+    hh.ts.override_current("target_investment", np.zeros_like(hh.ts.current("target_investment")))
+    hh.ts.override_current("rent", zeros.copy())
+    hh.ts.override_current("liquid_financial_assets", zeros.copy())
+    hh.ts.override_current("price_paid_for_property", zeros.copy())
+    hh.ts.override_current("received_mortgages", zeros.copy())
+    hh.ts.override_current("property_sale_proceeds", np.full(n, proceeds))
+
+    hh.refresh_post_labour_feasibility(scheduled_debt_service=np.full(n, 100.0))
+
+    np.testing.assert_allclose(hh.post_grant_feasible_plan.residual_shortfall_after_lfa, np.full(n, 100.0 - proceeds))
+    np.testing.assert_allclose(
+        hh.post_grant_feasible_plan.residual_shortfall_after_granted_credit, np.full(n, 100.0 - proceeds)
+    )

@@ -3281,7 +3281,12 @@ class Households(Agent):
                 sells = current_sales.loc[(current_sales["sales_types"] == "Sell") & ~self_sale_mask(current_sales)]
             else:
                 # Backward compatibility: allow passing already-filtered sales rows.
+                # The model always passes ``sales_types``; this path is for
+                # callers that pre-filter, so drop self-sales directly if the
+                # seller is known.
                 sells = current_sales
+                if "seller_id" in sells.columns:
+                    sells = sells.loc[sells["buyer_id"].to_numpy(dtype=int) != sells["seller_id"].to_numpy(dtype=int)]
 
             if sells is not None and len(sells) > 0:
                 missing = {"buyer_id", "price_or_rent"} - set(sells.columns)

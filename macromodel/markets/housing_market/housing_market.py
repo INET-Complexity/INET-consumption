@@ -541,8 +541,13 @@ class HousingMarket:
         self.states["current_sales"] = self.states["current_sales"].loc[feasible_sale_indices].reset_index(drop=True)
         is_self_sale = self_sale_mask(self.states["current_sales"])
 
-        def clear_previous_residence(buyer_id: int, prev_property_id: int) -> None:
-            if prev_property_id == VACANT_HOUSEHOLD_ID or prev_property_id not in self.states["properties"].index:
+        def clear_previous_residence(buyer_id: int, prev_property_id: int, new_property_id: int) -> None:
+            # A household that stays in its own home (self-sale of the current
+            # residence) has no previous residence to vacate.
+            if (
+                prev_property_id in (VACANT_HOUSEHOLD_ID, new_property_id)
+                or prev_property_id not in self.states["properties"].index
+            ):
                 return
             current_inhabitant_id = int(
                 self.states["properties"].loc[prev_property_id, "Corresponding Inhabitant Household ID"]
@@ -562,7 +567,7 @@ class HousingMarket:
             prev_property_id = household_states["Corresponding Inhabited House ID"][buyer_id]
             if sale["sales_types"] == "Rental":
                 self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
-                clear_previous_residence(buyer_id, int(prev_property_id))
+                clear_previous_residence(buyer_id, int(prev_property_id), property_id)
                 household_states["Corresponding Inhabited House ID"][buyer_id] = property_id
                 household_states["Tenure Status of the Main Residence"][buyer_id] = 3
                 household_states["corr_renters"][seller_id].append(buyer_id)
@@ -582,7 +587,7 @@ class HousingMarket:
 
                     # Corresponding inhabitant households
                     self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
-                    clear_previous_residence(buyer_id, int(prev_property_id))
+                    clear_previous_residence(buyer_id, int(prev_property_id), property_id)
 
                     # Corresponding inhabited house ID
                     household_states["Corresponding Inhabited House ID"][buyer_id] = property_id

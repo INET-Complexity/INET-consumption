@@ -170,6 +170,7 @@ class ResidualDiagnosticCapture:
                             "target_consumption",
                             "price_paid_for_property",
                             "received_mortgages",
+                            "property_sale_proceeds",
                             "liquid_financial_assets",
                         )
                     }

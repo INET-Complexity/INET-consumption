@@ -403,7 +403,10 @@ class HousingMarket:
             The ratio helps track market efficiency and price discovery,
             with deviations from 1.0 indicating potential market imbalances.
         """
-        current_sells = self.states["current_sales"].loc[self.states["current_sales"]["sales_types"] == "Sell"]
+        # Self-sales are moves at the owner's own asking price, not market
+        # transactions, so they do not enter price discovery.
+        current_sales = self.states["current_sales"]
+        current_sells = current_sales.loc[(current_sales["sales_types"] == "Sell") & ~self_sale_mask(current_sales)]
         if len(current_sells) == 0:
             self.ts.price_value_histogram.append(get_histogram(np.array([], dtype=float), None))
             return self.ts.current("observed_fraction_value_price")

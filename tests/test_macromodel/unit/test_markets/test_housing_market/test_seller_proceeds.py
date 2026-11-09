@@ -265,3 +265,17 @@ def test_post_labour_refresh_counts_sale_proceeds_as_cash(test_households, proce
     np.testing.assert_allclose(
         hh.post_grant_feasible_plan.residual_shortfall_after_granted_credit, np.full(n, 100.0 - proceeds)
     )
+
+
+def test_self_sales_do_not_enter_price_discovery(test_config):
+    """A self-sale's price is an unpaid asking price: it must not move the value-price fit."""
+    market = _two_property_owner_market(test_config)
+    ratio_before = np.asarray(market.ts.current("observed_fraction_value_price"), dtype=float).copy()
+    histograms_before = len(market.ts.dicts["price_value_histogram"])
+    market.states["current_sales"] = _sales([("Sell", 20, 0, 0, 900.0)])
+    market.states["current_sales"]["property_value"] = 200.0
+
+    ratio = market.compute_observed_fraction_value_price()
+
+    np.testing.assert_allclose(np.asarray(ratio, dtype=float), ratio_before)
+    assert len(market.ts.dicts["price_value_histogram"]) == histograms_before + 1

@@ -88,6 +88,7 @@ from macromodel.agents.households.utils.create_bundle_matrix import create_bundl
 from macromodel.configurations import HouseholdsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.goods_market.value_type import ValueType
+from macromodel.markets.housing_market.sales import self_sale_mask
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
 from macromodel.util.get_histogram import get_histogram
@@ -2229,7 +2230,7 @@ class Households(Agent):
         rent = self.current_consumption_cash_rent()
         resources = np.asarray(self.current_financing_income(), dtype=float).copy()
         resources += np.maximum(self.ts.current("wealth_financial_assets"), 0.0)
-        for key in ("received_consumption_loans", "received_mortgages"):
+        for key in ("received_consumption_loans", "received_mortgages", "property_sale_proceeds"):
             resources += np.asarray(self.ts.current(key), dtype=float)
         mandatory = rent.copy()
         for key in ("interest_paid", "debt_installments", "price_paid_for_property"):
@@ -2261,8 +2262,13 @@ class Households(Agent):
             + np.asarray(scheduled_debt_service, dtype=float)
             + np.asarray(self.ts.current("price_paid_for_property"), dtype=float)
         )
-        # Mortgage proceeds are distinct from the fixed consumer-credit grant.
-        income = income + np.asarray(self.ts.current("received_mortgages"), dtype=float)
+        # Mortgage and property-sale proceeds are cash resources, distinct from
+        # the fixed consumer-credit grant.
+        income = (
+            income
+            + np.asarray(self.ts.current("received_mortgages"), dtype=float)
+            + np.asarray(self.ts.current("property_sale_proceeds"), dtype=float)
+        )
         self.post_grant_feasible_plan = self.financial_feasibility.refresh_cash_needs(
             self.post_grant_feasible_plan,
             cash_uses=uses,
@@ -3149,11 +3155,24 @@ class Households(Agent):
         self.ts.rent.append(rent_by_household)
         self.ts.rent_imputed.append(imputed_rent_by_household)
 
-        # Calculate the price paid for property
-        price_paid_for_property = np.zeros(self.ts.current("n_households"))
+        # Price paid by buyers and proceeds received by sellers. ``current_sales``
+        # holds only completed sales. A self-sale is a move, not a purchase:
+        # it carries no price and no proceeds.
+        n_households = self.ts.current("n_households")
+        price_paid_for_property = np.zeros(n_households)
+        property_sale_proceeds = np.zeros(n_households)
         if len(current_sales) > 0:
-            price_paid_for_property[current_sales["buyer_id"].values] = current_sales["price_or_rent"].values
+            purchases = current_sales.loc[~self_sale_mask(current_sales)]
+            buyer_ids = purchases["buyer_id"].to_numpy(dtype=int)
+            seller_ids = purchases["seller_id"].to_numpy(dtype=int)
+            prices = purchases["price_or_rent"].to_numpy(dtype=float)
+            if np.any(seller_ids < 0) or np.any(seller_ids >= n_households):
+                raise ValueError("Every completed property sale must have a household seller.")
+            price_paid_for_property[buyer_ids] = prices
+            # A landlord can sell several properties in one period.
+            np.add.at(property_sale_proceeds, seller_ids, prices)
         self.ts.price_paid_for_property.append(price_paid_for_property)
+        self.ts.property_sale_proceeds.append(property_sale_proceeds)
 
     def compute_rent(
         self,
@@ -3258,7 +3277,8 @@ class Households(Agent):
         sells = None
         if current_sales is not None and len(current_sales) > 0:
             if "sales_types" in current_sales.columns:
-                sells = current_sales.loc[current_sales["sales_types"] == "Sell"]
+                # A self-sale is a move, so it requests no mortgage.
+                sells = current_sales.loc[(current_sales["sales_types"] == "Sell") & ~self_sale_mask(current_sales)]
             else:
                 # Backward compatibility: allow passing already-filtered sales rows.
                 sells = current_sales
@@ -3782,10 +3802,13 @@ class Households(Agent):
 
         if self.uses_feasibility_resolver:
             new_loans = granted_credit + optional_cash_flow("received_mortgages")
+            # Sale proceeds swap housing for cash: financing, not saving, so
+            # they bypass the new-wealth split between LFA and IFA.
             base_lfa = (
                 self.ts.current("liquid_financial_assets")
                 + cash_saving_before_financing
                 + new_loans
+                + optional_cash_flow("property_sale_proceeds")
                 - new_wealth_in_other_financial_assets
             )
         else:
@@ -4229,6 +4252,7 @@ class Households(Agent):
             used_up_wealth_in_deposits=used_up_wealth_in_deposits,
             current_interest_paid=self.ts.current("interest_paid"),
             price_paid_for_property=self.ts.current("price_paid_for_property"),
+            property_sale_proceeds=self.ts.current("property_sale_proceeds"),
             debt_installments=self.ts.current("debt_installments"),
             new_loans=self.ts.current("received_consumption_loans") + self.ts.current("received_mortgages"),
             new_real_wealth=self.ts.current("investment").sum(axis=1),

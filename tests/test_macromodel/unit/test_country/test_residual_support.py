@@ -8,8 +8,12 @@ from macromodel.country.country import Country
 from macromodel.timeseries import TimeSeries
 
 
-@pytest.mark.parametrize("receipt,expected_support", [(80.0, 20.0), (70.0, 30.0), (120.0, 0.0)])
-def test_final_support_uses_actual_receipts_and_posts_once(receipt, expected_support):
+@pytest.mark.parametrize(
+    "receipt,sale_proceeds,expected_support",
+    [(80.0, 0.0, 20.0), (70.0, 0.0, 30.0), (120.0, 0.0, 0.0), (80.0, 15.0, 5.0)],
+)
+def test_final_support_uses_actual_receipts_and_posts_once(receipt, sale_proceeds, expected_support):
+    """Property-sale proceeds are a realised cash resource that reduces support one for one."""
     hh = Households.__new__(Households)
     hh.uses_feasibility_resolver = True
     hh.post_grant_feasible_plan = SimpleNamespace(reserved_liquidation_total=np.zeros(1))
@@ -31,6 +35,7 @@ def test_final_support_uses_actual_receipts_and_posts_once(receipt, expected_sup
         liquid_financial_assets=np.zeros(1),
         received_consumption_loans=np.zeros(1),
         received_mortgages=np.zeros(1),
+        property_sale_proceeds=np.array([sale_proceeds]),
         expected_income=np.array([80.0]),
         financing_income_error=np.zeros(1),
     )
@@ -46,5 +51,8 @@ def test_final_support_uses_actual_receipts_and_posts_once(receipt, expected_sup
     assert hh.ts.current("income_social_transfers")[0] == expected_support
     assert country.current_stage5_subsistence_support_fiscal_increment() == expected_support
     assert hh.ts.current("financing_income_error")[0] == receipt - 80
-    assert hh.compute_income()[0] >= 100
+    # Proceeds are financing, not income: income is receipts plus support only,
+    # and income together with proceeds covers spending.
+    assert hh.compute_income()[0] == pytest.approx(receipt + expected_support)
+    assert hh.compute_income()[0] + sale_proceeds >= 100
     assert len(hh.ts.dicts["income_social_transfers"]) == 1

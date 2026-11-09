@@ -20,6 +20,7 @@ from macromodel.configurations import HousingMarketConfiguration
 from macromodel.markets.housing_market.housing_market_ts import (
     create_housing_market_timeseries,
 )
+from macromodel.markets.housing_market.sales import self_sale_mask
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import (
     functions_from_model,
@@ -466,8 +467,11 @@ class HousingMarket:
 
         buyer_ids = sale_transactions["buyer_id"].to_numpy(dtype=int, copy=False)
         prices = sale_transactions["price_or_rent"].to_numpy(dtype=float, copy=False)
-        has_financing = (household_received_mortgages[buyer_ids] > 0) | (
-            household_financial_wealth[buyer_ids] >= prices
+        # A self-sale moves no money, so it needs no financing.
+        has_financing = (
+            (household_received_mortgages[buyer_ids] > 0)
+            | (household_financial_wealth[buyer_ids] >= prices)
+            | self_sale_mask(sale_transactions)
         )
         feasible.loc[sale_transactions.index[~has_financing]] = False
 
@@ -528,12 +532,14 @@ class HousingMarket:
             reflected in the system state.
         """
         total_number_of_bought_houses = 0
+        total_number_of_self_sales = 0
         total_number_of_newly_rented_houses = 0
         feasible_sale_indices = self._filter_feasible_current_sale_indices(
             household_received_mortgages=household_received_mortgages,
             household_financial_wealth=household_financial_wealth,
         )
         self.states["current_sales"] = self.states["current_sales"].loc[feasible_sale_indices].reset_index(drop=True)
+        is_self_sale = self_sale_mask(self.states["current_sales"])
 
         def clear_previous_residence(buyer_id: int, prev_property_id: int) -> None:
             if prev_property_id == VACANT_HOUSEHOLD_ID or prev_property_id not in self.states["properties"].index:
@@ -547,7 +553,7 @@ class HousingMarket:
                     "Corresponding Inhabitant Household ID",
                 ] = VACANT_HOUSEHOLD_ID
 
-        for _, sale in self.states["current_sales"].iterrows():
+        for row_position, (_, sale) in enumerate(self.states["current_sales"].iterrows()):
             buyer_id, seller_id, property_id = (
                 int(sale["buyer_id"]),
                 int(sale["seller_id"]),
@@ -562,8 +568,10 @@ class HousingMarket:
                 household_states["corr_renters"][seller_id].append(buyer_id)
                 total_number_of_newly_rented_houses += 1
             elif sale["sales_types"] == "Sell":
+                self_sale = bool(is_self_sale[row_position])
                 if (
-                    household_received_mortgages[buyer_id] > 0
+                    self_sale
+                    or household_received_mortgages[buyer_id] > 0
                     or household_financial_wealth[buyer_id] >= sale["price_or_rent"]
                 ):
                     # Corresponding property owners
@@ -586,11 +594,13 @@ class HousingMarket:
                     if buyer_id in household_states["corr_renters"][seller_id]:
                         household_states["corr_renters"][seller_id].remove(buyer_id)
 
-                    # Price
-                    self.states["properties"].loc[property_id, "Value"] = sale["price_or_rent"]
-
-                    # Count
-                    total_number_of_bought_houses += 1
+                    if self_sale:
+                        # A move, not a purchase: no price was paid, so the
+                        # property value is not reset to the asking price.
+                        total_number_of_self_sales += 1
+                    else:
+                        self.states["properties"].loc[property_id, "Value"] = sale["price_or_rent"]
+                        total_number_of_bought_houses += 1
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
 
@@ -615,6 +625,7 @@ class HousingMarket:
             [np.sum(self.states["properties"]["Corresponding Inhabitant Household ID"] == -1)]
         )
         self.ts.total_number_of_bought_houses.append([total_number_of_bought_houses])
+        self.ts.total_number_of_self_sales.append([total_number_of_self_sales])
         self.ts.total_number_of_newly_rented_houses.append([total_number_of_newly_rented_houses])
 
     def compute_total_property_value(self) -> float:

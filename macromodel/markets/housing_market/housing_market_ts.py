@@ -74,6 +74,7 @@ def create_housing_market_timeseries(
     """
     return TimeSeries(
         total_number_of_bought_houses=[np.nan],
+        total_number_of_self_sales=[np.nan],
         total_number_of_newly_rented_houses=[np.nan],
         #
         observed_fraction_value_price=initial_observed_fraction_value_price,

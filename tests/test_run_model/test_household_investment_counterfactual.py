@@ -33,6 +33,7 @@ _ZERO_SERIES = (
     "debt_installments",
     "price_paid_for_property",
     "property_sale_proceeds",
+    "mortgage_sale_repayment",
     "portfolio_settlement_committed_adjustment_cost",
     "income_for_residual_saving",
     "total_liquid_financial_assets",

@@ -86,6 +86,7 @@ from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
+from macromodel.markets.housing_market.sales import sold_collateral_share
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.timeseries import TimeSeries
@@ -601,7 +602,7 @@ class Country:
             raise RuntimeError("Final support requires an executable liquidation reservation.")
         resources = income_without_support + hh.ts.current("liquid_financial_assets") + liquidation
         resources += hh.ts.current("received_consumption_loans") + hh.ts.current("received_mortgages")
-        resources += hh.ts.current("property_sale_proceeds")
+        resources += hh.current_net_property_sale_proceeds()
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
         support = np.maximum(uses - resources, 0.0)
@@ -2268,6 +2269,11 @@ class Country:
         Updates property ownership, rents, and related financial positions
         after market clearing.
         """
+        # Ownership and values before sale processing rewrites them; the
+        # mortgage repaid on sale is the debt share of the value sold.
+        properties = self.housing_market.states["properties"]
+        pre_sale_owner = properties["Corresponding Owner Household ID"].copy()
+        pre_sale_value = properties["Value"].copy()
         self.housing_market.process_housing_market_clearing(
             household_states=self.households.states,
             household_received_mortgages=self.households.ts.current("received_mortgages"),
@@ -2289,6 +2295,34 @@ class Country:
                 "unemployment_benefits_by_individual"
             )[0],
         )
+        self.households.ts.mortgage_sale_repayment.append(
+            self._compute_mortgage_sale_repayment(pre_sale_owner=pre_sale_owner, pre_sale_value=pre_sale_value)
+        )
+
+    def _compute_mortgage_sale_repayment(self, *, pre_sale_owner: pd.Series, pre_sale_value: pd.Series) -> np.ndarray:
+        """Mortgage principal each seller repays from sale proceeds this period.
+
+        ``R = min(s * B, proceeds)``: ``s`` is the share of the household's
+        property value sold, ``B`` the opening principal left after this
+        period's scheduled service. Negative equity leaves ``s * B - R`` on the
+        mortgage. Only the Stage 5 resolver settles mortgages through the
+        service snapshot, so the legacy path repays nothing.
+        """
+        n_households = self.households.ts.current("n_households")
+        if not self.households.uses_feasibility_resolver:
+            return np.zeros(n_households)
+        share = sold_collateral_share(
+            pre_sale_owner=pre_sale_owner,
+            pre_sale_value=pre_sale_value,
+            completed_sales=self.housing_market.states["current_sales"],
+            n_households=n_households,
+        )
+        if not np.any(share > 0.0):
+            # No property sold: nothing to repay, and no service snapshot needed.
+            return np.zeros(n_households)
+        principal_left = self.credit_market.mortgage_principal_after_scheduled_service()
+        proceeds = np.asarray(self.households.ts.current("property_sale_proceeds"), dtype=float)
+        return np.minimum(share * principal_left, proceeds)
 
     def process_credit_market_clearing(self) -> None:
         """Process credit market outcomes.
@@ -2412,7 +2446,10 @@ class Country:
         # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
         before_relief = self.households.current_remaining_subsistence_shortfall()
         after_consumer_relief = np.maximum(before_relief - settlement.unpaid_payment, 0.0)
-        self.credit_market.pay_household_mortgage_installments(after_consumer_relief)
+        self.credit_market.pay_household_mortgage_installments(
+            after_consumer_relief,
+            sale_repayment=self.households.ts.current("mortgage_sale_repayment"),
+        )
         mortgage_relief = self.credit_market._mortgage_unpaid_payment
         after_relief = np.maximum(after_consumer_relief - mortgage_relief, 0.0)
         for name, values in (

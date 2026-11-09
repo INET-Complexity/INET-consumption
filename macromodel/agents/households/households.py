@@ -2242,6 +2242,12 @@ class Households(Agent):
                 "Legacy financing cannot fund mandatory cash rent; no rent-support authority is enabled."
             )
 
+    def current_net_property_sale_proceeds(self) -> np.ndarray:
+        """Sale proceeds left as cash after the mortgage repaid on sale (financing, not income)."""
+        return np.asarray(self.ts.current("property_sale_proceeds"), dtype=float) - np.asarray(
+            self.ts.current("mortgage_sale_repayment"), dtype=float
+        )
+
     def current_financing_income(self) -> np.ndarray:
         """Known current wages/benefits plus remaining cash-receipt forecasts."""
         return (
@@ -2267,7 +2273,7 @@ class Households(Agent):
         income = (
             income
             + np.asarray(self.ts.current("received_mortgages"), dtype=float)
-            + np.asarray(self.ts.current("property_sale_proceeds"), dtype=float)
+            + self.current_net_property_sale_proceeds()
         )
         self.post_grant_feasible_plan = self.financial_feasibility.refresh_cash_needs(
             self.post_grant_feasible_plan,
@@ -3814,6 +3820,7 @@ class Households(Agent):
                 + cash_saving_before_financing
                 + new_loans
                 + optional_cash_flow("property_sale_proceeds")
+                - optional_cash_flow("mortgage_sale_repayment")
                 - new_wealth_in_other_financial_assets
             )
         else:

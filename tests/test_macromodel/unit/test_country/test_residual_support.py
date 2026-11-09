@@ -16,7 +16,9 @@ def test_final_support_uses_actual_receipts_and_posts_once(receipt, sale_proceed
     """Property-sale proceeds are a realised cash resource that reduces support one for one."""
     hh = Households.__new__(Households)
     hh.uses_feasibility_resolver = True
-    hh.post_grant_feasible_plan = SimpleNamespace(reserved_liquidation_total=np.zeros(1))
+    hh.post_grant_feasible_plan = SimpleNamespace(
+        reserved_liquidation_total=np.zeros(1), liquidation_sale_cost=np.zeros(1)
+    )
     hh.functions = {"wealth": SimpleNamespace(), "investment": SimpleNamespace()}
     hh.ts = TimeSeries(
         n_households=1,

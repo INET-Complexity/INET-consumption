@@ -5,6 +5,17 @@ from dataclasses import dataclass, fields, replace
 import numpy as np
 
 
+def gross_liquidation_sale(net_sale: np.ndarray, sale_cost: np.ndarray, available_ifa: np.ndarray) -> np.ndarray:
+    """Gross illiquid sale that delivers ``net_sale`` in cash after the sale cost.
+
+    The cost is added once when anything is sold, and the sale is capped by
+    the illiquid assets available. Shared by the reservation and the
+    settlement check so both use identical arithmetic.
+    """
+    net_sale = np.asarray(net_sale, dtype=float)
+    return np.minimum(net_sale + np.where(net_sale > 0.0, sale_cost, 0.0), available_ifa)
+
+
 def _freeze_plan_arrays(instance: object) -> None:
     """Defensively copy and freeze every array carried across Stage 5 stages."""
     for data_field in fields(instance):
@@ -55,6 +66,7 @@ class PostGrantFeasiblePlan:
     residual_shortfall_after_lfa: np.ndarray | None = None
     reserved_liquidation_total: np.ndarray | None = None
     liquidation_reservation_ifa: np.ndarray | None = None
+    liquidation_sale_cost: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -144,8 +156,15 @@ class HouseholdFinancialFeasibility:
         plan: PostGrantFeasiblePlan,
         *,
         available_pre_stage4_ifa: np.ndarray,
+        sale_cost: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
-        """Reserve the Stage 5 liquidation before floors and goods demand are fixed."""
+        """Reserve the Stage 5 liquidation before floors and goods demand are fixed.
+
+        ``planned_liquidation_total`` stays the net forced need (capped by IFA).
+        ``reserved_liquidation_total`` is the gross sale, which also pays the
+        illiquid-trade cost once; ``liquidation_sale_cost`` is that cost, at
+        most the gross sale. Only the sale net of its cost is cash.
+        """
         if plan.reserved_liquidation_total is not None:
             raise RuntimeError("Stage 5 executable liquidation has already been reserved for this period.")
         available = self._non_negative(available_pre_stage4_ifa)
@@ -157,13 +176,20 @@ class HouseholdFinancialFeasibility:
         residual = self._non_negative(residual_after_lfa)
         if not (available.shape == planned.shape == granted.shape == residual.shape):
             raise ValueError("Stage 5 liquidation reservation requires equal-length household vectors.")
-        reserved = np.minimum(planned, available)
+        cost = np.zeros_like(available) if sale_cost is None else self._non_negative(sale_cost)
+        if cost.shape != available.shape:
+            raise ValueError("Stage 5 liquidation sale cost must be a household vector.")
+        net = np.minimum(planned, available)
+        reserved = gross_liquidation_sale(net, cost, available)
+        cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
+        cash = reserved - cost_paid
         return replace(
             plan,
-            planned_liquidation_total=reserved.copy(),
+            planned_liquidation_total=net.copy(),
             reserved_liquidation_total=reserved.copy(),
+            liquidation_sale_cost=cost_paid.copy(),
             liquidation_reservation_ifa=available.copy(),
-            residual_shortfall_after_granted_credit=np.maximum(residual - granted - reserved, 0.0).copy(),
+            residual_shortfall_after_granted_credit=np.maximum(residual - granted - cash, 0.0).copy(),
         )
 
     def refresh_cash_needs(
@@ -200,6 +226,12 @@ class HouseholdFinancialFeasibility:
             arrays[name] = array
         if plan.consumption_after_floor is not None:
             raise RuntimeError("Cash needs must be refreshed before floor/payment settlement.")
+        sale_cost = (
+            np.zeros(shape)
+            if plan.liquidation_sale_cost is None
+            else np.asarray(plan.liquidation_sale_cost, dtype=float)
+        )
+        liquidation_cash = arrays["reserved_liquidation_total"] - sale_cost
         need = np.maximum(arrays["cash_uses"] - arrays["cash_income"], 0.0)
         funded = np.minimum(need, np.maximum(arrays["available_lfa"], 0.0))
         residual = need - funded
@@ -208,7 +240,7 @@ class HouseholdFinancialFeasibility:
             funded_from_liquid_assets=funded,
             residual_shortfall_after_lfa=residual,
             residual_shortfall_after_granted_credit=np.maximum(
-                residual - arrays["credit_granted"] - arrays["reserved_liquidation_total"], 0.0
+                residual - arrays["credit_granted"] - liquidation_cash, 0.0
             ),
         )
 

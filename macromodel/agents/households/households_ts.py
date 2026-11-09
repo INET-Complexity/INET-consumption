@@ -378,6 +378,7 @@ def create_households_timeseries(
         price_paid_for_property=np.full(len(data), np.nan),
         property_sale_proceeds=np.zeros(len(data)),
         mortgage_sale_repayment=np.zeros(len(data)),
+        illiquid_trade_cost_paid=np.zeros(len(data)),
         rent=data["Rent Paid"].values,
         rent_imputed=data["Rent Imputed"].values,
         max_price_willing_to_pay=np.full(len(data), np.nan),

@@ -127,7 +127,8 @@ def reconcile_investment_counterfactual(
                 "households/interest_paid",
                 "households/debt_installments",
                 "households/price_paid_for_property",
-                "households/portfolio_settlement_committed_adjustment_cost",
+                # Stage 5 sale cost plus portfolio fixed cost, paid at most once.
+                "households/illiquid_trade_cost_paid",
             )
         )
         # Property-sale proceeds net of the mortgage repaid on sale are

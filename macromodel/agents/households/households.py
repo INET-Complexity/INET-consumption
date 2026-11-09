@@ -43,6 +43,7 @@ from macromodel.agents.households.func.financial_feasibility import (
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
     PreGrantFeasiblePlan,
+    gross_liquidation_sale,
 )
 from macromodel.agents.households.func.housing_inputs import (
     add_housing_input_goods,
@@ -1063,7 +1064,20 @@ class Households(Agent):
         self.post_grant_feasible_plan = self.financial_feasibility.reserve_executable_liquidation(
             self.post_grant_feasible_plan,
             available_pre_stage4_ifa=available_pre_stage4_ifa,
+            sale_cost=self.current_illiquid_trade_cost(),
         )
+
+    def current_illiquid_trade_cost(self) -> np.ndarray:
+        """Fixed illiquid-trade cost per household this period (paper Upsilon).
+
+        ``fixed_cost_share`` times the same total-financial-asset base that
+        portfolio choice uses (``ts.prev`` of LFA plus IFA, read before this
+        period's stocks are appended), so a Stage 5 sale and a portfolio trade
+        price the cost identically. Paid at most once per period.
+        """
+        share = float(getattr(self.functions["wealth"], "fixed_cost_share", 0.0) or 0.0)
+        base = self.ts.prev("illiquid_financial_assets") + self.ts.prev("liquid_financial_assets")
+        return share * np.maximum(np.asarray(base, dtype=float), 0.0)
 
     def settle_post_grant_liquidation(
         self,
@@ -1078,11 +1092,17 @@ class Households(Agent):
         if plan.post_liquidation_lfa is not None or plan.post_liquidation_ifa is not None:
             raise RuntimeError("Stage 5 post-liquidation settlement has already been applied for this period.")
 
+        gross_sale = (
+            plan.reserved_liquidation_total
+            if plan.reserved_liquidation_total is not None
+            else plan.planned_liquidation_total
+        )
         settlement = settle_post_liquidation(
             base_lfa=base_lfa,
             base_ifa=base_ifa,
-            planned_liquidation_total=plan.planned_liquidation_total,
+            planned_liquidation_total=gross_sale,
             residual_shortfall_after_granted_credit=plan.residual_shortfall_after_granted_credit,
+            sale_cost=plan.liquidation_sale_cost,
         )
         self.post_grant_feasible_plan = replace(
             plan,
@@ -3832,6 +3852,7 @@ class Households(Agent):
             base_lfa = base_lfa + realised_cash_flow_adjustment
 
         reserved_liquidation = np.zeros_like(self.ts.current("illiquid_financial_assets"))
+        liquidation_sale_cost = np.zeros_like(reserved_liquidation)
         illiquid_financial_asset_capital_gains = np.zeros_like(reserved_liquidation)
         if self.uses_feasibility_resolver:
             plan = self.post_grant_feasible_plan
@@ -3851,10 +3872,22 @@ class Households(Agent):
             if np.any(reserved_liquidation < 0.0) or np.any(reserved_liquidation > opening_ifa):
                 raise RuntimeError("Reserved Stage 5 liquidation cannot be honoured before return settlement.")
             planned_liquidation = getattr(plan, "planned_liquidation_total", None)
-            if planned_liquidation is not None and not np.array_equal(
-                np.asarray(planned_liquidation, dtype=float), reserved_liquidation
-            ):
-                raise RuntimeError("Stage 5 planned and reserved liquidation quantities must agree exactly.")
+            plan_sale_cost = getattr(plan, "liquidation_sale_cost", None)
+            if plan_sale_cost is not None:
+                liquidation_sale_cost = np.asarray(plan_sale_cost, dtype=float)
+            if planned_liquidation is not None:
+                # The gross sale is the net forced need plus the trade cost once,
+                # capped by the IFA available at reservation.
+                reservation_ifa = getattr(plan, "liquidation_reservation_ifa", None)
+                expected_gross = gross_liquidation_sale(
+                    np.asarray(planned_liquidation, dtype=float),
+                    self.current_illiquid_trade_cost() if plan_sale_cost is not None else 0.0,
+                    opening_ifa if reservation_ifa is None else np.asarray(reservation_ifa, dtype=float),
+                )
+                if not np.array_equal(expected_gross, reserved_liquidation):
+                    raise RuntimeError(
+                        "Stage 5 reserved liquidation must equal the planned net sale plus the trade cost."
+                    )
             # Q_exec is a cash transaction against opening IFA. It settles
             # before the current-period capital return, so adverse returns
             # cannot silently reduce the sanctioned quantity.
@@ -3920,6 +3953,13 @@ class Households(Agent):
             if settles:
                 if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
                     raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
+            # A household that already paid the trade cost on a Stage 5 sale
+            # does not pay it again on its portfolio trade.
+            settled_sale = (
+                getattr(self.post_grant_feasible_plan, "settled_liquidation_total", None)
+                if self.uses_feasibility_resolver and self.post_grant_feasible_plan is not None
+                else None
+            )
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
@@ -3927,13 +3967,14 @@ class Households(Agent):
                 rebalancing=diagnostics.rebalancing,
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,
+                waive_fixed_cost=None if settled_sale is None else np.asarray(settled_sale, dtype=float) > 0.0,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa
 
         if self.uses_feasibility_resolver:
             portfolio_lfa_change = np.zeros_like(wealth_base_lfa)
-            expected_closing_lfa = base_lfa + reserved_liquidation
+            expected_closing_lfa = base_lfa + reserved_liquidation - liquidation_sale_cost
             if settlement is not None:
                 portfolio_lfa_change = settlement.committed_lfa_flow - settlement.committed_adjustment_cost
                 # Match the ordered stock arithmetic in
@@ -3976,6 +4017,11 @@ class Households(Agent):
         self.ts.cash_saving_before_financing.append(cash_saving_before_financing)
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
         self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)
+        # Illiquid-trade cost paid this period (Stage 5 sale or portfolio
+        # trade, at most once); Country routes it to banks as fee income.
+        self.ts.illiquid_trade_cost_paid.append(
+            liquidation_sale_cost + (0.0 if settlement is None else settlement.committed_adjustment_cost)
+        )
 
         if settlement is not None:
             self._append_stage4_portfolio_diagnostics(diagnostics)

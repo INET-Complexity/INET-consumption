@@ -21,12 +21,15 @@ def settle_post_liquidation(
     base_ifa: np.ndarray,
     planned_liquidation_total: np.ndarray,
     residual_shortfall_after_granted_credit: np.ndarray,
+    sale_cost: np.ndarray | None = None,
 ) -> PostLiquidationSettlement:
     """Settle sanctioned liquidation once against final wealth bases.
 
     ``planned_liquidation_total`` is the reservation made before floor and goods
     demand were fixed. It must be executable in full at settlement; a shortfall
     is a failed transaction, not a reason to silently shrink the reservation.
+    ``sale_cost`` is the illiquid-trade cost paid out of the sale: IFA falls by
+    the gross sale, LFA rises by the sale net of the cost.
     """
     arrays = {
         "base_lfa": np.asarray(base_lfa, dtype=float),
@@ -49,9 +52,14 @@ def settle_post_liquidation(
     if np.any(planned > base_ifa_values):
         raise RuntimeError("Reserved Stage 5 liquidation cannot be honoured at settlement.")
     settled = planned
+    cost = np.zeros_like(settled) if sale_cost is None else np.asarray(sale_cost, dtype=float)
+    if cost.shape != settled.shape or not np.all(np.isfinite(cost)):
+        raise ValueError("Stage 5 liquidation sale cost must be a finite household vector.")
+    if np.any(cost < 0.0) or np.any(cost > settled):
+        raise RuntimeError("Stage 5 liquidation sale cost must lie between zero and the gross sale.")
 
     return PostLiquidationSettlement(
-        post_liquidation_lfa=base_lfa_values + settled,
+        post_liquidation_lfa=base_lfa_values + settled - cost,
         post_liquidation_ifa=base_ifa_values - settled,
         settled_liquidation_total=settled,
         residual_shortfall_after_settlement=residual_after_granted_credit.copy(),

@@ -41,12 +41,18 @@ def settle_portfolio_reallocation(
     rebalancing: PortfolioRebalancingResult,
     settlement_enabled: bool,
     forced_liquidation_active: np.ndarray,
+    waive_fixed_cost: np.ndarray | None = None,
 ) -> PortfolioSettlement:
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
     ``base_lfa`` is the current liquid balance after the ordinary wealth update;
     it already includes positive saving. The Stage 4 flows therefore only move
     wealth between LFA and IFA and charge adjustment cost on LFA.
+
+    ``waive_fixed_cost`` marks households that already paid the illiquid-trade
+    cost this period on a Stage 5 sale. Their trade settles without the fixed
+    cost: only ``committed_cost`` is zeroed, so the LFA flow stays the pure
+    transfer ``-committed_ifa`` and no money is created or destroyed.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
@@ -118,6 +124,11 @@ def settle_portfolio_reallocation(
         committed_lfa[eligible] = counterfactual_lfa_flow[eligible] + adjustment_cost[eligible]
         committed_ifa[eligible] = counterfactual_ifa_flow[eligible]
         committed_cost[eligible] = adjustment_cost[eligible]
+        if waive_fixed_cost is not None:
+            waived = np.asarray(waive_fixed_cost, dtype=bool)
+            if waived.shape != shape:
+                raise ValueError("Portfolio fixed-cost waiver must have one value per household.")
+            committed_cost[eligible & waived] = 0.0
         status[eligible & inaction_flag] = SETTLEMENT_INACTION
 
     closing_lfa = base_lfa + committed_lfa - committed_cost

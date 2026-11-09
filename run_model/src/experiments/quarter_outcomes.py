@@ -44,6 +44,7 @@ _PLAN = (
     "funded_from_liquid_assets",
     "planned_liquidation_total",
     "reserved_liquidation_total",
+    "liquidation_sale_cost",
     "settled_liquidation_total",
     "consumption_after_floor",
 )

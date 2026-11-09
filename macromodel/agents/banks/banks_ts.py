@@ -127,6 +127,7 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         mortgage_opening_interest_arrears_collected=np.zeros(len(bank_data)),
         mortgage_interest_accrued=np.zeros(len(bank_data)),
         mortgage_default_credit_loss=np.zeros(len(bank_data)),
+        household_sale_fee_income=np.zeros(len(bank_data)),
         recognized_interest_received_on_loans=bank_data["Interest received from Loans"].values,
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
         interest_received=bank_data["Interest received from Loans"].values

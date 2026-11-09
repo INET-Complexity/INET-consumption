@@ -647,10 +647,7 @@ class DataReaders:
             * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
             for year in years
         ]
-        other = [
-            self._all_benefits_lcu(country_name, year, yearly_factor) - unemp[i]
-            for i, year in enumerate(years)
-        ]
+        other = [self._all_benefits_lcu(country_name, year, yearly_factor) - unemp[i] for i, year in enumerate(years)]
 
         benefits_data = pd.DataFrame(
             data={"Unemployment Benefits": unemp, "Other Total Benefits": other},

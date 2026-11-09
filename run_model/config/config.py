@@ -72,8 +72,8 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
     "tfp_investment_adjustment_cost": {
-         "firms.functions.productivity_investment_planner.parameters['adjustment_cost_lambda']": 0.75,
-     },
+        "firms.functions.productivity_investment_planner.parameters['adjustment_cost_lambda']": 0.75,
+    },
     "calibrated_income_legacy": {
         **CALIBRATED_CONSUMPTION_OVERRIDES,
         "households.functions.consumption.parameters['uses_aligned_behavioural_income']": False,
@@ -374,13 +374,13 @@ _SERIES_LABEL_OVERRIDES = {
 def _humanize_series_name(series_name: str) -> str:
     """Turn an unlisted snake-case output key into a readable display name."""
     if series_name.endswith("_to_gdp"):
-        subject = _humanize_series_name(series_name[:-len("_to_gdp")])
+        subject = _humanize_series_name(series_name[: -len("_to_gdp")])
         return f"{subject} as a share of GDP"
     if series_name.endswith("_to_expenditure"):
-        subject = _humanize_series_name(series_name[:-len("_to_expenditure")])
+        subject = _humanize_series_name(series_name[: -len("_to_expenditure")])
         return f"{subject} as a share of expenditure"
     if series_name.endswith("_yoy_change"):
-        subject = _humanize_series_name(series_name[:-len("_yoy_change")])
+        subject = _humanize_series_name(series_name[: -len("_yoy_change")])
         return f"{subject} change, yoy"
     words = series_name.replace("_", " ").split()
     acronyms = {"cpi": "CPI", "gdp": "GDP", "ppi": "PPI", "tfp": "TFP", "yoy": "yoy"}

@@ -11,9 +11,9 @@ from .config import (
     POLICY_COLUMNS,
     SCENARIO_PRESETS,
     SERIES_LABELS,
+    Config,
     label_result_columns,
     series_label,
-    Config,
 )
 
 __all__ = [

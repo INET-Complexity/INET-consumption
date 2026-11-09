@@ -109,7 +109,8 @@ def test_native_target_funding_and_floor_are_transparent(observed_model, policy)
     raw = components["state_before"]
     args = components["inputs"]
     np.testing.assert_allclose(
-        cash["inputs"]["cash_income"], getters["current_financing_income"][0] + raw["received_mortgages"]
+        cash["inputs"]["cash_income"],
+        getters["current_financing_income"][0] + raw["received_mortgages"] + raw["property_sale_proceeds"],
     )
     np.testing.assert_allclose(
         cash["inputs"]["cash_uses"],

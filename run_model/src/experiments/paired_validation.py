@@ -23,6 +23,9 @@ from .paired_response import _ids, measure_paired_response
 from .quarter_outcomes import QuarterOutcomeCollector
 from .two_pass_diagnostics import TwoPassDiagnosticCapture
 
+# Household case artifacts must stay under this root (overridable in tests only).
+ARTIFACT_ROOT = Path("/private/tmp")
+
 
 def save_artifact(directory, payload):
     """Exclusive JSON + numeric NPZ; retain raw NaNs without nonstandard JSON."""
@@ -257,8 +260,8 @@ def run_paired_case(
     if any(not np.isfinite(x) or x <= 0 for x in (wall_seconds, output_bytes, peak_rss_bytes)):
         raise ValueError("Resource budgets must be finite and positive.")
     root = Path(output_dir).resolve()
-    if not root.is_relative_to(Path("/private/tmp").resolve()):
-        raise ValueError("Household case artifacts must remain under /private/tmp.")
+    if not root.is_relative_to(ARTIFACT_ROOT.resolve()):
+        raise ValueError(f"Household case artifacts must remain under {ARTIFACT_ROOT}.")
     initial_checkpoint = PairedCheckpoint(model)  # Reject bound hooks before any output.
     root.mkdir(parents=True, exist_ok=False, mode=0o700)
     manifest = dict(

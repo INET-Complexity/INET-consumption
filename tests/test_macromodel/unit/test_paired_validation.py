@@ -3,7 +3,6 @@
 import json
 import pickle
 import sys
-import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +13,7 @@ RUN_MODEL = Path(__file__).resolve().parents[3] / "run_model"
 if str(RUN_MODEL) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL))
 
+from src.experiments import paired_validation  # noqa: E402
 from src.experiments.paired_checkpoint import _RandomState  # noqa: E402
 from src.experiments.paired_validation import load_artifact, run_paired_case, save_artifact  # noqa: E402
 
@@ -34,9 +34,10 @@ def preserve_rng():
 
 
 @pytest.fixture
-def output():
-    with tempfile.TemporaryDirectory(dir="/private/tmp", prefix="paired-runner-test-") as directory:
-        yield Path(directory) / "case"
+def output(tmp_path, monkeypatch):
+    # The runner confines artifacts to /private/tmp, which exists only on macOS.
+    monkeypatch.setattr(paired_validation, "ARTIFACT_ROOT", tmp_path)
+    return tmp_path / "case"
 
 
 class ToyHouseholds:
@@ -249,6 +250,7 @@ def test_failures_preserve_manifest_and_available_arm_evidence(output, fault):
         {"household_ids": ["a"]},
         {"transfer_nominal": [np.nan, 1.0]},
         {"provenance": {}},
+        {"output_dir": Path("/outside-artifact-root/case")},
     ],
 )
 def test_invalid_case_fails_before_output(output, changes):

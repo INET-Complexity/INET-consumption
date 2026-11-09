@@ -130,7 +130,11 @@ def reconcile_investment_counterfactual(
                 "households/portfolio_settlement_committed_adjustment_cost",
             )
         )
-        tracked_other_cash_sources = off_minus_base("households/income_for_residual_saving")
+        # Property-sale proceeds are financing booked straight to LFA, not
+        # income, so they are a cash source outside income_for_residual_saving.
+        tracked_other_cash_sources = off_minus_base("households/income_for_residual_saving") + off_minus_base(
+            "households/property_sale_proceeds"
+        )
         tracked_other_net_use = tracked_other_cash_uses - tracked_other_cash_sources
         # Liquidation exchanges IFA for LFA and is not a net source when saving
         # is measured as acquisition of total financial assets. Keep the user's

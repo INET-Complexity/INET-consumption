@@ -32,6 +32,7 @@ _ZERO_SERIES = (
     "interest_paid",
     "debt_installments",
     "price_paid_for_property",
+    "property_sale_proceeds",
     "portfolio_settlement_committed_adjustment_cost",
     "income_for_residual_saving",
     "total_liquid_financial_assets",
@@ -119,3 +120,19 @@ def test_reconcile_investment_counterfactual_reads_liquidation_planned_not_force
     # Pins the regression: the old forced_liquidation_amount-based delta
     # (999.0 - 1.0 = 998.0) must not leak through.
     assert result["reduced_asset_liquidation"] != pytest.approx(998.0)
+
+
+def test_reconcile_investment_counterfactual_counts_sale_proceeds_as_a_cash_source(tmp_path: Path) -> None:
+    """Sale proceeds are financing, not income: a difference between arms is a tracked source."""
+    paths = {}
+    for arm, proceeds in (("baseline", 0.0), ("off", 25.0)):
+        paths[arm] = tmp_path / f"{arm}.h5"
+        _write_reconciliation_fixture(
+            paths[arm], liquidation_planned_period1=0.0, forced_liquidation_amount_period1=0.0
+        )
+        with h5py.File(paths[arm], "r+") as h5_file:
+            h5_file["FRA/households/property_sale_proceeds"][1, 0] = proceeds
+
+    result = reconcile_investment_counterfactual(paths["baseline"], paths["off"], country="FRA", period=1)
+
+    assert result["tracked_other_cash_sources"] == pytest.approx(25.0)

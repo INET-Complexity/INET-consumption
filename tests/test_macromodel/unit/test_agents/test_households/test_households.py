@@ -1653,6 +1653,39 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         )
         np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
 
+    def test__resolver_books_property_sale_proceeds_as_liquid_financing(self, test_households, monkeypatch):
+        """Seller proceeds raise LFA one for one and never become saving split into IFA."""
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=False,
+            use_real_liquidation=True,
+        )
+        test_households.ts.override_current("income", np.zeros(n_households))
+        test_households.ts.override_current("expected_income", np.zeros(n_households))
+        test_households.ts.override_current("liquid_financial_assets", np.zeros(n_households))
+        test_households.ts.override_current("illiquid_financial_assets", np.full(n_households, 100.0))
+        proceeds = np.zeros(n_households)
+        proceeds[0] = 30.0
+        test_households.ts.override_current("property_sale_proceeds", proceeds)
+        new_wealth_seen = []
+
+        def record_new_wealth(*, new_wealth, **_kwargs):
+            new_wealth_seen.append(np.asarray(new_wealth, dtype=float).copy())
+            return np.zeros(n_households), np.zeros(n_households)
+
+        monkeypatch.setattr(test_households.functions["wealth"], "distribute_new_wealth", record_new_wealth)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), proceeds)
+        np.testing.assert_allclose(
+            test_households.ts.current("illiquid_financial_assets"), np.full(n_households, 100.0)
+        )
+        np.testing.assert_allclose(new_wealth_seen[0], np.zeros(n_households))
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
+
     def test__resolver_books_deposit_interest_once_as_a_direct_liquid_return(self, test_households, monkeypatch):
         n_households, _ = self._configure_update_wealth(
             test_households,

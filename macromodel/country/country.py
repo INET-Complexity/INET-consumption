@@ -601,6 +601,7 @@ class Country:
             raise RuntimeError("Final support requires an executable liquidation reservation.")
         resources = income_without_support + hh.ts.current("liquid_financial_assets") + liquidation
         resources += hh.ts.current("received_consumption_loans") + hh.ts.current("received_mortgages")
+        resources += hh.ts.current("property_sale_proceeds")
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
         support = np.maximum(uses - resources, 0.0)

@@ -55,7 +55,11 @@ IRF_CHANNEL_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("household_consumption_loan_interest", "{country}/households/interest_paid_on_loans", "sum"),
     IRFVariable("household_deposit_interest", "{country}/households/interest_paid_on_deposits", "sum"),
     IRFVariable("household_employment", "{country}/labour_market/num_employed_individuals_by_sector", "sum"),
-    IRFVariable("household_consumption_loan_rate", "{country}/banks/average_interest_rates_on_household_consumption_loans", "first"),
+    IRFVariable(
+        "household_consumption_loan_rate",
+        "{country}/banks/average_interest_rates_on_household_consumption_loans",
+        "first",
+    ),
     IRFVariable("household_mortgage_rate", "{country}/banks/average_interest_rates_on_mortgages", "first"),
     IRFVariable("household_deposit_rate", "{country}/banks/average_interest_rate_on_household_deposits", "first"),
     IRFVariable("firm_deposit_rate", "{country}/banks/average_interest_rate_on_firm_deposits", "first"),

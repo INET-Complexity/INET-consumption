@@ -129,6 +129,7 @@ class WealthSetter(ABC):
         new_loans: np.ndarray,
         new_real_wealth: np.ndarray,
         tau_cf: float,
+        property_sale_proceeds: np.ndarray | float = 0.0,
     ) -> np.ndarray:
         """Calculate deposit values.
 
@@ -142,6 +143,8 @@ class WealthSetter(ABC):
             new_loans (np.ndarray): New borrowing
             new_real_wealth (np.ndarray): New real assets
             tau_cf (float): Capital formation tax rate
+            property_sale_proceeds (np.ndarray | float): Proceeds received by
+                sellers of completed property sales (financing, not saving)
 
         Returns:
             np.ndarray: Updated deposit values
@@ -245,6 +248,7 @@ class SimpleWealthSetter(WealthSetter):
         new_loans: np.ndarray,
         new_real_wealth: np.ndarray,
         tau_cf: float,
+        property_sale_proceeds: np.ndarray | float = 0.0,
     ) -> np.ndarray:
         """Calculate deposits with all flows.
 
@@ -258,6 +262,8 @@ class SimpleWealthSetter(WealthSetter):
             new_loans (np.ndarray): New borrowing
             new_real_wealth (np.ndarray): New real assets
             tau_cf (float): Capital formation tax rate
+            property_sale_proceeds (np.ndarray | float): Proceeds received by
+                sellers of completed property sales (financing, not saving)
 
         Returns:
             np.ndarray: Updated deposit values
@@ -268,6 +274,7 @@ class SimpleWealthSetter(WealthSetter):
             - used_up_wealth_in_deposits
             - current_interest_paid
             - price_paid_for_property
+            + property_sale_proceeds
             - debt_installments
             + new_loans
             - tau_cf * np.maximum(0.0, new_real_wealth)
@@ -393,6 +400,7 @@ class DefaultWealthSetter(WealthSetter):
         new_loans: np.ndarray,
         new_real_wealth: np.ndarray,
         tau_cf: float,
+        property_sale_proceeds: np.ndarray | float = 0.0,
     ) -> np.ndarray:
         """Calculate deposits with all flows.
 
@@ -406,6 +414,8 @@ class DefaultWealthSetter(WealthSetter):
             new_loans (np.ndarray): New borrowing
             new_real_wealth (np.ndarray): New real assets
             tau_cf (float): Capital formation tax rate
+            property_sale_proceeds (np.ndarray | float): Proceeds received by
+                sellers of completed property sales (financing, not saving)
 
         Returns:
             np.ndarray: Updated deposit values
@@ -416,6 +426,7 @@ class DefaultWealthSetter(WealthSetter):
             - used_up_wealth_in_deposits
             - current_interest_paid
             - price_paid_for_property
+            + property_sale_proceeds
             - debt_installments
             + new_loans
             - tau_cf * np.maximum(0.0, new_real_wealth)

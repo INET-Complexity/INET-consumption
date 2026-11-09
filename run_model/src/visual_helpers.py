@@ -3,9 +3,9 @@ import warnings
 from ast import literal_eval
 from typing import Literal, overload
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from src.helpers import unpack_cell
@@ -144,9 +144,7 @@ def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
         real_change = 100 * ((1 + merged.pct_delta) / (1 + merged.pct_delta_cpi) - 1)
         real_by_key = {
             (seed, shock, int(horizon)): float(value)
-            for seed, shock, horizon, value in zip(
-                merged["seed"], merged["shock_name"], merged["horizon"], real_change
-            )
+            for seed, shock, horizon, value in zip(merged["seed"], merged["shock_name"], merged["horizon"], real_change)
         }
         variable_mask = result.variable == variable
         keys = zip(
@@ -159,7 +157,9 @@ def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
 
     cpi_by_key = {
         (row.seed, row.shock_name, int(row.horizon)): float(row.pct_delta)
-        for row in result.loc[result.variable == "cpi", ["seed", "shock_name", "horizon", "pct_delta"]].itertuples(index=False)
+        for row in result.loc[result.variable == "cpi", ["seed", "shock_name", "horizon", "pct_delta"]].itertuples(
+            index=False
+        )
     }
     for variable in ("firm_wage_per_employee",):
         mask = result.variable == variable
@@ -174,9 +174,7 @@ def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
     result.loc[result.variable == "firm_wage_per_employee", "variable"] = "firm_real_wage_per_employee"
     result.loc[result.variable == "gross_fixed_capital_formation", "variable"] = "gfcf"
     result.loc[result.variable == "unemployment_rate", "variable"] = "unemp"
-    result.loc[result.variable == "cpi", "plot_value"] = (
-        100 * result.loc[result.variable == "cpi", "pct_delta"]
-    )
+    result.loc[result.variable == "cpi", "plot_value"] = 100 * result.loc[result.variable == "cpi", "pct_delta"]
     return result
 
 
@@ -222,9 +220,7 @@ def plot_irf_panels(
         for row_idx, shock_name in enumerate(shock_names):
             for col_idx, variable in enumerate(variables):
                 ax = axs[row_idx, col_idx]
-                subset = plot_panel.loc[
-                    (plot_panel["shock_name"] == shock_name) & (plot_panel["variable"] == variable)
-                ]
+                subset = plot_panel.loc[(plot_panel["shock_name"] == shock_name) & (plot_panel["variable"] == variable)]
                 if subset.empty:
                     ax.set_visible(False)
                     continue

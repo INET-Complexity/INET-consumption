@@ -1431,8 +1431,38 @@ class CreditMarket:
             raise RuntimeError("Household service has not been snapshotted for this period.")
         return self._household_service_snapshot
 
-    def pay_household_mortgage_installments(self, remaining_shortfall: np.ndarray | None = None) -> np.ndarray:
-        """Settle mortgage service after consumer relief, carrying matched arrears."""
+    def mortgage_principal_after_scheduled_service(self) -> np.ndarray:
+        """Opening mortgage principal left per household if this period's service is paid in full.
+
+        Opening principal (``_serviceable_loans_this_period``, which excludes
+        loans granted this period) minus opening principal arrears and minus
+        scheduled contractual principal, both due this period. Relief granted
+        later can only leave more principal outstanding, so a repayment capped
+        by this amount never exceeds the principal left after service.
+        """
+        snapshot = self.current_household_service_snapshot()
+        opening_principal = self._serviceable_loans_this_period["mort_loans"][0]
+        remaining = (
+            opening_principal
+            - snapshot.mortgage_principal_by_cell
+            - snapshot.mortgage_opening_principal_arrears_by_cell
+        )
+        return np.maximum(remaining, 0.0).sum(axis=0)
+
+    def pay_household_mortgage_installments(
+        self,
+        remaining_shortfall: np.ndarray | None = None,
+        sale_repayment: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Settle mortgage service after consumer relief, carrying matched arrears.
+
+        ``sale_repayment`` is principal repaid from property-sale proceeds. It is
+        applied after scheduled service to the opening loans only (never to a
+        loan granted this period), principal arrears first, then performing
+        principal; the opening instalment shrinks in proportion, maturity is
+        unchanged. It is financing, not scheduled service, so it is excluded
+        from the principal-paid series.
+        """
         snapshot = self.current_household_service_snapshot()
         if self._mortgage_payments_settled:
             raise RuntimeError("Mortgage service has already been settled for this period.")
@@ -1443,6 +1473,17 @@ class CreditMarket:
         )
         if gap.shape != snapshot.mortgage_total_due.shape or not np.all(np.isfinite(gap)) or np.any(gap < 0):
             raise ValueError("Mortgage shortfall must be a finite non-negative household vector.")
+        repayment = (
+            np.zeros_like(snapshot.mortgage_total_due)
+            if sale_repayment is None
+            else np.asarray(sale_repayment, dtype=float)
+        )
+        if (
+            repayment.shape != snapshot.mortgage_total_due.shape
+            or not np.all(np.isfinite(repayment))
+            or np.any(repayment < 0)
+        ):
+            raise ValueError("Mortgage sale repayment must be a finite non-negative household vector.")
         unpaid = np.minimum(gap, snapshot.mortgage_total_due)
         available = snapshot.mortgage_total_due - unpaid
         components = []
@@ -1478,9 +1519,34 @@ class CreditMarket:
                 0.0,
             ),
         )
+        performing_before_repayment = np.maximum(
+            remaining_opening_principal - self._mortgage_principal_arrears_by_cell, 0.0
+        )
+        if np.any(repayment > 0.0):
+            available_principal = remaining_opening_principal.sum(axis=0)
+            if np.any(repayment > available_principal + 1e-6 * np.maximum(1.0, available_principal)):
+                raise RuntimeError("Mortgage sale repayment exceeds the opening principal left after service.")
+            arrears_repaid = _allocate_household_amount_pro_rata(repayment, self._mortgage_principal_arrears_by_cell)
+            performing_repaid = _allocate_household_amount_pro_rata(
+                repayment - arrears_repaid.sum(axis=0), performing_before_repayment
+            )
+            repaid = arrears_repaid + performing_repaid
+            self._mortgage_principal_arrears_by_cell = np.maximum(
+                self._mortgage_principal_arrears_by_cell - arrears_repaid, 0.0
+            )
+            remaining_opening_principal = np.maximum(remaining_opening_principal - repaid, 0.0)
+            loans[0] = np.maximum(loans[0] - repaid, 0.0)
         # Arrears do not accrue interest. Weight the rate over surviving
         # performing principal, including the new loan at its own rate.
         performing_opening = np.maximum(remaining_opening_principal - self._mortgage_principal_arrears_by_cell, 0.0)
+        # A sale repayment shrinks the opening instalment with the performing
+        # principal it removes; maturity is unchanged.
+        opening_instalment = opening_loans[2] * np.divide(
+            performing_opening,
+            performing_before_repayment,
+            out=np.ones_like(performing_opening),
+            where=performing_before_repayment > 0.0,
+        )
         performing_principal = performing_opening + new_loans[0]
         loans[1] = np.divide(
             performing_opening * opening_loans[1] + new_loans[0] * new_loans[1],
@@ -1490,7 +1556,7 @@ class CreditMarket:
         )
         # An opening balance entirely in arrears is due through the arrears
         # ledger. Its old annuity must not also accelerate the new principal.
-        loans[2] = new_loans[2] + np.where(np.isclose(performing_opening, 0.0, atol=1e-2), 0.0, opening_loans[2])
+        loans[2] = new_loans[2] + np.where(np.isclose(performing_opening, 0.0, atol=1e-2), 0.0, opening_instalment)
         self._mortgage_principal_paid = (old_principal + principal).sum(axis=0)
         self._mortgage_interest_paid = (old_interest + interest).sum(axis=0)
         self._mortgage_unpaid_payment = unpaid.copy()

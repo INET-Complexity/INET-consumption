@@ -1653,8 +1653,11 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         )
         np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
 
-    def test__resolver_books_property_sale_proceeds_as_liquid_financing(self, test_households, monkeypatch):
-        """Seller proceeds raise LFA one for one and never become saving split into IFA."""
+    @pytest.mark.parametrize("mortgage_repayment", [0.0, 20.0])
+    def test__resolver_books_property_sale_proceeds_as_liquid_financing(
+        self, test_households, monkeypatch, mortgage_repayment
+    ):
+        """Seller proceeds net of the mortgage repaid on sale raise LFA one for one, never via IFA."""
         n_households, _ = self._configure_update_wealth(
             test_households,
             monkeypatch,
@@ -1669,6 +1672,9 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         proceeds = np.zeros(n_households)
         proceeds[0] = 30.0
         test_households.ts.override_current("property_sale_proceeds", proceeds)
+        repayment = np.zeros(n_households)
+        repayment[0] = mortgage_repayment
+        test_households.ts.override_current("mortgage_sale_repayment", repayment)
         new_wealth_seen = []
 
         def record_new_wealth(*, new_wealth, **_kwargs):
@@ -1679,7 +1685,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
 
-        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), proceeds)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), proceeds - repayment)
         np.testing.assert_allclose(
             test_households.ts.current("illiquid_financial_assets"), np.full(n_households, 100.0)
         )

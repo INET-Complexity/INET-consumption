@@ -2601,6 +2601,13 @@ class TestCountry:
             compute_observed_fraction_rent_value,
         )
         monkeypatch.setattr(test_country.households, "process_housing_market_clearing", lambda **kwargs: None)
+        # This test calls the step without credit clearing, so there is no
+        # service snapshot; the mortgage repaid on sale is not under test.
+        monkeypatch.setattr(
+            test_country.credit_market,
+            "mortgage_principal_after_scheduled_service",
+            lambda: np.zeros(test_country.households.ts.current("n_households")),
+        )
 
         test_country.process_housing_market_clearing()
 
@@ -3887,7 +3894,9 @@ class TestCountry:
             lambda: pytest.fail("Country must leave the repayment cap to CreditMarket settlement."),
         )
         monkeypatch.setattr(
-            test_country.credit_market, "pay_household_mortgage_installments", lambda _gap: np.zeros(n_households)
+            test_country.credit_market,
+            "pay_household_mortgage_installments",
+            lambda _gap, **_kwargs: np.zeros(n_households),
         )
         monkeypatch.setattr(
             test_country.credit_market, "_mortgage_unpaid_payment", np.zeros(n_households), raising=False

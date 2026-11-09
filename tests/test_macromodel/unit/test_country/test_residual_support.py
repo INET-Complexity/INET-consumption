@@ -36,6 +36,7 @@ def test_final_support_uses_actual_receipts_and_posts_once(receipt, sale_proceed
         received_consumption_loans=np.zeros(1),
         received_mortgages=np.zeros(1),
         property_sale_proceeds=np.array([sale_proceeds]),
+        mortgage_sale_repayment=np.zeros(1),
         expected_income=np.array([80.0]),
         financing_income_error=np.zeros(1),
     )

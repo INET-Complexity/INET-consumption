@@ -171,6 +171,7 @@ class ResidualDiagnosticCapture:
                             "price_paid_for_property",
                             "received_mortgages",
                             "property_sale_proceeds",
+                            "mortgage_sale_repayment",
                             "liquid_financial_assets",
                         )
                     }

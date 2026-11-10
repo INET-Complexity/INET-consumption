@@ -15,6 +15,8 @@ def test__prepare_housing_market_clearing_uses_configured_period_inflation_for_r
 
     monkeypatch.setattr(test_country.housing_market, "update_property_value", lambda: None)
     monkeypatch.setattr(test_country.households, "prepare_housing_market_clearing", lambda **kwargs: None)
+    # The bid cap reads planning metrics, which this isolated call does not prepare.
+    monkeypatch.setattr(test_country, "_purchase_own_funds", lambda: None)
 
     def capture_update_rent(**kwargs):
         captured.update(kwargs)

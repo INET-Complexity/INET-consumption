@@ -316,3 +316,27 @@ def test_completed_sale_mask_must_cover_every_matched_row(test_config):
             household_financial_wealth=np.zeros(3),
             kept_sales=np.array([True]),
         )
+
+
+def test_seller_without_a_rental_moves_to_social_housing_and_a_dropped_rental_is_offered_again(test_config):
+    """Household 0 lives in home 10 and sells it to household 1. Household 2's rental of 20 does not go ahead."""
+    market, household_states = _market_with_two_sales(test_config)
+    market.states["properties"].loc[10, "Corresponding Inhabitant Household ID"] = 0
+    market.states["properties"]["Up for Rent"] = False
+    market.states["current_sales"] = _sales([("Sell", 1, 0, 10, 110.0), ("Rental", 2, 0, 20, 2.0)])
+    household_states["Corresponding Inhabited House ID"] = np.array([10, -1, -1])
+    household_states["Tenure Status of the Main Residence"] = np.array([1, 3, 3])
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(3),
+        household_financial_wealth=np.zeros(3),
+        kept_sales=np.array([True, False]),
+        sellers_vacate=True,
+    )
+
+    properties = market.states["properties"]
+    assert properties.loc[10, "Corresponding Inhabitant Household ID"] == 1
+    np.testing.assert_array_equal(household_states["Corresponding Inhabited House ID"], [-1, 10, -1])
+    np.testing.assert_array_equal(household_states["Tenure Status of the Main Residence"], [-1, 1, 3])
+    assert bool(properties.loc[20, "Up for Rent"])

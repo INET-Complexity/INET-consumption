@@ -87,7 +87,11 @@ from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
-from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
+from macromodel.markets.housing_market.purchase_completion import (
+    PurchaseCompletionInputs,
+    free_purchase_assets,
+    mortgage_financing_gap,
+)
 from macromodel.markets.housing_market.sales import sold_collateral_share
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
@@ -2193,6 +2197,8 @@ class Country:
             assumed_mortgage_maturity=self.banks.parameters.mortgage_maturity,
             rental_income_taxes=self.central_government.states["Income Tax"],
             time_unit=self.economy.time_unit,
+            purchase_own_funds=self._purchase_own_funds(),
+            loan_to_value_ratio=self.banks.parameters.mortgage_loan_to_value_ratio,
         )
 
         # Set rent
@@ -2250,8 +2256,17 @@ class Country:
             loan_interest_obligation_preview=scheduled_firm_installment_preview["scheduled_interest_due"],
             debt_installment_preview=scheduled_firm_installment_preview["scheduled_principal_due"],
         )
+        completion_inputs = self._purchase_completion_inputs()
         self.households.compute_target_credit(
             current_sales=self.housing_market.states["current_sales"],
+            mortgage_financing_gap=(
+                None
+                if completion_inputs is None
+                else mortgage_financing_gap(
+                    completion_inputs,
+                    principal_left=self.credit_market.preview_mortgage_principal_after_scheduled_service(),
+                )
+            ),
         )
 
     def clear_credit_market(self) -> None:
@@ -2270,6 +2285,38 @@ class Country:
             completion_inputs=self._purchase_completion_inputs(),
         )
 
+    def _purchase_cash_need(self) -> np.ndarray:
+        """Cash a buyer keeps out of a purchase: N plus the interest it pays on deposits this period.
+
+        Deposit interest is a payment when the deposit rate is negative or the
+        account is overdrawn. It is charged on opening liquid assets, so the
+        cash spent on the home still bears it. Interest received is not netted.
+        """
+        hh = self.households
+        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
+        deposit_interest = hh.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        return hh.planning_cash_need(consumer_service + mortgage_service) + np.maximum(deposit_interest, 0.0)
+
+    def _purchase_own_funds(self) -> np.ndarray | None:
+        """Assets each household can spend on a purchase, as the completion rule counts them.
+
+        ``None`` on the legacy path, where bids are not capped.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        hh = self.households
+        free_lfa, free_ifa = free_purchase_assets(
+            cash_need=self._purchase_cash_need(),
+            liquid_assets=hh.ts.current("liquid_financial_assets"),
+            illiquid_assets=hh.ts.current("illiquid_financial_assets"),
+            planned_liquidation=hh.ts.current("liquidation_planned"),
+            sale_cost=hh.current_illiquid_trade_cost(),
+        )
+        return free_lfa + free_ifa
+
     def _purchase_completion_inputs(self) -> PurchaseCompletionInputs | None:
         """Matched sales and buyer balance sheets for the purchase completion rule.
 
@@ -2281,17 +2328,17 @@ class Country:
             return None
         hh = self.households
         properties = self.housing_market.states["properties"]
-        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
         return PurchaseCompletionInputs(
             current_sales=self.housing_market.states["current_sales"],
             property_owner=properties["Corresponding Owner Household ID"].copy(),
             property_value=properties["Value"].copy(),
             property_inhabitant=properties["Corresponding Inhabitant Household ID"].copy(),
-            cash_need=hh.planning_cash_need(consumer_service + mortgage_service),
+            cash_need=self._purchase_cash_need(),
             liquid_assets=np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float),
             illiquid_assets=np.asarray(hh.ts.current("illiquid_financial_assets"), dtype=float),
             planned_liquidation=np.asarray(hh.ts.current("liquidation_planned"), dtype=float),
             sale_cost=hh.current_illiquid_trade_cost(),
+            sale_conditional_movers=hh.sale_conditional_movers(),
         )
 
     def process_housing_market_clearing(self) -> None:
@@ -2311,6 +2358,7 @@ class Country:
             household_received_mortgages=self.households.ts.current("received_mortgages"),
             household_financial_wealth=self.households.ts.current("wealth_financial_assets"),
             kept_sales=None if completion is None else completion.kept_sales,
+            sellers_vacate=completion is not None,
         )
         self.housing_market.ts.observed_fraction_value_price.append(
             self.housing_market.compute_observed_fraction_value_price()

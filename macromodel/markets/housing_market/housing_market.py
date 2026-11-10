@@ -20,7 +20,12 @@ from macromodel.configurations import HousingMarketConfiguration
 from macromodel.markets.housing_market.housing_market_ts import (
     create_housing_market_timeseries,
 )
-from macromodel.markets.housing_market.sales import VACANT_HOUSEHOLD_ID, move_chain_feasible, self_sale_mask
+from macromodel.markets.housing_market.sales import (
+    SOCIAL_HOUSING_TENURE_STATUS,
+    VACANT_HOUSEHOLD_ID,
+    move_chain_feasible,
+    self_sale_mask,
+)
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import (
     functions_from_model,
@@ -490,6 +495,7 @@ class HousingMarket:
         household_received_mortgages: np.ndarray,
         household_financial_wealth: np.ndarray,
         kept_sales: np.ndarray | None = None,
+        sellers_vacate: bool = False,
     ) -> None:
         """Process and finalize housing market transactions.
 
@@ -517,6 +523,9 @@ class HousingMarket:
             kept_sales: Mask over the rows of ``current_sales`` decided by the
                 purchase completion rule. When given, it is authoritative and
                 the mortgage/wealth financing test is not applied.
+            sellers_vacate: If True, a seller still living in a home it sold
+                moves to social housing. A seller with a kept rental has
+                already moved there.
 
         Note:
             This method ensures all market clearing outcomes are properly
@@ -537,6 +546,12 @@ class HousingMarket:
             if kept_sales.shape != (len(current_sales),):
                 raise ValueError("The completed-sale mask must have one entry per matched sale.")
             feasible_sale_indices = current_sales.index[kept_sales]
+            # A rental that does not go ahead is offered again.
+            if not kept_sales.all():
+                dropped_rentals = ~kept_sales & (current_sales["sales_types"] == "Rental").to_numpy()
+                self.states["properties"].loc[
+                    current_sales["property_id"].to_numpy(dtype=int)[dropped_rentals], "Up for Rent"
+                ] = True
         elif len(current_sales) == 0 or "sales_types" not in current_sales.columns:
             feasible_sale_indices = current_sales.index
         else:
@@ -608,6 +623,17 @@ class HousingMarket:
                     total_number_of_bought_houses += 1
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
+
+        if sellers_vacate:
+            for _, sale in self.states["current_sales"].iterrows():
+                seller_id, property_id = int(sale["seller_id"]), int(sale["property_id"])
+                if (
+                    sale["sales_types"] == "Sell"
+                    and seller_id != int(sale["buyer_id"])
+                    and household_states["Corresponding Inhabited House ID"][seller_id] == property_id
+                ):
+                    household_states["Corresponding Inhabited House ID"][seller_id] = VACANT_HOUSEHOLD_ID
+                    household_states["Tenure Status of the Main Residence"][seller_id] = SOCIAL_HOUSING_TENURE_STATUS
 
         self._refresh_owner_occupied_flags(self.states["properties"])
 

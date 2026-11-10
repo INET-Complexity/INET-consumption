@@ -2513,6 +2513,8 @@ class TestCountry:
         monkeypatch.setattr(test_country.banks, "set_interest_rates", lambda **kwargs: None)
         test_country.housing_market.states["current_sales"] = None
 
+        # This test runs the credit step without the planning phase that the completion inputs read.
+        monkeypatch.setattr(test_country, "_purchase_completion_inputs", lambda: None)
         test_country.prepare_credit_market_clearing()
 
         assert np.allclose(captured["wage_obligation_preview"], wage_preview)

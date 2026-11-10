@@ -1290,13 +1290,7 @@ class CreditMarket:
         if underwrites:
             cons, future_cons_service = self._cap_consumer_origination_dsti(households, maturity, consumer_loans)
         _, old_mortgage_service = self.preview_opening_household_service()
-        mortgages = self._serviceable_loans_this_period["mort_loans"]
-        _, scheduled_principal = _scheduled_service_components(
-            mortgages, self._mortgage_principal_arrears_by_cell, principal_arrears_accrue_interest=False
-        )
-        principal_left = _mortgage_principal_left_after_service(
-            mortgages[0], scheduled_principal, self._mortgage_principal_arrears_by_cell
-        )
+        principal_left = self.preview_mortgage_principal_after_scheduled_service()
 
         def mortgage_rejected(repayment: np.ndarray) -> np.ndarray:
             if not underwrites:
@@ -1476,6 +1470,16 @@ class CreditMarket:
             + self._mortgage_interest_arrears_by_cell
             + self._mortgage_principal_arrears_by_cell
         ).sum(axis=0)
+
+    def preview_mortgage_principal_after_scheduled_service(self) -> np.ndarray:
+        """Opening mortgage principal left per household after this period's scheduled service, before the snapshot."""
+        mortgages = self._serviceable_loans_this_period["mort_loans"]
+        _, scheduled_principal = _scheduled_service_components(
+            mortgages, self._mortgage_principal_arrears_by_cell, principal_arrears_accrue_interest=False
+        )
+        return _mortgage_principal_left_after_service(
+            mortgages[0], scheduled_principal, self._mortgage_principal_arrears_by_cell
+        )
 
     def prepare_household_service_snapshot(self) -> HouseholdServiceSnapshot:
         """Capture opening household service after consumer-credit booking."""

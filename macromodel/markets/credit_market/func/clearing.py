@@ -148,6 +148,16 @@ def _compute_loan_type_preference_caps(
     return firm_caps, hh_cons_caps, mortgage_caps
 
 
+def _mortgage_loan_to_value_cap(banks: Banks, households: Households) -> np.ndarray:
+    """Largest mortgage per household: the loan-to-value ratio times the price of the matched property.
+
+    The down payment is not tested here. The purchase completion rule tests
+    it against the buyer's actual resources, including own sale proceeds.
+    """
+    price = np.nan_to_num(np.asarray(households.ts.current("target_house_price"), dtype=float), nan=0.0)
+    return banks.parameters.mortgage_loan_to_value_ratio * price
+
+
 def _firm_dscr_underwriting_rate(banks_ir: np.ndarray, mode: str) -> float:
     """Return the borrower-level underwriting rate used for DSCR capacity."""
     if mode != "max_bank_rate":
@@ -1128,11 +1138,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 )
 
                 # Loan to value
-                loan_to_value_restrictions = (
-                    banks.parameters.mortgage_loan_to_value_ratio
-                    / (1 - banks.parameters.mortgage_loan_to_value_ratio)
-                    * households.ts.current("wealth_financial_assets")[household_id]
-                )
+                loan_to_value_restrictions = _mortgage_loan_to_value_cap(banks, households)[household_id]
 
                 # Debt service to income
                 debt_service_to_income_restrictions = (
@@ -1942,11 +1948,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 - households.ts.current("debt")[agents_with_demand]
                 - new_credit_by_household[agents_with_demand]
             )
-            loan_to_value_restrictions = (
-                banks.parameters.mortgage_loan_to_value_ratio
-                / (1 - banks.parameters.mortgage_loan_to_value_ratio)
-                * households.ts.current("wealth_financial_assets")[agents_with_demand]
-            )
+            loan_to_value_restrictions = _mortgage_loan_to_value_cap(banks, households)[agents_with_demand]
 
             credit_restrictions = np.minimum(loan_to_income_restrictions, loan_to_value_restrictions)
         else:

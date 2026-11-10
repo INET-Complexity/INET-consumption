@@ -90,6 +90,7 @@ from macromodel.agents.households.utils.create_bundle_matrix import create_bundl
 from macromodel.configurations import HouseholdsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.goods_market.value_type import ValueType
+from macromodel.markets.housing_market.purchase_completion import financeable_price
 from macromodel.markets.housing_market.sales import self_sale_mask
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
@@ -745,6 +746,8 @@ class Households(Agent):
             configuration (HouseholdsConfiguration): New household config
         """
         self.gen_reset()
+        for name in ("_buying_after_sale", "_moving_owners", "_moving_owner_wants_to_buy"):
+            self.__dict__.pop(name, None)
         consumption = self.functions["consumption"]
         reset_integrated_rule = (
             isinstance(consumption, CreditAugmentedConsumption)
@@ -3070,6 +3073,16 @@ class Households(Agent):
                 tau_cf=tau_cf,
             )
 
+    def buying_after_sale(self) -> np.ndarray:
+        """Households that sold their home in order to buy and have not bought yet."""
+        if not hasattr(self, "_buying_after_sale"):
+            self._buying_after_sale = np.zeros(self.ts.current("n_households"), dtype=bool)
+        return self._buying_after_sale
+
+    def sale_conditional_movers(self) -> np.ndarray:
+        """Owners who listed their home this period; they leave it only if its sale completes."""
+        return getattr(self, "_moving_owners", np.zeros(self.ts.current("n_households"), dtype=bool))
+
     def prepare_housing_market_clearing(
         self,
         housing_data: pd.DataFrame,
@@ -3079,6 +3092,8 @@ class Households(Agent):
         assumed_mortgage_maturity: int,
         rental_income_taxes: float,
         time_unit: int,
+        purchase_own_funds: np.ndarray | None = None,
+        loan_to_value_ratio: float | None = None,
     ) -> None:
         """Prepare for housing market clearing.
 
@@ -3096,9 +3111,20 @@ class Households(Agent):
             assumed_mortgage_maturity (int): Mortgage term length
             rental_income_taxes (float): Tax rate on rental income
             time_unit (int): Model period length in months
+            purchase_own_funds (np.ndarray | None): Assets each household can
+                spend on a purchase. When given, the price bid is capped at
+                the price these funds can finance at ``loan_to_value_ratio``,
+                and owners sell before they buy: a moving owner lists its
+                home, stays in it and bids for a rental; it bids to buy only
+                after the sale (see ``buying_after_sale``).
+            loan_to_value_ratio (float | None): Banks' mortgage loan-to-value limit
         """
         if len(housing_data) == 0:
             return
+        sell_before_buy = purchase_own_funds is not None
+        committed_buyers = None
+        if sell_before_buy:
+            committed_buyers = self.buying_after_sale() & (self.states["Tenure Status of the Main Residence"] != 1)
 
         # Households make decisions on their demand for properties
         (
@@ -3115,8 +3141,16 @@ class Households(Agent):
             expected_hpi_growth=expected_hpi_growth,
             assumed_mortgage_maturity=assumed_mortgage_maturity,
             rental_income_taxes=rental_income_taxes,
+            population_scale_factor=float(self.states.get("population_scale_factor", 1.0)),
+            period_months=time_unit,
+            committed_buyers=committed_buyers,
+            moving_owners_bid_rent=sell_before_buy,
         )
-        self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
+        if sell_before_buy:
+            # The moving owner's choice to buy is kept as an intention for after the sale.
+            self._moving_owners = np.asarray(households_hoping_to_move, dtype=bool).copy()
+            self._moving_owner_wants_to_buy = self._moving_owners & (np.nan_to_num(max_price_willing_to_pay) > 0.0)
+            max_price_willing_to_pay = np.where(self._moving_owners, np.nan, max_price_willing_to_pay)
         self.ts.max_rent_willing_to_pay.append(max_rent_willing_to_pay)
 
         # Set price of owner-occupied or vacant properties whose owners are hoping to move.
@@ -3149,6 +3183,16 @@ class Households(Agent):
             ],
             time_unit=time_unit,
         )
+
+        # A household bids at most the price it can finance: its own funds are the down payment.
+        if purchase_own_funds is not None:
+            if loan_to_value_ratio is None:
+                raise ValueError("Capping the price bid requires the loan-to-value ratio.")
+            max_price_willing_to_pay = np.minimum(
+                max_price_willing_to_pay,
+                financeable_price(np.asarray(purchase_own_funds, dtype=float), loan_to_value_ratio),
+            )
+        self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
 
         # Set what's up for rent
         prev_up_for_rent = pd.Series(housing_data["Up for Rent"], index=housing_data.index).fillna(False).astype(bool)
@@ -3252,6 +3296,12 @@ class Households(Agent):
             # A household can buy or sell several properties in one period.
             np.add.at(price_paid_for_property, buyer_ids, prices)
             np.add.at(property_sale_proceeds, seller_ids, prices)
+            # An owner who sold its home in order to buy bids to buy until a purchase completes.
+            wants_to_buy = getattr(self, "_moving_owner_wants_to_buy", None)
+            if wants_to_buy is not None:
+                left_home = self.states["Tenure Status of the Main Residence"][seller_ids] != 1
+                self.buying_after_sale()[seller_ids[wants_to_buy[seller_ids] & left_home]] = True
+                self.buying_after_sale()[buyer_ids] = False
         self.ts.price_paid_for_property.append(price_paid_for_property)
         self.ts.property_sale_proceeds.append(property_sale_proceeds)
 
@@ -3320,7 +3370,11 @@ class Households(Agent):
 
         return rent_by_household, imputed_rent_by_household
 
-    def compute_target_credit(self, current_sales: pd.DataFrame | None) -> None:
+    def compute_target_credit(
+        self,
+        current_sales: pd.DataFrame | None,
+        mortgage_financing_gap: np.ndarray | None = None,
+    ) -> None:
         """Calculate target credit demand.
 
         Determines credit needs for:
@@ -3330,6 +3384,10 @@ class Households(Agent):
 
         Args:
             current_sales (pd.DataFrame): Property transactions
+            mortgage_financing_gap (np.ndarray | None): Mortgage each buyer
+                needs under the purchase completion rule. When given, it is
+                the mortgage request; otherwise the configured target-credit
+                rule applies.
         """
         # Target consumption loans to cover immediate financing gaps. The legacy
         # unbounded-gap formula is always computed first; Stage 5 Increment 5
@@ -3377,15 +3435,18 @@ class Households(Agent):
                     )
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
                 np.add.at(target_house_price, buyer_ids, sells["price_or_rent"].to_numpy(dtype=float, copy=False))
-        self.ts.target_mortgage.append(
-            self.functions["target_credit"].compute_target_mortgage(
+        self.ts.target_house_price.append(target_house_price)
+        if mortgage_financing_gap is not None:
+            target_mortgage = np.where(target_house_price > 0.0, np.asarray(mortgage_financing_gap, dtype=float), 0.0)
+        else:
+            target_mortgage = self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,
                 target_consumption=self.consumption_cash_factor() * self.ts.current("target_consumption"),
                 income=self.ts.current("expected_income"),
                 rent=getattr(self, "planning_cash_rent", self.current_consumption_cash_rent()),
                 wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
             )
-        )
+        self.ts.target_mortgage.append(target_mortgage)
         self.ts.total_target_mortgage.append([self.ts.current("target_mortgage").sum()])
 
     def compute_interest_paid_on_deposits(

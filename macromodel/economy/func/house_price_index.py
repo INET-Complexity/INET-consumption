@@ -81,7 +81,7 @@ class HPIForecasting(ABC):
         if min_hpi_growth is not None:
             forecast = np.maximum(min_hpi_growth, forecast)
         if max_hpi_growth is not None:
-            forecast = np.maximum(max_hpi_growth, forecast)
+            forecast = np.minimum(max_hpi_growth, forecast)
         return forecast
 
 

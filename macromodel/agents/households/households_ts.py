@@ -419,6 +419,7 @@ def create_households_timeseries(
         #
         net_wealth=initial_wealth - initial_debt,
         #
+        target_house_price=np.full(len(data), np.nan),
         target_mortgage=np.full(len(data), np.nan),
         total_target_mortgage=[0.0],
         received_mortgages=np.full(len(data), np.nan),

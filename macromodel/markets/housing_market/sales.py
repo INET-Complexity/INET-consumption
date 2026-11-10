@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 VACANT_HOUSEHOLD_ID = -1
+#: Tenure status of a household with no property to live in.
+SOCIAL_HOUSING_TENURE_STATUS = -1
 
 
 def self_sale_mask(sales: pd.DataFrame) -> np.ndarray:

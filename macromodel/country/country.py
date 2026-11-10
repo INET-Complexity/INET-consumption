@@ -2359,6 +2359,7 @@ class Country:
             household_financial_wealth=self.households.ts.current("wealth_financial_assets"),
             kept_sales=None if completion is None else completion.kept_sales,
             sellers_vacate=completion is not None,
+            revalue_by_transaction_prices=completion is not None,
         )
         self.housing_market.ts.observed_fraction_value_price.append(
             self.housing_market.compute_observed_fraction_value_price()

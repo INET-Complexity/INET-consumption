@@ -317,3 +317,41 @@ def test_purchase_cash_need_adds_deposit_interest_paid_but_not_interest_received
     )
 
     np.testing.assert_allclose(Country._purchase_cash_need(country), [13.0, 10.0])
+
+
+def test_owner_with_an_unsold_listing_keeps_hoping_to_move():
+    """Owners never draw a move. Household 1 has an unsold listing; household 2 is a renter with the same mark."""
+    rule = _demand_rule()
+    rule.probability_stay_in_rented_property = 1.0
+
+    _, rent, moving = _demand(
+        rule,
+        [1, 1, PRIVATE_RENTER_TENURE_STATUS],
+        hpi_growth=1.0,
+        moving_owners_bid_rent=True,
+        owners_still_selling=np.array([False, True, True]),
+    )
+
+    np.testing.assert_array_equal(moving, [False, True, False])
+    assert rent[1] > 0.0 and np.isnan(rent[0])
+
+
+def test_price_to_value_ratio_compares_each_price_with_the_value_of_the_same_property():
+    """A cheap and a dear home both 2% above value, a third at value: the median ratio is 1.02."""
+    from macromodel.markets.housing_market.sales import median_price_to_value_ratio
+
+    ratio = median_price_to_value_ratio(np.array([102.0, 1020.0, 500.0]), np.array([100.0, 1000.0, 500.0]))
+
+    np.testing.assert_allclose(ratio, 1.02)
+    assert median_price_to_value_ratio(np.array([]), np.array([])) == 1.0
+    assert median_price_to_value_ratio(np.array([5.0, np.nan]), np.array([0.0, 10.0])) == 1.0
+
+
+def test_unsold_properties_are_revalued_by_the_ratio_and_sold_ones_keep_their_price():
+    from macromodel.markets.housing_market.sales import revalue_unsold_properties
+
+    values = pd.Series([102.0, 200.0, 300.0], index=[10, 20, 30])  # property 10 was sold at 102
+
+    revalued = revalue_unsold_properties(values=values, sold_property_ids=np.array([10]), ratio=1.02)
+
+    np.testing.assert_allclose(revalued.to_numpy(), [102.0, 204.0, 306.0])

@@ -303,6 +303,7 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         period_months: int = 12,
         committed_buyers: np.ndarray | None = None,
         moving_owners_bid_rent: bool = False,
+        owners_still_selling: np.ndarray | None = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Calculate property demand using default behavior.
 
@@ -330,6 +331,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
             moving_owners_bid_rent (bool): If True, every owner hoping to move
                 also gets a rent bid. Its price bid then only records that it
                 chose to buy; the caller decides whether it may bid.
+            owners_still_selling (np.ndarray | None): Owners with an unsold
+                listing from an earlier period. They keep hoping to move.
 
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: Maximum price willing to pay,
@@ -347,6 +350,10 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
             ind_owning,
             np.random.random(ind_owning.shape[0]) > self.probability_stay_in_owned_property,
         )
+        if owners_still_selling is not None:
+            ind_owning_not_staying = ind_owning_not_staying | (
+                ind_owning & np.asarray(owners_still_selling, dtype=bool)
+            )
 
         # Decision between renting and owning for households renting or in social housing
         ind_dec = ind_in_social_housing | ind_renting_not_staying | ind_owning_not_staying

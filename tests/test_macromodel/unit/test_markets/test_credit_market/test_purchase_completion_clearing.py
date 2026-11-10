@@ -340,3 +340,55 @@ def test_seller_without_a_rental_moves_to_social_housing_and_a_dropped_rental_is
     np.testing.assert_array_equal(household_states["Corresponding Inhabited House ID"], [-1, 10, -1])
     np.testing.assert_array_equal(household_states["Tenure Status of the Main Residence"], [-1, 1, 3])
     assert bool(properties.loc[20, "Up for Rent"])
+
+
+def _market_with_three_properties(test_config) -> tuple[HousingMarket, dict]:
+    market, household_states = _market_with_two_sales(test_config)
+    properties = market.states["properties"]
+    properties.loc[30] = properties.loc[20]
+    properties["Value"] = [100.0, 200.0, 300.0]
+    properties["Sale Price"] = [110.0, 190.0, np.nan]
+    properties["Temporarily for Sale"] = False
+    sales = _sales([("Sell", 1, 0, 10, 110.0), ("Sell", 2, 0, 20, 190.0)])
+    sales["property_value"] = [100.0, 200.0]
+    market.states["current_sales"] = sales
+    return market, household_states
+
+
+def test_sale_that_does_not_complete_stays_listed_and_its_asking_price_enters_the_revaluation(test_config):
+    """Property 10 (value 100) sells at 110. Property 20 (value 200, asking 190) does not complete.
+
+    Ratios on the market: 1.10 and 0.95, median 1.025. Property 30 is not for sale.
+    """
+    market, household_states = _market_with_three_properties(test_config)
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(3),
+        household_financial_wealth=np.zeros(3),
+        kept_sales=np.array([True, False]),
+        revalue_by_transaction_prices=True,
+    )
+
+    properties = market.states["properties"]
+    assert bool(properties.loc[20, "Temporarily for Sale"])
+    assert not bool(properties.loc[10, "Temporarily for Sale"])
+    np.testing.assert_allclose(properties["Value"].to_numpy(), [110.0, 200.0 * 1.025, 300.0 * 1.025])
+    assert properties.loc[20, "Sale Price"] == 190.0
+
+
+def test_values_fall_when_only_an_unsold_listing_below_value_is_on_the_market(test_config):
+    """Nothing sells. Property 20 asks 190 against a value of 200: every value falls by 5%."""
+    market, household_states = _market_with_three_properties(test_config)
+    market.states["current_sales"] = market.states["current_sales"].iloc[0:0]
+    market.states["properties"].loc[20, "Temporarily for Sale"] = True
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(3),
+        household_financial_wealth=np.zeros(3),
+        kept_sales=np.zeros(0, dtype=bool),
+        revalue_by_transaction_prices=True,
+    )
+
+    np.testing.assert_allclose(market.states["properties"]["Value"].to_numpy(), [95.0, 190.0, 285.0])

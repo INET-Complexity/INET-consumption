@@ -526,6 +526,12 @@ class HousingMarket:
         total_number_of_self_sales = 0
         total_number_of_newly_rented_houses = 0
         current_sales = self.states["current_sales"]
+        # Matched purchases before the completion filter; self-sales are moves.
+        total_number_of_matched_purchases = 0
+        if len(current_sales) > 0 and "sales_types" in current_sales.columns:
+            total_number_of_matched_purchases = int(
+                ((current_sales["sales_types"] == "Sell") & ~self_sale_mask(current_sales)).sum()
+            )
         if kept_sales is not None:
             kept_sales = np.asarray(kept_sales, dtype=bool)
             if kept_sales.shape != (len(current_sales),):
@@ -623,6 +629,7 @@ class HousingMarket:
         self.ts.total_number_of_houses_unoccupied.append(
             [np.sum(self.states["properties"]["Corresponding Inhabitant Household ID"] == -1)]
         )
+        self.ts.total_number_of_matched_purchases.append([total_number_of_matched_purchases])
         self.ts.total_number_of_bought_houses.append([total_number_of_bought_houses])
         self.ts.total_number_of_self_sales.append([total_number_of_self_sales])
         self.ts.total_number_of_newly_rented_houses.append([total_number_of_newly_rented_houses])

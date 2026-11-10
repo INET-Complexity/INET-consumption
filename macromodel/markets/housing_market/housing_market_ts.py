@@ -57,6 +57,7 @@ def create_housing_market_timeseries(
     Returns:
         TimeSeries: Object containing:
             - total_number_of_bought_houses: Properties sold
+            - total_number_of_matched_purchases: Purchases matched before the completion rule
             - total_number_of_newly_rented_houses: New rentals
             - observed_fraction_value_price: Price/value ratios
             - price_value_histogram: Distribution of price/value ratios
@@ -73,6 +74,7 @@ def create_housing_market_timeseries(
         useful for analyzing market segmentation and trends.
     """
     return TimeSeries(
+        total_number_of_matched_purchases=[np.nan],
         total_number_of_bought_houses=[np.nan],
         total_number_of_self_sales=[np.nan],
         total_number_of_newly_rented_houses=[np.nan],

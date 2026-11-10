@@ -148,6 +148,33 @@ def test_buyer_without_a_sale_is_tested_exactly_as_before():
         np.testing.assert_array_equal(mort, legacy_mort)
 
 
+def test_old_mortgage_paying_its_last_instalment_adds_no_service_after_the_grant():
+    """B = 0: old service 10.1 + new 26 + other 2 > 35 today; after this period only 28 remains."""
+    cons = np.zeros((3, 2, N_HOUSEHOLDS))
+    old = np.zeros_like(cons)
+    old[:, 0, 0] = [10.0, 0.01, 10.1]
+    market = CreditMarket.from_data("TST", np.zeros((3, 2, 1)), np.zeros((3, 2, 1)), cons, old)
+    mortgage = _new_mortgage(26.0)
+    inputs = PurchaseCompletionInputs(
+        current_sales=_sales([("Sell", 0, 2, 10, 150.0)]),
+        property_owner=pd.Series([2], index=[10]),
+        property_value=pd.Series([150.0], index=[10]),
+        property_inhabitant=pd.Series([-1], index=[10]),
+        cash_need=np.zeros(N_HOUSEHOLDS),
+        liquid_assets=np.full(N_HOUSEHOLDS, 1000.0),
+        illiquid_assets=np.zeros(N_HOUSEHOLDS),
+        planned_liquidation=np.zeros(N_HOUSEHOLDS),
+        sale_cost=np.zeros(N_HOUSEHOLDS),
+    )
+
+    _, legacy = market.enforce_household_origination_dsti(_households(), MATURITY, cons, mortgage)
+    assert legacy[0].sum() == 0.0  # characterisation: rejected on this period's last instalment
+
+    _, kept = _complete(market, mortgage, inputs)
+
+    np.testing.assert_array_equal(kept, mortgage)
+
+
 def test_without_underwriting_snapshot_only_the_completion_test_applies():
     market = _market()
     households = SimpleNamespace(uses_feasibility_resolver=True)
@@ -276,6 +303,7 @@ def test_completed_sale_mask_is_authoritative_over_mortgages_and_wealth(test_con
     assert properties.loc[20, "Corresponding Owner Household ID"] == 2
     assert properties.loc[20, "Value"] == 210.0
     assert market.ts.current("total_number_of_bought_houses")[0] == 1
+    assert market.ts.current("total_number_of_matched_purchases")[0] == 2
 
 
 def test_completed_sale_mask_must_cover_every_matched_row(test_config):

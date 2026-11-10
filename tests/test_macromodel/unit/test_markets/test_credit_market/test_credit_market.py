@@ -1133,3 +1133,67 @@ def test_household_service_snapshot_has_one_writer_per_period():
 
     with pytest.raises(RuntimeError, match="already been snapshotted"):
         market.prepare_household_service_snapshot()
+
+
+def test_mortgage_of_a_purchase_that_does_not_complete_is_not_booked_or_counted(
+    test_banks,
+    test_firms,
+    test_households,
+):
+    """Household 0 has a grant but no purchase; household 1 buys. Only household 1's mortgage is booked."""
+    import pandas as pd
+
+    from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
+
+    n_banks = test_banks.ts.current("n_banks")
+    n_firms = test_firms.ts.current("n_firms")
+    n_households = test_households.ts.current("n_households")
+
+    class FixedLoanClearer:
+        def clear(self, **_kwargs):
+            mortgages = _empty_loan_state(n_banks, n_households)
+            mortgages[:, 0, 0] = np.array([80.0, 0.01, 1.0])
+            mortgages[:, 0, 1] = np.array([60.0, 0.01, 1.0])
+            return (
+                _empty_loan_state(n_banks, n_firms),
+                _empty_loan_state(n_banks, n_firms),
+                _empty_loan_state(n_banks, n_households),
+                mortgages,
+            )
+
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(n_banks, n_firms),
+        lt_loans=_empty_loan_state(n_banks, n_firms),
+        cons_loans=_empty_loan_state(n_banks, n_households),
+        mort_loans=_empty_loan_state(n_banks, n_households),
+    )
+    market.states["mort_loans"][:, 0, 2] = np.array([100.0, 0.01, 2.0])
+    market.states["cons_loans"][:, 0, 3] = np.array([40.0, 0.01, 1.0])
+    market.functions["clearing"] = FixedLoanClearer()
+    test_households.configure_feasibility_resolver(False)
+    liquid_assets = np.zeros(n_households)
+    liquid_assets[1] = 40.0
+    inputs = PurchaseCompletionInputs(
+        current_sales=pd.DataFrame(
+            [("Sell", 1, 3, 10, 100.0)],
+            columns=["sales_types", "buyer_id", "seller_id", "property_id", "price_or_rent"],
+        ),
+        property_owner=pd.Series([3], index=[10]),
+        property_value=pd.Series([100.0], index=[10]),
+        property_inhabitant=pd.Series([-1], index=[10]),
+        cash_need=np.zeros(n_households),
+        liquid_assets=liquid_assets,
+        illiquid_assets=np.zeros(n_households),
+        planned_liquidation=np.zeros(n_households),
+        sale_cost=np.zeros(n_households),
+    )
+
+    market.clear(test_banks, test_firms, test_households, 0.0, 0.0, 0.0, completion_inputs=inputs)
+
+    received = test_households.ts.current("received_mortgages")
+    assert received[0] == 0.0
+    assert received[1] == 60.0
+    booked = market.states["mort_loans"][0].sum(axis=1)
+    np.testing.assert_allclose(booked.sum(), 160.0)
+    np.testing.assert_allclose(test_banks.ts.current("new_loans_fraction_mortgages")[0], 160.0 / 200.0)

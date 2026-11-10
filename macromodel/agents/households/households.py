@@ -3249,8 +3249,8 @@ class Households(Agent):
             prices = purchases["price_or_rent"].to_numpy(dtype=float)
             if np.any(seller_ids < 0) or np.any(seller_ids >= n_households):
                 raise ValueError("Every completed property sale must have a household seller.")
-            price_paid_for_property[buyer_ids] = prices
-            # A landlord can sell several properties in one period.
+            # A household can buy or sell several properties in one period.
+            np.add.at(price_paid_for_property, buyer_ids, prices)
             np.add.at(property_sale_proceeds, seller_ids, prices)
         self.ts.price_paid_for_property.append(price_paid_for_property)
         self.ts.property_sale_proceeds.append(property_sale_proceeds)
@@ -3376,7 +3376,7 @@ class Households(Agent):
                         f"current_sales is missing columns required for mortgage targeting: {sorted(missing)}"
                     )
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
-                target_house_price[buyer_ids] = sells["price_or_rent"].to_numpy(dtype=float, copy=False)
+                np.add.at(target_house_price, buyer_ids, sells["price_or_rent"].to_numpy(dtype=float, copy=False))
         self.ts.target_mortgage.append(
             self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,

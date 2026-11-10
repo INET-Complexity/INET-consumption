@@ -1282,7 +1282,8 @@ class CreditMarket:
         ``old service * (B - R) / B``, with ``B`` the principal left after this
         period's service and ``R`` the repayment from sales kept in the current
         pass. A household that sells nothing has ``R = 0`` and is tested as
-        before.
+        before. With ``B = 0`` this period's service is the last one, so the old
+        mortgage adds nothing to the service after the grant.
         """
         underwrites = hasattr(households, "consumer_underwriting_income")
         cons, future_cons_service = consumer_loans, None
@@ -1300,12 +1301,11 @@ class CreditMarket:
         def mortgage_rejected(repayment: np.ndarray) -> np.ndarray:
             if not underwrites:
                 return np.zeros(principal_left.shape, dtype=bool)
-            unrepaid_share = np.ones_like(principal_left)
-            np.divide(
+            unrepaid_share = np.divide(
                 np.maximum(principal_left - repayment, 0.0),
                 principal_left,
-                out=unrepaid_share,
-                where=(repayment > 0.0) & (principal_left > 0.0),
+                out=np.zeros_like(principal_left),
+                where=principal_left > 0.0,
             )
             return self._mortgage_dsti_rejected(
                 households, mortgage_loans, future_cons_service, old_mortgage_service * unrepaid_share

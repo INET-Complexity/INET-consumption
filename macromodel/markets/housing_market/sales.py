@@ -3,6 +3,8 @@
 import numpy as np
 import pandas as pd
 
+VACANT_HOUSEHOLD_ID = -1
+
 
 def self_sale_mask(sales: pd.DataFrame) -> np.ndarray:
     """Return True for ``Sell`` rows whose buyer is the seller.
@@ -55,3 +57,33 @@ def sold_collateral_share(
     owned_value = np.bincount(owners.to_numpy()[owned], weights=values.to_numpy()[owned], minlength=n_households)
     np.divide(sold_value, owned_value, out=share, where=owned_value > 0.0)
     return np.clip(share, 0.0, 1.0)
+
+
+def move_chain_feasible(sales: pd.DataFrame, kept: np.ndarray, property_inhabitant: pd.Series) -> np.ndarray:
+    """Drop kept sales whose property stays occupied by a household that does not move.
+
+    A buyer can move in only if the property is vacant, already its home, or
+    its inhabitant is itself the buyer of a kept sale. Dropping one sale can
+    strand the next link of a chain, so the pass repeats until nothing changes.
+    ``kept`` is a boolean mask over the rows of ``sales``; the result is a
+    subset of it.
+    """
+    kept = np.asarray(kept, dtype=bool).copy()
+    if not kept.any():
+        return kept
+    buyers = sales["buyer_id"].to_numpy(dtype=int)
+    inhabitants = (
+        property_inhabitant.fillna(VACANT_HOUSEHOLD_ID)
+        .astype(int)
+        .reindex(sales["property_id"].to_numpy(dtype=int))
+        .fillna(VACANT_HOUSEHOLD_ID)
+        .to_numpy(dtype=int)
+    )
+    while True:
+        can_transfer = (
+            (inhabitants == VACANT_HOUSEHOLD_ID) | (inhabitants == buyers) | np.isin(inhabitants, buyers[kept])
+        )
+        still_kept = kept & can_transfer
+        if still_kept.sum() == kept.sum():
+            return still_kept
+        kept = still_kept

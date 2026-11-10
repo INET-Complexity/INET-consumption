@@ -41,6 +41,11 @@ from macromodel.configurations import CreditMarketConfiguration
 from macromodel.markets.credit_market.credit_market_ts import (
     create_credit_market_timeseries,
 )
+from macromodel.markets.housing_market.purchase_completion import (
+    PurchaseCompletion,
+    PurchaseCompletionInputs,
+    resolve_purchase_completion,
+)
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
 
@@ -182,6 +187,13 @@ def _scheduled_service_components(
             np.maximum(loans[0] - principal_arrears, 0.0),
         )
     return interest_due, principal_due
+
+
+def _mortgage_principal_left_after_service(
+    opening_principal: np.ndarray, scheduled_principal: np.ndarray, opening_principal_arrears: np.ndarray
+) -> np.ndarray:
+    """Opening mortgage principal per household left once this period's service is paid in full."""
+    return np.maximum(opening_principal - scheduled_principal - opening_principal_arrears, 0.0).sum(axis=0)
 
 
 def _infer_firm_loan_remaining_terms(
@@ -543,6 +555,7 @@ class CreditMarket:
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period: np.ndarray | None = None
+        self._purchase_completion: PurchaseCompletion | None = None
         self._consumer_loan_remodulation_maturity: int | None = None
         n_households = self.states["cons_loans"].shape[2]
         # Lean state carried into the next CACF target calculation. It is not a
@@ -781,6 +794,7 @@ class CreditMarket:
         self._new_loans_this_period = _zero_like_loan_states(self.states)
         self._serviceable_loans_this_period = {key: self.states[key].copy() for key in _LOAN_KEYS}
         self._pending_consumer_loans_this_period = None
+        self._purchase_completion = None
         self._consumer_loan_remodulation_maturity = None
         n_households = self.states["cons_loans"].shape[2]
         self._consumer_debt_rate_delta_for_cacf = np.zeros(n_households)
@@ -882,6 +896,7 @@ class CreditMarket:
         current_npl_firm_loans: float,
         current_npl_hh_cons_loans: float,
         current_npl_mortgages: float,
+        completion_inputs: PurchaseCompletionInputs | None = None,
     ) -> None:
         """Clear the credit market by matching loan supply with demand.
 
@@ -904,6 +919,10 @@ class CreditMarket:
             current_npl_firm_loans (float): Current NPL rate for firm loans
             current_npl_hh_cons_loans (float): Current NPL rate for consumer loans
             current_npl_mortgages (float): Current NPL rate for mortgages
+            completion_inputs: Matched property sales and buyer balance sheets.
+                When given, the purchase completion rule decides which
+                mortgages are booked; a mortgage of a buyer whose purchase
+                does not complete is never booked.
 
         Note:
             The function updates various time series metrics including:
@@ -922,6 +941,7 @@ class CreditMarket:
         self._serviceable_firm_loan_cohorts = {key: cohorts.copy() for key, cohorts in self._firm_loan_cohorts.items()}
         self._new_firm_loan_cohorts = {key: np.zeros_like(cohorts) for key, cohorts in self._firm_loan_cohorts.items()}
         self._pending_consumer_loans_this_period = None
+        self._purchase_completion = None
         self._consumer_loan_remodulation_maturity = None
         self._household_service_snapshot = None
         self._consumer_payment_settlement = None
@@ -989,9 +1009,20 @@ class CreditMarket:
             current_npl_mortgages=current_npl_mortgages,
         )
         self._validate_new_consumer_loans(new_cons_loans)
-        new_cons_loans, new_mort_loans = self.enforce_household_origination_dsti(
-            households, banks.parameters.household_consumption_loan_maturity, new_cons_loans, new_mort_loans
-        )
+        if completion_inputs is None:
+            new_cons_loans, new_mort_loans = self.enforce_household_origination_dsti(
+                households, banks.parameters.household_consumption_loan_maturity, new_cons_loans, new_mort_loans
+            )
+        else:
+            # Decided before booking: a booked mortgage is merged into the
+            # household's existing loan and cannot be reversed.
+            new_cons_loans, new_mort_loans = self._complete_property_purchases(
+                households,
+                banks.parameters.household_consumption_loan_maturity,
+                new_cons_loans,
+                new_mort_loans,
+                completion_inputs,
+            )
 
         # Record the new loans. Slot 1 is a period rate, so it must be
         # principal-weighted instead of added as an interest cash-flow amount.
@@ -1179,6 +1210,20 @@ class CreditMarket:
         """
         if not hasattr(households, "consumer_underwriting_income"):
             return consumer_loans, mortgage_loans
+        cons, future_cons_service = self._cap_consumer_origination_dsti(households, maturity, consumer_loans)
+        _, mortgage_service = self.preview_opening_household_service()
+        mort = mortgage_loans.copy()
+        mort[:, :, self._mortgage_dsti_rejected(households, mort, future_cons_service, mortgage_service)] = 0.0
+        return cons, mort
+
+    def _cap_consumer_origination_dsti(
+        self, households: Households, maturity: int, consumer_loans: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return capped consumer grants and the consumer service they imply.
+
+        The cap counts the full opening mortgage service, also for a household
+        that repays its mortgage by selling this period (conservative).
+        """
         from macromodel.markets.credit_market.func.clearing import _annuity_payment_factor
 
         income = np.asarray(households.consumer_underwriting_income, dtype=float)
@@ -1191,12 +1236,11 @@ class CreditMarket:
         if not np.isfinite(limit) or not 0 < limit <= 1 or isinstance(maturity, bool) or maturity <= 0:
             raise ValueError("DSTI limit must lie in (0,1] and contract maturity must be positive.")
         cons = consumer_loans.copy()
-        mort = mortgage_loans.copy()
         grants = cons[0].sum(axis=0)
         rate = np.divide((cons[0] * cons[1]).sum(axis=0), grants, out=np.zeros_like(grants), where=grants > 0)
         factor = _annuity_payment_factor(rate, maturity)
         balance = self.current_consumer_balance_by_household() + self.preview_opening_consumer_interest()
-        _, mortgage_service = self.preview_opening_household_service()
+        current_cons_service, mortgage_service = self.preview_opening_household_service()
         headroom = np.maximum(limit * income - mortgage_service - other, 0.0)
         capacity = np.maximum(headroom / factor - balance, 0.0)
         if households.uses_feasibility_resolver:
@@ -1206,13 +1250,81 @@ class CreditMarket:
         cons[0] *= scale[None, :]
         cons[2] = cons[0] * factor[None, :]
         cons[1] = np.where(cons[0] > 0, cons[1], 0.0)
-        has_new_consumer = permitted > 0
-        current_cons_service, _ = self.preview_opening_household_service()
-        future_cons_service = np.where(has_new_consumer, (balance + permitted) * factor, current_cons_service)
-        combined = future_cons_service + mortgage_service + mort[2].sum(axis=0) + other
-        reject_mortgage = (mort[0].sum(axis=0) > 0) & (combined > limit * income + 1e-8)
-        mort[:, :, reject_mortgage] = 0.0
+        future_cons_service = np.where(permitted > 0, (balance + permitted) * factor, current_cons_service)
+        return cons, future_cons_service
+
+    @staticmethod
+    def _mortgage_dsti_rejected(
+        households: Households,
+        mortgage_loans: np.ndarray,
+        future_cons_service: np.ndarray,
+        old_mortgage_service: np.ndarray,
+    ) -> np.ndarray:
+        """All-or-nothing mortgage test: total service after the grant against income."""
+        income = np.asarray(households.consumer_underwriting_income, dtype=float)
+        limit = float(households.consumer_underwriting_dsti_limit)
+        other = np.asarray(households.consumer_underwriting_other_service, dtype=float)
+        combined = future_cons_service + old_mortgage_service + mortgage_loans[2].sum(axis=0) + other
+        return (mortgage_loans[0].sum(axis=0) > 0) & (combined > limit * income + 1e-8)
+
+    def _complete_property_purchases(
+        self,
+        households: Households,
+        maturity: int,
+        consumer_loans: np.ndarray,
+        mortgage_loans: np.ndarray,
+        completion_inputs: PurchaseCompletionInputs,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Apply the consumer cap, then keep only mortgages of purchases that complete.
+
+        The mortgage test moves into the completion rule because a mover's old
+        mortgage counts only for the part its own sale does not repay:
+        ``old service * (B - R) / B``, with ``B`` the principal left after this
+        period's service and ``R`` the repayment from sales kept in the current
+        pass. A household that sells nothing has ``R = 0`` and is tested as
+        before. With ``B = 0`` this period's service is the last one, so the old
+        mortgage adds nothing to the service after the grant.
+        """
+        underwrites = hasattr(households, "consumer_underwriting_income")
+        cons, future_cons_service = consumer_loans, None
+        if underwrites:
+            cons, future_cons_service = self._cap_consumer_origination_dsti(households, maturity, consumer_loans)
+        _, old_mortgage_service = self.preview_opening_household_service()
+        mortgages = self._serviceable_loans_this_period["mort_loans"]
+        _, scheduled_principal = _scheduled_service_components(
+            mortgages, self._mortgage_principal_arrears_by_cell, principal_arrears_accrue_interest=False
+        )
+        principal_left = _mortgage_principal_left_after_service(
+            mortgages[0], scheduled_principal, self._mortgage_principal_arrears_by_cell
+        )
+
+        def mortgage_rejected(repayment: np.ndarray) -> np.ndarray:
+            if not underwrites:
+                return np.zeros(principal_left.shape, dtype=bool)
+            unrepaid_share = np.divide(
+                np.maximum(principal_left - repayment, 0.0),
+                principal_left,
+                out=np.zeros_like(principal_left),
+                where=principal_left > 0.0,
+            )
+            return self._mortgage_dsti_rejected(
+                households, mortgage_loans, future_cons_service, old_mortgage_service * unrepaid_share
+            )
+
+        completion = resolve_purchase_completion(
+            completion_inputs,
+            granted_mortgage=mortgage_loans[0].sum(axis=0),
+            principal_left=principal_left,
+            mortgage_rejected=mortgage_rejected,
+        )
+        mort = mortgage_loans.copy()
+        mort[:, :, completion.mortgage_zeroed] = 0.0
+        self._purchase_completion = completion
         return cons, mort
+
+    def current_purchase_completion(self) -> PurchaseCompletion | None:
+        """Completion outcome of this period's clearing; ``None`` if the rule did not run."""
+        return self._purchase_completion
 
     def _validate_new_consumer_loans(self, new_loans: np.ndarray) -> None:
         """Reject malformed consumer-credit clearing output before it changes state."""
@@ -1441,13 +1553,11 @@ class CreditMarket:
         by this amount never exceeds the principal left after service.
         """
         snapshot = self.current_household_service_snapshot()
-        opening_principal = self._serviceable_loans_this_period["mort_loans"][0]
-        remaining = (
-            opening_principal
-            - snapshot.mortgage_principal_by_cell
-            - snapshot.mortgage_opening_principal_arrears_by_cell
+        return _mortgage_principal_left_after_service(
+            self._serviceable_loans_this_period["mort_loans"][0],
+            snapshot.mortgage_principal_by_cell,
+            snapshot.mortgage_opening_principal_arrears_by_cell,
         )
-        return np.maximum(remaining, 0.0).sum(axis=0)
 
     def pay_household_mortgage_installments(
         self,

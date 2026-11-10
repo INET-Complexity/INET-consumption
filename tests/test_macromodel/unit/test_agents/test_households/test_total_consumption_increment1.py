@@ -97,17 +97,23 @@ def test_zero_goods_floor_is_executable_in_net_units(test_households):
     np.testing.assert_allclose(shortfall, 42.0)  # 30 mandatory rent plus gross goods floor 12
 
 
-def test_refresh_counts_investment_property_and_mortgage_once(test_households):
+@pytest.mark.parametrize("buys", [False, True])
+def test_refresh_counts_investment_once_and_keeps_the_purchase_out_of_the_base(test_households, buys):
+    """A completed purchase changes the refresh only through the liquid assets it spends (D)."""
     h = test_households
     n = h.ts.current("n_households")
     h.consumption_vat_rate = 0.2
     h.investment_tax_rate = 0.1
+    # The buyer pays 60 with a mortgage of 40 and D = 20 of its 30 liquid
+    # assets; the non-buyer starts with the 10 the buyer has left.
     for key, value in {
         "expected_income": 50,
         "rent": 30,
-        "liquid_financial_assets": 10,
-        "received_mortgages": 40,
-        "price_paid_for_property": 60,
+        "liquid_financial_assets": 30 if buys else 10,
+        "received_mortgages": 40 if buys else 0,
+        "price_paid_for_property": 60 if buys else 0,
+        "property_sale_proceeds": 0,
+        "mortgage_sale_repayment": 0,
     }.items():
         h.ts.override_current(key, np.full(n, value, dtype=float))
     for key, total in [("target_consumption", 100), ("target_investment", 20)]:
@@ -122,8 +128,9 @@ def test_refresh_counts_investment_property_and_mortgage_once(test_households):
         residual_shortfall_after_granted_credit=np.zeros(n),
     )
     h.refresh_post_labour_feasibility(np.full(n, 8.0))
-    # Uses = 120+30+22+60+8=240; income+new mortgage=90; liquid+credit+sale=30.
-    np.testing.assert_allclose(h.post_grant_feasible_plan.residual_shortfall_after_granted_credit, 120.0)
+    # Uses = 120+30+22+8=180; income 50; liquid 10 + credit 15 + sale 5 = 30.
+    np.testing.assert_allclose(h.post_grant_feasible_plan.funded_from_liquid_assets, 10.0)
+    np.testing.assert_allclose(h.post_grant_feasible_plan.residual_shortfall_after_granted_credit, 100.0)
     np.testing.assert_allclose(h.post_grant_feasible_plan.credit_granted, 15.0)
 
 

@@ -54,6 +54,7 @@ from macromodel.agents.households.func.liquid_asset_drawdown import (
     compute_liquid_asset_drawdown,
 )
 from macromodel.agents.households.func.liquidity_shortfall import (
+    LiquidityShortfallResult,
     compute_liquidity_shortfall,
 )
 from macromodel.agents.households.func.payment_suspension import (
@@ -1057,14 +1058,21 @@ class Households(Agent):
         """Return planned liquidation carried into the settled feasibility plan."""
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
 
-    def reserve_post_grant_executable_liquidation(self, *, available_pre_stage4_ifa: np.ndarray) -> None:
-        """Reserve executable Stage 5 liquidation before floor and goods planning."""
+    def reserve_post_grant_executable_liquidation(
+        self, *, available_pre_stage4_ifa: np.ndarray, purchase_liquidation: np.ndarray | None = None
+    ) -> None:
+        """Reserve executable Stage 5 liquidation before floor and goods planning.
+
+        ``purchase_liquidation`` is the illiquid sale that pays for a completed
+        property purchase; it shares the single trade cost with the forced sale.
+        """
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
         self.post_grant_feasible_plan = self.financial_feasibility.reserve_executable_liquidation(
             self.post_grant_feasible_plan,
             available_pre_stage4_ifa=available_pre_stage4_ifa,
             sale_cost=self.current_illiquid_trade_cost(),
+            purchase_liquidation=purchase_liquidation,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:
@@ -2268,6 +2276,54 @@ class Households(Agent):
             self.ts.current("mortgage_sale_repayment"), dtype=float
         )
 
+    def current_net_housing_cash_need(self) -> np.ndarray:
+        """X: price paid less the new mortgage and the net proceeds of own sales (may be negative)."""
+        return (
+            np.asarray(self.ts.current("price_paid_for_property"), dtype=float)
+            - np.asarray(self.ts.current("received_mortgages"), dtype=float)
+            - self.current_net_property_sale_proceeds()
+        )
+
+    def current_housing_lfa_draw(self) -> np.ndarray:
+        """D: liquid assets this period's housing transactions spend, after the purchase sale of illiquid assets."""
+        plan = self.post_grant_feasible_plan
+        purchase_sale = None if plan is None else plan.purchase_liquidation_total
+        need = self.current_net_housing_cash_need()
+        return np.maximum(need - (0.0 if purchase_sale is None else np.asarray(purchase_sale, dtype=float)), 0.0)
+
+    def planning_cash_need(self, scheduled_debt_service: np.ndarray) -> np.ndarray:
+        """N: cash this period's consumption, rent and debt service need beyond expected income.
+
+        Used before credit clearing, so rent is the planning snapshot (this
+        period's rent is set only when the housing market is processed).
+        Investment is not reserved.
+        """
+        return np.maximum(
+            self._cash_shortfall(
+                income=self.current_financing_income(),
+                target_consumption=self.ts.current("target_consumption"),
+                scheduled_debt_service=scheduled_debt_service,
+                cash_rent=getattr(self, "planning_cash_rent", self.current_consumption_cash_rent()),
+            ).liquidity_shortfall,
+            0.0,
+        )
+
+    def _cash_shortfall(
+        self,
+        *,
+        income: np.ndarray,
+        target_consumption: np.ndarray,
+        scheduled_debt_service: np.ndarray,
+        cash_rent: np.ndarray,
+    ) -> LiquidityShortfallResult:
+        """Assemble nominal cash uses once: goods grossed up for VAT, cash rent, debt service."""
+        return compute_liquidity_shortfall(
+            income=income,
+            target_consumption=self.consumption_cash_factor() * np.asarray(target_consumption, dtype=float).sum(axis=1),
+            scheduled_debt_service=scheduled_debt_service,
+            cash_rent=cash_rent,
+        )
+
     def current_financing_income(self) -> np.ndarray:
         """Known current wages/benefits plus remaining cash-receipt forecasts."""
         return (
@@ -2280,26 +2336,23 @@ class Households(Agent):
         """Refresh cash needs without rebooking loans or authorising new sales."""
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Post-labour refresh requires a settled post-grant plan.")
-        income = np.asarray(self.current_financing_income(), dtype=float)
         uses = (
             self.consumption_cash_factor() * self.ts.current("target_consumption").sum(axis=1)
             + self.current_consumption_cash_rent()
             + self.target_investment_cash()
             + np.asarray(scheduled_debt_service, dtype=float)
-            + np.asarray(self.ts.current("price_paid_for_property"), dtype=float)
         )
-        # Mortgage and property-sale proceeds are cash resources, distinct from
-        # the fixed consumer-credit grant.
-        income = (
-            income
-            + np.asarray(self.ts.current("received_mortgages"), dtype=float)
-            + self.current_net_property_sale_proceeds()
-        )
+        # Housing leaves this base as one unit. A completed purchase is paid by
+        # its mortgage, own sale proceeds, the purchase sale of illiquid assets
+        # and the liquid assets D; only a seller's surplus max(-X, 0) is cash
+        # for other uses, and D is no longer available.
+        net_housing_need = self.current_net_housing_cash_need()
+        income = np.asarray(self.current_financing_income(), dtype=float) + np.maximum(-net_housing_need, 0.0)
         self.post_grant_feasible_plan = self.financial_feasibility.refresh_cash_needs(
             self.post_grant_feasible_plan,
             cash_uses=uses,
             cash_income=income,
-            available_lfa=self.ts.current("liquid_financial_assets"),
+            available_lfa=self.ts.current("liquid_financial_assets") - self.current_housing_lfa_draw(),
         )
         for key in ("funded_from_liquid_assets", "residual_shortfall_after_lfa"):
             self.ts.override_current(key, getattr(self.post_grant_feasible_plan, key).copy())
@@ -2342,9 +2395,9 @@ class Households(Agent):
         ):
             if not np.all(np.isfinite(values)):
                 raise ValueError("Household financing inputs must be finite.")
-        result = compute_liquidity_shortfall(
+        result = self._cash_shortfall(
             income=income,
-            target_consumption=self.consumption_cash_factor() * np.asarray(target_consumption, dtype=float).sum(axis=1),
+            target_consumption=target_consumption,
             scheduled_debt_service=scheduled_debt_service + other_cash_uses,
             cash_rent=self.current_consumption_cash_rent(),
         )
@@ -3196,8 +3249,8 @@ class Households(Agent):
             prices = purchases["price_or_rent"].to_numpy(dtype=float)
             if np.any(seller_ids < 0) or np.any(seller_ids >= n_households):
                 raise ValueError("Every completed property sale must have a household seller.")
-            price_paid_for_property[buyer_ids] = prices
-            # A landlord can sell several properties in one period.
+            # A household can buy or sell several properties in one period.
+            np.add.at(price_paid_for_property, buyer_ids, prices)
             np.add.at(property_sale_proceeds, seller_ids, prices)
         self.ts.price_paid_for_property.append(price_paid_for_property)
         self.ts.property_sale_proceeds.append(property_sale_proceeds)
@@ -3323,7 +3376,7 @@ class Households(Agent):
                         f"current_sales is missing columns required for mortgage targeting: {sorted(missing)}"
                     )
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
-                target_house_price[buyer_ids] = sells["price_or_rent"].to_numpy(dtype=float, copy=False)
+                np.add.at(target_house_price, buyer_ids, sells["price_or_rent"].to_numpy(dtype=float, copy=False))
         self.ts.target_mortgage.append(
             self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,
@@ -3878,17 +3931,20 @@ class Households(Agent):
             if plan_sale_cost is not None:
                 liquidation_sale_cost = np.asarray(plan_sale_cost, dtype=float)
             if planned_liquidation is not None:
-                # The gross sale is the net forced need plus the trade cost once,
-                # capped by the IFA available at reservation.
+                # The gross sale is the net forced need and the purchase sale,
+                # plus the trade cost once, capped by the IFA available at
+                # reservation.
                 reservation_ifa = getattr(plan, "liquidation_reservation_ifa", None)
+                purchase_sale = getattr(plan, "purchase_liquidation_total", None)
                 expected_gross = gross_liquidation_sale(
-                    np.asarray(planned_liquidation, dtype=float),
+                    np.asarray(planned_liquidation, dtype=float)
+                    + (0.0 if purchase_sale is None else np.asarray(purchase_sale, dtype=float)),
                     self.current_illiquid_trade_cost() if plan_sale_cost is not None else 0.0,
                     opening_ifa if reservation_ifa is None else np.asarray(reservation_ifa, dtype=float),
                 )
                 if not np.array_equal(expected_gross, reserved_liquidation):
                     raise RuntimeError(
-                        "Stage 5 reserved liquidation must equal the planned net sale plus the trade cost."
+                        "Stage 5 reserved liquidation must equal the planned and purchase sales plus the trade cost."
                     )
             # Q_exec is a cash transaction against opening IFA. It settles
             # before the current-period capital return, so adverse returns

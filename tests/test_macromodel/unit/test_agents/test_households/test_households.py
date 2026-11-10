@@ -1735,6 +1735,50 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
         )
         np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
 
+    def test__purchase_sale_is_settled_with_the_forced_sale_and_one_trade_cost(self, test_households, monkeypatch):
+        """Increment (b): a buyer pays 100 with a mortgage of 50, 20 of liquid assets and an illiquid sale of 30."""
+        from macromodel.agents.households.func.financial_feasibility import HouseholdFinancialFeasibility
+
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=False,
+            use_real_liquidation=True,
+        )
+        for key in ("income", "expected_income", "property_sale_proceeds", "mortgage_sale_repayment"):
+            test_households.ts.override_current(key, np.zeros(n_households))
+        test_households.ts.override_current("liquid_financial_assets", np.full(n_households, 20.0))
+        test_households.ts.override_current("illiquid_financial_assets", np.full(n_households, 100.0))
+        test_households.ts.override_current("price_paid_for_property", np.full(n_households, 100.0))
+        test_households.ts.override_current("received_mortgages", np.full(n_households, 50.0))
+        monkeypatch.setattr(test_households.functions["wealth"], "fixed_cost_share", 0.01, raising=False)
+        cost = test_households.current_illiquid_trade_cost()
+        assert np.any(cost > 0.0)
+        test_households.post_grant_feasible_plan = HouseholdFinancialFeasibility().reserve_executable_liquidation(
+            PostGrantFeasiblePlan(
+                funded_from_liquid_assets=np.zeros(n_households),
+                credit_granted=np.zeros(n_households),
+                credit_rationing_gap=np.zeros(n_households),
+                planned_liquidation_total=np.full(n_households, 10.0),
+                residual_shortfall_after_granted_credit=np.zeros(n_households),
+                residual_shortfall_after_lfa=np.full(n_households, 10.0),
+            ),
+            available_pre_stage4_ifa=np.full(n_households, 100.0),
+            sale_cost=cost,
+            purchase_liquidation=np.full(n_households, 30.0),
+        )
+        np.testing.assert_allclose(test_households.current_housing_lfa_draw(), 20.0)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        gross = 10.0 + 30.0 + cost
+        # 20 - 100 + 50 + (gross - cost): the forced sale of 10 is all that is left.
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), 10.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 100.0 - gross)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_trade_cost_paid"), cost)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
+
     def test__portfolio_trade_cost_is_waived_after_a_stage5_sale(self, test_households, monkeypatch):
         import macromodel.agents.households.households as households_module
 

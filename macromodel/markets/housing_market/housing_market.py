@@ -20,7 +20,7 @@ from macromodel.configurations import HousingMarketConfiguration
 from macromodel.markets.housing_market.housing_market_ts import (
     create_housing_market_timeseries,
 )
-from macromodel.markets.housing_market.sales import self_sale_mask
+from macromodel.markets.housing_market.sales import VACANT_HOUSEHOLD_ID, move_chain_feasible, self_sale_mask
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import (
     functions_from_model,
@@ -28,8 +28,6 @@ from macromodel.util.function_mapping import (
     update_functions,
 )
 from macromodel.util.get_histogram import get_histogram
-
-VACANT_HOUSEHOLD_ID = -1
 
 
 class HousingMarket:
@@ -454,57 +452,44 @@ class HousingMarket:
         )
         return self.ts.current("observed_fraction_rent_value")
 
-    def _filter_feasible_current_sale_indices(
+    def _legacy_financing_mask(
         self,
         household_received_mortgages: np.ndarray,
         household_financial_wealth: np.ndarray,
-    ) -> pd.Index:
+    ) -> np.ndarray:
+        """Financing test used when no completion rule ran: a mortgage, or wealth covering the price."""
+        current_sales = self.states["current_sales"]
+        buyer_ids = current_sales["buyer_id"].to_numpy(dtype=int)
+        prices = current_sales["price_or_rent"].to_numpy(dtype=float)
+        # A self-sale moves no money, so it needs no financing.
+        return (
+            (household_received_mortgages[buyer_ids] > 0)
+            | (household_financial_wealth[buyer_ids] >= prices)
+            | self_sale_mask(current_sales)
+        )
+
+    def _filter_feasible_current_sale_indices(self, has_financing: np.ndarray) -> pd.Index:
+        """Rows that go ahead: every rental, and financed sales that survive the move-chain pass.
+
+        ``has_financing`` is a mask over the rows of ``current_sales``.
+        """
         current_sales = self.states["current_sales"]
         if len(current_sales) == 0 or "sales_types" not in current_sales.columns:
             return current_sales.index
-
-        feasible = pd.Series(True, index=current_sales.index)
-        sale_transactions = current_sales.loc[current_sales["sales_types"].eq("Sell")]
-        if len(sale_transactions) == 0:
-            return current_sales.index
-
-        buyer_ids = sale_transactions["buyer_id"].to_numpy(dtype=int, copy=False)
-        prices = sale_transactions["price_or_rent"].to_numpy(dtype=float, copy=False)
-        # A self-sale moves no money, so it needs no financing.
-        has_financing = (
-            (household_received_mortgages[buyer_ids] > 0)
-            | (household_financial_wealth[buyer_ids] >= prices)
-            | self_sale_mask(sale_transactions)
+        is_sell = current_sales["sales_types"].eq("Sell").to_numpy()
+        kept = move_chain_feasible(
+            current_sales,
+            is_sell & np.asarray(has_financing, dtype=bool),
+            self.states["properties"]["Corresponding Inhabitant Household ID"],
         )
-        feasible.loc[sale_transactions.index[~has_financing]] = False
-
-        kept_sale_indices = sale_transactions.index[has_financing]
-        initial_inhabitants = (
-            self.states["properties"]["Corresponding Inhabitant Household ID"].fillna(VACANT_HOUSEHOLD_ID).astype(int)
-        )
-        while len(kept_sale_indices) > 0:
-            kept_sales = current_sales.loc[kept_sale_indices]
-            moving_households = kept_sales["buyer_id"].to_numpy(dtype=int, copy=False)
-            property_ids = kept_sales["property_id"].to_numpy(dtype=int, copy=False)
-            inhabitants = initial_inhabitants.reindex(property_ids).fillna(VACANT_HOUSEHOLD_ID).to_numpy(dtype=int)
-            can_transfer = (
-                (inhabitants == VACANT_HOUSEHOLD_ID)
-                | (inhabitants == moving_households)
-                | np.isin(inhabitants, moving_households)
-            )
-            new_kept_sale_indices = kept_sale_indices[can_transfer]
-            if len(new_kept_sale_indices) == len(kept_sale_indices):
-                break
-            feasible.loc[kept_sale_indices.difference(new_kept_sale_indices)] = False
-            kept_sale_indices = new_kept_sale_indices
-
-        return current_sales.index[feasible.to_numpy()]
+        return current_sales.index[kept | ~is_sell]
 
     def process_housing_market_clearing(
         self,
         household_states: dict[str, Any],
         household_received_mortgages: np.ndarray,
         household_financial_wealth: np.ndarray,
+        kept_sales: np.ndarray | None = None,
     ) -> None:
         """Process and finalize housing market transactions.
 
@@ -529,6 +514,9 @@ class HousingMarket:
             household_states: Dict containing household status information
             household_received_mortgages: Array of approved mortgage amounts
             household_financial_wealth: Array of household wealth levels
+            kept_sales: Mask over the rows of ``current_sales`` decided by the
+                purchase completion rule. When given, it is authoritative and
+                the mortgage/wealth financing test is not applied.
 
         Note:
             This method ensures all market clearing outcomes are properly
@@ -537,11 +525,25 @@ class HousingMarket:
         total_number_of_bought_houses = 0
         total_number_of_self_sales = 0
         total_number_of_newly_rented_houses = 0
-        feasible_sale_indices = self._filter_feasible_current_sale_indices(
-            household_received_mortgages=household_received_mortgages,
-            household_financial_wealth=household_financial_wealth,
-        )
-        self.states["current_sales"] = self.states["current_sales"].loc[feasible_sale_indices].reset_index(drop=True)
+        current_sales = self.states["current_sales"]
+        # Matched purchases before the completion filter; self-sales are moves.
+        total_number_of_matched_purchases = 0
+        if len(current_sales) > 0 and "sales_types" in current_sales.columns:
+            total_number_of_matched_purchases = int(
+                ((current_sales["sales_types"] == "Sell") & ~self_sale_mask(current_sales)).sum()
+            )
+        if kept_sales is not None:
+            kept_sales = np.asarray(kept_sales, dtype=bool)
+            if kept_sales.shape != (len(current_sales),):
+                raise ValueError("The completed-sale mask must have one entry per matched sale.")
+            feasible_sale_indices = current_sales.index[kept_sales]
+        elif len(current_sales) == 0 or "sales_types" not in current_sales.columns:
+            feasible_sale_indices = current_sales.index
+        else:
+            feasible_sale_indices = self._filter_feasible_current_sale_indices(
+                self._legacy_financing_mask(household_received_mortgages, household_financial_wealth)
+            )
+        self.states["current_sales"] = current_sales.loc[feasible_sale_indices].reset_index(drop=True)
         is_self_sale = self_sale_mask(self.states["current_sales"])
 
         def clear_previous_residence(buyer_id: int, prev_property_id: int, new_property_id: int) -> None:
@@ -576,39 +578,34 @@ class HousingMarket:
                 household_states["corr_renters"][seller_id].append(buyer_id)
                 total_number_of_newly_rented_houses += 1
             elif sale["sales_types"] == "Sell":
-                self_sale = bool(is_self_sale[row_position])
-                if (
-                    self_sale
-                    or household_received_mortgages[buyer_id] > 0
-                    or household_financial_wealth[buyer_id] >= sale["price_or_rent"]
-                ):
-                    # Corresponding property owners
-                    self.states["properties"].loc[property_id, "Corresponding Owner Household ID"] = buyer_id
-                    household_states["Corresponding Property Owner"][buyer_id] = buyer_id
-                    # household_states["corr_additionally_owned_properties"][buyer_id].append(property_id)
-                    # household_states["corr_additionally_owned_properties"][seller_id].remove(property_id)
+                # Every sale left in ``current_sales`` has passed the filter above.
+                # Corresponding property owners
+                self.states["properties"].loc[property_id, "Corresponding Owner Household ID"] = buyer_id
+                household_states["Corresponding Property Owner"][buyer_id] = buyer_id
+                # household_states["corr_additionally_owned_properties"][buyer_id].append(property_id)
+                # household_states["corr_additionally_owned_properties"][seller_id].remove(property_id)
 
-                    # Corresponding inhabitant households
-                    self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
-                    clear_previous_residence(buyer_id, int(prev_property_id), property_id)
+                # Corresponding inhabitant households
+                self.states["properties"].loc[property_id, "Corresponding Inhabitant Household ID"] = buyer_id
+                clear_previous_residence(buyer_id, int(prev_property_id), property_id)
 
-                    # Corresponding inhabited house ID
-                    household_states["Corresponding Inhabited House ID"][buyer_id] = property_id
+                # Corresponding inhabited house ID
+                household_states["Corresponding Inhabited House ID"][buyer_id] = property_id
 
-                    # Tenure status
-                    household_states["Tenure Status of the Main Residence"][buyer_id] = 1
+                # Tenure status
+                household_states["Tenure Status of the Main Residence"][buyer_id] = 1
 
-                    # Corresponding renter
-                    if buyer_id in household_states["corr_renters"][seller_id]:
-                        household_states["corr_renters"][seller_id].remove(buyer_id)
+                # Corresponding renter
+                if buyer_id in household_states["corr_renters"][seller_id]:
+                    household_states["corr_renters"][seller_id].remove(buyer_id)
 
-                    if self_sale:
-                        # A move, not a purchase: no price was paid, so the
-                        # property value is not reset to the asking price.
-                        total_number_of_self_sales += 1
-                    else:
-                        self.states["properties"].loc[property_id, "Value"] = sale["price_or_rent"]
-                        total_number_of_bought_houses += 1
+                if bool(is_self_sale[row_position]):
+                    # A move, not a purchase: no price was paid, so the
+                    # property value is not reset to the asking price.
+                    total_number_of_self_sales += 1
+                else:
+                    self.states["properties"].loc[property_id, "Value"] = sale["price_or_rent"]
+                    total_number_of_bought_houses += 1
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
 
@@ -632,6 +629,7 @@ class HousingMarket:
         self.ts.total_number_of_houses_unoccupied.append(
             [np.sum(self.states["properties"]["Corresponding Inhabitant Household ID"] == -1)]
         )
+        self.ts.total_number_of_matched_purchases.append([total_number_of_matched_purchases])
         self.ts.total_number_of_bought_houses.append([total_number_of_bought_houses])
         self.ts.total_number_of_self_sales.append([total_number_of_self_sales])
         self.ts.total_number_of_newly_rented_houses.append([total_number_of_newly_rented_houses])

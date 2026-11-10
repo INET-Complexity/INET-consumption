@@ -746,6 +746,8 @@ class Households(Agent):
             configuration (HouseholdsConfiguration): New household config
         """
         self.gen_reset()
+        for name in ("_buying_after_sale", "_moving_owners", "_moving_owner_wants_to_buy"):
+            self.__dict__.pop(name, None)
         consumption = self.functions["consumption"]
         reset_integrated_rule = (
             isinstance(consumption, CreditAugmentedConsumption)
@@ -3071,28 +3073,15 @@ class Households(Agent):
                 tau_cf=tau_cf,
             )
 
-    def _listed_property_equity(self, housing_data: pd.DataFrame) -> np.ndarray:
-        """Asking price of each household's listed properties, net of the mortgage they secure.
+    def buying_after_sale(self) -> np.ndarray:
+        """Households that sold their home in order to buy and have not bought yet."""
+        if not hasattr(self, "_buying_after_sale"):
+            self._buying_after_sale = np.zeros(self.ts.current("n_households"), dtype=bool)
+        return self._buying_after_sale
 
-        A mortgage is secured on all the household's properties in proportion
-        to value (as when a sale repays it), so the listed share of the
-        property value carries the same share of the mortgage debt.
-        """
-        n_households = self.ts.current("n_households")
-        owners = housing_data["Corresponding Owner Household ID"].fillna(VACANT_HOUSEHOLD_ID).to_numpy(dtype=int)
-        values = housing_data["Value"].fillna(0.0).to_numpy(dtype=float)
-        listed = housing_data["Temporarily for Sale"].to_numpy(dtype=bool) & (owners >= 0)
-        owned = owners >= 0
-        owned_value = np.bincount(owners[owned], weights=values[owned], minlength=n_households)
-        listed_value = np.bincount(owners[listed], weights=values[listed], minlength=n_households)
-        asking = np.bincount(
-            owners[listed],
-            weights=housing_data["Sale Price"].fillna(0.0).to_numpy(dtype=float)[listed],
-            minlength=n_households,
-        )
-        share = np.divide(listed_value, owned_value, out=np.zeros(n_households), where=owned_value > 0.0)
-        debt = np.maximum(np.asarray(self.ts.current("mortgage_debt"), dtype=float), 0.0)
-        return np.maximum(asking - share * debt, 0.0)
+    def sale_conditional_movers(self) -> np.ndarray:
+        """Owners who listed their home this period; they leave it only if its sale completes."""
+        return getattr(self, "_moving_owners", np.zeros(self.ts.current("n_households"), dtype=bool))
 
     def prepare_housing_market_clearing(
         self,
@@ -3124,12 +3113,18 @@ class Households(Agent):
             time_unit (int): Model period length in months
             purchase_own_funds (np.ndarray | None): Assets each household can
                 spend on a purchase. When given, the price bid is capped at
-                the price these funds and the equity in a listed home can
-                finance at ``loan_to_value_ratio``.
+                the price these funds can finance at ``loan_to_value_ratio``,
+                and owners sell before they buy: a moving owner lists its
+                home, stays in it and bids for a rental; it bids to buy only
+                after the sale (see ``buying_after_sale``).
             loan_to_value_ratio (float | None): Banks' mortgage loan-to-value limit
         """
         if len(housing_data) == 0:
             return
+        sell_before_buy = purchase_own_funds is not None
+        committed_buyers = None
+        if sell_before_buy:
+            committed_buyers = self.buying_after_sale() & (self.states["Tenure Status of the Main Residence"] != 1)
 
         # Households make decisions on their demand for properties
         (
@@ -3148,7 +3143,14 @@ class Households(Agent):
             rental_income_taxes=rental_income_taxes,
             population_scale_factor=float(self.states.get("population_scale_factor", 1.0)),
             period_months=time_unit,
+            committed_buyers=committed_buyers,
+            moving_owners_bid_rent=sell_before_buy,
         )
+        if sell_before_buy:
+            # The moving owner's choice to buy is kept as an intention for after the sale.
+            self._moving_owners = np.asarray(households_hoping_to_move, dtype=bool).copy()
+            self._moving_owner_wants_to_buy = self._moving_owners & (np.nan_to_num(max_price_willing_to_pay) > 0.0)
+            max_price_willing_to_pay = np.where(self._moving_owners, np.nan, max_price_willing_to_pay)
         self.ts.max_rent_willing_to_pay.append(max_rent_willing_to_pay)
 
         # Set price of owner-occupied or vacant properties whose owners are hoping to move.
@@ -3182,17 +3184,13 @@ class Households(Agent):
             time_unit=time_unit,
         )
 
-        # A household bids at most the price it can finance: its own funds
-        # plus the equity in the home it has listed are the down payment.
+        # A household bids at most the price it can finance: its own funds are the down payment.
         if purchase_own_funds is not None:
             if loan_to_value_ratio is None:
                 raise ValueError("Capping the price bid requires the loan-to-value ratio.")
             max_price_willing_to_pay = np.minimum(
                 max_price_willing_to_pay,
-                financeable_price(
-                    np.asarray(purchase_own_funds, dtype=float) + self._listed_property_equity(housing_data),
-                    loan_to_value_ratio,
-                ),
+                financeable_price(np.asarray(purchase_own_funds, dtype=float), loan_to_value_ratio),
             )
         self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
 
@@ -3298,6 +3296,12 @@ class Households(Agent):
             # A household can buy or sell several properties in one period.
             np.add.at(price_paid_for_property, buyer_ids, prices)
             np.add.at(property_sale_proceeds, seller_ids, prices)
+            # An owner who sold its home in order to buy bids to buy until a purchase completes.
+            wants_to_buy = getattr(self, "_moving_owner_wants_to_buy", None)
+            if wants_to_buy is not None:
+                left_home = self.states["Tenure Status of the Main Residence"][seller_ids] != 1
+                self.buying_after_sale()[seller_ids[wants_to_buy[seller_ids] & left_home]] = True
+                self.buying_after_sale()[buyer_ids] = False
         self.ts.price_paid_for_property.append(price_paid_for_property)
         self.ts.property_sale_proceeds.append(property_sale_proceeds)
 

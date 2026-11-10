@@ -265,3 +265,39 @@ def test_move_chain_keeps_only_sales_whose_property_is_freed():
 
     # 10 is freed because 1 moves to 12; 11 stays occupied by 3, who is not moving.
     np.testing.assert_array_equal(kept, [True, False, True])
+
+
+def _selling_first(inputs, movers):
+    return inputs.__class__(**{**inputs.__dict__, "sale_conditional_movers": np.asarray(movers, dtype=bool)})
+
+
+def test_seller_who_vacates_on_sale_needs_no_purchase_of_its_own():
+    """Household 1 lives in the home it sells and buys nothing: the sale completes when it vacates on sale."""
+    sales = _sales([("Sell", 0, 1, 10, 100.0)])
+    inputs = _inputs(sales, n=2, owner={10: 1}, inhabitant={10: 1}, lfa=[100.0, 0.0])
+
+    assert not _resolve(inputs, [0.0, 0.0]).kept_sales[0]
+    assert _resolve(_selling_first(inputs, [False, True]), [0.0, 0.0]).kept_sales[0]
+
+
+def test_rental_of_a_moving_owner_goes_ahead_only_if_its_home_is_sold():
+    """Owner 1 sells home 10 to household 0 and is matched to rental 20. Household 3 rents 30 and owns nothing."""
+    sales = _sales([("Sell", 0, 1, 10, 100.0), ("Rental", 1, 2, 20, 5.0), ("Rental", 3, 2, 30, 5.0)])
+    owner, inhabitant = {10: 1, 20: 2, 30: 2}, {10: 1}
+    buyer_pays = _inputs(sales, n=4, owner=owner, inhabitant=inhabitant, lfa=[100.0, 0.0, 0.0, 0.0])
+    buyer_fails = _inputs(sales, n=4, owner=owner, inhabitant=inhabitant, lfa=0.0)
+    movers = [False, True, False, False]
+
+    np.testing.assert_array_equal(
+        _resolve(_selling_first(buyer_pays, movers), np.zeros(4)).kept_sales, [True, True, True]
+    )
+    np.testing.assert_array_equal(
+        _resolve(_selling_first(buyer_fails, movers), np.zeros(4)).kept_sales, [False, False, True]
+    )
+
+
+def test_moving_owner_whose_home_is_not_matched_keeps_no_rental():
+    sales = _sales([("Rental", 1, 2, 20, 5.0)])
+    inputs = _selling_first(_inputs(sales, n=3, owner={10: 1, 20: 2}, inhabitant={10: 1}), [False, True, False])
+
+    assert not _resolve(inputs, np.zeros(3)).kept_sales[0]

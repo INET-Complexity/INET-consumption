@@ -2325,6 +2325,7 @@ class Country:
             illiquid_assets=np.asarray(hh.ts.current("illiquid_financial_assets"), dtype=float),
             planned_liquidation=np.asarray(hh.ts.current("liquidation_planned"), dtype=float),
             sale_cost=hh.current_illiquid_trade_cost(),
+            sale_conditional_movers=hh.sale_conditional_movers(),
         )
 
     def process_housing_market_clearing(self) -> None:
@@ -2344,6 +2345,7 @@ class Country:
             household_received_mortgages=self.households.ts.current("received_mortgages"),
             household_financial_wealth=self.households.ts.current("wealth_financial_assets"),
             kept_sales=None if completion is None else completion.kept_sales,
+            sellers_vacate=completion is not None,
         )
         self.housing_market.ts.observed_fraction_value_price.append(
             self.housing_market.compute_observed_fraction_value_price()

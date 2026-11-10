@@ -186,22 +186,44 @@ def test_free_purchase_assets_reserve_the_cash_need_the_planned_sale_and_the_tra
     np.testing.assert_allclose(free_ifa, [39.0, 0.0])
 
 
-def test_listed_property_equity_nets_the_mortgage_share_of_the_listed_value():
-    """Household 0 lists one of two equal properties with debt 60: equity 110 - 30. Household 1 lists nothing."""
-    from macromodel.agents.households.households import Households
-
-    housing_data = pd.DataFrame(
-        {
-            "Corresponding Owner Household ID": [0, 0, 1, np.nan],
-            "Value": [100.0, 100.0, 80.0, 50.0],
-            "Sale Price": [110.0, np.nan, np.nan, 55.0],
-            "Temporarily for Sale": [True, False, False, True],
-        }
+def _demand(rule, tenure, *, hpi_growth, **options):
+    np.random.seed(0)
+    return rule.compute_demand(
+        housing_data=pd.DataFrame({"Value": [1.0]}),
+        household_residence_tenure_status=np.asarray(tenure),
+        household_income=np.full(len(tenure), 45_000.0),
+        household_financial_wealth=np.zeros(len(tenure)),
+        observed_fraction_value_price=np.array([1.0, 0.0]),
+        observed_fraction_rent_value=np.array([0.01, 0.0]),
+        expected_hpi_growth=hpi_growth,
+        assumed_mortgage_maturity=100,
+        rental_income_taxes=0.0,
+        **options,
     )
-    series = {"n_households": 2, "mortgage_debt": np.array([60.0, 40.0])}
-    households = SimpleNamespace(ts=SimpleNamespace(current=series.__getitem__))
 
-    np.testing.assert_allclose(Households._listed_property_equity(households, housing_data), [80.0, 0.0])
+
+def test_committed_buyer_bids_to_buy_although_it_would_stay_or_rent():
+    """Renters never reconsider and renting is cheaper, yet the committed household 1 bids to buy."""
+    rule = _demand_rule()
+    rule.probability_stay_in_rented_property = 1.0
+
+    price, rent, _ = _demand(
+        rule, [PRIVATE_RENTER_TENURE_STATUS] * 2, hpi_growth=-0.5, committed_buyers=np.array([False, True])
+    )
+
+    assert np.isnan(price[0]) and np.isnan(rent[0])
+    assert price[1] > 0.0 and np.isnan(rent[1])
+
+
+def test_moving_owner_gets_a_rent_bid_and_keeps_its_choice_to_buy():
+    rule = _demand_rule()
+    rule.probability_stay_in_owned_property = 0.0
+
+    price, rent, moving = _demand(rule, [1], hpi_growth=1.0, moving_owners_bid_rent=True)
+    _, rent_without, _ = _demand(rule, [1], hpi_growth=1.0)
+
+    assert moving[0] and price[0] > 0.0 and rent[0] > 0.0
+    assert np.isnan(rent_without[0])
 
 
 def _gap_inputs(sales_rows, *, liquid, illiquid=None, cash_need=None):

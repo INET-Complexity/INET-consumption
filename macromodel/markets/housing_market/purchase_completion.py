@@ -24,6 +24,11 @@ class PurchaseCompletionInputs:
     (N, this period's cash uses not covered by expected income), opening liquid
     and illiquid assets, the Stage 5 liquidation already planned, and the
     illiquid-trade cost.
+
+    ``sale_conditional_movers`` marks owners who leave their home only if its
+    sale completes. When given, the seller of an occupied home vacates it on
+    sale, so no move chain is needed, and a rental matched to such an owner is
+    kept only if the sale of its home is kept.
     """
 
     current_sales: pd.DataFrame
@@ -35,6 +40,7 @@ class PurchaseCompletionInputs:
     illiquid_assets: np.ndarray
     planned_liquidation: np.ndarray
     sale_cost: np.ndarray
+    sale_conditional_movers: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -42,7 +48,7 @@ class PurchaseCompletion:
     """Outcome of the completion rule.
 
     ``kept_sales`` is a mask over the rows of the matched ``current_sales``
-    (rentals are always kept). The rest are household vectors:
+    (rentals are kept, except those of an owner whose home sale is not kept). The rest are household vectors:
     ``mortgage_zeroed`` marks granted mortgages that must not be booked,
     ``net_housing_cash_need`` is X = price - mortgage - (proceeds - repayment),
     ``purchase_liquidation`` the illiquid assets sold to pay X (net of the trade
@@ -217,14 +223,25 @@ def resolve_purchase_completion(
         mortgage = np.where(mortgage_zeroed, 0.0, granted)
         net_need = price_paid - mortgage - (proceeds - repayment)
         completes = net_need <= free_lfa + free_ifa
-        still_kept = move_chain_feasible(sales, kept & (is_self_sale | completes[buyers]), inputs.property_inhabitant)
+        still_kept = kept & (is_self_sale | completes[buyers])
+        if inputs.sale_conditional_movers is None:
+            still_kept = move_chain_feasible(sales, still_kept, inputs.property_inhabitant)
         if still_kept.sum() == kept.sum():
             break
         kept = still_kept
 
+    kept_rentals = ~is_sell
+    if inputs.sale_conditional_movers is not None:
+        inhabitants = (
+            inputs.property_inhabitant.reindex(sales["property_id"].to_numpy(dtype=int)).fillna(-1).to_numpy(dtype=int)
+        )
+        home_sold = np.bincount(sellers[kept & ~is_self_sale & (inhabitants == sellers)], minlength=n_households) > 0
+        waits_for_sale = np.asarray(inputs.sale_conditional_movers, dtype=bool)
+        kept_rentals = kept_rentals & (~waits_for_sale[buyers] | home_sold[buyers])
+
     purchase_liquidation = np.maximum(net_need - free_lfa, 0.0)
     return PurchaseCompletion(
-        kept_sales=kept | ~is_sell,
+        kept_sales=kept | kept_rentals,
         mortgage_zeroed=mortgage_zeroed,
         sale_proceeds=proceeds,
         mortgage_sale_repayment=repayment,

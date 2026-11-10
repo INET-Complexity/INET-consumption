@@ -116,7 +116,7 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
 
     This class implements a strategy that:
     1. Calculates base capital needs from production and capital-use coefficients
-    2. Adjusts for existing stock levels relative to historical usage
+    2. Adjusts for existing stock levels relative to the current-target-scaled initial stock
     3. Further adjusts based on credit constraints and price expectations
 
     The approach ensures that capital targets are:
@@ -149,7 +149,8 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
             capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             prev_capital_inputs_stock (np.ndarray): Current stock levels
             initial_capital_inputs_stock (np.ndarray): Reference stock levels
-            prev_production (np.ndarray): Current production levels
+            prev_production (np.ndarray): Previous production passed for the shared setter interface;
+                this stock benchmark uses current target production
             initial_production (np.ndarray): Reference production levels
             previous_good_prices (np.ndarray): Previous period's input prices
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution
@@ -176,9 +177,9 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
                 - (
                     (
                         np.divide(
-                            prev_production,
+                            current_target_production,
                             initial_production,
-                            out=np.zeros_like(prev_production),
+                            out=np.zeros_like(current_target_production),
                             where=initial_production != 0.0,
                         )
                     )[:, None]
@@ -281,7 +282,8 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
             capital_input_use_matrix (np.ndarray): Physical capital-use/replacement coefficients
             prev_capital_inputs_stock (np.ndarray): Current stock levels
             initial_capital_inputs_stock (np.ndarray): Reference stock levels
-            prev_production (np.ndarray): Current production levels
+            prev_production (np.ndarray): Previous production passed for the shared setter interface;
+                this stock benchmark uses current target production
             initial_production (np.ndarray): Reference production levels
             previous_good_prices (np.ndarray): Previous period's input prices
             substitution_bundle_matrix (np.ndarray): Matrix defining substitution

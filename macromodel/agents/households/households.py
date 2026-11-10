@@ -3115,6 +3115,8 @@ class Households(Agent):
             expected_hpi_growth=expected_hpi_growth,
             assumed_mortgage_maturity=assumed_mortgage_maturity,
             rental_income_taxes=rental_income_taxes,
+            population_scale_factor=float(self.states.get("population_scale_factor", 1.0)),
+            period_months=time_unit,
         )
         self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
         self.ts.max_rent_willing_to_pay.append(max_rent_willing_to_pay)
@@ -3377,6 +3379,7 @@ class Households(Agent):
                     )
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
                 np.add.at(target_house_price, buyer_ids, sells["price_or_rent"].to_numpy(dtype=float, copy=False))
+        self.ts.target_house_price.append(target_house_price)
         self.ts.target_mortgage.append(
             self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,

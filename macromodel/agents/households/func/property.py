@@ -167,6 +167,8 @@ class HouseholdDemandForProperty(ABC):
         expected_hpi_growth: float,
         assumed_mortgage_maturity: int,
         rental_income_taxes: float,
+        population_scale_factor: float = 1.0,
+        period_months: int = 12,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Calculate property demand and market participation.
 
@@ -180,6 +182,9 @@ class HouseholdDemandForProperty(ABC):
             expected_hpi_growth (float): Expected house price growth
             assumed_mortgage_maturity (int): Mortgage term length
             rental_income_taxes (float): Tax rate on rental income
+            population_scale_factor (float): Real households represented by
+                one model household. Monetary inputs are multiples of it.
+            period_months (int): Model period length in months
 
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: Maximum price willing to pay,
@@ -293,6 +298,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         expected_hpi_growth: float,
         assumed_mortgage_maturity: int,
         rental_income_taxes: float,
+        population_scale_factor: float = 1.0,
+        period_months: int = 12,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Calculate property demand using default behavior.
 
@@ -312,6 +319,9 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
             expected_hpi_growth (float): Expected house price growth
             assumed_mortgage_maturity (int): Mortgage term length
             rental_income_taxes (float): Tax rate on rental income
+            population_scale_factor (float): Real households represented by
+                one model household. Monetary inputs are multiples of it.
+            period_months (int): Model period length in months
 
         Returns:
             Tuple[np.ndarray, np.ndarray, np.ndarray]: Maximum price willing to pay,
@@ -332,10 +342,19 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
 
         # Decision between renting and owning for households renting or in social housing
         ind_dec = ind_in_social_housing | ind_renting_not_staying | ind_owning_not_staying
-        affordability_income = np.maximum(household_income, 0.0)
+        # The price and rent rules are power laws estimated on the annual income
+        # of one household, and the rent rule returns a monthly rent. Model
+        # income is per period and per ``population_scale_factor`` households,
+        # so it is converted before the rule and the result converted back.
+        if population_scale_factor <= 0.0 or period_months <= 0:
+            raise ValueError("Population scale factor and period length must be positive.")
+        annual_income_per_household = (
+            np.maximum(household_income, 0.0) * (12.0 / period_months) / population_scale_factor
+        )
         max_amount_pay = (
-            self.maximum_price_income_coefficient
-            * affordability_income[ind_dec] ** self.maximum_price_income_exponent
+            population_scale_factor
+            * self.maximum_price_income_coefficient
+            * annual_income_per_household[ind_dec] ** self.maximum_price_income_exponent
             * np.exp(
                 np.random.normal(
                     self.maximum_price_noise_mean,
@@ -369,8 +388,10 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         # The rent households are willing to pay
         max_rent_willing_to_pay = np.full(household_income.shape, np.nan)
         max_rent_willing_to_pay[ind_deciding_to_rent] = (
-            self.maximum_rent_income_coefficient
-            * affordability_income[ind_deciding_to_rent] ** self.maximum_rent_income_exponent
+            population_scale_factor
+            * period_months
+            * self.maximum_rent_income_coefficient
+            * annual_income_per_household[ind_deciding_to_rent] ** self.maximum_rent_income_exponent
         )
 
         return (

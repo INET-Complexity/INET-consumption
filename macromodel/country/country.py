@@ -74,6 +74,7 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
+from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
 from macromodel.agents.households.households import Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -86,6 +87,7 @@ from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
+from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
 from macromodel.markets.housing_market.sales import sold_collateral_share
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
@@ -592,21 +594,21 @@ class Country:
         investment = np.maximum(spent - goods_consumption, 0.0).sum(axis=1)
         taxes = self.central_government.states
         uses = spent.sum(axis=1) + taxes["Value-added Tax"] * goods_consumption.sum(axis=1)
-        uses += hh.current_consumption_cash_rent() + hh.ts.current("price_paid_for_property")
+        uses += hh.current_consumption_cash_rent()
         uses += hh.ts.current("interest_paid") + hh.ts.current("debt_installments")
         uses += (
             taxes["Household Capital Formation Tax"] + (taxes["Household Investment VAT Rate"] or 0.0)
         ) * investment
-        liquidation = hh.post_grant_feasible_plan.reserved_liquidation_total
-        if liquidation is None:
+        if hh.post_grant_feasible_plan.reserved_liquidation_total is None:
             raise RuntimeError("Final support requires an executable liquidation reservation.")
-        # Only the sale net of the illiquid-trade cost is cash.
-        sale_cost = hh.post_grant_feasible_plan.liquidation_sale_cost
-        if sale_cost is not None:
-            liquidation = liquidation - sale_cost
-        resources = income_without_support + hh.ts.current("liquid_financial_assets") + liquidation
-        resources += hh.ts.current("received_consumption_loans") + hh.ts.current("received_mortgages")
-        resources += hh.current_net_property_sale_proceeds()
+        # Only the forced sale, net of the illiquid-trade cost, is cash here.
+        # Housing leaves the base as one unit: the purchase is paid by its
+        # mortgage, own sale proceeds, the purchase sale and the liquid assets
+        # D, so support never finances it. A seller's surplus is a resource.
+        resources = income_without_support + forced_liquidation_cash(hh.post_grant_feasible_plan)
+        resources += hh.ts.current("liquid_financial_assets") - hh.current_housing_lfa_draw()
+        resources += hh.ts.current("received_consumption_loans")
+        resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
         support = np.maximum(uses - resources, 0.0)
@@ -2265,6 +2267,31 @@ class Country:
             current_npl_firm_loans=self.economy.ts.current("npl_firm_loans")[0],
             current_npl_hh_cons_loans=self.economy.ts.current("npl_hh_cons_loans")[0],
             current_npl_mortgages=self.economy.ts.current("npl_mortgages")[0],
+            completion_inputs=self._purchase_completion_inputs(),
+        )
+
+    def _purchase_completion_inputs(self) -> PurchaseCompletionInputs | None:
+        """Matched sales and buyer balance sheets for the purchase completion rule.
+
+        The rule reserves this period's cash need and the planned Stage 5
+        liquidation, which exist only under the feasibility resolver; the
+        legacy path keeps its mortgage-or-wealth financing test.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        hh = self.households
+        properties = self.housing_market.states["properties"]
+        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
+        return PurchaseCompletionInputs(
+            current_sales=self.housing_market.states["current_sales"],
+            property_owner=properties["Corresponding Owner Household ID"].copy(),
+            property_value=properties["Value"].copy(),
+            property_inhabitant=properties["Corresponding Inhabitant Household ID"].copy(),
+            cash_need=hh.planning_cash_need(consumer_service + mortgage_service),
+            liquid_assets=np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float),
+            illiquid_assets=np.asarray(hh.ts.current("illiquid_financial_assets"), dtype=float),
+            planned_liquidation=np.asarray(hh.ts.current("liquidation_planned"), dtype=float),
+            sale_cost=hh.current_illiquid_trade_cost(),
         )
 
     def process_housing_market_clearing(self) -> None:
@@ -2278,10 +2305,12 @@ class Country:
         properties = self.housing_market.states["properties"]
         pre_sale_owner = properties["Corresponding Owner Household ID"].copy()
         pre_sale_value = properties["Value"].copy()
+        completion = self.credit_market.current_purchase_completion()
         self.housing_market.process_housing_market_clearing(
             household_states=self.households.states,
             household_received_mortgages=self.households.ts.current("received_mortgages"),
             household_financial_wealth=self.households.ts.current("wealth_financial_assets"),
+            kept_sales=None if completion is None else completion.kept_sales,
         )
         self.housing_market.ts.observed_fraction_value_price.append(
             self.housing_market.compute_observed_fraction_value_price()
@@ -2302,6 +2331,12 @@ class Country:
         self.households.ts.mortgage_sale_repayment.append(
             self._compute_mortgage_sale_repayment(pre_sale_owner=pre_sale_owner, pre_sale_value=pre_sale_value)
         )
+        # The purchase sale was sized on the completion rule's X; the cash
+        # ledger must book the same housing flows.
+        if completion is not None and not np.allclose(
+            self.households.current_net_housing_cash_need(), completion.net_housing_cash_need, rtol=1e-10, atol=1e-6
+        ):
+            raise RuntimeError("Booked housing cash flows differ from the purchase completion rule.")
 
     def household_trade_fee_income_by_bank(self) -> np.ndarray:
         """Households' illiquid-trade cost paid this period, as fee income of their bank.
@@ -2412,8 +2447,10 @@ class Country:
             credit_granted=credit_granted,
             granted_consumer_credit_by_bank_and_household=granted_consumer_credit_by_bank_and_household,
         )
+        completion = self.credit_market.current_purchase_completion()
         self.households.reserve_post_grant_executable_liquidation(
             available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
+            purchase_liquidation=None if completion is None else completion.purchase_liquidation,
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:

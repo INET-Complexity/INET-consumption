@@ -376,7 +376,7 @@ class DefaultInterestRatesSetter(InterestRatesSetter):
         Returns:
             np.ndarray: New firm deposit rates by bank
         """
-        return np.full(prev_interest_rate_on_firm_deposits.shape, central_bank_policy_rate)
+        return np.full(prev_interest_rate_on_firm_deposits.shape, max(0.0, central_bank_policy_rate))
 
     def compute_overdraft_rate_on_firm_deposits(
         self,
@@ -429,7 +429,7 @@ class DefaultInterestRatesSetter(InterestRatesSetter):
         Returns:
             np.ndarray: New household deposit rates by bank
         """
-        return np.full(prev_interest_rate_on_hh_deposits.shape, central_bank_policy_rate)
+        return np.full(prev_interest_rate_on_hh_deposits.shape, max(0.0, central_bank_policy_rate))
 
     def compute_overdraft_rate_on_household_deposits(
         self,
@@ -563,7 +563,7 @@ class MarkUpInterestRatesSetter(InterestRatesSetter):
         firm_pt: float,
         firm_ect: float,
     ) -> np.ndarray:
-        return np.full(prev_interest_rate_on_firm_deposits.shape, central_bank_policy_rate)
+        return np.full(prev_interest_rate_on_firm_deposits.shape, max(0.0, central_bank_policy_rate))
 
     def compute_overdraft_rate_on_firm_deposits(
         self,
@@ -586,7 +586,7 @@ class MarkUpInterestRatesSetter(InterestRatesSetter):
         hh_cons_pt: float,
         hh_cons_ect: float,
     ) -> np.ndarray:
-        return np.full(prev_interest_rate_on_hh_deposits.shape, central_bank_policy_rate)
+        return np.full(prev_interest_rate_on_hh_deposits.shape, max(0.0, central_bank_policy_rate))
 
     def compute_overdraft_rate_on_household_deposits(
         self,

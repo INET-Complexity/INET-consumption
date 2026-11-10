@@ -117,17 +117,26 @@ class TestMarkUpInterestRatesSetter:
 
         np.testing.assert_allclose(result, np.array([0.00, 0.03]))
 
-    def test_keeps_deposit_rates_at_policy_rate(self):
+    def test_floors_deposit_rates_at_zero(self):
         setter = MarkUpInterestRatesSetter()
 
         np.testing.assert_allclose(
             setter.compute_interest_rate_on_firm_deposits(
-                central_bank_policy_rate=0.02,
+                central_bank_policy_rate=-0.02,
                 prev_interest_rate_on_firm_deposits=np.array([0.01, 0.03]),
                 firm_pt=0.0,
                 firm_ect=0.0,
             ),
-            np.array([0.02, 0.02]),
+            np.array([0.0, 0.0]),
+        )
+        np.testing.assert_allclose(
+            setter.compute_interest_rate_on_household_deposits(
+                central_bank_policy_rate=-0.02,
+                prev_interest_rate_on_hh_deposits=np.array([0.01, 0.03]),
+                hh_cons_pt=0.0,
+                hh_cons_ect=0.0,
+            ),
+            np.array([0.0, 0.0]),
         )
 
     def test_constructor_spreads_apply_to_overdraft_rates(self):

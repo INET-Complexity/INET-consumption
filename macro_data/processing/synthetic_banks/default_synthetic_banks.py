@@ -251,8 +251,9 @@ class DefaultSyntheticBanks(SyntheticBanks):
         initial_quarter_key = cls._initial_policy_rate_quarter_key(year, quarter)
         initial_central_bank_policy_rate = initial_policy_rates.loc[initial_quarter_key, "Policy Rate"].values[0]
 
-        bank_data["Interest Rates on Firm Deposits"] = initial_central_bank_policy_rate
-        bank_data["Interest Rates on Household Deposits"] = initial_central_bank_policy_rate
+        initial_deposit_rate = max(0.0, initial_central_bank_policy_rate)
+        bank_data["Interest Rates on Firm Deposits"] = initial_deposit_rate
+        bank_data["Interest Rates on Household Deposits"] = initial_deposit_rate
 
         return cls(
             country_name,
@@ -377,8 +378,9 @@ class DefaultSyntheticBanks(SyntheticBanks):
         initial_quarter_key = cls._initial_policy_rate_quarter_key(year, quarter)
         initial_central_bank_policy_rate = initial_policy_rates.loc[initial_quarter_key, "Policy Rate"].values[0]
 
-        bank_data["Interest Rates on Firm Deposits"] = initial_central_bank_policy_rate
-        bank_data["Interest Rates on Household Deposits"] = initial_central_bank_policy_rate
+        initial_deposit_rate = max(0.0, initial_central_bank_policy_rate)
+        bank_data["Interest Rates on Firm Deposits"] = initial_deposit_rate
+        bank_data["Interest Rates on Household Deposits"] = initial_deposit_rate
 
         return cls(
             country_name,

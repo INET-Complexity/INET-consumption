@@ -58,6 +58,41 @@ class PurchaseCompletion:
     housing_lfa_draw: np.ndarray
 
 
+def free_purchase_assets(
+    *,
+    cash_need: np.ndarray,
+    liquid_assets: np.ndarray,
+    illiquid_assets: np.ndarray,
+    planned_liquidation: np.ndarray,
+    sale_cost: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Liquid and illiquid assets a household can spend on a purchase.
+
+    Liquid assets after this period's cash need, and illiquid assets after
+    the planned Stage 5 liquidation and the illiquid-trade cost.
+    """
+    free_lfa = np.maximum(np.asarray(liquid_assets, dtype=float) - np.asarray(cash_need, dtype=float), 0.0)
+    free_ifa = np.maximum(
+        np.asarray(illiquid_assets, dtype=float)
+        - np.asarray(planned_liquidation, dtype=float)
+        - np.asarray(sale_cost, dtype=float),
+        0.0,
+    )
+    return free_lfa, free_ifa
+
+
+def financeable_price(own_funds: np.ndarray, loan_to_value_ratio: float) -> np.ndarray:
+    """Highest price a buyer can pay when the mortgage is at most ``loan_to_value_ratio`` times the price.
+
+    The buyer pays ``price - mortgage >= (1 - ltv) * price`` from its own
+    funds, so ``price <= own_funds / (1 - ltv)``. No limit at ``ltv >= 1``.
+    """
+    own_funds = np.maximum(np.asarray(own_funds, dtype=float), 0.0)
+    if loan_to_value_ratio >= 1.0:
+        return np.full(own_funds.shape, np.inf)
+    return own_funds / (1.0 - loan_to_value_ratio)
+
+
 def resolve_purchase_completion(
     inputs: PurchaseCompletionInputs,
     *,
@@ -86,14 +121,12 @@ def resolve_purchase_completion(
     granted = np.asarray(granted_mortgage, dtype=float)
     n_households = granted.shape[0]
     principal_left = np.asarray(principal_left, dtype=float)
-    free_lfa = np.maximum(
-        np.asarray(inputs.liquid_assets, dtype=float) - np.asarray(inputs.cash_need, dtype=float), 0.0
-    )
-    free_ifa = np.maximum(
-        np.asarray(inputs.illiquid_assets, dtype=float)
-        - np.asarray(inputs.planned_liquidation, dtype=float)
-        - np.asarray(inputs.sale_cost, dtype=float),
-        0.0,
+    free_lfa, free_ifa = free_purchase_assets(
+        cash_need=inputs.cash_need,
+        liquid_assets=inputs.liquid_assets,
+        illiquid_assets=inputs.illiquid_assets,
+        planned_liquidation=inputs.planned_liquidation,
+        sale_cost=inputs.sale_cost,
     )
     for name, values in (("principal_left", principal_left), ("free_lfa", free_lfa), ("free_ifa", free_ifa)):
         if values.shape != (n_households,) or not np.all(np.isfinite(values)):

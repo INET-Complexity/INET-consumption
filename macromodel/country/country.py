@@ -87,7 +87,7 @@ from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
-from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
+from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs, free_purchase_assets
 from macromodel.markets.housing_market.sales import sold_collateral_share
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
@@ -2193,6 +2193,8 @@ class Country:
             assumed_mortgage_maturity=self.banks.parameters.mortgage_maturity,
             rental_income_taxes=self.central_government.states["Income Tax"],
             time_unit=self.economy.time_unit,
+            purchase_own_funds=self._purchase_own_funds(),
+            loan_to_value_ratio=self.banks.parameters.mortgage_loan_to_value_ratio,
         )
 
         # Set rent
@@ -2269,6 +2271,24 @@ class Country:
             current_npl_mortgages=self.economy.ts.current("npl_mortgages")[0],
             completion_inputs=self._purchase_completion_inputs(),
         )
+
+    def _purchase_own_funds(self) -> np.ndarray | None:
+        """Assets each household can spend on a purchase, as the completion rule counts them.
+
+        ``None`` on the legacy path, where bids are not capped.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        hh = self.households
+        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
+        free_lfa, free_ifa = free_purchase_assets(
+            cash_need=hh.planning_cash_need(consumer_service + mortgage_service),
+            liquid_assets=hh.ts.current("liquid_financial_assets"),
+            illiquid_assets=hh.ts.current("illiquid_financial_assets"),
+            planned_liquidation=hh.ts.current("liquidation_planned"),
+            sale_cost=hh.current_illiquid_trade_cost(),
+        )
+        return free_lfa + free_ifa
 
     def _purchase_completion_inputs(self) -> PurchaseCompletionInputs | None:
         """Matched sales and buyer balance sheets for the purchase completion rule.

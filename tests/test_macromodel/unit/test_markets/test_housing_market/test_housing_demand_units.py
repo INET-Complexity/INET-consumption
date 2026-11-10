@@ -13,6 +13,7 @@ from macromodel.agents.households.func.property import (
 from macromodel.economy.func.house_price_index import HPIForecastingConstant
 from macromodel.markets.credit_market.func.clearing import _mortgage_loan_to_value_cap
 from macromodel.markets.housing_market.func.clearing import AutomaticHousingMarketClearer
+from macromodel.markets.housing_market.purchase_completion import financeable_price, free_purchase_assets
 
 PRICE_COEFFICIENT, PRICE_EXPONENT = 42.9, 0.789
 RENT_COEFFICIENT, RENT_EXPONENT = 17.2166, 0.3464
@@ -165,3 +166,39 @@ def test_house_price_growth_forecast_is_clamped_to_its_bounds(value, expected):
     )
 
     np.testing.assert_allclose(np.ravel(forecast)[0], expected)
+
+
+def test_financeable_price_is_own_funds_over_the_down_payment_share():
+    np.testing.assert_allclose(financeable_price(np.array([0.0, 20.0, -5.0]), 0.8), [0.0, 100.0, 0.0])
+    assert np.all(np.isinf(financeable_price(np.array([0.0, 20.0]), 1.0)))
+
+
+def test_free_purchase_assets_reserve_the_cash_need_the_planned_sale_and_the_trade_cost():
+    free_lfa, free_ifa = free_purchase_assets(
+        cash_need=np.array([30.0, 200.0]),
+        liquid_assets=np.array([100.0, 100.0]),
+        illiquid_assets=np.array([50.0, 50.0]),
+        planned_liquidation=np.array([10.0, 60.0]),
+        sale_cost=np.array([1.0, 1.0]),
+    )
+
+    np.testing.assert_allclose(free_lfa, [70.0, 0.0])
+    np.testing.assert_allclose(free_ifa, [39.0, 0.0])
+
+
+def test_listed_property_equity_nets_the_mortgage_share_of_the_listed_value():
+    """Household 0 lists one of two equal properties with debt 60: equity 110 - 30. Household 1 lists nothing."""
+    from macromodel.agents.households.households import Households
+
+    housing_data = pd.DataFrame(
+        {
+            "Corresponding Owner Household ID": [0, 0, 1, np.nan],
+            "Value": [100.0, 100.0, 80.0, 50.0],
+            "Sale Price": [110.0, np.nan, np.nan, 55.0],
+            "Temporarily for Sale": [True, False, False, True],
+        }
+    )
+    series = {"n_households": 2, "mortgage_debt": np.array([60.0, 40.0])}
+    households = SimpleNamespace(ts=SimpleNamespace(current=series.__getitem__))
+
+    np.testing.assert_allclose(Households._listed_property_equity(households, housing_data), [80.0, 0.0])

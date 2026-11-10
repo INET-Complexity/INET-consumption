@@ -90,6 +90,7 @@ from macromodel.agents.households.utils.create_bundle_matrix import create_bundl
 from macromodel.configurations import HouseholdsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.goods_market.value_type import ValueType
+from macromodel.markets.housing_market.purchase_completion import financeable_price
 from macromodel.markets.housing_market.sales import self_sale_mask
 from macromodel.timeseries import TimeSeries
 from macromodel.util.function_mapping import functions_from_model, update_functions
@@ -3070,6 +3071,29 @@ class Households(Agent):
                 tau_cf=tau_cf,
             )
 
+    def _listed_property_equity(self, housing_data: pd.DataFrame) -> np.ndarray:
+        """Asking price of each household's listed properties, net of the mortgage they secure.
+
+        A mortgage is secured on all the household's properties in proportion
+        to value (as when a sale repays it), so the listed share of the
+        property value carries the same share of the mortgage debt.
+        """
+        n_households = self.ts.current("n_households")
+        owners = housing_data["Corresponding Owner Household ID"].fillna(VACANT_HOUSEHOLD_ID).to_numpy(dtype=int)
+        values = housing_data["Value"].fillna(0.0).to_numpy(dtype=float)
+        listed = housing_data["Temporarily for Sale"].to_numpy(dtype=bool) & (owners >= 0)
+        owned = owners >= 0
+        owned_value = np.bincount(owners[owned], weights=values[owned], minlength=n_households)
+        listed_value = np.bincount(owners[listed], weights=values[listed], minlength=n_households)
+        asking = np.bincount(
+            owners[listed],
+            weights=housing_data["Sale Price"].fillna(0.0).to_numpy(dtype=float)[listed],
+            minlength=n_households,
+        )
+        share = np.divide(listed_value, owned_value, out=np.zeros(n_households), where=owned_value > 0.0)
+        debt = np.maximum(np.asarray(self.ts.current("mortgage_debt"), dtype=float), 0.0)
+        return np.maximum(asking - share * debt, 0.0)
+
     def prepare_housing_market_clearing(
         self,
         housing_data: pd.DataFrame,
@@ -3079,6 +3103,8 @@ class Households(Agent):
         assumed_mortgage_maturity: int,
         rental_income_taxes: float,
         time_unit: int,
+        purchase_own_funds: np.ndarray | None = None,
+        loan_to_value_ratio: float | None = None,
     ) -> None:
         """Prepare for housing market clearing.
 
@@ -3096,6 +3122,11 @@ class Households(Agent):
             assumed_mortgage_maturity (int): Mortgage term length
             rental_income_taxes (float): Tax rate on rental income
             time_unit (int): Model period length in months
+            purchase_own_funds (np.ndarray | None): Assets each household can
+                spend on a purchase. When given, the price bid is capped at
+                the price these funds and the equity in a listed home can
+                finance at ``loan_to_value_ratio``.
+            loan_to_value_ratio (float | None): Banks' mortgage loan-to-value limit
         """
         if len(housing_data) == 0:
             return
@@ -3118,7 +3149,6 @@ class Households(Agent):
             population_scale_factor=float(self.states.get("population_scale_factor", 1.0)),
             period_months=time_unit,
         )
-        self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
         self.ts.max_rent_willing_to_pay.append(max_rent_willing_to_pay)
 
         # Set price of owner-occupied or vacant properties whose owners are hoping to move.
@@ -3151,6 +3181,20 @@ class Households(Agent):
             ],
             time_unit=time_unit,
         )
+
+        # A household bids at most the price it can finance: its own funds
+        # plus the equity in the home it has listed are the down payment.
+        if purchase_own_funds is not None:
+            if loan_to_value_ratio is None:
+                raise ValueError("Capping the price bid requires the loan-to-value ratio.")
+            max_price_willing_to_pay = np.minimum(
+                max_price_willing_to_pay,
+                financeable_price(
+                    np.asarray(purchase_own_funds, dtype=float) + self._listed_property_equity(housing_data),
+                    loan_to_value_ratio,
+                ),
+            )
+        self.ts.max_price_willing_to_pay.append(max_price_willing_to_pay)
 
         # Set what's up for rent
         prev_up_for_rent = pd.Series(housing_data["Up for Rent"], index=housing_data.index).fillna(False).astype(bool)

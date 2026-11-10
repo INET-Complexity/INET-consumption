@@ -202,3 +202,76 @@ def test_listed_property_equity_nets_the_mortgage_share_of_the_listed_value():
     households = SimpleNamespace(ts=SimpleNamespace(current=series.__getitem__))
 
     np.testing.assert_allclose(Households._listed_property_equity(households, housing_data), [80.0, 0.0])
+
+
+def _gap_inputs(sales_rows, *, liquid, illiquid=None, cash_need=None):
+    from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
+
+    n = len(liquid)
+    sales = pd.DataFrame(sales_rows, columns=["sales_types", "property_id", "buyer_id", "seller_id", "price_or_rent"])
+    return PurchaseCompletionInputs(
+        current_sales=sales,
+        property_owner=pd.Series([0.0, np.nan]),
+        property_value=pd.Series([200.0, 300.0]),
+        property_inhabitant=pd.Series([0.0, -1.0]),
+        cash_need=np.zeros(n) if cash_need is None else np.asarray(cash_need, dtype=float),
+        liquid_assets=np.asarray(liquid, dtype=float),
+        illiquid_assets=np.zeros(n) if illiquid is None else np.asarray(illiquid, dtype=float),
+        planned_liquidation=np.zeros(n),
+        sale_cost=np.zeros(n),
+    )
+
+
+def test_mortgage_request_is_the_price_not_covered_by_free_assets_and_net_sale_proceeds():
+    """Household 0 sells its home for 200 (repays 50) and buys for 300 with 40 free: gap 300 - 150 - 40.
+
+    Household 1 buys household 0's home for 200 with liquid 100 and cash need 30: gap 200 - 70.
+    Household 2 buys nothing.
+    """
+    from macromodel.markets.housing_market.purchase_completion import mortgage_financing_gap
+
+    inputs = _gap_inputs(
+        [("Sell", 0, 1, 0, 200.0), ("Sell", 1, 0, -1, 300.0), ("Rent", 1, 2, -1, 5.0)],
+        liquid=[40.0, 100.0, 500.0],
+        cash_need=[0.0, 30.0, 0.0],
+    )
+    inputs.current_sales.loc[1, "seller_id"] = 2  # a household that owns nothing mortgaged
+    inputs = inputs.__class__(**{**inputs.__dict__, "property_owner": pd.Series([0.0, 2.0])})
+
+    gap = mortgage_financing_gap(inputs, principal_left=np.array([50.0, 0.0, 0.0]), margin=0.0)
+
+    np.testing.assert_allclose(gap, [110.0, 130.0, 0.0])
+
+
+def test_mortgage_request_margin_lets_the_requested_mortgage_complete_the_purchase():
+    from macromodel.markets.housing_market.purchase_completion import (
+        mortgage_financing_gap,
+        resolve_purchase_completion,
+    )
+
+    inputs = _gap_inputs([("Sell", 1, 0, 1, 300.0)], liquid=[0.1 + 0.2, 0.0], cash_need=[0.1, 0.0])
+    inputs = inputs.__class__(**{**inputs.__dict__, "property_owner": pd.Series([np.nan, 1.0])})
+    principal_left = np.zeros(2)
+
+    request = mortgage_financing_gap(inputs, principal_left=principal_left)
+    completion = resolve_purchase_completion(inputs, granted_mortgage=request, principal_left=principal_left)
+
+    assert request[0] > 300.0 - 0.2
+    assert request[0] - (300.0 - 0.2) < 1e-6
+    assert completion.kept_sales[0]
+    assert request[1] == 0.0
+
+
+def test_households_request_the_financing_gap_when_it_is_given(test_households):
+    n = test_households.ts.current("n_households")
+    gap = np.full(n, 70.0)
+    sales = pd.DataFrame(
+        [("Sell", 0, 1, 0, 100.0)], columns=["sales_types", "property_id", "buyer_id", "seller_id", "price_or_rent"]
+    )
+
+    test_households.uses_feasibility_resolver = False
+    test_households.compute_target_credit(current_sales=sales, mortgage_financing_gap=gap)
+
+    expected = np.zeros(n)
+    expected[1] = 70.0
+    np.testing.assert_allclose(test_households.ts.current("target_mortgage"), expected)

@@ -3366,7 +3366,11 @@ class Households(Agent):
 
         return rent_by_household, imputed_rent_by_household
 
-    def compute_target_credit(self, current_sales: pd.DataFrame | None) -> None:
+    def compute_target_credit(
+        self,
+        current_sales: pd.DataFrame | None,
+        mortgage_financing_gap: np.ndarray | None = None,
+    ) -> None:
         """Calculate target credit demand.
 
         Determines credit needs for:
@@ -3376,6 +3380,10 @@ class Households(Agent):
 
         Args:
             current_sales (pd.DataFrame): Property transactions
+            mortgage_financing_gap (np.ndarray | None): Mortgage each buyer
+                needs under the purchase completion rule. When given, it is
+                the mortgage request; otherwise the configured target-credit
+                rule applies.
         """
         # Target consumption loans to cover immediate financing gaps. The legacy
         # unbounded-gap formula is always computed first; Stage 5 Increment 5
@@ -3424,15 +3432,17 @@ class Households(Agent):
                 buyer_ids = sells["buyer_id"].to_numpy(dtype=int, copy=False)
                 np.add.at(target_house_price, buyer_ids, sells["price_or_rent"].to_numpy(dtype=float, copy=False))
         self.ts.target_house_price.append(target_house_price)
-        self.ts.target_mortgage.append(
-            self.functions["target_credit"].compute_target_mortgage(
+        if mortgage_financing_gap is not None:
+            target_mortgage = np.where(target_house_price > 0.0, np.asarray(mortgage_financing_gap, dtype=float), 0.0)
+        else:
+            target_mortgage = self.functions["target_credit"].compute_target_mortgage(
                 target_house_price=target_house_price,
                 target_consumption=self.consumption_cash_factor() * self.ts.current("target_consumption"),
                 income=self.ts.current("expected_income"),
                 rent=getattr(self, "planning_cash_rent", self.current_consumption_cash_rent()),
                 wealth_in_financial_assets=self.ts.current("wealth_financial_assets"),
             )
-        )
+        self.ts.target_mortgage.append(target_mortgage)
         self.ts.total_target_mortgage.append([self.ts.current("target_mortgage").sum()])
 
     def compute_interest_paid_on_deposits(

@@ -93,6 +93,51 @@ def financeable_price(own_funds: np.ndarray, loan_to_value_ratio: float) -> np.n
     return own_funds / (1.0 - loan_to_value_ratio)
 
 
+#: Share of the price added to the mortgage request, so that rounding in
+#: ``price - mortgage <= own funds`` cannot fail a purchase the request covers.
+MORTGAGE_REQUEST_MARGIN = 1e-9
+
+
+def mortgage_financing_gap(
+    inputs: PurchaseCompletionInputs,
+    *,
+    principal_left: np.ndarray,
+    margin: float = MORTGAGE_REQUEST_MARGIN,
+) -> np.ndarray:
+    """Mortgage each matched buyer needs to complete under the completion rule.
+
+    ``max(price - (proceeds - repayment) - free LFA - free IFA, 0)`` plus
+    ``margin * price``, with proceeds and repayment taken as if every matched
+    sale completes. Zero for households that buy nothing. The lender's caps
+    apply afterwards.
+    """
+    sales = inputs.current_sales
+    principal_left = np.asarray(principal_left, dtype=float)
+    n_households = principal_left.shape[0]
+    if len(sales) == 0 or "sales_types" not in sales.columns:
+        return np.zeros(n_households)
+    purchases = (sales["sales_types"].to_numpy() == "Sell") & ~self_sale_mask(sales)
+    prices = sales["price_or_rent"].to_numpy(dtype=float)[purchases]
+    price_paid = np.bincount(sales["buyer_id"].to_numpy(dtype=int)[purchases], weights=prices, minlength=n_households)
+    proceeds = np.bincount(sales["seller_id"].to_numpy(dtype=int)[purchases], weights=prices, minlength=n_households)
+    share = sold_collateral_share(
+        pre_sale_owner=inputs.property_owner,
+        pre_sale_value=inputs.property_value,
+        completed_sales=sales,
+        n_households=n_households,
+    )
+    repayment = np.minimum(share * principal_left, proceeds)
+    free_lfa, free_ifa = free_purchase_assets(
+        cash_need=inputs.cash_need,
+        liquid_assets=inputs.liquid_assets,
+        illiquid_assets=inputs.illiquid_assets,
+        planned_liquidation=inputs.planned_liquidation,
+        sale_cost=inputs.sale_cost,
+    )
+    gap = price_paid - (proceeds - repayment) - free_lfa - free_ifa
+    return np.where(price_paid > 0.0, np.maximum(gap + margin * price_paid, 0.0), 0.0)
+
+
 def resolve_purchase_completion(
     inputs: PurchaseCompletionInputs,
     *,

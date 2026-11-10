@@ -87,7 +87,11 @@ from macromodel.exogenous.exogenous import Exogenous
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.credit_market.func.clearing import compute_firm_borrower_credit_room
 from macromodel.markets.housing_market.housing_market import HousingMarket
-from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs, free_purchase_assets
+from macromodel.markets.housing_market.purchase_completion import (
+    PurchaseCompletionInputs,
+    free_purchase_assets,
+    mortgage_financing_gap,
+)
 from macromodel.markets.housing_market.sales import sold_collateral_share
 from macromodel.markets.labour_market.labour_market import LabourMarket
 from macromodel.rest_of_the_world import RestOfTheWorld
@@ -2252,8 +2256,17 @@ class Country:
             loan_interest_obligation_preview=scheduled_firm_installment_preview["scheduled_interest_due"],
             debt_installment_preview=scheduled_firm_installment_preview["scheduled_principal_due"],
         )
+        completion_inputs = self._purchase_completion_inputs()
         self.households.compute_target_credit(
             current_sales=self.housing_market.states["current_sales"],
+            mortgage_financing_gap=(
+                None
+                if completion_inputs is None
+                else mortgage_financing_gap(
+                    completion_inputs,
+                    principal_left=self.credit_market.preview_mortgage_principal_after_scheduled_service(),
+                )
+            ),
         )
 
     def clear_credit_market(self) -> None:

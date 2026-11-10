@@ -392,3 +392,18 @@ def test_values_fall_when_only_an_unsold_listing_below_value_is_on_the_market(te
     )
 
     np.testing.assert_allclose(market.states["properties"]["Value"].to_numpy(), [95.0, 190.0, 285.0])
+
+
+def test_revaluation_without_a_sales_table_leaves_values_unchanged_when_nothing_is_listed(test_config):
+    market, household_states = _market_with_three_properties(test_config)
+    market.states["current_sales"] = pd.DataFrame()
+
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(3),
+        household_financial_wealth=np.zeros(3),
+        kept_sales=np.zeros(0, dtype=bool),
+        revalue_by_transaction_prices=True,
+    )
+
+    np.testing.assert_allclose(market.states["properties"]["Value"].to_numpy(), [100.0, 200.0, 300.0])

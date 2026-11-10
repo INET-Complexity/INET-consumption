@@ -386,3 +386,40 @@ def test_bids_use_gross_income_when_it_is_given(test_households, monkeypatch):
     with pytest.raises(StopIteration):
         test_households.prepare_housing_market_clearing(**arguments)
     np.testing.assert_allclose(seen["income"], test_households.ts.current("expected_income"))
+
+
+def test_owner_of_an_unsold_home_is_passed_on_as_still_selling(test_households, monkeypatch):
+    """Home 0 was left unsold last period; home 1 is not for sale. Only owner 0 is still selling."""
+    seen = {}
+
+    class DemandStub:
+        @staticmethod
+        def compute_demand(*, owners_still_selling, **_kwargs):
+            seen["still_selling"] = None if owners_still_selling is None else np.asarray(owners_still_selling).copy()
+            raise StopIteration
+
+    monkeypatch.setitem(test_households.functions, "property", DemandStub())
+    n = test_households.ts.current("n_households")
+    arguments = dict(
+        housing_data=pd.DataFrame(
+            {"Corresponding Owner Household ID": [0.0, 1.0, np.nan], "Temporarily for Sale": [True, False, True]}
+        ),
+        observed_fraction_value_price=np.array([1.0, 0.0]),
+        observed_fraction_rent_value=np.array([0.01, 0.0]),
+        expected_hpi_growth=0.0,
+        assumed_mortgage_maturity=100,
+        rental_income_taxes=0.0,
+        time_unit=3,
+    )
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(
+            **arguments, purchase_own_funds=np.zeros(n), loan_to_value_ratio=0.8
+        )
+    expected = np.zeros(n, dtype=bool)
+    expected[0] = True
+    np.testing.assert_array_equal(seen["still_selling"], expected)
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments)
+    assert seen["still_selling"] is None

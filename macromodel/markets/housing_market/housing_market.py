@@ -641,7 +641,10 @@ class HousingMarket:
 
         if revalue_by_transaction_prices:
             completed = self.states["current_sales"]
-            purchases = completed.loc[(completed["sales_types"] == "Sell").to_numpy() & ~is_self_sale]
+            if "sales_types" in completed.columns:
+                purchases = completed.loc[(completed["sales_types"] == "Sell").to_numpy() & ~is_self_sale]
+            else:
+                purchases = pd.DataFrame(columns=["price_or_rent", "property_value", "property_id"])
             properties = self.states["properties"]
             still_listed = properties["Temporarily for Sale"].fillna(False).astype(bool)
             ratio = median_price_to_value_ratio(

@@ -2198,6 +2198,11 @@ class Country:
             rental_income_taxes=self.central_government.states["Income Tax"],
             time_unit=self.economy.time_unit,
             purchase_own_funds=self._purchase_own_funds(),
+            gross_income=(
+                self.household_gross_cash_income()
+                if self.configuration.households.parameters.uses_feasibility_resolver
+                else None
+            ),
             loan_to_value_ratio=self.banks.parameters.mortgage_loan_to_value_ratio,
         )
 
@@ -2359,6 +2364,7 @@ class Country:
             household_financial_wealth=self.households.ts.current("wealth_financial_assets"),
             kept_sales=None if completion is None else completion.kept_sales,
             sellers_vacate=completion is not None,
+            revalue_by_transaction_prices=completion is not None,
         )
         self.housing_market.ts.observed_fraction_value_price.append(
             self.housing_market.compute_observed_fraction_value_price()

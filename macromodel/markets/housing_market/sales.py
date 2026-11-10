@@ -89,3 +89,29 @@ def move_chain_feasible(sales: pd.DataFrame, kept: np.ndarray, property_inhabita
         if still_kept.sum() == kept.sum():
             return still_kept
         kept = still_kept
+
+
+def median_price_to_value_ratio(prices: np.ndarray, previous_values: np.ndarray) -> float:
+    """Median of price over the property's own previous value; 1 if there is no valid pair.
+
+    Comparing each price with the value of the same property removes the
+    effect of which properties are in the sample.
+    """
+    prices = np.asarray(prices, dtype=float)
+    previous_values = np.asarray(previous_values, dtype=float)
+    valid = np.isfinite(prices) & np.isfinite(previous_values) & (prices > 0.0) & (previous_values > 0.0)
+    if not valid.any():
+        return 1.0
+    return float(np.median(prices[valid] / previous_values[valid]))
+
+
+def revalue_unsold_properties(*, values: pd.Series, sold_property_ids: np.ndarray, ratio: float) -> pd.Series:
+    """Scale the value of every property not sold this period by ``ratio``.
+
+    ``values`` is indexed by property id and already holds the price for the
+    properties sold; those are left as they are.
+    """
+    revalued = values.astype(float).copy()
+    unsold = ~revalued.index.isin(np.asarray(sold_property_ids, dtype=int))
+    revalued.loc[unsold] = revalued.loc[unsold] * ratio
+    return revalued

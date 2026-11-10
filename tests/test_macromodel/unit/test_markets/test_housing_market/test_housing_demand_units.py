@@ -317,3 +317,109 @@ def test_purchase_cash_need_adds_deposit_interest_paid_but_not_interest_received
     )
 
     np.testing.assert_allclose(Country._purchase_cash_need(country), [13.0, 10.0])
+
+
+def test_owner_with_an_unsold_listing_keeps_hoping_to_move():
+    """Owners never draw a move. Household 1 has an unsold listing; household 2 is a renter with the same mark."""
+    rule = _demand_rule()
+    rule.probability_stay_in_rented_property = 1.0
+
+    _, rent, moving = _demand(
+        rule,
+        [1, 1, PRIVATE_RENTER_TENURE_STATUS],
+        hpi_growth=1.0,
+        moving_owners_bid_rent=True,
+        owners_still_selling=np.array([False, True, True]),
+    )
+
+    np.testing.assert_array_equal(moving, [False, True, False])
+    assert rent[1] > 0.0 and np.isnan(rent[0])
+
+
+def test_price_to_value_ratio_compares_each_price_with_the_value_of_the_same_property():
+    """A cheap and a dear home both 2% above value, a third at value: the median ratio is 1.02."""
+    from macromodel.markets.housing_market.sales import median_price_to_value_ratio
+
+    ratio = median_price_to_value_ratio(np.array([102.0, 1020.0, 500.0]), np.array([100.0, 1000.0, 500.0]))
+
+    np.testing.assert_allclose(ratio, 1.02)
+    assert median_price_to_value_ratio(np.array([]), np.array([])) == 1.0
+    assert median_price_to_value_ratio(np.array([5.0, np.nan]), np.array([0.0, 10.0])) == 1.0
+
+
+def test_unsold_properties_are_revalued_by_the_ratio_and_sold_ones_keep_their_price():
+    from macromodel.markets.housing_market.sales import revalue_unsold_properties
+
+    values = pd.Series([102.0, 200.0, 300.0], index=[10, 20, 30])  # property 10 was sold at 102
+
+    revalued = revalue_unsold_properties(values=values, sold_property_ids=np.array([10]), ratio=1.02)
+
+    np.testing.assert_allclose(revalued.to_numpy(), [102.0, 204.0, 306.0])
+
+
+def test_bids_use_gross_income_when_it_is_given(test_households, monkeypatch):
+    """The price and rent rules were estimated on gross income."""
+    seen = {}
+
+    class DemandStub:
+        @staticmethod
+        def compute_demand(*, household_income, **_kwargs):
+            seen["income"] = np.asarray(household_income, dtype=float).copy()
+            raise StopIteration
+
+    monkeypatch.setitem(test_households.functions, "property", DemandStub())
+    gross = 1.3 * np.asarray(test_households.ts.current("expected_income"), dtype=float)
+    arguments = dict(
+        housing_data=pd.DataFrame({"Value": [1.0]}),
+        observed_fraction_value_price=np.array([1.0, 0.0]),
+        observed_fraction_rent_value=np.array([0.01, 0.0]),
+        expected_hpi_growth=0.0,
+        assumed_mortgage_maturity=100,
+        rental_income_taxes=0.0,
+        time_unit=3,
+    )
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments, gross_income=gross)
+    np.testing.assert_allclose(seen["income"], gross)
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments)
+    np.testing.assert_allclose(seen["income"], test_households.ts.current("expected_income"))
+
+
+def test_owner_of_an_unsold_home_is_passed_on_as_still_selling(test_households, monkeypatch):
+    """Home 0 was left unsold last period; home 1 is not for sale. Only owner 0 is still selling."""
+    seen = {}
+
+    class DemandStub:
+        @staticmethod
+        def compute_demand(*, owners_still_selling, **_kwargs):
+            seen["still_selling"] = None if owners_still_selling is None else np.asarray(owners_still_selling).copy()
+            raise StopIteration
+
+    monkeypatch.setitem(test_households.functions, "property", DemandStub())
+    n = test_households.ts.current("n_households")
+    arguments = dict(
+        housing_data=pd.DataFrame(
+            {"Corresponding Owner Household ID": [0.0, 1.0, np.nan], "Temporarily for Sale": [True, False, True]}
+        ),
+        observed_fraction_value_price=np.array([1.0, 0.0]),
+        observed_fraction_rent_value=np.array([0.01, 0.0]),
+        expected_hpi_growth=0.0,
+        assumed_mortgage_maturity=100,
+        rental_income_taxes=0.0,
+        time_unit=3,
+    )
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(
+            **arguments, purchase_own_funds=np.zeros(n), loan_to_value_ratio=0.8
+        )
+    expected = np.zeros(n, dtype=bool)
+    expected[0] = True
+    np.testing.assert_array_equal(seen["still_selling"], expected)
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments)
+    assert seen["still_selling"] is None

@@ -3094,6 +3094,7 @@ class Households(Agent):
         time_unit: int,
         purchase_own_funds: np.ndarray | None = None,
         loan_to_value_ratio: float | None = None,
+        gross_income: np.ndarray | None = None,
     ) -> None:
         """Prepare for housing market clearing.
 
@@ -3116,15 +3117,28 @@ class Households(Agent):
                 the price these funds can finance at ``loan_to_value_ratio``,
                 and owners sell before they buy: a moving owner lists its
                 home, stays in it and bids for a rental; it bids to buy only
-                after the sale (see ``buying_after_sale``).
+                after the sale (see ``buying_after_sale``). A listing then
+                stays on the market until it sells.
             loan_to_value_ratio (float | None): Banks' mortgage loan-to-value limit
+            gross_income (np.ndarray | None): Household income before income
+                tax and employee contributions. The price and rent rules were
+                estimated on gross income; when given, bids use it instead of
+                expected disposable income.
         """
         if len(housing_data) == 0:
             return
         sell_before_buy = purchase_own_funds is not None
         committed_buyers = None
+        owners_still_selling = None
         if sell_before_buy:
             committed_buyers = self.buying_after_sale() & (self.states["Tenure Status of the Main Residence"] != 1)
+            # A listing stays on the market until it sells: the owner of a
+            # home left unsold last period is still hoping to move.
+            unsold = housing_data.loc[
+                housing_data["Temporarily for Sale"].fillna(False).astype(bool), "Corresponding Owner Household ID"
+            ].dropna()
+            owners_still_selling = np.zeros(self.ts.current("n_households"), dtype=bool)
+            owners_still_selling[unsold.to_numpy(dtype=int)[unsold.to_numpy(dtype=int) >= 0]] = True
 
         # Households make decisions on their demand for properties
         (
@@ -3134,7 +3148,7 @@ class Households(Agent):
         ) = self.functions["property"].compute_demand(
             housing_data=housing_data,
             household_residence_tenure_status=self.states["Tenure Status of the Main Residence"],
-            household_income=self.ts.current("expected_income"),
+            household_income=self.ts.current("expected_income") if gross_income is None else gross_income,
             household_financial_wealth=self.ts.current("wealth_financial_assets"),
             observed_fraction_value_price=observed_fraction_value_price,
             observed_fraction_rent_value=observed_fraction_rent_value,
@@ -3145,6 +3159,7 @@ class Households(Agent):
             period_months=time_unit,
             committed_buyers=committed_buyers,
             moving_owners_bid_rent=sell_before_buy,
+            owners_still_selling=owners_still_selling,
         )
         if sell_before_buy:
             # The moving owner's choice to buy is kept as an intention for after the sale.

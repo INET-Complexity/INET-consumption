@@ -23,7 +23,9 @@ from macromodel.markets.housing_market.housing_market_ts import (
 from macromodel.markets.housing_market.sales import (
     SOCIAL_HOUSING_TENURE_STATUS,
     VACANT_HOUSEHOLD_ID,
+    median_price_to_value_ratio,
     move_chain_feasible,
+    revalue_unsold_properties,
     self_sale_mask,
 )
 from macromodel.timeseries import TimeSeries
@@ -496,6 +498,7 @@ class HousingMarket:
         household_financial_wealth: np.ndarray,
         kept_sales: np.ndarray | None = None,
         sellers_vacate: bool = False,
+        revalue_by_transaction_prices: bool = False,
     ) -> None:
         """Process and finalize housing market transactions.
 
@@ -526,6 +529,13 @@ class HousingMarket:
             sellers_vacate: If True, a seller still living in a home it sold
                 moves to social housing. A seller with a kept rental has
                 already moved there.
+            revalue_by_transaction_prices: If True, every property that was
+                not sold is revalued by the median ratio of price to previous
+                value over all properties for sale this period: the price paid
+                for those sold, the asking price for those still listed. A
+                sold property is valued at its price. Asking prices of unsold
+                listings are not rescaled, so a listing that does not sell
+                pulls the ratio down as values rise.
 
         Note:
             This method ensures all market clearing outcomes are properly
@@ -551,6 +561,11 @@ class HousingMarket:
                 dropped_rentals = ~kept_sales & (current_sales["sales_types"] == "Rental").to_numpy()
                 self.states["properties"].loc[
                     current_sales["property_id"].to_numpy(dtype=int)[dropped_rentals], "Up for Rent"
+                ] = True
+                # A sale that does not go ahead stays listed.
+                dropped_sales = ~kept_sales & (current_sales["sales_types"] == "Sell").to_numpy()
+                self.states["properties"].loc[
+                    current_sales["property_id"].to_numpy(dtype=int)[dropped_sales], "Temporarily for Sale"
                 ] = True
         elif len(current_sales) == 0 or "sales_types" not in current_sales.columns:
             feasible_sale_indices = current_sales.index
@@ -623,6 +638,34 @@ class HousingMarket:
                     total_number_of_bought_houses += 1
             else:
                 raise ValueError("Unknown housing market sales type", sale["sales_types"])
+
+        if revalue_by_transaction_prices:
+            completed = self.states["current_sales"]
+            if "sales_types" in completed.columns:
+                purchases = completed.loc[(completed["sales_types"] == "Sell").to_numpy() & ~is_self_sale]
+            else:
+                purchases = pd.DataFrame(columns=["price_or_rent", "property_value", "property_id"])
+            properties = self.states["properties"]
+            still_listed = properties["Temporarily for Sale"].fillna(False).astype(bool)
+            ratio = median_price_to_value_ratio(
+                prices=np.concatenate(
+                    [
+                        purchases["price_or_rent"].to_numpy(dtype=float),
+                        properties.loc[still_listed, "Sale Price"].to_numpy(dtype=float),
+                    ]
+                ),
+                previous_values=np.concatenate(
+                    [
+                        purchases["property_value"].to_numpy(dtype=float),
+                        properties.loc[still_listed, "Value"].to_numpy(dtype=float),
+                    ]
+                ),
+            )
+            properties["Value"] = revalue_unsold_properties(
+                values=properties["Value"],
+                sold_property_ids=purchases["property_id"].to_numpy(dtype=int),
+                ratio=ratio,
+            )
 
         if sellers_vacate:
             for _, sale in self.states["current_sales"].iterrows():

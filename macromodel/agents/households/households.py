@@ -3094,6 +3094,7 @@ class Households(Agent):
         time_unit: int,
         purchase_own_funds: np.ndarray | None = None,
         loan_to_value_ratio: float | None = None,
+        gross_income: np.ndarray | None = None,
     ) -> None:
         """Prepare for housing market clearing.
 
@@ -3119,6 +3120,10 @@ class Households(Agent):
                 after the sale (see ``buying_after_sale``). A listing then
                 stays on the market until it sells.
             loan_to_value_ratio (float | None): Banks' mortgage loan-to-value limit
+            gross_income (np.ndarray | None): Household income before income
+                tax and employee contributions. The price and rent rules were
+                estimated on gross income; when given, bids use it instead of
+                expected disposable income.
         """
         if len(housing_data) == 0:
             return
@@ -3143,7 +3148,7 @@ class Households(Agent):
         ) = self.functions["property"].compute_demand(
             housing_data=housing_data,
             household_residence_tenure_status=self.states["Tenure Status of the Main Residence"],
-            household_income=self.ts.current("expected_income"),
+            household_income=self.ts.current("expected_income") if gross_income is None else gross_income,
             household_financial_wealth=self.ts.current("wealth_financial_assets"),
             observed_fraction_value_price=observed_fraction_value_price,
             observed_fraction_rent_value=observed_fraction_rent_value,

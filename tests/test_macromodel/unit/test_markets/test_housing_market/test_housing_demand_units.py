@@ -355,3 +355,34 @@ def test_unsold_properties_are_revalued_by_the_ratio_and_sold_ones_keep_their_pr
     revalued = revalue_unsold_properties(values=values, sold_property_ids=np.array([10]), ratio=1.02)
 
     np.testing.assert_allclose(revalued.to_numpy(), [102.0, 204.0, 306.0])
+
+
+def test_bids_use_gross_income_when_it_is_given(test_households, monkeypatch):
+    """The price and rent rules were estimated on gross income."""
+    seen = {}
+
+    class DemandStub:
+        @staticmethod
+        def compute_demand(*, household_income, **_kwargs):
+            seen["income"] = np.asarray(household_income, dtype=float).copy()
+            raise StopIteration
+
+    monkeypatch.setitem(test_households.functions, "property", DemandStub())
+    gross = 1.3 * np.asarray(test_households.ts.current("expected_income"), dtype=float)
+    arguments = dict(
+        housing_data=pd.DataFrame({"Value": [1.0]}),
+        observed_fraction_value_price=np.array([1.0, 0.0]),
+        observed_fraction_rent_value=np.array([0.01, 0.0]),
+        expected_hpi_growth=0.0,
+        assumed_mortgage_maturity=100,
+        rental_income_taxes=0.0,
+        time_unit=3,
+    )
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments, gross_income=gross)
+    np.testing.assert_allclose(seen["income"], gross)
+
+    with pytest.raises(StopIteration):
+        test_households.prepare_housing_market_clearing(**arguments)
+    np.testing.assert_allclose(seen["income"], test_households.ts.current("expected_income"))

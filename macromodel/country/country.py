@@ -2198,6 +2198,11 @@ class Country:
             rental_income_taxes=self.central_government.states["Income Tax"],
             time_unit=self.economy.time_unit,
             purchase_own_funds=self._purchase_own_funds(),
+            gross_income=(
+                self.household_gross_cash_income()
+                if self.configuration.households.parameters.uses_feasibility_resolver
+                else None
+            ),
             loan_to_value_ratio=self.banks.parameters.mortgage_loan_to_value_ratio,
         )
 

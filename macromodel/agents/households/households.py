@@ -99,6 +99,8 @@ from macromodel.util.housing_flows import normalise_housing_flow
 from macromodel.util.property_mapping import map_to_enum
 
 VACANT_HOUSEHOLD_ID = -1
+# Consumption-unit weights: first adult, additional adult (age >= 14), child (age < 14).
+DEFAULT_CU_WEIGHTS: tuple[float, float, float] = (1.0, 0.5, 0.3)
 
 # Stage 4 (portfolio choice) diagnostic time series, registered at Households
 # init (regardless of whether uses_portfolio_choice is active) so that
@@ -363,8 +365,10 @@ class Households(Agent):
             self.bundle_matrix = None
 
         self.emission_fractions = emission_fractions
+        self.cu_weights: tuple[float, float, float] = DEFAULT_CU_WEIGHTS
         self._consumption_units_dirty = True
         self._consumption_unit_composition_signature: tuple[tuple[int, int], ...] | None = None
+        self._consumption_unit_weights_signature: tuple[float, float, float] | None = None
 
         # Wealth-ratio diagnostics (PR #138 review finding 2): buffered here, not
         # via self.ts / households_ts.py, and written to HDF5 directly in
@@ -388,6 +392,7 @@ class Households(Agent):
         scale: int,
         add_emissions: bool = False,
         emission_fractions: Optional[EmissionFractions] = None,
+        cu_weights: Optional[tuple[float, float, float]] = None,
     ) -> "Households":
         """Create household agent from synthetic data.
 
@@ -409,11 +414,14 @@ class Households(Agent):
             scale (int): Scaling factor for histograms
             add_emissions (bool): Whether to track emissions
             emission_fractions (Optional[EmissionFractions]): Per-industry emission fraction multipliers
+            cu_weights (Optional[tuple[float, float, float]]): Consumption-unit weights
+                (first adult, additional adult, child). Defaults to (1.0, 0.5, 0.3).
 
         Returns:
             Households: Initialized household agent
         """
         individual_ages = synthetic_population.individual_data["Age"].values
+        cu_weights = DEFAULT_CU_WEIGHTS if cu_weights is None else tuple(float(w) for w in cu_weights)
 
         corr_individuals = synthetic_population.household_data["Corresponding Individuals ID"]
         corr_individuals = corr_individuals.rename_axis("Household ID")
@@ -699,7 +707,9 @@ class Households(Agent):
         # Stage 2 proxy: consumption units are computed from initial household ages.
         states["Consumption Units"] = np.array(
             [
-                Households._compute_consumption_units_from_ages(individual_ages[states["corr_individuals"][hh_id]])
+                Households._compute_consumption_units_from_ages(
+                    individual_ages[states["corr_individuals"][hh_id]], cu_weights
+                )
                 for hh_id in range(ts.current("n_households"))
             ],
             dtype=float,
@@ -734,6 +744,7 @@ class Households(Agent):
         households.housing_input_rate = housing_input_rate
         households.housing_input_weights = housing_input_weights
         households.initial_housing_input_goods = initial_housing_input_goods
+        households.cu_weights = cu_weights
         households.refresh_consumption_units_if_needed(individual_ages)
         return households
 
@@ -2977,21 +2988,6 @@ class Households(Agent):
             else:
                 history.append(value)
 
-    @staticmethod
-    def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
-        """Return paper-style household consumption units from member ages.
-
-        The data available here has ages, not the paper's exact adult/child
-        dependency state. Stage 2 uses age >= 14 for the 0.5 CU additional-member
-        category and age < 14 for the 0.3 CU child category.
-        """
-        ages = np.asarray(ages, dtype=float)
-        if len(ages) == 0:
-            return 1.0
-        older_members = int(np.sum(ages >= 14.0))
-        younger_children = int(np.sum(ages < 14.0))
-        return 1.0 + 0.5 * max(0, older_members - 1) + 0.3 * younger_children
-
     def _current_consumption_units(self) -> np.ndarray:
         return np.asarray(
             self.states.get("Consumption Units", np.ones(self.ts.current("n_households"))),
@@ -3503,14 +3499,22 @@ class Households(Agent):
         return self.ts.current("interest_paid_on_loans") + self.ts.current("interest_paid_on_deposits")
 
     @staticmethod
-    def _compute_consumption_units_from_ages(ages: np.ndarray) -> float:
-        """Return household consumption units from member ages."""
+    def _compute_consumption_units_from_ages(
+        ages: np.ndarray, weights: tuple[float, float, float] = DEFAULT_CU_WEIGHTS
+    ) -> float:
+        """Return household consumption units from member ages.
+
+        The data has ages, not the paper's adult/child dependency state:
+        members aged 14 or more count as adults, younger members as children.
+        ``weights`` is (first adult, additional adult, child).
+        """
+        first_adult, additional_adult, child = weights
         ages = np.asarray(ages, dtype=float)
         if len(ages) == 0:
-            return 1.0
+            return first_adult
         older_members = int(np.sum(ages >= 14.0))
         younger_children = int(np.sum(ages < 14.0))
-        return 1.0 + 0.5 * max(0, older_members - 1) + 0.3 * younger_children
+        return first_adult + additional_adult * max(0, older_members - 1) + child * younger_children
 
     @staticmethod
     def _consumption_unit_signature_from_ages(ages: np.ndarray) -> tuple[int, int]:
@@ -3530,20 +3534,34 @@ class Households(Agent):
     def refresh_consumption_units_if_needed(self, individual_ages: np.ndarray) -> bool:
         """Refresh household consumption units when age-band composition changes."""
         signature = self._household_consumption_unit_signature(individual_ages)
-        if not self._consumption_units_dirty and signature == self._consumption_unit_composition_signature:
+        if (
+            not self._consumption_units_dirty
+            and signature == self._consumption_unit_composition_signature
+            and self.cu_weights == self._consumption_unit_weights_signature
+        ):
             return False
 
         ages = np.asarray(individual_ages, dtype=float)
         self.states["Consumption Units"] = np.array(
             [
-                self._compute_consumption_units_from_ages(ages[np.asarray(corr_individuals, dtype=int)])
+                self._compute_consumption_units_from_ages(
+                    ages[np.asarray(corr_individuals, dtype=int)], self.cu_weights
+                )
                 for corr_individuals in self.states["corr_individuals"]
             ],
             dtype=float,
         )
         self._consumption_unit_composition_signature = signature
+        self._consumption_unit_weights_signature = self.cu_weights
         self._consumption_units_dirty = False
         return True
+
+    def current_household_sizes(self) -> np.ndarray:
+        """Members per household, from the composition the consumption units were built on."""
+        signature = self._consumption_unit_composition_signature
+        if signature is None:
+            return np.array([len(members) for members in self.states["corr_individuals"]], dtype=int)
+        return np.array([older + younger for older, younger in signature], dtype=int)
 
     def current_consumption_units(self) -> np.ndarray:
         return np.asarray(

@@ -273,12 +273,16 @@ financial_distress:
   missed_payments_to_ficp: 2
 
 subsistence_consumption:
-  # Section 3.1.1 — SMIC-based subsistence floor, with consumer-unit (CU) weights
-  # smic_monthly_override: if set (non-null), use this fixed monthly SMIC value (€, nominal);
-  #   if null, load from the CSV data path below and select the appropriate year.
-  smic_monthly_override: null  # e.g. 1128.70 for the 2014 paper calibration
-  data_paths:
-    smic_monthly_values: INSEE/SMIC_monthly_values.csv
+  # Section 3.1.1 — goods floor per month = max(smic_share x net SMIC x CU - housing deduction, 0).
+  # Read through country_config_FRA.yaml (paper_parameter_ref). The net SMIC comes from
+  # DataPaths.insee_smic_path.
+  smic_share: 0.5
+  # RSA housing deduction (forfait logement), EUR per month at 1 Jan 2014, by household size
+  # (3 = three or more): RSA base 499.31 x 12%; x 1.5 x 16%; x 1.8 x 16.5%.
+  housing_deduction_monthly:
+    1: 59.92
+    2: 119.84
+    3: 148.30
   cu_weights:
     first_adult: 1.0
     additional_adult: 0.5  # age >= 14

@@ -2285,6 +2285,21 @@ class Country:
             completion_inputs=self._purchase_completion_inputs(),
         )
 
+    def _purchase_cash_need(self) -> np.ndarray:
+        """Cash a buyer keeps out of a purchase: N plus the interest it pays on deposits this period.
+
+        Deposit interest is a payment when the deposit rate is negative or the
+        account is overdrawn. It is charged on opening liquid assets, so the
+        cash spent on the home still bears it. Interest received is not netted.
+        """
+        hh = self.households
+        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
+        deposit_interest = hh.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        return hh.planning_cash_need(consumer_service + mortgage_service) + np.maximum(deposit_interest, 0.0)
+
     def _purchase_own_funds(self) -> np.ndarray | None:
         """Assets each household can spend on a purchase, as the completion rule counts them.
 
@@ -2293,9 +2308,8 @@ class Country:
         if not self.configuration.households.parameters.uses_feasibility_resolver:
             return None
         hh = self.households
-        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
         free_lfa, free_ifa = free_purchase_assets(
-            cash_need=hh.planning_cash_need(consumer_service + mortgage_service),
+            cash_need=self._purchase_cash_need(),
             liquid_assets=hh.ts.current("liquid_financial_assets"),
             illiquid_assets=hh.ts.current("illiquid_financial_assets"),
             planned_liquidation=hh.ts.current("liquidation_planned"),
@@ -2314,13 +2328,12 @@ class Country:
             return None
         hh = self.households
         properties = self.housing_market.states["properties"]
-        consumer_service, mortgage_service = self.credit_market.preview_opening_household_service()
         return PurchaseCompletionInputs(
             current_sales=self.housing_market.states["current_sales"],
             property_owner=properties["Corresponding Owner Household ID"].copy(),
             property_value=properties["Value"].copy(),
             property_inhabitant=properties["Corresponding Inhabitant Household ID"].copy(),
-            cash_need=hh.planning_cash_need(consumer_service + mortgage_service),
+            cash_need=self._purchase_cash_need(),
             liquid_assets=np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float),
             illiquid_assets=np.asarray(hh.ts.current("illiquid_financial_assets"), dtype=float),
             planned_liquidation=np.asarray(hh.ts.current("liquidation_planned"), dtype=float),

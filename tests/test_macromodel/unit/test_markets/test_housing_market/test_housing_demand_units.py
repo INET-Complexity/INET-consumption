@@ -297,3 +297,23 @@ def test_households_request_the_financing_gap_when_it_is_given(test_households):
     expected = np.zeros(n)
     expected[1] = 70.0
     np.testing.assert_allclose(test_households.ts.current("target_mortgage"), expected)
+
+
+def test_purchase_cash_need_adds_deposit_interest_paid_but_not_interest_received():
+    """N = [10, 10]. Household 0 pays 2 on its deposits (negative rate); household 1 receives 3."""
+    from macromodel.country.country import Country
+
+    series = {
+        "interest_rate_on_household_deposits": np.array([0.0]),
+        "overdraft_rate_on_household_deposits": np.array([0.0]),
+    }
+    country = SimpleNamespace(
+        households=SimpleNamespace(
+            planning_cash_need=lambda service: np.array([10.0, 10.0]) + service,
+            compute_interest_paid_on_deposits=lambda **_rates: np.array([2.0, -3.0]),
+        ),
+        credit_market=SimpleNamespace(preview_opening_household_service=lambda: (np.zeros(2), np.array([1.0, 0.0]))),
+        banks=SimpleNamespace(ts=SimpleNamespace(current=series.__getitem__)),
+    )
+
+    np.testing.assert_allclose(Country._purchase_cash_need(country), [13.0, 10.0])

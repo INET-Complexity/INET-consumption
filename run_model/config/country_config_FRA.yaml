@@ -314,7 +314,7 @@ FRA:
         path_name: profit_estimator
         parameters: {}
       target_capital_inputs:
-        name: FinancialTargetCapitalInputsSetter
+        name: TFPAdjustedTargetCapitalInputsSetter
         path_name: target_capital_inputs
         parameters:
           credit_gap_fraction: 0

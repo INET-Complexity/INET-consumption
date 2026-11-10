@@ -218,12 +218,15 @@ class Production(BaseModel):
 class TargetCapitalInputs(BaseModel):
     """
     The function used to setting firms desired capital inputs.
-    Options: UnconstrainedTargetCapitalInputsSetter, FinancialTargetCapitalInputsSetter
+    Options: FinancialTargetCapitalInputsSetter, TFPAdjustedTargetCapitalInputsSetter,
+    BundleWeightedTargetCapitalInputsSetter
     """
 
-    name: Literal["FinancialTargetCapitalInputsSetter", "BundleWeightedTargetCapitalInputsSetter"] = (
-        "FinancialTargetCapitalInputsSetter"
-    )
+    name: Literal[
+        "FinancialTargetCapitalInputsSetter",
+        "TFPAdjustedTargetCapitalInputsSetter",
+        "BundleWeightedTargetCapitalInputsSetter",
+    ] = "FinancialTargetCapitalInputsSetter"
     path_name: str = "target_capital_inputs"
     parameters: dict[str, Any] = {"target_capital_inputs_fraction": 0.0, "credit_gap_fraction": 0.0}
 

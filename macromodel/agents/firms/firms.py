@@ -1636,6 +1636,8 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=self.ts.current("production"),
             initial_production=self.ts.initial("production"),
+            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
+            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
@@ -2562,6 +2564,8 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=target_production,
             initial_production=self.ts.initial("production"),
+            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
+            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
         )

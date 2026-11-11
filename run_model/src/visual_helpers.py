@@ -1033,6 +1033,22 @@ def build_macro_output_df(model, country_code):
     df_bank_ts = timeseries_dict_to_frame(country.banks.ts.__dict__["dicts"])
     economy_ts_dict = country.economy.ts.__dict__["dicts"]
 
+    # Housing-market aggregates are stored separately from the economy and
+    # bank time series. Include the scalar counts/stocks in this common output
+    # frame so the standard saved-results plotting flow can display them.
+    housing_ts = getattr(getattr(country, "housing_market", None), "ts", None)
+    if housing_ts is not None:
+        for housing_name in (
+            "total_number_of_bought_houses",
+            "total_number_of_newly_rented_houses",
+            "total_number_of_houses_rented",
+            "total_number_of_houses_owner_occupied",
+            "total_number_of_houses_unoccupied",
+        ):
+            values = _safe_ts_values(housing_ts, housing_name)
+            if values is not None:
+                add_column(housing_name, as_output_series(values))
+
     source_columns = {
         "gdp": ("GDP_Expenditure", "GDP_Output", "GDP_Income"),
         "household_consumption": ("Household Consumption", "+Household_Consumption"),

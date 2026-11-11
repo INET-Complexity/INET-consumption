@@ -290,6 +290,27 @@ BALANCE_SHEET_COLUMNS = (
     "bank_balance_sheet_identity_residual_proxy",
 )
 
+# Housing prices, rental flows, and mortgage-market activity. HPI is the
+# model's only aggregate house-price index; no separate RPI series is emitted.
+HOUSING_COLUMNS = (
+    "hpi",
+    "hpi_inflation",
+    "estimated_hpi_inflation",
+    "total_real_rent_paid",
+    "total_imp_rent_paid",
+    "total_real_rent_rec",
+    "total_number_of_bought_houses",
+    "total_number_of_newly_rented_houses",
+    "total_number_of_houses_rented",
+    "total_number_of_houses_owner_occupied",
+    "total_number_of_houses_unoccupied",
+    "mortgages_to_households",
+    "mortgage_borrowing_rate",
+    "household_credit_demand_mortgage",
+    "household_credit_received_mortgage",
+    "new_credit_granted_mortgages",
+)
+
 
 # Human-readable names for plots and shared result tables. Machine-readable
 # dataframe columns retain their original keys.
@@ -352,6 +373,19 @@ _SERIES_LABEL_OVERRIDES = {
     "household_credit_received_consumption": "Household consumption-credit received",
     "household_credit_demand_mortgage": "Household mortgage-credit demand",
     "household_credit_received_mortgage": "Household mortgage-credit received",
+    "hpi": "House price index (HPI)",
+    "hpi_inflation": "House price index growth (per period)",
+    "estimated_hpi_inflation": "Expected house price index growth (per period)",
+    "total_real_rent_paid": "Rent paid (total, nominal LCU)",
+    "total_imp_rent_paid": "Imputed rent (total, nominal LCU)",
+    "total_real_rent_rec": "Rental income received (total, nominal LCU)",
+    "mortgages_to_households": "Mortgage debt (stock, nominal LCU)",
+    "new_credit_granted_mortgages": "New mortgages granted (flow, nominal LCU)",
+    "total_number_of_bought_houses": "Homes purchased (completed sales)",
+    "total_number_of_newly_rented_houses": "New rental agreements",
+    "total_number_of_houses_rented": "Rented homes (stock)",
+    "total_number_of_houses_owner_occupied": "Owner-occupied homes (stock)",
+    "total_number_of_houses_unoccupied": "Unoccupied homes (stock)",
     "inventory": "Firm inventories (quantity)",
     "profits": "Firm profits",
     "wages": "Wage bill",

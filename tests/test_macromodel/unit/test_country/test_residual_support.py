@@ -65,6 +65,8 @@ def test_final_support_uses_actual_receipts_and_posts_once(
         (dict(receipt=100.0, housing=dict(price=50.0, mortgage=30.0, lfa=20.0, purchase_sale=0.0)), 0.0),
         # VAT: the floor is gross-of-VAT cash, realised goods are VAT-exclusive.
         (dict(receipt=50.0, floor=110.0, vat=0.2), 60.0),
+        # Overdrawn liquid assets count as zero: the overdraft does not raise support.
+        (dict(receipt=50.0, floor=60.0, housing=dict(price=0.0, mortgage=0.0, lfa=-30.0, purchase_sale=0.0)), 10.0),
     ],
 )
 def test_final_support_covers_the_goods_floor_and_cash_rent_only(case, expected_support):

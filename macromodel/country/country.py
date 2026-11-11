@@ -665,7 +665,8 @@ class Country:
         # mortgage, own sale proceeds, the purchase sale and the liquid assets
         # D, so support never finances it. A seller's surplus is a resource.
         resources = income_without_support + forced_liquidation_cash(hh.post_grant_feasible_plan)
-        resources += hh.ts.current("liquid_financial_assets") - hh.current_housing_lfa_draw()
+        # max(LFA - D, 0), as in the settlement: an overdraft is not a claim on support.
+        resources += np.maximum(hh.ts.current("liquid_financial_assets") - hh.current_housing_lfa_draw(), 0.0)
         resources += hh.ts.current("received_consumption_loans")
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):

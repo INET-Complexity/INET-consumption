@@ -523,7 +523,9 @@ FRA:
       policy_rate:
         name: SmoothTaylorRule
         path_name: policy_rate
-        parameters: {}
+        # lower_bound: floor on the annual policy rate; null removes it.
+        parameters:
+          lower_bound: 0.0
     # Overrides for the ARDL-estimated SmoothTaylorRule coefficients (estimated in
     # DefaultSyntheticCentralBank._estimate_smooth_taylor_rule from historical
     # BIS policy-rate, CPI, and output-gap data). Leave a field null to keep the
@@ -547,6 +549,8 @@ FRA:
         path_name: demography
         parameters:
           solvency_ratio: 0.05
+          # Weight of reserves in the assets of the ratio: 0 = loans only.
+          reserve_weight: 0.0
       interest_rates:
         name: MarkUpInterestRatesSetter
         path_name: interest_rates

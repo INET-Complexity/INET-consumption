@@ -14,6 +14,7 @@ The policy rate setting considers:
 - Monetary policy parameters
 """
 
+import math
 from abc import ABC, abstractmethod
 
 
@@ -189,6 +190,19 @@ class SmoothTaylorRule(PolicyRate):
       annual policy rate is converted to the simulation frequency using `time_unit`.
     """
 
+    def __init__(self, lower_bound: float | None = None):
+        """Initialize the rule.
+
+        Args:
+            lower_bound (float | None): Lower bound on the annual policy rate.
+                The bound applies to the stored rate, so the smoothing term
+                uses the bounded rate (no shadow rate). None keeps the rule
+                unbounded below, apart from the numerical guard of -1 per period.
+        """
+        if lower_bound is not None and not math.isfinite(lower_bound):
+            raise ValueError("lower_bound must be finite or None.")
+        self.lower_bound = lower_bound
+
     @staticmethod
     def _periods_per_year(time_unit: int) -> int:
         """Convert the model time unit in months to integer periods per year."""
@@ -231,4 +245,6 @@ class SmoothTaylorRule(PolicyRate):
             )
             + shock
         )
+        if self.lower_bound is not None:
+            annual_rate = max(annual_rate, self.lower_bound)
         return min(max(-1.0, annual_rate / periods_per_year), 1)

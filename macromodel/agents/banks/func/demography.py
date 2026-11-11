@@ -40,13 +40,20 @@ class BankDemography(ABC):
         solvency_ratio (float): Minimum required equity to assets ratio
     """
 
-    def __init__(self, solvency_ratio: float):
+    def __init__(self, solvency_ratio: float, reserve_weight: float = 1.0):
         """Initialize bank demography manager.
 
         Args:
             solvency_ratio (float): Minimum required equity to assets ratio
+            reserve_weight (float): Weight of reserves (the bank series
+                ``deposits``) in the assets of the ratio. 1 counts them in
+                full; 0 counts loans only, as a risk-weighted ratio does for
+                central-bank reserves.
         """
+        if not 0.0 <= reserve_weight <= 1.0:
+            raise ValueError("reserve_weight must lie in [0, 1].")
         self.solvency_ratio = solvency_ratio
+        self.reserve_weight = reserve_weight
 
     @abstractmethod
     def handle_bank_insolvency(
@@ -141,15 +148,11 @@ class DefaultBankDemography(BankDemography):
             Tuple[float, float]: (Total equity injection needed,
                 Average equity of solvent banks)
         """
-        insolvent_banks = (
-            np.divide(
-                current_bank_equity,
-                current_bank_loans + current_bank_deposits,
-                out=np.zeros(current_bank_equity.shape),
-                where=current_bank_loans + current_bank_deposits != 0.0,
-            )
-            < self.solvency_ratio
-        )
+        # Equity below the required share of weighted assets. Written as a
+        # product so that a bank without weighted assets is insolvent only
+        # when its equity is negative.
+        weighted_assets = np.maximum(current_bank_loans + self.reserve_weight * current_bank_deposits, 0.0)
+        insolvent_banks = current_bank_equity < self.solvency_ratio * weighted_assets
         is_insolvent[insolvent_banks] = True
 
         # Compute average equity of non-insolvent banks

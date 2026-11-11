@@ -294,11 +294,11 @@ BALANCE_SHEET_COLUMNS = (
 # model's only aggregate house-price index; no separate RPI series is emitted.
 HOUSING_COLUMNS = (
     "hpi",
-    "hpi_inflation",
-    "estimated_hpi_inflation",
+    # "hpi_inflation",
+    # "estimated_hpi_inflation",
     "total_real_rent_paid",
-    "total_imp_rent_paid",
     "total_real_rent_rec",
+    "total_imp_rent_paid",
     "total_number_of_bought_houses",
     "total_number_of_newly_rented_houses",
     "total_number_of_houses_rented",

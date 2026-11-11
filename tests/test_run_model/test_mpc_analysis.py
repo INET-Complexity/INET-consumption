@@ -592,3 +592,72 @@ def test_build_household_mpc_panel_requires_complete_household_ids(tmp_path):
             shock_row=1,
             horizon_periods=1,
         )
+
+
+def _window_inputs(tmp_path):
+    rng = np.random.default_rng(0)
+    paths, metadata = (
+        {},
+        pd.DataFrame(
+            {
+                "seed": [1, 1, 1],
+                "household_id": [0, 1, 2],
+                "income": [100.0, 300.0, 200.0],
+                "net_wealth": [0.0, 10.0, 5.0],
+                "net_liquid_financial_assets": [0.0, 5.0, 1.0],
+                "illiquid_financial_assets": [0.0, 8.0, 2.0],
+                "housing_wealth": [0.0, 50.0, 3.0],
+                "housing_tenure": ["renter", "owner_mortgage", "renter"],
+            }
+        ),
+    )
+    base = rng.uniform(10.0, 20.0, size=(7, 3))
+    cpi = {"baseline": 1.0 + 0.01 * np.arange(7), "shock": 1.0 + 0.012 * np.arange(7)}
+    for arm, bump in (("baseline", 0.0), ("shock", 1.5)):
+        consumption = base + bump * rng.uniform(size=(7, 3))
+        target = np.repeat(consumption[:, :, None] / 2.0, 2, axis=2)
+        paths[arm] = tmp_path / f"{arm}.h5"
+        _write_household_h5(
+            paths[arm], country_code="FRA", consumption=consumption, target_consumption=target, cpi=cpi[arm]
+        )
+        with h5py.File(paths[arm], "a") as handle:
+            handle.create_dataset("FRA/households/income", data=consumption * 3.0)
+    return paths, metadata
+
+
+def test_mpc_panel_from_window_files_is_identical_to_panel_from_full_h5(tmp_path):
+    from src.mpc_analysis import extract_mpc_window, write_mpc_window
+
+    paths, metadata = _window_inputs(tmp_path)
+    kwargs = {"country_code": "FRA", "shock_row": 2, "horizon_periods": 4, "shock_fraction": 0.05}
+    from_h5 = build_household_mpc_panel(
+        baseline_h5=paths["baseline"], shock_h5=paths["shock"], metadata=metadata, **kwargs
+    )
+
+    windows = {
+        arm: write_mpc_window(
+            tmp_path / f"{arm}.npz",
+            extract_mpc_window(paths[arm], "FRA", shock_row=2, horizon_periods=4, cpi_source="cpi_fixed_basket"),
+        )
+        for arm in paths
+    }
+    from_npz = build_household_mpc_panel(
+        baseline_h5=windows["baseline"], shock_h5=windows["shock"], metadata=metadata, **kwargs
+    )
+
+    pd.testing.assert_frame_equal(from_h5, from_npz, check_exact=True)
+    assert np.load(windows["baseline"])["consumption"].shape == (4, 3)
+
+
+def test_mpc_window_file_rejects_mismatched_shock_row(tmp_path):
+    from src.mpc_analysis import extract_mpc_window, load_mpc_window, write_mpc_window
+
+    paths, _ = _window_inputs(tmp_path)
+    saved = write_mpc_window(
+        tmp_path / "w.npz", extract_mpc_window(paths["baseline"], "FRA", shock_row=2, horizon_periods=4)
+    )
+
+    with pytest.raises(ValueError, match="was saved for"):
+        load_mpc_window(saved, country_code="FRA", shock_row=3, horizon_periods=4)
+    with pytest.raises(ValueError, match="extends beyond available HDF5 rows"):
+        extract_mpc_window(paths["baseline"], "FRA", shock_row=5, horizon_periods=4)

@@ -260,3 +260,55 @@ def test_plot_irfs_can_plot_percent_deviations():
 
     assert list(fig.data[0].y) == pytest.approx([0.02])
     assert fig.layout.yaxis.title.text == "Percent deviation"
+
+
+def test_build_irf_panel_from_saved_series_matches_h5_panel(tmp_path):
+    from src.irf_analysis import build_irf_panel_from_series, extract_irf_series, write_irf_series
+
+    baseline = tmp_path / "baseline.h5"
+    shock = tmp_path / "shock.h5"
+    _write_default_irf_h5(baseline, baseline=True)
+    _write_default_irf_h5(shock, baseline=False)
+    kwargs = {
+        "seed": 12,
+        "shock_name": "test",
+        "shock_kind": "policy_rate",
+        "shock_period": 1,
+        "shock_magnitude": 0.01,
+        "horizon_periods": 2,
+    }
+    from_h5 = build_irf_panel(baseline_h5=baseline, shock_h5=shock, country_code="FRA", **kwargs)
+
+    paths = {}
+    for name, h5_path in (("baseline", baseline), ("shock", shock)):
+        series, missing = extract_irf_series(h5_path, country_code="FRA", variables=DEFAULT_IRF_VARIABLES)
+        assert not missing
+        paths[name] = write_irf_series(tmp_path / f"{name}.npz", series)
+    from_npz = build_irf_panel_from_series(baseline_npz=paths["baseline"], shock_npz=paths["shock"], **kwargs)
+
+    pd.testing.assert_frame_equal(from_h5, from_npz)
+
+
+def test_build_irf_panel_from_series_strict_raises_on_missing_variable(tmp_path):
+    from src.irf_analysis import build_irf_panel_from_series, extract_irf_series, write_irf_series
+
+    baseline = tmp_path / "baseline.h5"
+    shock = tmp_path / "shock.h5"
+    _write_default_irf_h5(baseline, baseline=True, omitted_variable="gdp_income")
+    _write_default_irf_h5(shock, baseline=False)
+    npz = {}
+    for name, h5_path in (("baseline", baseline), ("shock", shock)):
+        series, _ = extract_irf_series(h5_path, country_code="FRA", variables=DEFAULT_IRF_VARIABLES)
+        npz[name] = write_irf_series(tmp_path / f"{name}.npz", series)
+
+    with pytest.raises(ValueError, match="gdp_income"):
+        build_irf_panel_from_series(
+            baseline_npz=npz["baseline"],
+            shock_npz=npz["shock"],
+            seed=12,
+            shock_name="test",
+            shock_kind="policy_rate",
+            shock_period=1,
+            shock_magnitude=0.01,
+            horizon_periods=2,
+        )

@@ -435,3 +435,73 @@ def test_run_mpc_experiment_rejects_tolerance_with_a_row_dropping_filter(tmp_pat
             output_dir=tmp_path,
             labor_income_tolerance=-0.1,
         )
+
+
+@pytest.mark.parametrize("keep_full_h5", [False, True])
+def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monkeypatch, keep_full_h5):
+    import h5py
+    import numpy as np
+
+    class FakeCountry:
+        pass
+
+    class FakeModel:
+        def __init__(self):
+            self.posthooks = []
+            self.prehooks = []
+            self.countries = {"FRA": FakeCountry()}
+
+        def run(self):
+            for t in range(4):
+                for hook in self.posthooks:
+                    hook(self, t, 2014, 1)
+
+        def save(self, save_dir, file_name):
+            with h5py.File(Path(save_dir) / file_name, "w") as handle:
+                handle.create_dataset("FRA/households/consumption", data=np.ones((5, 2)))
+                handle.create_dataset("FRA/economy/cpi_fixed_basket", data=np.ones((5, 1)))
+                handle.create_dataset("FRA/households/target_consumption", data=np.ones((5, 2)))
+                handle.create_dataset("FRA/households/target_consumption_columns", data=np.array([[0, 0], [1, 0]]))
+
+    monkeypatch.setattr(
+        mpc_runner.SimulationConfiguration, "model_validate", staticmethod(lambda payload: SimpleNamespace())
+    )
+    monkeypatch.setattr(mpc_runner.Simulation, "from_datawrapper", staticmethod(lambda **kwargs: FakeModel()))
+    monkeypatch.setattr(
+        mpc_runner,
+        "make_household_metadata",
+        lambda country, seed, pre_shock_row: pd.DataFrame({"household_id": [0, 1]}),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "make_household_labor_state_snapshot",
+        lambda country: {name: np.zeros(2) for name in mpc_runner.HOUSEHOLD_LABOR_STATE_COLUMNS},
+    )
+    seed_dir = tmp_path / "baseline" / "seed-1"
+    seed_dir.mkdir(parents=True)
+    stale = seed_dir / "multi_country_simulation.h5"
+    stale.write_bytes(b"previous full run")
+
+    mpc_runner._run_one(
+        data=SimpleNamespace(configuration=SimpleNamespace(year=2014), time_unit=3),
+        country_configurations={},
+        country_code="FRA",
+        seed=1,
+        t_max=4,
+        output_dir=tmp_path / "baseline",
+        shock=False,
+        shock_period=1,
+        shock_fraction=0.01,
+        horizon_periods=2,
+        keep_full_h5=keep_full_h5,
+    )
+
+    window = np.load(seed_dir / "mpc_window.npz")
+    assert window["consumption"].shape == (2, 2)
+    assert int(window["shock_row"]) == 2
+    assert not list(seed_dir.glob(".scratch-*"))
+    if keep_full_h5:
+        with h5py.File(stale, "r") as handle:
+            assert "FRA/households/consumption" in handle
+    else:
+        assert stale.read_bytes() == b"previous full run"  # fixed-path file is never touched

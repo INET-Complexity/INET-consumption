@@ -411,6 +411,92 @@ def summarize_mpc_regimes(
     return pd.DataFrame(rows)
 
 
+MPC_WINDOW_OUTCOMES = ("cash", "total", "behavioural_total_target", "imputed_rent", "target_consumption_total_mpc")
+_MPC_WINDOW_META = ("shock_row", "horizon_periods", "cpi_source")
+
+
+def extract_mpc_window(
+    h5_path: str | Path,
+    country_code: str,
+    *,
+    shock_row: int,
+    horizon_periods: int,
+    cpi_source: str = "cpi_fixed_basket",
+) -> dict[str, np.ndarray]:
+    """Read everything the household MPC panel needs from one saved simulation.
+
+    Per-household series are cut to HDF5 rows ``shock_row .. shock_row + horizon_periods - 1``
+    (the measurement window). CPI is validated over the full series and then cut the same way.
+    The regime inputs are read at ``shock_row`` only. Uses the same readers as the full-file path.
+    """
+    stop = shock_row + horizon_periods
+
+    def window(values: np.ndarray) -> np.ndarray:
+        if values.shape[0] < stop:
+            raise ValueError("Requested MPC horizon extends beyond available HDF5 rows.")
+        return np.asarray(values[shock_row:stop], dtype=float)
+
+    out: dict[str, np.ndarray] = {
+        "shock_row": np.asarray(shock_row),
+        "horizon_periods": np.asarray(horizon_periods),
+        "cpi_source": np.asarray(cpi_source),
+        "consumption": window(read_household_consumption(h5_path, country_code)),
+        "cpi": window(read_cpi(h5_path, country_code, cpi_source=cpi_source)),
+        "target": window(read_household_target_consumption_sum(h5_path, country_code)),
+    }
+    income = read_household_income(h5_path, country_code)
+    if income is not None:
+        out["income"] = window(income)
+    for name, values in read_household_consumption_outcomes(h5_path, country_code).items():
+        out[f"outcome_{name}"] = window(values)
+    regime_inputs = read_household_regime_inputs(h5_path, country_code, row=shock_row)
+    if regime_inputs is not None:
+        for name, values in regime_inputs.items():
+            out[f"regime_{name}"] = values
+    return out
+
+
+def write_mpc_window(path: str | Path, window: dict[str, np.ndarray]) -> Path:
+    """Persist an MPC window as a compressed ``.npz``."""
+    path = Path(path)
+    np.savez_compressed(path, **window)
+    return path
+
+
+def load_mpc_window(
+    path: str | Path,
+    *,
+    country_code: str,
+    shock_row: int,
+    horizon_periods: int,
+    cpi_source: str = "cpi_fixed_basket",
+) -> dict[str, np.ndarray]:
+    """Load an MPC window from a ``.npz`` window file, or extract it from a full HDF5."""
+    path = Path(path)
+    if path.suffix != ".npz":
+        return extract_mpc_window(
+            path, country_code, shock_row=shock_row, horizon_periods=horizon_periods, cpi_source=cpi_source
+        )
+    with np.load(path) as archive:
+        window = {name: np.asarray(archive[name]) for name in archive.files}
+    saved = (int(window["shock_row"]), int(window["horizon_periods"]), str(window["cpi_source"]))
+    if saved != (shock_row, horizon_periods, cpi_source):
+        raise ValueError(
+            f"{path} was saved for (shock_row, horizon_periods, cpi_source)={saved}; "
+            f"requested {(shock_row, horizon_periods, cpi_source)}."
+        )
+    return window
+
+
+def _window_outcomes(window: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {name: window[f"outcome_{name}"] for name in MPC_WINDOW_OUTCOMES}
+
+
+def _window_regime_inputs(window: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
+    inputs = {name[len("regime_") :]: values for name, values in window.items() if name.startswith("regime_")}
+    return inputs or None
+
+
 def build_household_mpc_panel(
     *,
     baseline_h5: str | Path,
@@ -426,7 +512,10 @@ def build_household_mpc_panel(
     real_cumulative_mpc_column: str = "real_cmpc_4q",
     target_real_cumulative_mpc_column: str = "target_real_cmpc_4q",
 ) -> pd.DataFrame:
-    """Build a household-level MPC panel from paired baseline and shock HDF5s.
+    """Build a household-level MPC panel from paired baseline and shock runs.
+
+    ``baseline_h5``/``shock_h5`` are either full simulation HDF5 files or the
+    per-run window files written by :func:`write_mpc_window`; both give the same panel.
 
     The returned panel preserves pre-shock household characteristics and adds:
     impact realised MPC, cumulative realised MPC, and target-consumption
@@ -443,12 +532,23 @@ def build_household_mpc_panel(
 
     shock_amount = compute_shock_amount(panel, shock_fraction)
 
-    baseline_consumption = read_household_consumption(baseline_h5, country_code)
-    shock_consumption = read_household_consumption(shock_h5, country_code)
-    baseline_income = read_household_income(baseline_h5, country_code)
-    shock_income = read_household_income(shock_h5, country_code)
-    baseline_cpi = read_cpi(baseline_h5, country_code, cpi_source=cpi_source)
-    shock_cpi = read_cpi(shock_h5, country_code, cpi_source=cpi_source)
+    window_kwargs = {
+        "country_code": country_code,
+        "shock_row": shock_row,
+        "horizon_periods": horizon_periods,
+        "cpi_source": cpi_source,
+    }
+    baseline_window = load_mpc_window(baseline_h5, **window_kwargs)
+    shock_window = load_mpc_window(shock_h5, **window_kwargs)
+    # Windows hold HDF5 rows shock_row .. shock_row + horizon_periods - 1, so the shock row is row 0.
+    shock_row = 0
+
+    baseline_consumption = baseline_window["consumption"]
+    shock_consumption = shock_window["consumption"]
+    baseline_income = baseline_window.get("income")
+    shock_income = shock_window.get("income")
+    baseline_cpi = baseline_window["cpi"]
+    shock_cpi = shock_window["cpi"]
     impact, cumulative = _delta_at_and_cumulative(
         baseline_consumption,
         shock_consumption,
@@ -462,8 +562,8 @@ def build_household_mpc_panel(
         horizon_periods=horizon_periods,
     )
 
-    baseline_target = read_household_target_consumption_sum(baseline_h5, country_code)
-    shock_target = read_household_target_consumption_sum(shock_h5, country_code)
+    baseline_target = baseline_window["target"]
+    shock_target = shock_window["target"]
     target_impact, target_cumulative = _delta_at_and_cumulative(
         baseline_target,
         shock_target,
@@ -484,7 +584,7 @@ def build_household_mpc_panel(
     panel["real_shock_amount"] = real_shock_amount
     panel["baseline_consumption_impact"] = baseline_consumption[shock_row]
     panel["shock_consumption_impact"] = shock_consumption[shock_row]
-    panel["baseline_consumption_cumulative"] = baseline_consumption[shock_row : shock_row + horizon_periods].sum(axis=0)
+    panel["baseline_consumption_cumulative"] = baseline_consumption.sum(axis=0)
     panel["baseline_consumption_to_income"] = np.divide(
         panel["baseline_consumption_impact"],
         panel["income"],
@@ -545,8 +645,8 @@ def build_household_mpc_panel(
         panel[f"target_cmpc_{suffix}"] = target_horizon / shock_amount
         panel[f"real_cmpc_{suffix}"] = real_horizon / real_shock_amount
         panel[f"target_real_cmpc_{suffix}"] = target_real_horizon / real_shock_amount
-    baseline_outcomes = read_household_consumption_outcomes(baseline_h5, country_code)
-    shock_outcomes = read_household_consumption_outcomes(shock_h5, country_code)
+    baseline_outcomes = _window_outcomes(baseline_window)
+    shock_outcomes = _window_outcomes(shock_window)
     additions = {}
     for name in ("cash", "total", "behavioural_total_target", "imputed_rent"):
         base = baseline_outcomes[name]
@@ -571,7 +671,7 @@ def build_household_mpc_panel(
                 additions[f"{name}_{measure}cmpc_{suffix}"] = cumulative_value / denominator
     for arm, outcomes in (("baseline", baseline_outcomes), ("shock", shock_outcomes)):
         additions[f"{arm}_target_consumption_total_mpc"] = outcomes["target_consumption_total_mpc"][shock_row]
-    regime_inputs = read_household_regime_inputs(baseline_h5, country_code, row=shock_row)
+    regime_inputs = _window_regime_inputs(baseline_window)
     if regime_inputs is None:
         additions["mpc_regime"] = np.full(len(panel), MPC_REGIME_UNKNOWN, dtype=object)
     else:

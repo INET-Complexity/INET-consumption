@@ -181,3 +181,47 @@ def test_apply_firm_loan_dscr_override_changes_only_requested_flag():
 
     irf_runner._apply_firm_loan_dscr_override(configurations, "FRA", None)
     assert country_cfg.banks.parameters.enable_firm_loans_dscr_restriction is False
+
+
+@pytest.mark.parametrize("keep_full_h5", [False, True])
+def test_run_one_writes_aggregates_and_only_keeps_full_h5_on_request(tmp_path, monkeypatch, keep_full_h5):
+    from src import irf_analysis
+    from src.experiments import irf as irf_module
+
+    class FakeModel:
+        prehooks: list = []
+
+        def run(self):
+            pass
+
+        def save(self, save_dir, file_name):
+            _write_irf_smoke_h5(Path(save_dir) / file_name)
+
+    monkeypatch.setattr(irf_module, "_build_simulation", lambda **kwargs: FakeModel())
+    seed_dir = tmp_path / "arm" / "seed-12"
+    seed_dir.mkdir(parents=True)
+    stale = seed_dir / "multi_country_simulation.h5"
+    stale.write_bytes(b"previous full run")
+
+    result = irf_module._run_one(
+        data=SimpleNamespace(configuration=SimpleNamespace(year=2014)),
+        country_configurations={},
+        country_code="FRA",
+        seed=12,
+        t_max=3,
+        output_dir=tmp_path / "arm",
+        shock_spec=None,
+        keep_full_h5=keep_full_h5,
+    )
+
+    npz = seed_dir / "irf_aggregates.npz"
+    series = irf_analysis.read_irf_series(npz)
+    assert series["household_consumption"].tolist() == [100.0] * 4
+    assert not list(seed_dir.glob(".scratch-*"))
+    if keep_full_h5:
+        assert result == stale
+        with h5py.File(stale, "r") as handle:
+            assert "FRA/households/consumption" in handle
+    else:
+        assert result == npz
+        assert stale.read_bytes() == b"previous full run"  # fixed-path file is never touched

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +30,7 @@ from src.mpc_analysis import (  # noqa: E402
     MPCFilterConfig,
     add_mpc_bins,
     build_household_mpc_panel,
+    extract_mpc_window,
     filter_mpc_panel,
     labor_income_gap_share,
     make_household_labor_state_snapshot,
@@ -36,6 +38,7 @@ from src.mpc_analysis import (  # noqa: E402
     period_to_year_month,
     summarize_mpc_bins,
     summarize_mpc_regimes,
+    write_mpc_window,
 )
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
@@ -51,6 +54,8 @@ DEFAULT_SHOCK_PERIOD = 20
 DEFAULT_HORIZON_PERIODS = 4
 DEFAULT_SHOCK_FRACTION = 0.01
 STATE_BIN_ROUND_DECIMALS = 8
+FULL_H5_NAME = "multi_country_simulation.h5"
+WINDOW_NAME = "mpc_window.npz"
 
 
 def _resolve_run_model_path(path: str | Path) -> Path:
@@ -137,8 +142,15 @@ def _run_one(
     horizon_periods: int,
     data_paths: DataPaths | None = None,
     shock_exempt_from_support: bool = False,
+    cpi_source: str = "cpi_fixed_basket",
+    keep_full_h5: bool = False,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
+
+    The household series the MPC panel needs (measurement-window rows only) are
+    always written to ``mpc_window.npz`` in the seed directory. The full per-agent
+    HDF5 is written to ``multi_country_simulation.h5`` only with ``keep_full_h5``;
+    otherwise it exists transiently in a temporary directory.
 
     ``shock_period`` is a zero-based simulation iteration. Since HDF5 row ``0``
     is the initial state, metadata for binning is captured at HDF5 row
@@ -221,7 +233,16 @@ def _run_one(
 
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
-    model.save(save_dir=seed_dir, file_name="multi_country_simulation.h5")
+    window_kwargs = {"shock_row": pre_shock_row + 1, "horizon_periods": horizon_periods, "cpi_source": cpi_source}
+    if keep_full_h5:
+        model.save(save_dir=seed_dir, file_name=FULL_H5_NAME)
+        window = extract_mpc_window(seed_dir / FULL_H5_NAME, country_code, **window_kwargs)
+    else:
+        # Scratch HDF5 lives in its own temp dir so an existing full file at the fixed path is never touched.
+        with tempfile.TemporaryDirectory(dir=seed_dir, prefix=".scratch-") as scratch:
+            model.save(save_dir=scratch, file_name=FULL_H5_NAME)
+            window = extract_mpc_window(Path(scratch) / FULL_H5_NAME, country_code, **window_kwargs)
+    write_mpc_window(seed_dir / WINDOW_NAME, window)
     return result
 
 
@@ -239,6 +260,8 @@ def _run_seed_pair(
     horizon_periods: int,
     data_paths: DataPaths | None = None,
     shock_exempt_from_support: bool = False,
+    cpi_source: str = "cpi_fixed_basket",
+    keep_full_h5: bool = False,
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed.
 
@@ -260,6 +283,8 @@ def _run_seed_pair(
         horizon_periods=horizon_periods,
         data_paths=data_paths,
         shock_exempt_from_support=shock_exempt_from_support,
+        cpi_source=cpi_source,
+        keep_full_h5=keep_full_h5,
     )
     shock_metadata = _run_one(
         data=data,
@@ -274,6 +299,8 @@ def _run_seed_pair(
         horizon_periods=horizon_periods,
         data_paths=data_paths,
         shock_exempt_from_support=shock_exempt_from_support,
+        cpi_source=cpi_source,
+        keep_full_h5=keep_full_h5,
     )
     shock_state_columns = [
         column
@@ -440,8 +467,13 @@ def run_mpc_experiment(
     activity_bracket_prefix: str = "activity_bracket_",
     labor_income_tolerance: float | None = None,
     shock_exempt_from_support: bool = False,
+    keep_full_h5: bool = False,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
+
+    Per arm and seed only the measurement-window household series are persisted
+    (``mpc_window.npz``). ``keep_full_h5=True`` also keeps the full per-agent HDF5
+    for debugging, and the panel is then built straight from it.
 
     ``n_jobs`` controls seed-level parallelism. Each job runs one baseline and
     one shock simulation for a seed, so ``n_jobs=1`` is serial and values above
@@ -512,6 +544,8 @@ def run_mpc_experiment(
             horizon_periods=horizon_periods,
             data_paths=data_paths,
             shock_exempt_from_support=shock_exempt_from_support,
+            cpi_source=cpi_source,
+            keep_full_h5=keep_full_h5,
         )
         for seed in seed_list
     )
@@ -530,12 +564,13 @@ def run_mpc_experiment(
         [plotted_mpc_column] if mpc_plot_measure is not None else [real_cumulative_mpc_column, cumulative_mpc_column]
     )
 
+    run_file = FULL_H5_NAME if keep_full_h5 else WINDOW_NAME
     panels = []
     for seed in seed_list:
         seed_metadata = metadata.loc[metadata["seed"] == int(seed)].copy()
         panel = build_household_mpc_panel(
-            baseline_h5=baseline_dir / f"seed-{int(seed)}" / "multi_country_simulation.h5",
-            shock_h5=shock_dir / f"seed-{int(seed)}" / "multi_country_simulation.h5",
+            baseline_h5=baseline_dir / f"seed-{int(seed)}" / run_file,
+            shock_h5=shock_dir / f"seed-{int(seed)}" / run_file,
             metadata=seed_metadata,
             country_code=country_code,
             shock_row=shock_row,
@@ -673,6 +708,11 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--keep-full-h5",
+        action="store_true",
+        help="Also keep the full per-agent HDF5 of every run (debugging; ~1 GB per run). Default: window file only.",
+    )
+    parser.add_argument(
         "--activity-bracket-prefix",
         default="activity_bracket_",
         help="Column prefix used to identify period-by-period activity bracket indicators in the MPC panel.",
@@ -713,6 +753,7 @@ def main() -> None:
         activity_bracket_prefix=parsed.activity_bracket_prefix,
         labor_income_tolerance=parsed.labor_income_tolerance,
         shock_exempt_from_support=parsed.shock_exempt_from_support,
+        keep_full_h5=parsed.keep_full_h5,
     )
     print(
         {

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import pandas as pd
@@ -22,15 +23,13 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
         sys.path.insert(0, path)
 
 from src.irf_analysis import (  # noqa: E402
-    DEFAULT_IRF_VARIABLES,
-    FIRM_LOAN_RATE_IRF_VARIABLE,
-    FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE,
-    GFCF_INTENSITY_IRF_VARIABLE,
-    IRF_CHANNEL_VARIABLES,
-    TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
+    ALL_IRF_VARIABLES,
     build_irf_panel,
+    build_irf_panel_from_series,
+    extract_irf_series,
     summarize_irf_panel,
     write_irf_plots,
+    write_irf_series,
 )
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
@@ -43,6 +42,8 @@ from macromodel.utils.prehooks.irf_shocks import ShockSpec, create_irf_shock_hoo
 DEFAULT_SEEDS = [12, 13, 14]
 DEFAULT_T_MAX = 50
 DEFAULT_HORIZON_PERIODS = 12
+FULL_H5_NAME = "multi_country_simulation.h5"
+AGGREGATES_NAME = "irf_aggregates.npz"
 
 
 def _validate_unique_seeds(seeds: list[int]) -> list[int]:
@@ -124,7 +125,15 @@ def _run_one(
     output_dir: Path,
     shock_spec: ShockSpec | None,
     data_paths: DataPaths | None = None,
+    keep_full_h5: bool = False,
 ) -> Path:
+    """Run one arm and return the file the analysis stage reads.
+
+    The aggregate IRF series are always written to ``irf_aggregates.npz`` in the seed
+    directory. By default that ``.npz`` is returned and the per-agent HDF5 only
+    exists transiently in a temporary directory. With ``keep_full_h5`` the full
+    HDF5 is written to ``multi_country_simulation.h5`` and returned instead.
+    """
     model = _build_simulation(
         data=data,
         country_configurations=country_configurations,
@@ -144,8 +153,16 @@ def _run_one(
     model.run()
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
-    model.save(save_dir=seed_dir, file_name="multi_country_simulation.h5")
-    return seed_dir / "multi_country_simulation.h5"
+    if keep_full_h5:
+        model.save(save_dir=seed_dir, file_name=FULL_H5_NAME)
+        series, _missing = extract_irf_series(seed_dir / FULL_H5_NAME, country_code=country_code)
+        write_irf_series(seed_dir / AGGREGATES_NAME, series)
+        return seed_dir / FULL_H5_NAME
+    # Scratch HDF5 lives in its own temp dir so an existing full file at the fixed path is never touched.
+    with tempfile.TemporaryDirectory(dir=seed_dir, prefix=".scratch-") as scratch:
+        model.save(save_dir=scratch, file_name=FULL_H5_NAME)
+        series, _missing = extract_irf_series(Path(scratch) / FULL_H5_NAME, country_code=country_code)
+    return write_irf_series(seed_dir / AGGREGATES_NAME, series)
 
 
 def _run_seed(
@@ -159,8 +176,9 @@ def _run_seed(
     shocks_dir: Path,
     shock_specs: tuple[ShockSpec, ...],
     data_paths: DataPaths | None = None,
+    keep_full_h5: bool = False,
 ) -> list[dict[str, object]]:
-    baseline_h5 = _run_one(
+    baseline_output = _run_one(
         data=data,
         country_configurations=country_configurations,
         country_code=country_code,
@@ -169,10 +187,11 @@ def _run_seed(
         output_dir=baseline_dir,
         shock_spec=None,
         data_paths=data_paths,
+        keep_full_h5=keep_full_h5,
     )
     rows: list[dict[str, object]] = []
     for spec in shock_specs:
-        shock_h5 = _run_one(
+        shock_output = _run_one(
             data=data,
             country_configurations=country_configurations,
             country_code=country_code,
@@ -181,6 +200,7 @@ def _run_seed(
             output_dir=shocks_dir / spec.name,
             shock_spec=spec,
             data_paths=data_paths,
+            keep_full_h5=keep_full_h5,
         )
         rows.append(
             {
@@ -191,11 +211,30 @@ def _run_seed(
                 "shock_magnitude": spec.magnitude,
                 "shock_duration": spec.duration,
                 "shock_mode": spec.mode,
-                "baseline_h5": baseline_h5,
-                "shock_h5": shock_h5,
+                "baseline_output": baseline_output,
+                "shock_output": shock_output,
             }
         )
     return rows
+
+
+def _build_panel(row: dict[str, object], spec: ShockSpec, *, horizon_periods: int, country_code: str) -> pd.DataFrame:
+    """Build one (seed, shock) panel from the saved aggregates, or from the full HDF5 if that was kept."""
+    common = {
+        "seed": int(row["seed"]),
+        "shock_name": spec.name,
+        "shock_kind": spec.kind,
+        "shock_period": spec.period + 1,
+        "shock_magnitude": spec.magnitude,
+        "shock_duration": spec.duration,
+        "shock_mode": spec.mode,
+        "horizon_periods": horizon_periods,
+        "variables": ALL_IRF_VARIABLES,
+    }
+    baseline, shock = Path(row["baseline_output"]), Path(row["shock_output"])
+    if baseline.suffix == ".npz":
+        return build_irf_panel_from_series(baseline_npz=baseline, shock_npz=shock, **common)
+    return build_irf_panel(baseline_h5=baseline, shock_h5=shock, country_code=country_code, **common)
 
 
 def _shock_specs_frame(shock_specs: tuple[ShockSpec, ...]) -> pd.DataFrame:
@@ -231,8 +270,13 @@ def run_irf_experiment(
     verbose: int = 0,
     batch_size: int = 1,
     firm_loan_dscr: bool | None = None,
+    keep_full_h5: bool = False,
 ) -> dict[str, Path]:
-    """Run paired IRF simulations, aggregate responses, and write outputs."""
+    """Run paired IRF simulations, aggregate responses, and write outputs.
+
+    Only aggregate series are persisted per arm (``irf_aggregates.npz``) unless
+    ``keep_full_h5`` is set, which also keeps the full per-agent HDF5 for debugging.
+    """
 
     seed_list = _validate_unique_seeds(seeds)
     if not shock_specs:
@@ -280,6 +324,7 @@ def run_irf_experiment(
             shocks_dir=shocks_dir,
             shock_specs=shock_specs,
             data_paths=data_paths,
+            keep_full_h5=keep_full_h5,
         )
         for seed in seed_list
     )
@@ -291,29 +336,7 @@ def run_irf_experiment(
     spec_by_name = {spec.name: spec for spec in shock_specs}
     for row in run_rows:
         spec = spec_by_name[str(row["shock_name"])]
-        panels.append(
-            build_irf_panel(
-                baseline_h5=row["baseline_h5"],
-                shock_h5=row["shock_h5"],
-                seed=int(row["seed"]),
-                shock_name=spec.name,
-                shock_kind=spec.kind,
-                shock_period=spec.period + 1,
-                shock_magnitude=spec.magnitude,
-                shock_duration=spec.duration,
-                shock_mode=spec.mode,
-                horizon_periods=horizon_periods,
-                country_code=country_code,
-                variables=(
-                    *DEFAULT_IRF_VARIABLES,
-                    *IRF_CHANNEL_VARIABLES,
-                    TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
-                    GFCF_INTENSITY_IRF_VARIABLE,
-                    FIRM_LOAN_RATE_IRF_VARIABLE,
-                    FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE,
-                ),
-            )
-        )
+        panels.append(_build_panel(row, spec, horizon_periods=horizon_periods, country_code=country_code))
     panel = pd.concat(panels, ignore_index=True) if panels else pd.DataFrame()
     summary = summarize_irf_panel(panel)
     panel.to_csv(analysis_dir / "irf_panel.csv", index=False)
@@ -351,6 +374,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--verbose", type=int, default=0, help="Joblib verbosity level.")
     parser.add_argument("--batch-size", type=int, default=1, help="Number of seeds batched per worker.")
     parser.add_argument(
+        "--keep-full-h5",
+        action="store_true",
+        help="Also keep the full per-agent HDF5 of every arm (debugging; ~2 GB per run). Default: aggregates only.",
+    )
+    parser.add_argument(
         "--firm-loan-dscr",
         choices=("on", "off"),
         default=None,
@@ -381,6 +409,7 @@ def main() -> None:
         verbose=parsed.verbose,
         batch_size=parsed.batch_size,
         firm_loan_dscr=None if parsed.firm_loan_dscr is None else parsed.firm_loan_dscr == "on",
+        keep_full_h5=parsed.keep_full_h5,
     )
     print({name: str(path) for name, path in outputs.items()})
 

@@ -133,6 +133,141 @@ def _as_series(values: np.ndarray, *, transform: str) -> np.ndarray:
     raise ValueError("IRF variable transform must be one of 'sum', 'mean', or 'first'.")
 
 
+ALL_IRF_VARIABLES: tuple[IRFVariable, ...] = (
+    *DEFAULT_IRF_VARIABLES,
+    *IRF_CHANNEL_VARIABLES,
+    TFP_INVESTMENT_INTENSITY_IRF_VARIABLE,
+    GFCF_INTENSITY_IRF_VARIABLE,
+    FIRM_LOAN_RATE_IRF_VARIABLE,
+    FIRM_LONG_TERM_LOAN_RATE_IRF_VARIABLE,
+)
+
+
+def _reduce_variable(
+    handle: h5py.File, variable: IRFVariable, *, country_code: str
+) -> tuple[np.ndarray | None, str | None]:
+    """Reduce one saved variable to its 1-D aggregate series; return (series, reason-if-missing)."""
+    dataset_path = variable.h5_path.format(country=country_code)
+    raw = _read_h5_array_from_handle(handle, variable.h5_path, country_code=country_code)
+    if raw is None:
+        return None, f"{variable.name} at {dataset_path}"
+    series = _as_series(raw, transform=variable.transform)
+    if variable.ratio_denominator_path is None:
+        return series, None
+    denominator_path = variable.ratio_denominator_path.format(country=country_code)
+    denominator_raw = _read_h5_array_from_handle(handle, variable.ratio_denominator_path, country_code=country_code)
+    if denominator_raw is None:
+        return None, f"{variable.name} denominator at {denominator_path}"
+    denominator = _as_series(denominator_raw, transform="sum")
+    if series.shape != denominator.shape:
+        raise ValueError(f"{variable.name} numerator and denominator time dimensions do not match.")
+    ratio = np.divide(series, denominator, out=np.full_like(series, np.nan), where=denominator != 0.0)
+    return ratio, None
+
+
+def extract_irf_series(
+    h5_path: str | Path,
+    *,
+    country_code: str,
+    variables: tuple[IRFVariable, ...] = ALL_IRF_VARIABLES,
+) -> tuple[dict[str, np.ndarray], dict[str, str]]:
+    """Read the aggregate IRF series (post transform/ratio) from one saved simulation.
+
+    Returns ``(series, missing)``: ``series`` maps variable name to a 1-D array;
+    ``missing`` maps the names of absent variables to a description of the absent dataset.
+    """
+    series: dict[str, np.ndarray] = {}
+    missing: dict[str, str] = {}
+    with h5py.File(h5_path, "r") as handle:
+        for variable in variables:
+            values, reason = _reduce_variable(handle, variable, country_code=country_code)
+            if values is None:
+                missing[variable.name] = str(reason)
+            else:
+                series[variable.name] = values
+    return series, missing
+
+
+def write_irf_series(path: str | Path, series: dict[str, np.ndarray]) -> Path:
+    """Persist aggregate IRF series as a compressed ``.npz`` keyed by variable name."""
+    path = Path(path)
+    np.savez_compressed(path, **{name: np.asarray(values, dtype=float) for name, values in series.items()})
+    return path
+
+
+def read_irf_series(path: str | Path) -> dict[str, np.ndarray]:
+    """Load aggregate IRF series written by :func:`write_irf_series`."""
+    with np.load(path) as archive:
+        return {name: np.asarray(archive[name], dtype=float) for name in archive.files}
+
+
+def _panel_from_series(
+    *,
+    baseline_series: dict[str, np.ndarray],
+    shock_series: dict[str, np.ndarray],
+    baseline_missing: dict[str, str],
+    shock_missing: dict[str, str],
+    seed: int,
+    shock_name: str,
+    shock_kind: str,
+    shock_period: int,
+    shock_magnitude: float,
+    horizon_periods: int,
+    shock_duration: int,
+    shock_mode: str,
+    variables: tuple[IRFVariable, ...],
+    strict: bool,
+) -> pd.DataFrame:
+    if shock_period < 0:
+        raise ValueError("shock_period must be non-negative.")
+    if horizon_periods <= 0:
+        raise ValueError("horizon_periods must be positive.")
+
+    rows: list[dict[str, float | int | str]] = []
+    missing: list[str] = []
+    for variable in variables:
+        baseline = baseline_series.get(variable.name)
+        shocked = shock_series.get(variable.name)
+        if baseline is None or shocked is None:
+            sides = [label for label, series in (("baseline", baseline), ("shock", shocked)) if series is None]
+            reason = (baseline_missing.get(variable.name) or shock_missing.get(variable.name)) or (
+                f"{variable.name} (not saved)"
+            )
+            missing.append(f"{reason} missing from {', '.join(sides)}")
+            continue
+        if baseline.shape != shocked.shape:
+            raise ValueError(f"{variable.name} shape mismatch: {baseline.shape} != {shocked.shape}.")
+        stop = min(shock_period + horizon_periods, baseline.shape[0])
+        if stop <= shock_period:
+            raise ValueError(f"Requested horizon starts beyond saved rows for {variable.name}.")
+        for row in range(shock_period, stop):
+            baseline_value = float(baseline[row])
+            shock_value = float(shocked[row])
+            delta = shock_value - baseline_value
+            pct_delta = np.nan if baseline_value == 0.0 else delta / baseline_value
+            rows.append(
+                {
+                    "seed": int(seed),
+                    "shock_name": shock_name,
+                    "shock_kind": shock_kind,
+                    "shock_period": int(shock_period),
+                    "shock_magnitude": float(shock_magnitude),
+                    "shock_duration": int(shock_duration),
+                    "shock_mode": shock_mode,
+                    "horizon": int(row - shock_period),
+                    "row": int(row),
+                    "variable": variable.name,
+                    "baseline": baseline_value,
+                    "shock": shock_value,
+                    "delta": delta,
+                    "pct_delta": pct_delta,
+                }
+            )
+    if strict and missing:
+        raise ValueError("Missing IRF HDF5 variables: " + "; ".join(missing))
+    return pd.DataFrame(rows)
+
+
 def build_irf_panel(
     *,
     baseline_h5: str | Path,
@@ -151,93 +286,59 @@ def build_irf_panel(
 ) -> pd.DataFrame:
     """Build a long impulse-response panel from paired baseline and shocked HDF5s."""
 
-    if shock_period < 0:
-        raise ValueError("shock_period must be non-negative.")
-    if horizon_periods <= 0:
-        raise ValueError("horizon_periods must be positive.")
+    baseline_series, baseline_missing = extract_irf_series(baseline_h5, country_code=country_code, variables=variables)
+    shock_series, shock_missing = extract_irf_series(shock_h5, country_code=country_code, variables=variables)
+    return _panel_from_series(
+        baseline_series=baseline_series,
+        shock_series=shock_series,
+        baseline_missing=baseline_missing,
+        shock_missing=shock_missing,
+        seed=seed,
+        shock_name=shock_name,
+        shock_kind=shock_kind,
+        shock_period=shock_period,
+        shock_magnitude=shock_magnitude,
+        horizon_periods=horizon_periods,
+        shock_duration=shock_duration,
+        shock_mode=shock_mode,
+        variables=variables,
+        strict=strict,
+    )
 
-    rows: list[dict[str, float | int | str]] = []
-    missing: list[str] = []
-    with h5py.File(baseline_h5, "r") as baseline_handle, h5py.File(shock_h5, "r") as shock_handle:
-        for variable in variables:
-            dataset_path = variable.h5_path.format(country=country_code)
-            baseline_raw = _read_h5_array_from_handle(baseline_handle, variable.h5_path, country_code=country_code)
-            shock_raw = _read_h5_array_from_handle(shock_handle, variable.h5_path, country_code=country_code)
-            if baseline_raw is None or shock_raw is None:
-                missing_sides = []
-                if baseline_raw is None:
-                    missing_sides.append("baseline")
-                if shock_raw is None:
-                    missing_sides.append("shock")
-                missing.append(f"{variable.name} at {dataset_path} missing from {', '.join(missing_sides)}")
-                continue
-            baseline = _as_series(baseline_raw, transform=variable.transform)
-            shocked = _as_series(shock_raw, transform=variable.transform)
-            if variable.ratio_denominator_path is not None:
-                denominator_path = variable.ratio_denominator_path.format(country=country_code)
-                baseline_denominator_raw = _read_h5_array_from_handle(
-                    baseline_handle, variable.ratio_denominator_path, country_code=country_code
-                )
-                shock_denominator_raw = _read_h5_array_from_handle(
-                    shock_handle, variable.ratio_denominator_path, country_code=country_code
-                )
-                if baseline_denominator_raw is None or shock_denominator_raw is None:
-                    missing_sides = []
-                    if baseline_denominator_raw is None:
-                        missing_sides.append("baseline")
-                    if shock_denominator_raw is None:
-                        missing_sides.append("shock")
-                    missing.append(
-                        f"{variable.name} denominator at {denominator_path} missing from {', '.join(missing_sides)}"
-                    )
-                    continue
-                baseline_denominator = _as_series(baseline_denominator_raw, transform="sum")
-                shock_denominator = _as_series(shock_denominator_raw, transform="sum")
-                if baseline.shape != baseline_denominator.shape or shocked.shape != shock_denominator.shape:
-                    raise ValueError(f"{variable.name} numerator and denominator time dimensions do not match.")
-                baseline = np.divide(
-                    baseline,
-                    baseline_denominator,
-                    out=np.full_like(baseline, np.nan),
-                    where=baseline_denominator != 0.0,
-                )
-                shocked = np.divide(
-                    shocked,
-                    shock_denominator,
-                    out=np.full_like(shocked, np.nan),
-                    where=shock_denominator != 0.0,
-                )
-            if baseline.shape != shocked.shape:
-                raise ValueError(f"{variable.name} shape mismatch: {baseline.shape} != {shocked.shape}.")
-            stop = min(shock_period + horizon_periods, baseline.shape[0])
-            if stop <= shock_period:
-                raise ValueError(f"Requested horizon starts beyond saved rows for {variable.name}.")
-            for row in range(shock_period, stop):
-                baseline_value = float(baseline[row])
-                shock_value = float(shocked[row])
-                delta = shock_value - baseline_value
-                pct_delta = np.nan if baseline_value == 0.0 else delta / baseline_value
-                rows.append(
-                    {
-                        "seed": int(seed),
-                        "shock_name": shock_name,
-                        "shock_kind": shock_kind,
-                        "shock_period": int(shock_period),
-                        "shock_magnitude": float(shock_magnitude),
-                        "shock_duration": int(shock_duration),
-                        "shock_mode": shock_mode,
-                        "horizon": int(row - shock_period),
-                        "row": int(row),
-                        "variable": variable.name,
-                        "baseline": baseline_value,
-                        "shock": shock_value,
-                        "delta": delta,
-                        "pct_delta": pct_delta,
-                    }
-                )
-    if strict and missing:
-        raise ValueError("Missing IRF HDF5 variables: " + "; ".join(missing))
-    return pd.DataFrame(rows)
+
+def build_irf_panel_from_series(
+    *,
+    baseline_npz: str | Path,
+    shock_npz: str | Path,
+    seed: int,
+    shock_name: str,
+    shock_kind: str,
+    shock_period: int,
+    shock_magnitude: float,
+    horizon_periods: int,
+    shock_duration: int = 1,
+    shock_mode: str = "additive",
+    variables: tuple[IRFVariable, ...] = DEFAULT_IRF_VARIABLES,
+    strict: bool = True,
+) -> pd.DataFrame:
+    """Build the same long panel as :func:`build_irf_panel` from saved aggregate ``.npz`` series."""
+
+    return _panel_from_series(
+        baseline_series=read_irf_series(baseline_npz),
+        shock_series=read_irf_series(shock_npz),
+        baseline_missing={},
+        shock_missing={},
+        seed=seed,
+        shock_name=shock_name,
+        shock_kind=shock_kind,
+        shock_period=shock_period,
+        shock_magnitude=shock_magnitude,
+        horizon_periods=horizon_periods,
+        shock_duration=shock_duration,
+        shock_mode=shock_mode,
+        variables=variables,
+        strict=strict,
+    )
 
 
 def summarize_irf_panel(panel: pd.DataFrame) -> pd.DataFrame:

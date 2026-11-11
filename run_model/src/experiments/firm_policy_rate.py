@@ -208,6 +208,7 @@ def run_firm_policy_rate_verification(
         backend=backend,
         batch_size=batch_size,
         firm_loan_dscr=True,
+        keep_full_h5=True,  # firm-level IRF panels re-read the per-firm HDF5
     )
     off_specs = (dose_specs[1],)
     off_paths = run_irf_experiment(
@@ -221,6 +222,7 @@ def run_firm_policy_rate_verification(
         backend=backend,
         batch_size=batch_size,
         firm_loan_dscr=False,
+        keep_full_h5=True,
     )
 
     run_sets = ((on_paths, True), (off_paths, False))
@@ -231,8 +233,8 @@ def run_firm_policy_rate_verification(
         for row in run_index.to_dict(orient="records"):
             shock_period = int(row["shock_period"]) + 1
             firm_panel = build_firm_policy_rate_irf_panel(
-                row["baseline_h5"],
-                row["shock_h5"],
+                row["baseline_output"],
+                row["shock_output"],
                 seed=int(row["seed"]),
                 shock_name=str(row["shock_name"]),
                 shock_kind=str(row["shock_kind"]),
@@ -247,8 +249,8 @@ def run_firm_policy_rate_verification(
             firm_aggregate_panels.append(aggregate_firm_policy_rate_irf(firm_panel))
             macro_panels.append(
                 build_irf_panel(
-                    baseline_h5=row["baseline_h5"],
-                    shock_h5=row["shock_h5"],
+                    baseline_h5=row["baseline_output"],
+                    shock_h5=row["shock_output"],
                     seed=int(row["seed"]),
                     shock_name=str(row["shock_name"]),
                     shock_kind=str(row["shock_kind"]),

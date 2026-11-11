@@ -671,7 +671,7 @@ class Country:
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
-        support = np.maximum(uses - resources, 0.0)
+        support = np.maximum(uses - (resources - self._household_resources_exempt_from_support_test()), 0.0)
         hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
         self.set_stage5_subsistence_support_by_household(support)
         delta = support - planned_support
@@ -1246,14 +1246,21 @@ class Country:
     def _clear_household_income_shock(self) -> None:
         """Clear any staged household income shock used by MPC experiments."""
         self._staged_household_income_shock: Optional[np.ndarray] = None
+        self._household_income_shock_exempt_from_support: bool = False
 
-    def stage_household_income_shock(self, shock: np.ndarray) -> None:
+    def stage_household_income_shock(self, shock: np.ndarray, *, exempt_from_support_test: bool = False) -> None:
         """Stage an income shock for the current MPC experiment iteration.
 
         The staged shock is added to expected household income during planning
         and to realised household income during accounting. It is not assigned to
         a specific fiscal transfer account, so it represents an exogenous
         household income receipt for MPC measurement.
+
+        ``exempt_from_support_test`` chooses how subsistence support treats the
+        receipt. False (default): it counts as a resource, so it lowers support
+        one for one (a lottery win). True: the support test ignores it, so a
+        supported household keeps its support and the receipt (a one-off
+        payment that the means test does not count, such as a tax rebate).
         """
         shock = np.asarray(shock, dtype=float)
         expected_shape = self.households.ts.current("expected_income").shape
@@ -1266,8 +1273,16 @@ class Country:
             raise ValueError("A household income shock is already staged.")
 
         self._staged_household_income_shock = shock.copy()
+        self._household_income_shock_exempt_from_support = bool(exempt_from_support_test)
 
     stage_household_expected_income_shock = stage_household_income_shock
+
+    def _household_resources_exempt_from_support_test(self) -> np.ndarray:
+        """Per-household resources that the support test ignores: the positive part of an exempt staged shock."""
+        shock = getattr(self, "_staged_household_income_shock", None)
+        if shock is None or not getattr(self, "_household_income_shock_exempt_from_support", False):
+            return np.zeros(self.households.ts.current("stage5_subsistence_support").shape)
+        return np.maximum(shock, 0.0)
 
     def _apply_household_income_shock(self, income: np.ndarray) -> np.ndarray:
         """Add the staged MPC income shock when one is active."""
@@ -2615,6 +2630,7 @@ class Country:
             scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             scheduled_mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
             investment=investment_cash,
+            support_exempt_resources=self._household_resources_exempt_from_support_test(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,

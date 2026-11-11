@@ -283,6 +283,7 @@ class HouseholdFinancialFeasibility:
         scheduled_consumer_service: np.ndarray,
         scheduled_mortgage_service: np.ndarray,
         investment: np.ndarray,
+        support_exempt_resources: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Allocate resources in the Stage 5 payment order, without writing household state.
 
@@ -299,6 +300,10 @@ class HouseholdFinancialFeasibility:
 
         Support S covers the goods floor and rent only. Unpaid service U is
         suspended on consumer credit first, then on the mortgage.
+
+        ``support_exempt_resources`` (E, default zero) is the part of A that the
+        support test does not count: S = max(F + R - (A - E), 0). The household
+        still spends E, so A1 = A + S - F - R is unchanged in form.
         """
         desired = self._non_negative(consumption_before_floor)
         floor = self._non_negative(subsistence_floor)
@@ -314,8 +319,13 @@ class HouseholdFinancialFeasibility:
                 raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
         if not np.all(np.isfinite(available)):
             raise ValueError("Stage 5 consumption-floor resources must be finite.")
+        exempt = (
+            np.zeros(shape) if support_exempt_resources is None else np.asarray(support_exempt_resources, dtype=float)
+        )
+        if exempt.shape != shape or not np.all(np.isfinite(exempt)) or np.any(exempt < 0.0):
+            raise ValueError("Support-exempt resources must be finite, non-negative household values.")
 
-        support = np.maximum(floor + rent - available, 0.0)
+        support = np.maximum(floor + rent - (available - exempt), 0.0)
         after_floor_and_rent = np.maximum(available + support - floor - rent, 0.0)
         service = consumer_service + mortgage_service
         service_paid = np.minimum(service, after_floor_and_rent)

@@ -1538,6 +1538,7 @@ class Households(Agent):
         scheduled_consumer_service: np.ndarray,
         scheduled_mortgage_service: np.ndarray,
         investment: np.ndarray,
+        support_exempt_resources: np.ndarray | None = None,
     ) -> None:
         """Apply the Stage 5 payment order to the settled carrier."""
         if self.post_grant_feasible_plan is None:
@@ -1575,6 +1576,7 @@ class Households(Agent):
             scheduled_consumer_service=scheduled_consumer_service,
             scheduled_mortgage_service=scheduled_mortgage_service,
             investment=investment,
+            support_exempt_resources=support_exempt_resources,
         )
         self._record_consumption_floor_diagnostics()
 

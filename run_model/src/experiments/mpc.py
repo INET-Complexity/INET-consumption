@@ -136,6 +136,7 @@ def _run_one(
     shock_fraction: float,
     horizon_periods: int,
     data_paths: DataPaths | None = None,
+    shock_exempt_from_support: bool = False,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
 
@@ -199,6 +200,7 @@ def _run_one(
                 target_year=target_year,
                 target_month=target_month,
                 shock_fraction_of_median_income=shock_fraction,
+                exempt_from_support_test=shock_exempt_from_support,
             )
         )
 
@@ -236,6 +238,7 @@ def _run_seed_pair(
     shock_fraction: float,
     horizon_periods: int,
     data_paths: DataPaths | None = None,
+    shock_exempt_from_support: bool = False,
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed.
 
@@ -256,6 +259,7 @@ def _run_seed_pair(
         shock_fraction=shock_fraction,
         horizon_periods=horizon_periods,
         data_paths=data_paths,
+        shock_exempt_from_support=shock_exempt_from_support,
     )
     shock_metadata = _run_one(
         data=data,
@@ -269,6 +273,7 @@ def _run_seed_pair(
         shock_fraction=shock_fraction,
         horizon_periods=horizon_periods,
         data_paths=data_paths,
+        shock_exempt_from_support=shock_exempt_from_support,
     )
     shock_state_columns = [
         column
@@ -434,6 +439,7 @@ def run_mpc_experiment(
     stable_effective_labor_state_only: bool = False,
     activity_bracket_prefix: str = "activity_bracket_",
     labor_income_tolerance: float | None = None,
+    shock_exempt_from_support: bool = False,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
 
@@ -505,6 +511,7 @@ def run_mpc_experiment(
             shock_fraction=shock_fraction,
             horizon_periods=horizon_periods,
             data_paths=data_paths,
+            shock_exempt_from_support=shock_exempt_from_support,
         )
         for seed in seed_list
     )
@@ -650,6 +657,14 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--shock-exempt-from-support",
+        action="store_true",
+        help=(
+            "The subsistence-support test ignores the transfer, so supported households keep their support "
+            "(a one-off payment outside the means test). Default: the transfer counts as a resource."
+        ),
+    )
+    parser.add_argument(
         "--activity-bracket-prefix",
         default="activity_bracket_",
         help="Column prefix used to identify period-by-period activity bracket indicators in the MPC panel.",
@@ -689,6 +704,7 @@ def main() -> None:
         stable_effective_labor_state_only=parsed.stable_effective_labor_state_only,
         activity_bracket_prefix=parsed.activity_bracket_prefix,
         labor_income_tolerance=parsed.labor_income_tolerance,
+        shock_exempt_from_support=parsed.shock_exempt_from_support,
     )
     print(
         {

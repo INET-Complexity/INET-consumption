@@ -219,3 +219,26 @@ def test__floor_settlement_rejects_non_finite_resources_and_unequal_shapes():
             scheduled_mortgage_service=np.zeros(2),
             investment=np.zeros(2),
         )
+
+
+def test__floor_settlement_exempt_resources_keep_support_and_are_spent():
+    # F + R = 100. Each household receives a transfer T = 30, included in A.
+    # Household 0: A = 60 + 30. Counted: S = 10. Exempt: S = 40, as without T.
+    # Household 1: A = 150 + 30, never supported: the exemption changes nothing.
+    resources = np.array([90.0, 180.0])
+    counted = _settle_floor(resources=resources)
+    exempt = _settle_floor(resources=resources, support_exempt_resources=30.0)
+
+    np.testing.assert_allclose(counted.floor_support, [10.0, 0.0])
+    np.testing.assert_allclose(exempt.floor_support, [40.0, 0.0])
+    # The exempt household spends the transfer after the floor and rent: A1 = 90 + 40 - 100 = 30 of service.
+    np.testing.assert_allclose(exempt.unpaid_consumer_service + exempt.unpaid_mortgage_service, [10.0, 0.0])
+    np.testing.assert_allclose(counted.unpaid_consumer_service + counted.unpaid_mortgage_service, [40.0, 0.0])
+    for name in ("consumption_after_floor", "investment_after_floor", "unpaid_mortgage_service"):
+        np.testing.assert_allclose(getattr(exempt, name)[1], getattr(counted, name)[1])
+
+
+@pytest.mark.parametrize("bad", [-1.0, np.nan])
+def test__floor_settlement_rejects_invalid_exempt_resources(bad):
+    with pytest.raises(ValueError, match="Support-exempt"):
+        _settle_floor(resources=np.array([90.0]), support_exempt_resources=bad)

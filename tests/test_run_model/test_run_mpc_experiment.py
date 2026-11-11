@@ -404,7 +404,8 @@ def test_run_mpc_experiment_labor_income_tolerance_keeps_all_households_and_flag
     # Household 1 changes hours over time but not between runs: it stays.
     # Household 2 differs between runs by 20% of the shock: kept, not identified.
     assert panel["household_id"].tolist() == [0, 1, 2]
-    assert str(summary.loc[0, "ids"]) == "0,1,2"
+    # The cumulative-MPC bin summary uses the identified households only.
+    assert str(summary.loc[0, "ids"]) == "0,1"
     assert panel["labor_income_gap_share"].tolist() == pytest.approx([0.0, 0.0, 0.2])
     assert panel["cumulative_mpc_identified"].tolist() == [True, True, False]
     regimes = pd.read_csv(paths["analysis_dir"] / "household_mpc_regime_summary.csv").set_index("regime")

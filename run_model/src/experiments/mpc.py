@@ -567,8 +567,16 @@ def run_mpc_experiment(
         required_mpc_columns=plot_mpc_columns,
     )
     filtered_household_panel = add_mpc_bins(filtered_household_panel)
-    raw_summary = summarize_mpc_bins(raw_household_panel, mpc_column=plotted_mpc_column)
-    filtered_summary = summarize_mpc_bins(filtered_household_panel, mpc_column=plotted_mpc_column)
+
+    def cumulative_sample(panel: pd.DataFrame) -> pd.DataFrame:
+        # The bin summaries report a cumulative MPC: under the tolerance they
+        # use the identified households only. The saved panels keep everyone.
+        if "cumulative_mpc_identified" not in panel.columns:
+            return panel
+        return panel.loc[panel["cumulative_mpc_identified"].astype(bool)]
+
+    raw_summary = summarize_mpc_bins(cumulative_sample(raw_household_panel), mpc_column=plotted_mpc_column)
+    filtered_summary = summarize_mpc_bins(cumulative_sample(filtered_household_panel), mpc_column=plotted_mpc_column)
     raw_household_panel.to_csv(analysis_dir / "household_mpc_panel_raw.csv", index=False)
     filtered_household_panel.to_csv(analysis_dir / "household_mpc_panel_filtered.csv", index=False)
     raw_summary.to_csv(analysis_dir / "household_mpc_summary_raw.csv", index=False)

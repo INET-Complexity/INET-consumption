@@ -229,9 +229,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["household_social_transfers"].tolist() == [5.0, 5.1, 5.2]
     assert output["public_pension_benefits_to_gdp"].tolist() == pytest.approx([0.03, 3.1 / 110, 3.2 / 121])
     assert output["total_number_of_bought_houses"].tolist() == pytest.approx([np.nan, 4.0, 5.0], nan_ok=True)
-    assert output["total_number_of_newly_rented_houses"].tolist() == pytest.approx(
-        [np.nan, 2.0, 3.0], nan_ok=True
-    )
+    assert output["total_number_of_newly_rented_houses"].tolist() == pytest.approx([np.nan, 2.0, 3.0], nan_ok=True)
     assert output["total_number_of_houses_rented"].tolist() == [10.0, 11.0, 12.0]
     assert output["total_number_of_houses_owner_occupied"].tolist() == [20.0, 21.0, 22.0]
     assert output["total_number_of_houses_unoccupied"].tolist() == [5.0, 4.0, 3.0]

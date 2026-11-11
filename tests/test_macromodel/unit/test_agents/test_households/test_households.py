@@ -33,6 +33,26 @@ def _replace_post_grant_plan(households, **updates):
         setattr(plan, name, value)
 
 
+def _floor_inputs(n_households, resources):
+    """Floor-settlement inputs with no rent, debt service or investment."""
+    zeros = np.zeros(n_households)
+    return {
+        "cash_rent": zeros,
+        "resources": np.broadcast_to(np.asarray(resources, dtype=float), (n_households,)).copy(),
+        "scheduled_consumer_service": zeros,
+        "scheduled_mortgage_service": zeros,
+        "investment": zeros,
+    }
+
+
+def _settle_agent_level_floor_from(monkeypatch, households, resources):
+    """Give the agent-level floor path known resources and no cash rent."""
+    n_households = households.ts.current("n_households")
+    resources = np.broadcast_to(np.asarray(resources, dtype=float), (n_households,)).copy()
+    monkeypatch.setattr(households, "current_floor_settlement_resources", lambda: resources.copy())
+    households.ts.override_current("rent", np.zeros(n_households))
+
+
 def _setup_emission_ts(households, n_hh, n_industries):
     """Inject a non-NaN spending matrix and emission timeseries keys."""
     households.ts.dicts["nominal_amount_spent_in_lcu"][-1] = np.full((n_hh, n_industries), 10.0)
@@ -755,6 +775,7 @@ class TestHouseholds:
     def test__prepare_goods_market_clearing_applies_floor_by_proportional_consumption_scaling(
         self,
         test_households,
+        monkeypatch,
     ):
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
@@ -772,6 +793,9 @@ class TestHouseholds:
         )
         test_households.ts.override_current("target_consumption", target_consumption.copy())
         test_households.ts.override_current("target_investment", target_investment.copy())
+        _settle_agent_level_floor_from(
+            monkeypatch, test_households, target_consumption.sum(axis=1) - residual_shortfall
+        )
         test_households.exchange_rate_usd_to_lcu = 1.0
 
         shortfall = test_households.prepare_goods_market_clearing(
@@ -803,6 +827,7 @@ class TestHouseholds:
     def test__prepare_goods_market_clearing_persists_consumption_cut_reconciliation(
         self,
         test_households,
+        monkeypatch,
     ):
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
@@ -819,6 +844,9 @@ class TestHouseholds:
         )
         test_households.ts.override_current("target_consumption", target_consumption.copy())
         test_households.ts.override_current("target_investment", target_investment.copy())
+        _settle_agent_level_floor_from(
+            monkeypatch, test_households, target_consumption.sum(axis=1) - residual_shortfall
+        )
         test_households.exchange_rate_usd_to_lcu = 1.0
 
         test_households.prepare_goods_market_clearing(
@@ -843,6 +871,7 @@ class TestHouseholds:
     def test__prepare_goods_market_clearing_floor_does_not_mutate_credit_liquidation_or_balance_sheet(
         self,
         test_households,
+        monkeypatch,
     ):
         n_households = test_households.ts.current("n_households")
         n_industries = test_households.n_industries
@@ -857,6 +886,7 @@ class TestHouseholds:
         )
         test_households.ts.override_current("target_consumption", target_consumption.copy())
         test_households.ts.override_current("target_investment", target_investment.copy())
+        _settle_agent_level_floor_from(monkeypatch, test_households, target_consumption.sum(axis=1) - 30.0)
         invariant_keys = [
             "target_consumption_loans",
             "received_consumption_loans",
@@ -3005,6 +3035,7 @@ class TestPopulatePostGrantFeasiblePlan:
         test_households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=np.full(n_households, 100.0),
             subsistence_floor=np.full(n_households, 80.0),
+            **_floor_inputs(n_households, 100.0),
         )
 
         plan = test_households.post_grant_feasible_plan
@@ -3047,9 +3078,11 @@ class TestPopulatePostGrantFeasiblePlan:
             residual_shortfall_after_granted_credit=residual,
         )
 
+        # Resources fall short of desired goods by the residual; no rent, service or investment.
         test_households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=consumption_before,
             subsistence_floor=subsistence_floor,
+            **_floor_inputs(n_households, consumption_before - residual),
         )
 
         plan = test_households.post_grant_feasible_plan
@@ -3085,6 +3118,7 @@ class TestPopulatePostGrantFeasiblePlan:
         test_households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=np.full(n_households, 50.0),
             subsistence_floor=np.full(n_households, 80.0),
+            **_floor_inputs(n_households, 50.0),
         )
 
         plan = test_households.post_grant_feasible_plan
@@ -3099,6 +3133,7 @@ class TestPopulatePostGrantFeasiblePlan:
             test_households.apply_consumption_floor_to_post_grant_plan(
                 consumption_before_floor=np.zeros(n_households),
                 subsistence_floor=np.zeros(n_households),
+                **_floor_inputs(n_households, 0.0),
             )
 
     def test__remaining_subsistence_shortfall_accessor_raises_before_floor_enforcement(self, test_households):
@@ -3113,15 +3148,19 @@ class TestPopulatePostGrantFeasiblePlan:
         with pytest.raises(RuntimeError, match="remaining_subsistence_shortfall"):
             test_households.current_remaining_subsistence_shortfall()
 
-    def test__record_pre_support_payment_suspension_diagnostics_uses_settled_remaining_shortfall(self, test_households):
+    def test__record_pre_support_payment_suspension_diagnostics_uses_settled_unpaid_service(self, test_households):
         n_households = test_households.ts.current("n_households")
-        residual = np.resize(np.asarray([0.0, 8.0, 25.0, 4.0]), n_households)
+        # Support (here 50) is not a claim on debt service: only unpaid service is suspended.
+        residual = np.resize(np.asarray([0.0, 8.0, 25.0, 4.0]), n_households) + 50.0
         test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
             credit_granted=np.zeros(n_households),
             credit_rationing_gap=np.zeros(n_households),
             planned_liquidation_total=np.zeros(n_households),
             residual_shortfall_after_granted_credit=np.zeros(n_households),
             remaining_subsistence_shortfall=residual.copy(),
+            floor_support=np.full(n_households, 50.0),
+            unpaid_consumer_service=np.resize(np.asarray([0.0, 8.0, 10.0, 0.0]), n_households),
+            unpaid_mortgage_service=np.resize(np.asarray([0.0, 0.0, 15.0, 4.0]), n_households),
         )
 
         test_households.record_pre_support_payment_suspension_diagnostics(
@@ -3433,6 +3472,7 @@ class TestPopulatePostGrantFeasiblePlan:
             test_households.apply_consumption_floor_to_post_grant_plan(
                 consumption_before_floor=consumption_before_floor,
                 subsistence_floor=subsistence_floor,
+                **_floor_inputs(n_households, 0.0),
             )
 
     def test__consumption_floor_clips_non_finite_inputs_without_aliasing(self, test_households):
@@ -3449,6 +3489,7 @@ class TestPopulatePostGrantFeasiblePlan:
         test_households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=consumption_before,
             subsistence_floor=subsistence_floor,
+            **_floor_inputs(n_households, np.resize(np.asarray([95.0, 0.0, 0.0, 0.0]), n_households)),
         )
         consumption_before[:] = 99.0
         subsistence_floor[:] = 88.0

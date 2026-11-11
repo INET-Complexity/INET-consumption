@@ -43,6 +43,7 @@ from macromodel.agents.households.func.financial_feasibility import (
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
     PreGrantFeasiblePlan,
+    forced_liquidation_cash,
     gross_liquidation_sale,
 )
 from macromodel.agents.households.func.housing_inputs import (
@@ -1150,6 +1151,42 @@ class Households(Agent):
         """Return the post-floor shortfall handoff for government support."""
         return self._current_post_grant_feasible_plan_field("remaining_subsistence_shortfall")
 
+    def current_floor_support(self) -> np.ndarray:
+        """Return S: support for the goods floor and cash rent only."""
+        return self._current_post_grant_feasible_plan_field("floor_support")
+
+    def current_unpaid_consumer_service(self) -> np.ndarray:
+        """Return the consumer service the floor settlement leaves unpaid."""
+        return self._current_post_grant_feasible_plan_field("unpaid_consumer_service")
+
+    def current_unpaid_mortgage_service(self) -> np.ndarray:
+        """Return the mortgage service the floor settlement leaves unpaid."""
+        return self._current_post_grant_feasible_plan_field("unpaid_mortgage_service")
+
+    def current_floor_settlement_resources(self) -> np.ndarray:
+        """Return A: cash available to this period's floor settlement, without support.
+
+        Income, a seller's housing surplus max(-X, 0), liquid assets left after
+        the housing draw D floored at zero, granted consumer credit K and the
+        forced liquidation net of its cost and of the purchase sale. The floor
+        on max(LFA - D, 0) matches the resolver: an overdraft is not a claim on
+        support.
+        """
+        plan = self.post_grant_feasible_plan
+        if plan is None:
+            raise RuntimeError("Floor settlement resources require a settled post-grant plan.")
+        liquid_assets_after_housing = np.maximum(
+            np.asarray(self.ts.current("liquid_financial_assets"), dtype=float) - self.current_housing_lfa_draw(),
+            0.0,
+        )
+        return (
+            np.asarray(self.current_financing_income(), dtype=float)
+            + np.maximum(-self.current_net_housing_cash_need(), 0.0)
+            + liquid_assets_after_housing
+            + np.asarray(plan.credit_granted, dtype=float)
+            + forced_liquidation_cash(plan)
+        )
+
     def current_early_consumer_repayment_capacity(self) -> np.ndarray:
         """Return surplus capacity reserved for optional consumer repayment."""
         return self._current_post_grant_feasible_plan_field("early_consumer_repayment_capacity")
@@ -1214,8 +1251,11 @@ class Households(Agent):
         scheduled_mortgage_payments: np.ndarray,
     ) -> None:
         """Persist diagnostic-only payment suspensions from the settled pre-support path."""
+        # Support is not a claim on debt service: only unpaid service is suspended.
         diagnostics = compute_stage5_payment_suspension_diagnostics(
-            remaining_subsistence_shortfall=self.current_remaining_subsistence_shortfall(),
+            remaining_subsistence_shortfall=(
+                self.current_unpaid_consumer_service() + self.current_unpaid_mortgage_service()
+            ),
             scheduled_consumer_payments=scheduled_consumer_payments,
             scheduled_mortgage_payments=scheduled_mortgage_payments,
         )
@@ -1493,8 +1533,13 @@ class Households(Agent):
         *,
         consumption_before_floor: np.ndarray,
         subsistence_floor: np.ndarray,
+        cash_rent: np.ndarray,
+        resources: np.ndarray,
+        scheduled_consumer_service: np.ndarray,
+        scheduled_mortgage_service: np.ndarray,
+        investment: np.ndarray,
     ) -> None:
-        """Apply Stage 5 Increment 8 floor arithmetic to the settled carrier."""
+        """Apply the Stage 5 payment order to the settled carrier."""
         if self.post_grant_feasible_plan is None:
             raise RuntimeError(
                 "Stage 5 consumption-floor enforcement requires post_grant_feasible_plan "
@@ -1505,6 +1550,11 @@ class Households(Agent):
         for name, values in (
             ("consumption_before_floor", np.asarray(consumption_before_floor)),
             ("subsistence_floor", np.asarray(subsistence_floor)),
+            ("cash_rent", np.asarray(cash_rent)),
+            ("resources", np.asarray(resources)),
+            ("scheduled_consumer_service", np.asarray(scheduled_consumer_service)),
+            ("scheduled_mortgage_service", np.asarray(scheduled_mortgage_service)),
+            ("investment", np.asarray(investment)),
             (
                 "post_grant_feasible_plan.residual_shortfall_after_granted_credit",
                 np.asarray(self.post_grant_feasible_plan.residual_shortfall_after_granted_credit),
@@ -1520,6 +1570,11 @@ class Households(Agent):
             self.post_grant_feasible_plan,
             consumption_before_floor=consumption_before_floor,
             subsistence_floor=subsistence_floor,
+            cash_rent=cash_rent,
+            resources=resources,
+            scheduled_consumer_service=scheduled_consumer_service,
+            scheduled_mortgage_service=scheduled_mortgage_service,
+            investment=investment,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -3611,10 +3666,18 @@ class Households(Agent):
                 )
             if self.post_grant_feasible_plan.consumption_after_floor is None:
                 # Compatibility for direct agent-level callers. The live Country
-                # path settles this outcome before consumer-loan settlement.
+                # path settles this outcome before consumer-loan settlement. This
+                # path settles the goods floor only: it ranks neither debt
+                # service (no credit market in reach) nor investment.
+                nothing = np.zeros(self.ts.current("n_households"))
                 self.apply_consumption_floor_to_post_grant_plan(
                     consumption_before_floor=self.consumption_cash_factor() * target_consumption.sum(axis=1),
                     subsistence_floor=subsistence_consumption,
+                    cash_rent=self.current_consumption_cash_rent(),
+                    resources=self.current_floor_settlement_resources(),
+                    scheduled_consumer_service=nothing,
+                    scheduled_mortgage_service=nothing,
+                    investment=nothing,
                 )
                 goods_consumption = self._scale_consumption_matrix_to_household_totals(
                     target_consumption=target_consumption,

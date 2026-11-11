@@ -73,6 +73,10 @@ class PostGrantFeasiblePlan:
     consumption_after_floor: np.ndarray | None = None
     consumption_cut_amount: np.ndarray | None = None
     remaining_subsistence_shortfall: np.ndarray | None = None
+    floor_support: np.ndarray | None = None
+    unpaid_consumer_service: np.ndarray | None = None
+    unpaid_mortgage_service: np.ndarray | None = None
+    investment_after_floor: np.ndarray | None = None
     early_consumer_repayment_capacity: np.ndarray | None = None
     floor_binding: np.ndarray | None = None
     post_liquidation_lfa: np.ndarray | None = None
@@ -274,30 +278,66 @@ class HouseholdFinancialFeasibility:
         *,
         consumption_before_floor: np.ndarray,
         subsistence_floor: np.ndarray,
+        cash_rent: np.ndarray,
+        resources: np.ndarray,
+        scheduled_consumer_service: np.ndarray,
+        scheduled_mortgage_service: np.ndarray,
+        investment: np.ndarray,
     ) -> PostGrantFeasiblePlan:
-        """Apply the Stage 5 floor policy without writing household state."""
-        consumption_before = np.asarray(consumption_before_floor, dtype=float)
-        floor = np.asarray(subsistence_floor, dtype=float)
-        residual_shortfall = np.asarray(plan.residual_shortfall_after_granted_credit, dtype=float)
-        if not (consumption_before.shape == floor.shape == residual_shortfall.shape):
-            raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
+        """Allocate resources in the Stage 5 payment order, without writing household state.
 
-        cleaned_consumption_before = self._non_negative(consumption_before)
-        cleaned_floor = self._non_negative(floor)
-        residual_before_floor = self._non_negative(residual_shortfall)
-        maximum_floor_cut = np.maximum(cleaned_consumption_before - cleaned_floor, 0.0)
-        consumption_cut_amount = np.minimum(residual_before_floor, maximum_floor_cut)
-        consumption_before_support = cleaned_consumption_before - consumption_cut_amount
-        residual_after_floor_cut = residual_before_floor - consumption_cut_amount
-        floor_top_up = np.maximum(cleaned_floor - consumption_before_support, 0.0)
-        consumption_after_floor = consumption_before_support + floor_top_up
-        remaining_subsistence_shortfall = floor_top_up + residual_after_floor_cut
+        All inputs are nominal cash amounts per household. ``resources`` (A) is
+        income without support plus liquid assets, granted consumer credit and
+        the reserved liquidation net of its cost. The order is: goods up to the
+        floor F and cash rent R; debt service O; goods above the floor up to
+        desired goods G; investment V.
+
+            S   = max(F + R - A, 0)             A1 = A + S - F - R
+            P   = min(O, A1)                    U  = O - P
+            C^f = F + min(max(G - F, 0), A1 - P)
+            V^p = min(V, A1 - P - (C^f - F))
+
+        Support S covers the goods floor and rent only. Unpaid service U is
+        suspended on consumer credit first, then on the mortgage.
+        """
+        desired = self._non_negative(consumption_before_floor)
+        floor = self._non_negative(subsistence_floor)
+        rent = self._non_negative(cash_rent)
+        consumer_service = self._non_negative(scheduled_consumer_service)
+        mortgage_service = self._non_negative(scheduled_mortgage_service)
+        desired_investment = self._non_negative(investment)
+        available = np.asarray(resources, dtype=float)
+        residual_before_floor = self._non_negative(plan.residual_shortfall_after_granted_credit)
+        shape = residual_before_floor.shape
+        for values in (desired, floor, rent, consumer_service, mortgage_service, desired_investment, available):
+            if values.shape != shape:
+                raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
+        if not np.all(np.isfinite(available)):
+            raise ValueError("Stage 5 consumption-floor resources must be finite.")
+
+        support = np.maximum(floor + rent - available, 0.0)
+        after_floor_and_rent = np.maximum(available + support - floor - rent, 0.0)
+        service = consumer_service + mortgage_service
+        service_paid = np.minimum(service, after_floor_and_rent)
+        unpaid_service = service - service_paid
+        unpaid_consumer = np.minimum(unpaid_service, consumer_service)
+        unpaid_mortgage = unpaid_service - unpaid_consumer
+        after_service = after_floor_and_rent - service_paid
+        consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
+        consumption_after_floor = floor + consumption_above_floor
+        investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
+        consumption_cut_amount = np.maximum(desired - consumption_after_floor, 0.0)
+        floor_top_up = np.maximum(consumption_after_floor - desired, 0.0)
         return replace(
             plan,
-            consumption_before_floor=cleaned_consumption_before,
+            consumption_before_floor=desired,
             residual_shortfall_before_floor=residual_before_floor,
             consumption_after_floor=consumption_after_floor,
             consumption_cut_amount=consumption_cut_amount,
-            remaining_subsistence_shortfall=remaining_subsistence_shortfall,
+            remaining_subsistence_shortfall=support + unpaid_consumer + unpaid_mortgage,
+            floor_support=support,
+            unpaid_consumer_service=unpaid_consumer,
+            unpaid_mortgage_service=unpaid_mortgage,
+            investment_after_floor=investment_after_floor,
             floor_binding=(consumption_cut_amount + floor_top_up) > 0.0,
         )

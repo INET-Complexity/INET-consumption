@@ -34,7 +34,7 @@ import hashlib
 import logging
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional
+from typing import Any, Mapping, NamedTuple, Optional
 
 import h5py
 import numpy as np
@@ -75,7 +75,7 @@ from macromodel.agents.households.consumption_inputs import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
-from macromodel.agents.households.households import Households
+from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
@@ -114,6 +114,62 @@ def _positive_float_or_default(value: object, default: float) -> float:
     except (TypeError, ValueError):
         return default
     return parsed if np.isfinite(parsed) and parsed > 0.0 else default
+
+
+class SubsistenceFloorParameters(NamedTuple):
+    """Goods-floor parameters; the defaults reproduce the floor without a configured block."""
+
+    smic_share: float = 0.5
+    cu_weights: tuple[float, float, float] = DEFAULT_CU_WEIGHTS
+    # Monthly housing deduction (ordinary euros, base year) for households of 1, 2 and 3 or more members.
+    housing_deduction_monthly: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def housing_deduction_by_household(
+        self, household_sizes: np.ndarray, *, population_scale_factor: float
+    ) -> np.ndarray:
+        """Monthly deduction per household in model monetary units; size 0 uses the one-member value."""
+        size_index = np.clip(np.asarray(household_sizes, dtype=int), 1, 3) - 1
+        return np.asarray(self.housing_deduction_monthly, dtype=float)[size_index] * float(population_scale_factor)
+
+
+def _read_subsistence_floor_parameters(block: Mapping[str, Any] | None) -> SubsistenceFloorParameters:
+    """Validate the ``subsistence_consumption`` configuration block; an empty block gives the defaults."""
+    block = dict(block or {})
+    defaults = SubsistenceFloorParameters()
+    unknown = set(block) - {"smic_share", "cu_weights", "housing_deduction_monthly"}
+    if unknown:
+        raise ValueError(f"Unknown subsistence_consumption keys: {sorted(str(key) for key in unknown)}")
+
+    def number(value: object, name: str) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+            raise ValueError(f"subsistence_consumption.{name} must be a finite number.")
+        return float(value)
+
+    smic_share = number(block.get("smic_share", defaults.smic_share), "smic_share")
+    if not 0.0 < smic_share <= 1.0:
+        raise ValueError("subsistence_consumption.smic_share must lie in (0, 1].")
+
+    cu_weights = defaults.cu_weights
+    if "cu_weights" in block:
+        weights = block["cu_weights"]
+        names = ("first_adult", "additional_adult", "child")
+        if not isinstance(weights, Mapping) or set(weights) != set(names):
+            raise ValueError(f"subsistence_consumption.cu_weights must define exactly {list(names)}.")
+        cu_weights = tuple(number(weights[name], f"cu_weights.{name}") for name in names)
+        if min(cu_weights) <= 0.0:
+            raise ValueError("subsistence_consumption.cu_weights must be positive.")
+
+    housing_deduction = defaults.housing_deduction_monthly
+    if "housing_deduction_monthly" in block:
+        deduction = block["housing_deduction_monthly"]
+        if not isinstance(deduction, Mapping) or {str(key) for key in deduction} != {"1", "2", "3"}:
+            raise ValueError("subsistence_consumption.housing_deduction_monthly must define exactly keys 1, 2, 3.")
+        by_size = {str(key): number(value, f"housing_deduction_monthly.{key}") for key, value in deduction.items()}
+        housing_deduction = (by_size["1"], by_size["2"], by_size["3"])
+        if min(housing_deduction) < 0.0:
+            raise ValueError("subsistence_consumption.housing_deduction_monthly must be non-negative.")
+
+    return SubsistenceFloorParameters(smic_share, cu_weights, housing_deduction)
 
 
 def _resolve_frm_coefficients_path(
@@ -769,6 +825,9 @@ class Country:
         ]
         emission_fractions = synthetic_country.emission_fractions
 
+        subsistence_floor = _read_subsistence_floor_parameters(
+            getattr(country_configuration, "subsistence_consumption", {})
+        )
         households = Households.from_pickled_agent(
             synthetic_population=synthetic_population,
             synthetic_country=synthetic_country,
@@ -781,6 +840,7 @@ class Country:
             scale=scale,
             add_emissions=add_emissions,
             emission_fractions=emission_fractions,
+            cu_weights=subsistence_floor.cu_weights,
         )
 
         average_initial_price = synthetic_country.industry_data["industry_vectors"]["Average Initial Price"].values
@@ -934,6 +994,10 @@ class Country:
                 initial_cpi=economy.initial_consumer_price_level(),
                 consumption_units=households._current_consumption_units(),
                 time_unit=time_unit,
+                smic_share=subsistence_floor.smic_share,
+                housing_deduction=subsistence_floor.housing_deduction_by_household(
+                    households.current_household_sizes(), population_scale_factor=scale
+                ),
             ),
         )
 
@@ -1095,9 +1159,17 @@ class Country:
         initial_cpi: float,
         consumption_units: np.ndarray,
         time_unit: int,
+        smic_share: float = 0.5,
+        housing_deduction: np.ndarray | float = 0.0,
     ) -> np.ndarray:
+        """Goods floor per household and period: CPI x months x max(share x SMIC x CU - H, 0).
+
+        ``housing_deduction`` is monthly, at base-year prices and in model
+        monetary units, like ``net_smic_base``.
+        """
         initial_cpi = float(initial_cpi) if initial_cpi != 0.0 else 1.0
-        net_smic_monthly_t = float(net_smic_base) * max(float(current_cpi) / initial_cpi, 0.0)
+        cpi_ratio = max(float(current_cpi) / initial_cpi, 0.0)
+        net_smic_monthly_t = float(net_smic_base) * cpi_ratio
         # net_smic_base is already in model monetary units: INSEE's monthly
         # level is population-expanded once by _select_net_smic_base. Do not
         # expand it again on refresh. The benefit fallback keeps its legacy
@@ -1110,16 +1182,25 @@ class Country:
         # (consumption_micro_macro.pdf footnote 3, p.8): monthly SMIC EUR1,128.70,
         # CU=1.8 -> quarterly subsistence EUR3,047.49 = 0.5 * 1128.70 * 1.8 * 3.
         net_smic_period_t = net_smic_monthly_t * float(time_unit)
-        return 0.5 * net_smic_period_t * np.asarray(consumption_units, dtype=float)
+        gross_floor = float(smic_share) * net_smic_period_t * np.asarray(consumption_units, dtype=float)
+        housing_deduction_period_t = np.asarray(housing_deduction, dtype=float) * cpi_ratio * float(time_unit)
+        return np.maximum(gross_floor - housing_deduction_period_t, 0.0)
 
     def _update_subsistence_consumption(self, *, replace_current: bool) -> None:
         net_smic_base = self.economy.ts.current("net_smic_base")[0]
+        subsistence_floor = _read_subsistence_floor_parameters(
+            getattr(getattr(self, "configuration", None), "subsistence_consumption", {})
+        )
         subsistence_consumption = self._compute_subsistence_consumption_from_units(
             net_smic_base=net_smic_base,
             current_cpi=self.economy.current_consumer_price_level(),
             initial_cpi=self.economy.initial_consumer_price_level(),
             consumption_units=self.households._current_consumption_units(),
             time_unit=self.economy.time_unit,
+            smic_share=subsistence_floor.smic_share,
+            housing_deduction=subsistence_floor.housing_deduction_by_household(
+                self.households.current_household_sizes(), population_scale_factor=self.scale
+            ),
         )
         if replace_current:
             self.economy.ts.override_current("net_smic_base", [net_smic_base])

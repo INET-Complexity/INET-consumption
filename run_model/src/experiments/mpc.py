@@ -30,10 +30,12 @@ from src.mpc_analysis import (  # noqa: E402
     add_mpc_bins,
     build_household_mpc_panel,
     filter_mpc_panel,
+    labor_income_gap_share,
     make_household_labor_state_snapshot,
     make_household_metadata,
     period_to_year_month,
     summarize_mpc_bins,
+    summarize_mpc_regimes,
 )
 from src.notebook_workflow import NotebookRunConfig, build_country_config, prepare_data  # noqa: E402
 
@@ -431,6 +433,7 @@ def run_mpc_experiment(
     stay_in_activity_bracket_only: bool = False,
     stable_effective_labor_state_only: bool = False,
     activity_bracket_prefix: str = "activity_bracket_",
+    labor_income_tolerance: float | None = None,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
 
@@ -462,6 +465,11 @@ def run_mpc_experiment(
         stay_in_activity_bracket_only=stay_in_activity_bracket_only,
         stable_effective_labor_state_only=stable_effective_labor_state_only,
     )
+    if labor_income_tolerance is not None:
+        if identification_filter_mode != "none":
+            raise ValueError("labor_income_tolerance cannot be combined with a row-dropping identification filter.")
+        if not np.isfinite(labor_income_tolerance) or labor_income_tolerance < 0.0:
+            raise ValueError("labor_income_tolerance must be finite and non-negative.")
     output_dir = Path(output_dir)
     shock_row = shock_period + 1
     if shock_row + horizon_periods > t_max + 1:
@@ -542,6 +550,14 @@ def run_mpc_experiment(
         )
     elif identification_filter_mode == "effective_labor_state":
         raw_household_panel = _keep_households_in_stable_effective_labor_state(raw_household_panel)
+    if labor_income_tolerance is not None:
+        # Keep every household for the impact MPC. Flag the households whose
+        # labour income is close enough between the two runs for the
+        # cumulative MPC to be attributed to the shock.
+        raw_household_panel["labor_income_gap_share"] = labor_income_gap_share(raw_household_panel)
+        raw_household_panel["cumulative_mpc_identified"] = (
+            raw_household_panel["labor_income_gap_share"] <= labor_income_tolerance
+        )
     filter_config = mpc_filter_config or MPCFilterConfig(enabled=apply_mpc_filters)
     if not apply_mpc_filters and filter_config.enabled:
         filter_config = MPCFilterConfig(enabled=False)
@@ -551,8 +567,16 @@ def run_mpc_experiment(
         required_mpc_columns=plot_mpc_columns,
     )
     filtered_household_panel = add_mpc_bins(filtered_household_panel)
-    raw_summary = summarize_mpc_bins(raw_household_panel, mpc_column=plotted_mpc_column)
-    filtered_summary = summarize_mpc_bins(filtered_household_panel, mpc_column=plotted_mpc_column)
+
+    def cumulative_sample(panel: pd.DataFrame) -> pd.DataFrame:
+        # The bin summaries report a cumulative MPC: under the tolerance they
+        # use the identified households only. The saved panels keep everyone.
+        if "cumulative_mpc_identified" not in panel.columns:
+            return panel
+        return panel.loc[panel["cumulative_mpc_identified"].astype(bool)]
+
+    raw_summary = summarize_mpc_bins(cumulative_sample(raw_household_panel), mpc_column=plotted_mpc_column)
+    filtered_summary = summarize_mpc_bins(cumulative_sample(filtered_household_panel), mpc_column=plotted_mpc_column)
     raw_household_panel.to_csv(analysis_dir / "household_mpc_panel_raw.csv", index=False)
     filtered_household_panel.to_csv(analysis_dir / "household_mpc_panel_filtered.csv", index=False)
     raw_summary.to_csv(analysis_dir / "household_mpc_summary_raw.csv", index=False)
@@ -560,6 +584,10 @@ def run_mpc_experiment(
     filter_report.to_csv(analysis_dir / "household_mpc_filter_report.csv", index=False)
     filtered_household_panel.to_csv(analysis_dir / "household_mpc_panel.csv", index=False)
     filtered_summary.to_csv(analysis_dir / "household_mpc_summary.csv", index=False)
+    if "mpc_regime" in filtered_household_panel.columns:
+        summarize_mpc_regimes(filtered_household_panel, cumulative_column=plotted_mpc_column).to_csv(
+            analysis_dir / "household_mpc_regime_summary.csv", index=False
+        )
 
     return {
         "baseline_dir": baseline_dir,
@@ -620,6 +648,16 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--labor-income-tolerance",
+        type=float,
+        default=None,
+        help=(
+            "Keep every household for the impact MPC and flag as identified for the cumulative MPC those whose "
+            "cumulative absolute labour-income gap between the shock and baseline runs is at most this share "
+            "of the shock. Cannot be combined with the two row-dropping filters."
+        ),
+    )
+    parser.add_argument(
         "--activity-bracket-prefix",
         default="activity_bracket_",
         help="Column prefix used to identify period-by-period activity bracket indicators in the MPC panel.",
@@ -658,6 +696,7 @@ def main() -> None:
         stay_in_activity_bracket_only=parsed.stay_in_activity_bracket_only,
         stable_effective_labor_state_only=parsed.stable_effective_labor_state_only,
         activity_bracket_prefix=parsed.activity_bracket_prefix,
+        labor_income_tolerance=parsed.labor_income_tolerance,
     )
     print(
         {

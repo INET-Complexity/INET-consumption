@@ -244,3 +244,6 @@ def test_floor_settlement_resources_count_each_source_once(test_households):
     h.ts.override_current("property_sale_proceeds", np.full(n, 25.0))
     h.post_grant_feasible_plan = replace(h.post_grant_feasible_plan, purchase_liquidation_total=np.zeros(n))
     np.testing.assert_allclose(h.current_floor_settlement_resources(), 50.0 + 25.0 + 30.0 + 7.0 + 9.0)
+    # Overdrawn liquid assets count as zero, not as a negative resource.
+    h.ts.override_current("liquid_financial_assets", np.full(n, -40.0))
+    np.testing.assert_allclose(h.current_floor_settlement_resources(), 50.0 + 25.0 + 0.0 + 7.0 + 9.0)

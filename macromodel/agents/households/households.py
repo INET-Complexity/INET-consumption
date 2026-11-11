@@ -1167,17 +1167,22 @@ class Households(Agent):
         """Return A: cash available to this period's floor settlement, without support.
 
         Income, a seller's housing surplus max(-X, 0), liquid assets left after
-        the housing draw D, granted consumer credit K and the forced
-        liquidation net of its cost and of the purchase sale.
+        the housing draw D floored at zero, granted consumer credit K and the
+        forced liquidation net of its cost and of the purchase sale. The floor
+        on max(LFA - D, 0) matches the resolver: an overdraft is not a claim on
+        support.
         """
         plan = self.post_grant_feasible_plan
         if plan is None:
             raise RuntimeError("Floor settlement resources require a settled post-grant plan.")
+        liquid_assets_after_housing = np.maximum(
+            np.asarray(self.ts.current("liquid_financial_assets"), dtype=float) - self.current_housing_lfa_draw(),
+            0.0,
+        )
         return (
             np.asarray(self.current_financing_income(), dtype=float)
             + np.maximum(-self.current_net_housing_cash_need(), 0.0)
-            + np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
-            - self.current_housing_lfa_draw()
+            + liquid_assets_after_housing
             + np.asarray(plan.credit_granted, dtype=float)
             + forced_liquidation_cash(plan)
         )

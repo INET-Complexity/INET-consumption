@@ -76,6 +76,27 @@ def test_final_support_covers_the_goods_floor_and_cash_rent_only(case, expected_
     assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support)
 
 
+@pytest.mark.parametrize("exempt,expected_support", [(False, 20.0), (True, 50.0)])
+def test_final_support_counts_or_ignores_the_staged_transfer(exempt, expected_support):
+    # Receipts 50 + transfer 30 against a floor of 100. Counted: 100 - 80 = 20.
+    # Exempt: the test sees 50 only, so support stays at 50.
+    country, hh = _country(50.0)
+    country._staged_household_income_shock = np.array([30.0])
+    country._household_income_shock_exempt_from_support = exempt
+    country.reconcile_realised_household_support()
+    assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
+
+
+def test_stage_household_income_shock_records_the_exemption_and_clears_it():
+    country, hh = _country(50.0)
+    country.stage_household_income_shock(np.array([30.0]), exempt_from_support_test=True)
+    np.testing.assert_allclose(country._household_resources_exempt_from_support_test(), [30.0])
+    country._clear_household_income_shock()
+    np.testing.assert_allclose(country._household_resources_exempt_from_support_test(), [0.0])
+    country.stage_household_income_shock(np.array([30.0]))
+    np.testing.assert_allclose(country._household_resources_exempt_from_support_test(), [0.0])
+
+
 def _country(
     receipt,
     sale_proceeds=0.0,

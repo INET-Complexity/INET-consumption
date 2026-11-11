@@ -20,6 +20,7 @@ def create_household_income_shock_hook(
     target_year: int,
     target_month: int,
     shock_fraction_of_median_income: float = 0.01,
+    exempt_from_support_test: bool = False,
 ) -> Callable[[Simulation, int, int], None]:
     """Create a one-time household income shock for MPC experiments.
 
@@ -37,6 +38,9 @@ def create_household_income_shock_hook(
     shock_fraction_of_median_income:
         Shock amount per household as a fraction of the current median positive
         household income. The shock is equal in nominal value for all households.
+    exempt_from_support_test:
+        False: subsistence support counts the receipt as a resource. True: the
+        support test ignores it.
     """
     if shock_fraction_of_median_income <= 0:
         raise ValueError("shock_fraction_of_median_income must be strictly positive.")
@@ -65,7 +69,10 @@ def create_household_income_shock_hook(
 
         shock_amount = float(shock_fraction_of_median_income * np.median(positive_income))
         shock = np.full(pre_shock_income.shape, shock_amount, dtype=float)
-        country.stage_household_income_shock(shock)
+        if exempt_from_support_test:
+            country.stage_household_income_shock(shock, exempt_from_support_test=True)
+        else:
+            country.stage_household_income_shock(shock)
         applied[0] = True
 
         logging.info(

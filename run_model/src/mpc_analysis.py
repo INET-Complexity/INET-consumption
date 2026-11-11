@@ -39,6 +39,27 @@ PLOT_KINDS = {"violin", "box", "box_only"}
 MPC_PLOT_MEASURES = {"nominal", "real"}
 WINSOR_MODES = {"clip", "trim"}
 PLOT_OUTPUT_FORMATS = {"html", "png", "both"}
+# Regimes of the floor settlement, classified on the baseline run in the shock period.
+MPC_REGIME_SUPPORTED = "floor_bound_supported"
+MPC_REGIME_FLOOR_SELF_FUNDED = "floor_bound_self_funded"
+MPC_REGIME_CONSTRAINED = "liquidity_constrained"
+MPC_REGIME_UNCONSTRAINED = "unconstrained"
+MPC_REGIME_UNKNOWN = "unknown"
+MPC_REGIMES = (
+    MPC_REGIME_UNCONSTRAINED,
+    MPC_REGIME_CONSTRAINED,
+    MPC_REGIME_FLOOR_SELF_FUNDED,
+    MPC_REGIME_SUPPORTED,
+)
+MPC_REGIME_INPUTS = (
+    "stage5_subsistence_support",
+    "consumption_before_floor",
+    "consumption_after_floor",
+    "consumption_cut_amount",
+    "unpaid_consumer_payment",
+    "unpaid_mortgage_payment",
+)
+MPC_REGIME_RELATIVE_TOLERANCE = 1e-9
 SAVED_PLOT_BASE_HEIGHT = 600
 SAVED_PLOT_HEIGHT_SCALE = 0.8
 
@@ -257,6 +278,139 @@ def _series_or_nan(values: np.ndarray | None, *, row: int, n_households: int) ->
     return np.asarray(values[row], dtype=float)
 
 
+def read_household_regime_inputs(h5_path: str | Path, country_code: str, *, row: int) -> dict[str, np.ndarray] | None:
+    """Read the floor-settlement outcomes of one period; None when the file predates them."""
+    with h5py.File(h5_path, "r") as handle:
+        group = handle[f"{country_code}/households"]
+        floor_path = f"{country_code}/economy/subsistence_consumption"
+        if floor_path not in handle or any(name not in group for name in MPC_REGIME_INPUTS):
+            return None
+        inputs = {name: np.asarray(group[name][row], dtype=float) for name in MPC_REGIME_INPUTS}
+        inputs["subsistence_floor"] = np.asarray(handle[floor_path][row], dtype=float)
+    return inputs
+
+
+def classify_mpc_regime(
+    *,
+    support: np.ndarray,
+    consumption_before_floor: np.ndarray,
+    consumption_after_floor: np.ndarray,
+    consumption_cut: np.ndarray,
+    unpaid_service: np.ndarray,
+    subsistence_floor: np.ndarray,
+) -> np.ndarray:
+    """Classify each household into one regime of the floor settlement.
+
+    In order of precedence:
+    - floor-bound supported: support S > 0;
+    - floor-bound self-funded: desired goods G do not exceed the floor F, so
+      consumption equals F, paid from own resources;
+    - liquidity-constrained: consumption above the floor is cut, or debt
+      service is unpaid;
+    - unconstrained: none of the above.
+    A household with a non-finite input is "unknown". Amounts are compared
+    with a tolerance relative to the household's floor.
+    """
+    arrays = [
+        np.asarray(values, dtype=float)
+        for values in (
+            support,
+            consumption_before_floor,
+            consumption_after_floor,
+            consumption_cut,
+            unpaid_service,
+            subsistence_floor,
+        )
+    ]
+    if len({values.shape for values in arrays}) != 1:
+        raise ValueError("Regime inputs must have one value per household.")
+    support, desired, consumed, cut, unpaid, floor = arrays
+    tolerance = MPC_REGIME_RELATIVE_TOLERANCE * np.maximum(np.abs(floor), 1.0)
+    supported = support > tolerance
+    floor_bound = (desired <= floor + tolerance) & (np.abs(consumed - floor) <= tolerance)
+    constrained = (cut > tolerance) | (unpaid > tolerance)
+    regime = np.select(
+        [supported, floor_bound, constrained],
+        [MPC_REGIME_SUPPORTED, MPC_REGIME_FLOOR_SELF_FUNDED, MPC_REGIME_CONSTRAINED],
+        default=MPC_REGIME_UNCONSTRAINED,
+    ).astype(object)
+    regime[~np.all(np.isfinite(np.vstack(arrays)), axis=0)] = MPC_REGIME_UNKNOWN
+    return regime
+
+
+def labor_income_gap_share(panel: pd.DataFrame) -> pd.Series:
+    """Cumulative absolute labour-income gap between the two runs, per unit of shock.
+
+    Sums |labour income in the shock run - labour income in the baseline run|
+    over the snapshot periods ``labor_income_t*`` / ``labor_income_shock_t*``
+    and divides by the shock amount. The comparison is between runs in the same
+    period, not across periods. NaN when a snapshot is missing.
+    """
+    baseline_columns = sorted(
+        column for column in panel.columns if column.startswith("labor_income_t") and not column.endswith("_bin")
+    )
+    if not baseline_columns:
+        raise ValueError("The panel has no labor_income_t* snapshot columns.")
+    gap = pd.Series(0.0, index=panel.index)
+    for column in baseline_columns:
+        shock_column = column.replace("labor_income_t", "labor_income_shock_t")
+        if shock_column not in panel.columns:
+            raise ValueError(f"Missing shock-run snapshot column: {shock_column}.")
+        gap = gap + (panel[shock_column].astype(float) - panel[column].astype(float)).abs()
+    return gap / panel["shock_amount"].astype(float)
+
+
+def summarize_mpc_regimes(
+    panel: pd.DataFrame,
+    *,
+    impact_column: str = "mpc_impact",
+    cumulative_column: str = "real_cmpc_4q",
+    group_column: str = "income_bin",
+    identified_column: str = "cumulative_mpc_identified",
+) -> pd.DataFrame:
+    """Regime shares and MPC moments by group (default: income bin) and regime.
+
+    ``share`` is the fraction of the group's households in the regime. The
+    impact MPC uses every household. The cumulative MPC uses only households
+    with ``identified_column`` true (all households when the column is absent),
+    because the labour income of the others differs between the two runs after
+    the shock period. A row with regime "all" gives the group totals.
+    """
+    if "mpc_regime" not in panel.columns:
+        raise ValueError("The panel has no mpc_regime column.")
+    identified = (
+        panel[identified_column].fillna(False).astype(bool)
+        if identified_column in panel.columns
+        else pd.Series(True, index=panel.index)
+    )
+    rows = []
+    for group_value, group in panel.groupby(group_column, dropna=False, sort=True, observed=True):
+        present = [regime for regime in (*MPC_REGIMES, MPC_REGIME_UNKNOWN) if (group["mpc_regime"] == regime).any()]
+        for regime in ("all", *present):
+            members = group if regime == "all" else group.loc[group["mpc_regime"] == regime]
+            impact = members[impact_column].replace([np.inf, -np.inf], np.nan).dropna()
+            cumulative = (
+                members.loc[identified.loc[members.index], cumulative_column]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            rows.append(
+                {
+                    group_column: group_value,
+                    "regime": regime,
+                    "n": int(len(members)),
+                    "share": float(len(members) / len(group)),
+                    "impact_mean": float(impact.mean()) if len(impact) else np.nan,
+                    "impact_median": float(impact.median()) if len(impact) else np.nan,
+                    "impact_share_zero": float((impact.abs() < 0.02).mean()) if len(impact) else np.nan,
+                    "n_cumulative_identified": int(len(cumulative)),
+                    "cumulative_mean": float(cumulative.mean()) if len(cumulative) else np.nan,
+                    "cumulative_median": float(cumulative.median()) if len(cumulative) else np.nan,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def build_household_mpc_panel(
     *,
     baseline_h5: str | Path,
@@ -417,6 +571,21 @@ def build_household_mpc_panel(
                 additions[f"{name}_{measure}cmpc_{suffix}"] = cumulative_value / denominator
     for arm, outcomes in (("baseline", baseline_outcomes), ("shock", shock_outcomes)):
         additions[f"{arm}_target_consumption_total_mpc"] = outcomes["target_consumption_total_mpc"][shock_row]
+    regime_inputs = read_household_regime_inputs(baseline_h5, country_code, row=shock_row)
+    if regime_inputs is None:
+        additions["mpc_regime"] = np.full(len(panel), MPC_REGIME_UNKNOWN, dtype=object)
+    else:
+        additions["baseline_floor_support"] = regime_inputs["stage5_subsistence_support"]
+        additions["baseline_subsistence_floor"] = regime_inputs["subsistence_floor"]
+        additions["baseline_consumption_before_floor"] = regime_inputs["consumption_before_floor"]
+        additions["mpc_regime"] = classify_mpc_regime(
+            support=regime_inputs["stage5_subsistence_support"],
+            consumption_before_floor=regime_inputs["consumption_before_floor"],
+            consumption_after_floor=regime_inputs["consumption_after_floor"],
+            consumption_cut=regime_inputs["consumption_cut_amount"],
+            unpaid_service=regime_inputs["unpaid_consumer_payment"] + regime_inputs["unpaid_mortgage_payment"],
+            subsistence_floor=regime_inputs["subsistence_floor"],
+        )
     return pd.concat([panel, pd.DataFrame(additions, index=panel.index)], axis=1)
 
 

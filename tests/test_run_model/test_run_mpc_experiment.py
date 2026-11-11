@@ -316,3 +316,121 @@ def test_run_mpc_experiment_strict_filter_excludes_hours_and_income_switchers(tm
 
     assert panel["household_id"].tolist() == [0]
     assert str(summary.loc[0, "ids"]) == "0"
+
+
+def test_run_mpc_experiment_labor_income_tolerance_keeps_all_households_and_flags_identified(tmp_path, monkeypatch):
+    data = SimpleNamespace(configuration=SimpleNamespace(year=2014))
+    country_cfg = SimpleNamespace(assume_zero_growth=False)
+
+    monkeypatch.setattr(
+        mpc_runner,
+        "_prepare_mpc_inputs",
+        lambda **kwargs: (
+            SimpleNamespace(),
+            data,
+            {"ESP": country_cfg},
+            "ESP",
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "_run_seed_pair",
+        lambda **kwargs: pd.DataFrame({"seed": [kwargs["seed"]] * 3, "household_id": [0, 1, 2]}),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "build_household_mpc_panel",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "seed": [kwargs["metadata"]["seed"].iat[0]] * 3,
+                "household_id": [0, 1, 2],
+                "income": [200.0, 200.0, 200.0],
+                "baseline_consumption_impact": [100.0, 100.0, 100.0],
+                "shock_consumption_impact": [105.0, 105.0, 105.0],
+                "debt_asset_ratio": [0.0, 0.0, 0.0],
+                "real_cmpc_4q": [0.2, 0.2, 0.2],
+                "cmpc_4q": [0.2, 0.2, 0.2],
+                "shock_amount": [100.0, 100.0, 100.0],
+                "mpc_impact": [0.1, 0.2, 0.3],
+                "mpc_regime": ["unconstrained", "unconstrained", "liquidity_constrained"],
+                "activity_bracket_t0": [1, 1, 1],
+                "activity_bracket_t1": [1, 1, 1],
+                "activity_bracket_shock_t0": [1, 1, 1],
+                "activity_bracket_shock_t1": [1, 1, 1],
+                "worked_hours_t0": [1.0, 1.0, 1.0],
+                "worked_hours_t1": [1.0, 2.0, 1.0],
+                "worked_hours_shock_t0": [1.0, 1.0, 1.0],
+                "worked_hours_shock_t1": [1.0, 2.0, 1.0],
+                "labor_income_t0": [100.0, 100.0, 100.0],
+                "labor_income_t1": [100.0, 100.0, 100.0],
+                "labor_income_shock_t0": [100.0, 100.0, 100.0],
+                "labor_income_shock_t1": [100.0, 100.0, 120.0],
+            }
+        ),
+    )
+    monkeypatch.setattr(mpc_runner, "add_mpc_bins", lambda panel: panel.assign(income_bin="all"))
+    monkeypatch.setattr(
+        mpc_runner,
+        "filter_mpc_panel",
+        lambda panel, config, required_mpc_columns=None: (
+            panel.copy(),
+            pd.DataFrame({"filter": ["identity"], "before": [len(panel)], "dropped": [0], "remaining": [len(panel)]}),
+        ),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "summarize_mpc_bins",
+        lambda panel, **kwargs: pd.DataFrame(
+            {"rows": [len(panel)], "ids": [",".join(panel["household_id"].astype(str))]}
+        ),
+    )
+
+    paths = mpc_runner.run_mpc_experiment(
+        seeds=[1],
+        t_max=10,
+        shock_period=2,
+        horizon_periods=4,
+        shock_fraction=0.01,
+        output_dir=tmp_path,
+        country_iso3="ESP",
+        apply_mpc_filters=False,
+        labor_income_tolerance=0.05,
+    )
+
+    panel = pd.read_csv(paths["analysis_dir"] / "household_mpc_panel.csv")
+    summary = pd.read_csv(paths["analysis_dir"] / "household_mpc_summary.csv")
+
+    # Household 1 changes hours over time but not between runs: it stays.
+    # Household 2 differs between runs by 20% of the shock: kept, not identified.
+    assert panel["household_id"].tolist() == [0, 1, 2]
+    assert str(summary.loc[0, "ids"]) == "0,1,2"
+    assert panel["labor_income_gap_share"].tolist() == pytest.approx([0.0, 0.0, 0.2])
+    assert panel["cumulative_mpc_identified"].tolist() == [True, True, False]
+    regimes = pd.read_csv(paths["analysis_dir"] / "household_mpc_regime_summary.csv").set_index("regime")
+    assert regimes.loc["all", "n"] == 3 and regimes.loc["all", "n_cumulative_identified"] == 2
+    assert regimes.loc["liquidity_constrained", "n_cumulative_identified"] == 0
+
+
+def test_run_mpc_experiment_rejects_tolerance_with_a_row_dropping_filter(tmp_path):
+    with pytest.raises(ValueError, match="labor_income_tolerance"):
+        mpc_runner.run_mpc_experiment(
+            seeds=[1],
+            t_max=10,
+            shock_period=2,
+            horizon_periods=4,
+            shock_fraction=0.01,
+            output_dir=tmp_path,
+            stable_effective_labor_state_only=True,
+            labor_income_tolerance=0.05,
+        )
+    with pytest.raises(ValueError, match="non-negative"):
+        mpc_runner.run_mpc_experiment(
+            seeds=[1],
+            t_max=10,
+            shock_period=2,
+            horizon_periods=4,
+            shock_fraction=0.01,
+            output_dir=tmp_path,
+            labor_income_tolerance=-0.1,
+        )

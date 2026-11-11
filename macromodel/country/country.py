@@ -638,9 +638,11 @@ class Country:
     def reconcile_realised_household_support(self) -> None:
         """Resolve receipt errors before final cash/learning/fiscal postings.
 
-        Support is provisional until the actual cash ledger is known. Existing
-        regular benefits enter resources once; only the residual is a top-up.
-        Payment relief already committed by the credit authority is preserved.
+        Support is provisional until the actual cash ledger is known. The rule
+        is the settlement's, on realised quantities: support covers realised
+        goods up to the floor plus cash rent, never investment, a property
+        purchase or debt service. Existing regular benefits enter resources
+        once; only the residual is a top-up.
         """
         hh = self.households
         if not hh.uses_feasibility_resolver or hh.post_grant_feasible_plan is None:
@@ -651,14 +653,11 @@ class Country:
         goods_consumption = np.minimum(spent, hh.ts.current("target_consumption"))
         if getattr(hh.functions["investment"], "disables_household_investment", False):
             goods_consumption = spent
-        investment = np.maximum(spent - goods_consumption, 0.0).sum(axis=1)
         taxes = self.central_government.states
-        uses = spent.sum(axis=1) + taxes["Value-added Tax"] * goods_consumption.sum(axis=1)
-        uses += hh.current_consumption_cash_rent()
-        uses += hh.ts.current("interest_paid") + hh.ts.current("debt_installments")
-        uses += (
-            taxes["Household Capital Formation Tax"] + (taxes["Household Investment VAT Rate"] or 0.0)
-        ) * investment
+        # The floor is gross-of-VAT cash; realised goods are VAT-exclusive.
+        realised_goods_cash = (1.0 + taxes["Value-added Tax"]) * goods_consumption.sum(axis=1)
+        floor = np.asarray(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        uses = np.minimum(floor, realised_goods_cash) + hh.current_consumption_cash_rent()
         if hh.post_grant_feasible_plan.reserved_liquidation_total is None:
             raise RuntimeError("Final support requires an executable liquidation reservation.")
         # Only the forced sale, net of the illiquid-trade cost, is cash here.
@@ -2606,9 +2605,15 @@ class Country:
             raise ValueError("Stage 6 FICP supports monthly (1) and quarterly (3) periods only.")
         target_consumption = self.households.ts.current("target_consumption")
         subsistence_consumption = self.economy.ts.current("subsistence_consumption")
+        investment_cash = self.households.target_investment_cash()
         self.households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=self.households.consumption_cash_factor() * target_consumption.sum(axis=1),
             subsistence_floor=subsistence_consumption,
+            cash_rent=self.households.current_consumption_cash_rent(),
+            resources=self.households.current_floor_settlement_resources(),
+            scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
+            scheduled_mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
+            investment=investment_cash,
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -2619,13 +2624,25 @@ class Country:
             fallback_weights=self.households.consumption_weights,
         )
         self.households.ts.override_current("target_consumption", goods_consumption)
+        # Investment ranks last: cut it before anything is ordered.
+        paid_share = np.divide(
+            self.households.post_grant_feasible_plan.investment_after_floor,
+            investment_cash,
+            out=np.ones_like(investment_cash),
+            where=investment_cash > 0.0,
+        )
+        target_investment = np.asarray(self.households.ts.current("target_investment"), dtype=float)
+        self.households.ts.override_current(
+            "target_investment",
+            target_investment * (paid_share[:, None] if target_investment.ndim == 2 else paid_share),
+        )
         self.households.populate_post_grant_early_repayment_capacity(
             mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
             scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             eligible_ficp=self.households.current_ficp_active(),
         )
         settlement = self.credit_market.settle_consumer_payments(
-            remaining_shortfall=self.households.current_remaining_subsistence_shortfall(),
+            remaining_shortfall=self.households.current_unpaid_consumer_service(),
             # CreditMarket caps this capacity against the post-service balance
             # as part of the authoritative settlement. Country only routes the
             # household feasibility carrier; it does not impose a second
@@ -2634,13 +2651,14 @@ class Country:
         )
         # closing_consumer_arrears = settlement.arrears.closing_interest.sum(axis=0) + settlement.arrears.closing_principal.sum(axis=0)  # DEAD CODE
         before_relief = self.households.current_remaining_subsistence_shortfall()
-        after_consumer_relief = np.maximum(before_relief - settlement.unpaid_payment, 0.0)
         self.credit_market.pay_household_mortgage_installments(
-            after_consumer_relief,
+            self.households.current_unpaid_mortgage_service(),
             sale_repayment=self.households.ts.current("mortgage_sale_repayment"),
         )
         mortgage_relief = self.credit_market._mortgage_unpaid_payment
-        after_relief = np.maximum(after_consumer_relief - mortgage_relief, 0.0)
+        # Support covers the goods floor and cash rent only; unpaid debt
+        # service is suspended by the credit market, never paid by support.
+        after_relief = self.households.current_floor_support()
         for name, values in (
             ("pre_relief_funding_gap", before_relief),
             ("post_relief_funding_gap", after_relief),
@@ -2952,7 +2970,7 @@ class Country:
             support_by_household = compute_stage5_subsistence_support(
                 self.households.ts.current("post_relief_funding_gap")
                 if self.credit_market.consumer_payments_settled()
-                else self.households.current_remaining_subsistence_shortfall()
+                else self.households.current_floor_support()
             )
             self.set_stage5_subsistence_support_by_household(support_by_household)
         self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)

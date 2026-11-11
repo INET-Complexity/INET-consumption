@@ -39,6 +39,19 @@ def _replace_post_grant_plan(households, **updates):
     households.post_grant_feasible_plan = replace(households.post_grant_feasible_plan, **updates)
 
 
+def _floor_outcome(support, unpaid_consumer=None, unpaid_mortgage=None):
+    """Settled floor fields: support for the floor and rent, plus unpaid debt service by type."""
+    support = np.asarray(support, dtype=float)
+    unpaid_consumer = np.zeros_like(support) if unpaid_consumer is None else np.asarray(unpaid_consumer, dtype=float)
+    unpaid_mortgage = np.zeros_like(support) if unpaid_mortgage is None else np.asarray(unpaid_mortgage, dtype=float)
+    return {
+        "remaining_subsistence_shortfall": support + unpaid_consumer + unpaid_mortgage,
+        "floor_support": support.copy(),
+        "unpaid_consumer_service": unpaid_consumer,
+        "unpaid_mortgage_service": unpaid_mortgage,
+    }
+
+
 def _load_permanent_income_forecast_inputs_for_test():
     """Load FR permanent-income forecast inputs via the production loader."""
     return load_permanent_income_forecast_inputs(
@@ -1487,6 +1500,7 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
         )
+        monkeypatch.setattr(test_country.households, "current_floor_support", lambda: np.zeros(n_households))
         monkeypatch.setattr(
             test_country.households, "record_pre_support_payment_suspension_diagnostics", lambda **_: None
         )
@@ -1581,7 +1595,7 @@ class TestCountry:
 
         def capture_household_goods_prep(**_kwargs):
             calls["households"] += 1
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=np.zeros(n_households))
+            _replace_post_grant_plan(test_country.households, **_floor_outcome(np.zeros(n_households)))
             return np.zeros(n_households)
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1634,7 +1648,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=sentinel_shortfall)
+            _replace_post_grant_plan(test_country.households, **_floor_outcome(sentinel_shortfall))
             return sentinel_shortfall
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1675,7 +1689,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=np.zeros(n_households))
+            _replace_post_grant_plan(test_country.households, **_floor_outcome(np.zeros(n_households)))
             return np.zeros(n_households)
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1710,10 +1724,18 @@ class TestCountry:
             planned_liquidation_total=np.zeros(n_households),
             residual_shortfall_after_granted_credit=np.zeros(n_households),
         )
+        # Support for the floor and rent; debt service is suspended separately, never paid by support.
         residual = np.resize(np.asarray([0.0, 8.0, 25.0, 4.0]), n_households)
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=residual.copy())
+            _replace_post_grant_plan(
+                test_country.households,
+                **_floor_outcome(
+                    residual.copy(),
+                    unpaid_consumer=np.resize(np.asarray([0.0, 8.0, 10.0, 0.0]), n_households),
+                    unpaid_mortgage=np.resize(np.asarray([0.0, 0.0, 15.0, 4.0]), n_households),
+                ),
+            )
             return residual.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1757,7 +1779,14 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy())
+            _replace_post_grant_plan(
+                test_country.households,
+                **_floor_outcome(
+                    settled_shortfall.copy(),
+                    unpaid_consumer=np.resize(np.asarray([0.0, 1.0, 5.0, 0.0]), n_households),
+                    unpaid_mortgage=np.resize(np.asarray([0.0, 1.0, 3.0, 1.0]), n_households),
+                ),
+            )
             return stale_shortfall.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -1829,6 +1858,12 @@ class TestCountry:
         test_country.households.ts.override_current("target_consumption", target_consumption.copy())
         test_country.households.ts.override_current("target_investment", target_investment.copy())
         test_country.economy.ts.override_current("subsistence_consumption", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households,
+            "current_floor_settlement_resources",
+            lambda: target_consumption.sum(axis=1) - test_country.households.current_post_grant_residual_shortfall(),
+        )
 
         test_country.prepare_goods_market_clearing()
 
@@ -1903,6 +1938,12 @@ class TestCountry:
         test_country.households.ts.override_current("target_consumption", target_consumption.copy())
         test_country.households.ts.override_current("target_investment", target_investment.copy())
         test_country.economy.ts.override_current("subsistence_consumption", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households,
+            "current_floor_settlement_resources",
+            lambda: target_consumption.sum(axis=1) - test_country.households.current_post_grant_residual_shortfall(),
+        )
 
         test_country.prepare_goods_market_clearing()
 
@@ -1979,6 +2020,12 @@ class TestCountry:
         test_country.households.ts.override_current("target_consumption", target_consumption.copy())
         test_country.households.ts.override_current("target_investment", target_investment.copy())
         test_country.economy.ts.override_current("subsistence_consumption", np.full(n_households, 80.0))
+        test_country.households.ts.override_current("rent", np.zeros(n_households))
+        monkeypatch.setattr(
+            test_country.households,
+            "current_floor_settlement_resources",
+            lambda: target_consumption.sum(axis=1) - test_country.households.current_post_grant_residual_shortfall(),
+        )
 
         test_country.prepare_goods_market_clearing()
 
@@ -2047,7 +2094,7 @@ class TestCountry:
         )
 
         def capture_household_goods_prep(**_kwargs):
-            _replace_post_grant_plan(test_country.households, remaining_subsistence_shortfall=settled_shortfall.copy())
+            _replace_post_grant_plan(test_country.households, **_floor_outcome(settled_shortfall.copy()))
             return settled_shortfall.copy()
 
         monkeypatch.setattr(test_country.households, "prepare_goods_market_clearing", capture_household_goods_prep)
@@ -3837,14 +3884,20 @@ class TestCountry:
         n_banks = test_country.credit_market.states["cons_loans"].shape[1]
         target_consumption = test_country.households.ts.current("target_consumption")
         early_repayment_capacity = np.full(n_households, 5.0)
+        support = np.resize(np.asarray([0.0, 7.0, 0.0, 2.0]), n_households)
+        unpaid_consumer = np.resize(np.asarray([0.0, 3.0, 4.0, 0.0]), n_households)
+        unpaid_mortgage = np.resize(np.asarray([0.0, 9.0, 0.0, 0.0]), n_households)
+        target_investment = np.asarray(test_country.households.ts.current("target_investment"), dtype=float).copy()
         test_country.households.post_grant_feasible_plan = PostGrantFeasiblePlan(
             credit_granted=np.zeros(n_households),
             credit_rationing_gap=np.zeros(n_households),
             planned_liquidation_total=np.zeros(n_households),
             residual_shortfall_after_granted_credit=np.zeros(n_households),
             consumption_after_floor=np.zeros(n_households),
-            remaining_subsistence_shortfall=np.zeros(n_households),
+            # Half of desired investment is affordable after the floor, rent and debt service.
+            investment_after_floor=0.5 * test_country.households.target_investment_cash(),
             early_consumer_repayment_capacity=early_repayment_capacity,
+            **_floor_outcome(support, unpaid_consumer=unpaid_consumer, unpaid_mortgage=unpaid_mortgage),
         )
         order = []
         empty_arrears = SimpleNamespace(
@@ -3860,15 +3913,16 @@ class TestCountry:
             principal_paid=np.zeros(n_households),
             arrears=empty_arrears,
         )
+        settlement_inputs = {}
         monkeypatch.setattr(test_country.credit_market, "consumer_payments_settled", lambda: False)
         monkeypatch.setattr(test_country.households, "apply_consumption_floor_to_post_grant_plan", lambda **_: None)
+        monkeypatch.setattr(
+            test_country.households, "current_floor_settlement_resources", lambda: np.zeros(n_households)
+        )
         monkeypatch.setattr(
             test_country.households,
             "_scale_consumption_matrix_to_household_totals",
             lambda **_: target_consumption,
-        )
-        monkeypatch.setattr(
-            test_country.households, "current_remaining_subsistence_shortfall", lambda: np.zeros(n_households)
         )
         monkeypatch.setattr(
             test_country.households,
@@ -3898,7 +3952,7 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.credit_market,
             "pay_household_mortgage_installments",
-            lambda _gap, **_kwargs: np.zeros(n_households),
+            lambda gap, **_kwargs: settlement_inputs.update(mortgage_gap=gap) or np.zeros(n_households),
         )
         monkeypatch.setattr(
             test_country.credit_market, "_mortgage_unpaid_payment", np.zeros(n_households), raising=False
@@ -3912,7 +3966,6 @@ class TestCountry:
         monkeypatch.setattr(
             test_country.credit_market, "_mortgage_principal_arrears_by_cell", np.zeros((n_banks, n_households))
         )
-        settlement_inputs = {}
         monkeypatch.setattr(
             test_country.credit_market,
             "settle_consumer_payments",
@@ -3965,7 +4018,16 @@ class TestCountry:
 
         test_country.settle_authoritative_household_payments()
 
-        np.testing.assert_array_equal(settlement_inputs["remaining_shortfall"], np.zeros(n_households))
+        # Each unpaid amount reaches its own credit-market path; support pays neither.
+        np.testing.assert_array_equal(settlement_inputs["remaining_shortfall"], unpaid_consumer)
+        np.testing.assert_array_equal(settlement_inputs["mortgage_gap"], unpaid_mortgage)
+        np.testing.assert_array_equal(test_country.current_stage5_subsistence_support_by_household(), support)
+        np.testing.assert_array_equal(test_country.households.ts.current("post_relief_funding_gap"), support)
+        np.testing.assert_array_equal(
+            test_country.households.ts.current("pre_relief_funding_gap"), support + unpaid_consumer + unpaid_mortgage
+        )
+        # Investment is cut to what the payment order leaves, before anything is ordered.
+        np.testing.assert_allclose(test_country.households.ts.current("target_investment"), 0.5 * target_investment)
         np.testing.assert_array_equal(
             settlement_inputs["early_repayment_capacity"],
             early_repayment_capacity,

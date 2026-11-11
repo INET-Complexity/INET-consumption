@@ -49,7 +49,12 @@ def sequence(model):
     hh.refresh_post_labour_feasibility(np.full(hh.ts.current("n_households"), 4.0))
     hh.apply_consumption_floor_to_post_grant_plan(
         consumption_before_floor=hh.consumption_cash_factor() * hh.ts.current("target_consumption").sum(1),
-        subsistence_floor=np.full(hh.ts.current("n_households"), 3.0),
+        subsistence_floor=np.full(count, 3.0),
+        cash_rent=hh.current_consumption_cash_rent(),
+        resources=hh.current_floor_settlement_resources(),
+        scheduled_consumer_service=np.full(count, 1.0),
+        scheduled_mortgage_service=np.full(count, 3.0),
+        investment=np.zeros(count),
     )
 
 
@@ -146,8 +151,16 @@ def test_floor_captures_native_cut_and_derived_topup(observed_model):
 
     native = replace(native, residual_shortfall_after_granted_credit=np.array([0.0, 3.0, 30.0]))
     with ResidualDiagnosticCapture(observed_model) as capture:
+        # Resources fall short of desired goods by the residual; no rent, service or investment.
         result = feasibility.settle_consumption_floor(
-            native, consumption_before_floor=np.array([2.0, 20.0, 20.0]), subsistence_floor=np.full(3, 5.0)
+            native,
+            consumption_before_floor=np.array([2.0, 20.0, 20.0]),
+            subsistence_floor=np.full(3, 5.0),
+            cash_rent=np.zeros(3),
+            resources=np.array([2.0, 17.0, -10.0]),
+            scheduled_consumer_service=np.zeros(3),
+            scheduled_mortgage_service=np.zeros(3),
+            investment=np.zeros(3),
         )
     record = capture.records[-1]
     np.testing.assert_array_equal(record["output"]["consumption_cut_amount"], [0, 3, 15])

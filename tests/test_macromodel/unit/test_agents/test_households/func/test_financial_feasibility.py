@@ -107,10 +107,115 @@ def test__consumption_floor_policy_is_pure_and_keeps_the_carrier_immutable():
     post = resolver.build_post_grant_plan(pre, credit_granted=np.array([3.0]))
 
     settled = resolver.settle_consumption_floor(
-        post, consumption_before_floor=np.array([5.0]), subsistence_floor=np.array([4.0])
+        post,
+        consumption_before_floor=np.array([5.0]),
+        subsistence_floor=np.array([4.0]),
+        cash_rent=np.array([0.0]),
+        resources=np.array([1.0]),
+        scheduled_consumer_service=np.array([0.0]),
+        scheduled_mortgage_service=np.array([0.0]),
+        investment=np.array([0.0]),
     )
 
     assert post.consumption_after_floor is None
     np.testing.assert_allclose(settled.consumption_after_floor, [4.0])
     np.testing.assert_allclose(settled.consumption_cut_amount, [1.0])
     np.testing.assert_allclose(settled.remaining_subsistence_shortfall, [3.0])
+    np.testing.assert_allclose(settled.floor_support, [3.0])
+
+
+def _settle_floor(**inputs):
+    """Settle one-household-per-entry inputs; F=80, R=20, O=10+30, G=120, V=15 unless overridden."""
+    values = {
+        "consumption_before_floor": 120.0,
+        "subsistence_floor": 80.0,
+        "cash_rent": 20.0,
+        "scheduled_consumer_service": 10.0,
+        "scheduled_mortgage_service": 30.0,
+        "investment": 15.0,
+        **inputs,
+    }
+    resources = np.atleast_1d(np.asarray(values.pop("resources"), dtype=float))
+    plan = PostGrantFeasiblePlan(
+        credit_granted=np.zeros_like(resources),
+        credit_rationing_gap=np.zeros_like(resources),
+        planned_liquidation_total=np.zeros_like(resources),
+        residual_shortfall_after_granted_credit=np.zeros_like(resources),
+    )
+    return HouseholdFinancialFeasibility().settle_consumption_floor(
+        plan, resources=resources, **{name: np.full_like(resources, value) for name, value in values.items()}
+    )
+
+
+def test__floor_settlement_pays_in_order_floor_and_rent_then_service_then_goods_then_investment():
+    # F + R = 100, O = 40, goods above the floor = 40, V = 15: full plan costs 195.
+    resources = np.array([60.0, 100.0, 125.0, 140.0, 160.0, 180.0, 190.0, 195.0, 500.0])
+    settled = _settle_floor(resources=resources)
+
+    np.testing.assert_allclose(settled.floor_support, [40, 0, 0, 0, 0, 0, 0, 0, 0])
+    # Unpaid service is suspended on consumer credit first, then on the mortgage.
+    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 5, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 100, 120, 120, 120, 120])
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 10, 15, 15])
+    np.testing.assert_allclose(settled.consumption_cut_amount, [40, 40, 40, 40, 20, 0, 0, 0, 0])
+    np.testing.assert_array_equal(settled.floor_binding, [True, True, True, True, True, False, False, False, False])
+    np.testing.assert_allclose(
+        settled.remaining_subsistence_shortfall,
+        settled.floor_support + settled.unpaid_consumer_service + settled.unpaid_mortgage_service,
+    )
+    # Every euro of resources and support is spent in the order above, or left over.
+    service_paid = 40.0 - settled.unpaid_consumer_service - settled.unpaid_mortgage_service
+    spent = settled.consumption_after_floor + 20.0 + service_paid + settled.investment_after_floor
+    np.testing.assert_allclose(spent, np.minimum(resources + settled.floor_support, 195.0))
+
+
+def test__floor_support_covers_the_goods_floor_and_rent_only():
+    # Resources cover the floor and rent exactly: nothing else is supported.
+    for shortfall_only_in in (
+        {"investment": 500.0},
+        {"scheduled_consumer_service": 500.0},
+        {"scheduled_mortgage_service": 500.0},
+        {"consumption_before_floor": 500.0},
+    ):
+        settled = _settle_floor(resources=100.0, **shortfall_only_in)
+        np.testing.assert_allclose(settled.floor_support, [0.0])
+        np.testing.assert_allclose(settled.consumption_after_floor, [80.0])
+        np.testing.assert_allclose(settled.investment_after_floor, [0.0])
+    # A household on support pays no debt service, buys nothing above the floor and does not invest.
+    supported = _settle_floor(resources=70.0)
+    np.testing.assert_allclose(supported.floor_support, [30.0])
+    np.testing.assert_allclose(supported.unpaid_consumer_service + supported.unpaid_mortgage_service, [40.0])
+    np.testing.assert_allclose(supported.consumption_after_floor, [80.0])
+    np.testing.assert_allclose(supported.investment_after_floor, [0.0])
+
+
+def test__floor_is_compulsory_and_funded_from_own_resources_first():
+    settled = _settle_floor(resources=np.array([500.0, 90.0, -10.0]), consumption_before_floor=50.0)
+    np.testing.assert_allclose(settled.consumption_after_floor, [80.0, 80.0, 80.0])
+    # Overdrawn resources (third household) raise support; they are not repaid by it.
+    np.testing.assert_allclose(settled.floor_support, [0.0, 10.0, 110.0])
+    np.testing.assert_allclose(settled.consumption_cut_amount, [0.0, 0.0, 0.0])
+    np.testing.assert_array_equal(settled.floor_binding, [True, True, True])
+
+
+def test__floor_settlement_rejects_non_finite_resources_and_unequal_shapes():
+    with pytest.raises(ValueError, match="resources must be finite"):
+        _settle_floor(resources=np.array([np.nan]))
+    plan = PostGrantFeasiblePlan(
+        credit_granted=np.zeros(2),
+        credit_rationing_gap=np.zeros(2),
+        planned_liquidation_total=np.zeros(2),
+        residual_shortfall_after_granted_credit=np.zeros(2),
+    )
+    with pytest.raises(ValueError, match="equal-length household vectors"):
+        HouseholdFinancialFeasibility().settle_consumption_floor(
+            plan,
+            consumption_before_floor=np.zeros(2),
+            subsistence_floor=np.zeros(2),
+            cash_rent=np.zeros(3),
+            resources=np.zeros(2),
+            scheduled_consumer_service=np.zeros(2),
+            scheduled_mortgage_service=np.zeros(2),
+            investment=np.zeros(2),
+        )

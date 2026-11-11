@@ -1,6 +1,6 @@
 """Cash-unit and settled-authority regressions for total consumption Increment 1."""
 
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import numpy as np
 import pytest
@@ -79,7 +79,7 @@ def test_refresh_rejects_malformed_funding(bad):
         )
 
 
-def test_zero_goods_floor_is_executable_in_net_units(test_households):
+def test_zero_goods_floor_is_executable_in_net_units(test_households, monkeypatch):
     h = test_households
     n = h.ts.current("n_households")
     h.uses_feasibility_resolver = True
@@ -92,9 +92,11 @@ def test_zero_goods_floor_is_executable_in_net_units(test_households):
         planned_liquidation_total=np.zeros(n),
         residual_shortfall_after_granted_credit=np.full(n, 30.0),
     )
+    h.ts.override_current("rent", np.full(n, 30.0))
+    monkeypatch.setattr(h, "current_floor_settlement_resources", lambda: np.zeros(n))
     shortfall = h.prepare_goods_market_clearing(exchange_rate_usd_to_lcu=1.0, subsistence_consumption=np.full(n, 12.0))
     np.testing.assert_allclose(h.ts.current("target_consumption").sum(axis=1), 10.0)
-    np.testing.assert_allclose(shortfall, 42.0)  # 30 mandatory rent plus gross goods floor 12
+    np.testing.assert_allclose(shortfall, 42.0)  # support: 30 cash rent plus gross goods floor 12
 
 
 @pytest.mark.parametrize("buys", [False, True])
@@ -208,3 +210,37 @@ def test_legacy_rent_shortfall_is_explicit(test_households, funded):
     else:
         with pytest.raises(RuntimeError, match="cannot fund mandatory cash rent"):
             h.validate_legacy_mandatory_cash_uses()
+
+
+def test_floor_settlement_resources_count_each_source_once(test_households):
+    """A = income + seller surplus + liquid assets left after the housing draw + credit + forced sale net of cost."""
+    h = test_households
+    n = h.ts.current("n_households")
+    for key, value in {
+        "expected_income": 50,
+        "liquid_financial_assets": 30,
+        "price_paid_for_property": 60,
+        "received_mortgages": 40,
+        "property_sale_proceeds": 0,
+        "mortgage_sale_repayment": 0,
+    }.items():
+        h.ts.override_current(key, np.full(n, float(value)))
+    h._known_receipts_ready = False
+    h.post_grant_feasible_plan = PostGrantFeasiblePlan(
+        credit_granted=np.full(n, 7.0),
+        credit_rationing_gap=np.zeros(n),
+        planned_liquidation_total=np.full(n, 9.0),
+        residual_shortfall_after_granted_credit=np.zeros(n),
+        reserved_liquidation_total=np.full(n, 12.0),
+        liquidation_sale_cost=np.full(n, 3.0),
+        purchase_liquidation_total=np.full(n, 5.0),
+    )
+    # Buyer: X = 60 - 40 = 20, of which 5 from the purchase sale, so D = 15.
+    # Forced-sale cash = 12 - 3 - 5 = 4. A = 50 + 0 + (30 - 15) + 7 + 4.
+    np.testing.assert_allclose(h.current_floor_settlement_resources(), 76.0)
+    # Pure seller: X = -25 is a surplus; no housing draw.
+    h.ts.override_current("price_paid_for_property", np.zeros(n))
+    h.ts.override_current("received_mortgages", np.zeros(n))
+    h.ts.override_current("property_sale_proceeds", np.full(n, 25.0))
+    h.post_grant_feasible_plan = replace(h.post_grant_feasible_plan, purchase_liquidation_total=np.zeros(n))
+    np.testing.assert_allclose(h.current_floor_settlement_resources(), 50.0 + 25.0 + 30.0 + 7.0 + 9.0)

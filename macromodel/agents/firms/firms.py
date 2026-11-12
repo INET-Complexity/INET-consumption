@@ -983,6 +983,21 @@ class Firms(Agent):
             interest_paid_on_loans=self.ts.current("interest_paid_on_loans"),
         )
 
+    def _effective_planning_limits(self) -> dict[str, np.ndarray]:
+        """Input limits for purchase planning, in the effective units production uses.
+
+        ``labour_inputs`` and ``limiting_*_inputs`` are stored before TFP, while
+        ``compute_production`` caps output at ``tfp * limit``. Comparing raw limits
+        with ``target_production`` reads labour that is sufficient in effective
+        units as short by ``1/tfp``, so input purchases fall below use as TFP grows.
+        """
+        tfp = np.asarray(self.states.get("tfp_multiplier", 1.0), dtype=float)
+        return {
+            "current_limiting_labour_inputs": self.ts.current("labour_inputs") * tfp,
+            "current_limiting_intermediate_inputs": self.ts.current("limiting_intermediate_inputs") * tfp,
+            "current_limiting_capital_inputs": self.ts.current("limiting_capital_inputs") * tfp,
+        }
+
     def compute_target_intermediate_inputs_production(self) -> np.ndarray:
         """Calculate target intermediate input production levels.
 
@@ -1001,9 +1016,7 @@ class Firms(Agent):
         ].compute_constrained_intermediate_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._effective_planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1032,9 +1045,7 @@ class Firms(Agent):
         ].compute_constrained_capital_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._effective_planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")

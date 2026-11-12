@@ -3073,3 +3073,21 @@ class TestFirms:
         test_firms.ts.override_current("deposits", np.r_[-1.0, np.zeros(n_firms - 1)])
 
         assert np.isclose(test_firms.compute_total_credit_exposure()[0], 13.0)
+
+    @pytest.mark.parametrize("which", ["intermediate", "capital"])
+    def test__input_planning_limits_are_in_effective_tfp_units(self, test_firms, which):
+        # Labour and stocks exactly sufficient in effective units (tfp * limit == y*):
+        # the planning base must equal y*. Before the fix, raw limits cut it by w*(1 - 1/tfp).
+        n_firms = test_firms.ts.current("production").shape[0]
+        y_star = np.full(n_firms, 10.0)
+        tfp = np.full(n_firms, 1.2)
+        test_firms.states["tfp_multiplier"] = tfp
+        test_firms.ts.override_current("target_production", y_star)
+        for key in ("labour_inputs", "limiting_intermediate_inputs", "limiting_capital_inputs"):
+            test_firms.ts.override_current(key, y_star / tfp)
+        compute = getattr(test_firms, f"compute_target_{which}_inputs_production")
+        np.testing.assert_allclose(compute(), y_star)
+
+        # Same raw limits without TFP growth genuinely bind (when the configured weights are positive).
+        test_firms.states["tfp_multiplier"] = np.ones(n_firms)
+        assert np.all(compute() <= y_star + 1e-12)

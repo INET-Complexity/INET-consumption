@@ -318,7 +318,7 @@ FRA:
         path_name: target_capital_inputs
         parameters:
           credit_gap_fraction: 0
-          target_capital_inputs_fraction: 0.25
+          target_capital_inputs_fraction: 0.05
       target_credit:
         name: DefaultTargetCreditSetter
         path_name: target_credit

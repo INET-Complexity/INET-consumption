@@ -1,0 +1,35 @@
+{
+  "git_commit": "dfde7397ed66fb6f6435b188efff992495ba622b",
+  "source_archive_root": "/private/tmp/inet-phi005-dfde7397",
+  "python": "3.12.13 (main, Mar 25 2026, 03:16:06) [Clang 22.1.1 ]",
+  "platform": "macOS-15.7.9-arm64-arm-64bit",
+  "data_cache": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/output_data/data_benchmark.pkl",
+  "data_cache_sha256": "e6613a49eb3c26bf504a873d2c2844430d8b901fc753fad7c1ea340e68d3396f",
+  "yaml_sha256": {
+    "consumption_paper_parameters.yaml": "1fd74a0c73475a9cb07b464daae38ff5018276956772e043830070b5141f820e",
+    "country_config_FRA.yaml": "bf83b31bffbf147cae4c8f5b1098158f45698058ff3461c30cb70aef8084b5a8",
+    "data_config_FRA.yaml": "51c0326b9fa626b2f038391831e4a75f1b2ae1557a760eebd1707a7dbb6c13d6",
+    "consumption_parameter_documentation.yaml": "184953f534e88ae6b51ced5bb14114c96e68fa97ff1de7e0409df75634e3c06c"
+  },
+  "explicit_overrides": {
+    "target_capital_inputs_fraction": 0.05
+  },
+  "seeds": [
+    40,
+    41,
+    42,
+    43
+  ],
+  "periods": 50,
+  "workers": 1,
+  "frozen_data_cache": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/output_data/phi005-validation-20261112-dfde7397-isolated/data_benchmark.pkl",
+  "effective_configuration_sha256": {
+    "configuration_seed43.json": "a615a414210b747f50c08a731d394d862c4be5c3302f6ff4a8a94fbb8fad98ef",
+    "configuration_seed42.json": "f77fa7929fdfaf9acc5f3edec4207593582e5226c6eab6c3b7eda2c695058a68",
+    "configuration_seed41.json": "f88c455cb9feda081b6937d274608fc0b8c0d37c72abd6ba515c26fbd7e07e20",
+    "configuration_seed40.json": "63da3675a6e1addbd7805764534fe6bc5d42ef44d996d986cf8d6160c0c8fe94"
+  },
+  "environment_snapshot": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/output_data/phi005-validation-20261112-dfde7397-isolated/environment.txt",
+  "artifacts": "/Users/andone/Documents/python_projects/INET-consumption/run_model/data/output_data/phi005-validation-20261112-dfde7397-isolated",
+  "source_archive_command": "git archive dfde7397 | tar -x -C /private/tmp/inet-phi005-dfde7397"
+}

@@ -1,0 +1,56 @@
+{
+  "phase": "full",
+  "provenance_pass": true,
+  "stability_pass": true,
+  "elapsed_seconds": 53.556116082996596,
+  "metrics": [
+    {
+      "seed": 40,
+      "phi": 0.05,
+      "detrended_real_gdp_sd_pct": 1.4996121933123963,
+      "peak_unemployment_pct": 10.701298701298702,
+      "bank_insolvency_max": 0.0,
+      "mean_deficit_pct_gdp": 5.550459549413758,
+      "terminal_debt_pct_annual_gdp": 154.7701931083683,
+      "mean_cpi_yoy_pct": 0.2082669094832278,
+      "lt_credit_fulfillment_pct": 49.99640114815786,
+      "terminal_real_gdp_ratio": 1.0753412574212817
+    },
+    {
+      "seed": 41,
+      "phi": 0.05,
+      "detrended_real_gdp_sd_pct": 1.6829427058109512,
+      "peak_unemployment_pct": 12.277056277056277,
+      "bank_insolvency_max": 0.0,
+      "mean_deficit_pct_gdp": 5.692505559283698,
+      "terminal_debt_pct_annual_gdp": 162.05877790842632,
+      "mean_cpi_yoy_pct": 0.1500943792780591,
+      "lt_credit_fulfillment_pct": 53.286160961612254,
+      "terminal_real_gdp_ratio": 1.0350365813466367
+    },
+    {
+      "seed": 42,
+      "phi": 0.05,
+      "detrended_real_gdp_sd_pct": 1.1123251820381816,
+      "peak_unemployment_pct": 10.233766233766234,
+      "bank_insolvency_max": 0.0,
+      "mean_deficit_pct_gdp": 6.118488927545922,
+      "terminal_debt_pct_annual_gdp": 159.601568578853,
+      "mean_cpi_yoy_pct": 0.16750351297476387,
+      "lt_credit_fulfillment_pct": 49.50552709178676,
+      "terminal_real_gdp_ratio": 1.0948643138660081
+    },
+    {
+      "seed": 43,
+      "phi": 0.05,
+      "detrended_real_gdp_sd_pct": 1.4247234132265383,
+      "peak_unemployment_pct": 11.532467532467534,
+      "bank_insolvency_max": 0.0,
+      "mean_deficit_pct_gdp": 5.4242847491909645,
+      "terminal_debt_pct_annual_gdp": 153.38097990775395,
+      "mean_cpi_yoy_pct": 0.16891631808689367,
+      "lt_credit_fulfillment_pct": 51.83842766357661,
+      "terminal_real_gdp_ratio": 1.0730159116348525
+    }
+  ]
+}

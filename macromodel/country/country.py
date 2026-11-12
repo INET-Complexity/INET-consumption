@@ -3979,7 +3979,6 @@ class Country:
 
         self.firms.ts.total_debt.append([self.firms.compute_total_debt()])
         self.firms.ts.total_deposits.append([self.firms.compute_total_deposits()])
-        self.firms.ts.total_credit_exposure.append([self.firms.compute_total_credit_exposure().sum()])
 
         self.banks.ts.dividend_fund_settlement_debit.append(
             np.maximum(self.banks.ts.current("dividend_fund_declared_distribution"), 0.0).copy()

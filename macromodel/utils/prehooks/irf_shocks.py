@@ -108,7 +108,14 @@ class _PolicyRateShockProxy:
 
     def compute_rate(self, *args, **kwargs):
         base_rate = self.wrapped.compute_rate(*args, **kwargs)
-        return base_rate + float(self.shock)
+        shocked_rate = base_rate + float(self.shock)
+        lower_bound = getattr(self.wrapped, "lower_bound", None)
+        if lower_bound is not None:
+            # Policy floors are annual; both the stored rate and this shock
+            # are per-period. Preserve the additive rate-path intervention.
+            time_unit = kwargs.get("time_unit", args[6] if len(args) > 6 else 1)
+            shocked_rate = max(shocked_rate, lower_bound / _periods_per_year(time_unit))
+        return shocked_rate
 
 
 def _period_to_year_month(initial_year: int, time_unit: int, period: int) -> tuple[int, int]:

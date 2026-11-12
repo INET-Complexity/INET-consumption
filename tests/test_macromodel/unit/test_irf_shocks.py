@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from macromodel.agents.central_bank.func.policy_rate import SmoothTaylorRule
 from macromodel.agents.government_entities.func.consumption import ExpectedGrowthGovernmentConsumptionSetter
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
@@ -70,6 +71,47 @@ def test_policy_rate_shock_converts_annual_rate_points_to_period_rate_points():
     assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.0225)
     hook(simulation, 2020, 7)
     assert central_bank.functions["policy_rate"].compute_rate() == pytest.approx(0.02)
+
+
+@pytest.mark.parametrize(
+    ("lower_bound", "magnitude", "time_unit", "expected_rate"),
+    [
+        (0.0, -0.01, 3, 0.0),
+        (0.0, -0.01, 1, 0.0),
+        (0.01, -0.02, 3, 0.0025),
+        (-0.01, -0.02, 3, -0.0025),
+        (None, -0.01, 3, -0.0025),
+        (0.0, 0.01, 3, 0.0025),
+    ],
+)
+@pytest.mark.parametrize("positional", [False, True])
+def test_policy_rate_shock_respects_annual_floor(lower_bound, magnitude, time_unit, expected_rate, positional):
+    rule = SmoothTaylorRule(lower_bound=lower_bound)
+    central_bank = SimpleNamespace(functions={"policy_rate": rule})
+    simulation = SimpleNamespace(countries={"FRA": SimpleNamespace(central_bank=central_bank)})
+    hook = create_policy_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=time_unit,
+        spec=ShockSpec(name="bounded_rate", kind="policy_rate", period=0, magnitude=magnitude),
+    )
+    states = dict(rho=0.0, r_star=-0.02, targeted_inflation_rate=0.02, phi_pi=0.0, phi_q=0.0)
+    inputs = dict(
+        prev_rate=0.0,
+        inflation=0.0,
+        growth=0.0,
+        central_bank_states=states,
+        cpi_yoy_inflation=0.0,
+        output_gap=0.0,
+        time_unit=time_unit,
+    )
+    hook(simulation, 2020, 1)
+    shocked = central_bank.functions["policy_rate"]
+    actual = shocked.compute_rate(*inputs.values()) if positional else shocked.compute_rate(**inputs)
+    assert actual == pytest.approx(expected_rate)
+
+    hook(simulation, 2020, 1 + time_unit)
+    assert shocked.compute_rate(**inputs) == pytest.approx(rule.compute_rate(**inputs))
 
 
 def test_policy_rate_shock_perturbs_real_simulation_policy_rate(datawrapper):

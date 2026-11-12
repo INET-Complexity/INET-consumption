@@ -789,6 +789,19 @@ class TestFirms:
         test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
         assert np.allclose(test_firms.compute_pricing_depreciation_unit_cost(np.full(n_firms, 10.0)), 0.0)
 
+    def test__pricing_usage_unit_cost_uses_production_from_the_cost_period(self, test_firms):
+        """Pricing sees this period's production before this period's capital cost is booked."""
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "none"
+        test_firms.ts.override_current("used_capital_inputs_costs", np.full(n_firms, 12.0))
+        test_firms.ts.override_current("production", np.full(n_firms, 4.0))
+        test_firms.ts.production.append(np.full(n_firms, 8.0))  # next period's output, cost not yet booked
+
+        unit_cost = test_firms.compute_pricing_depreciation_unit_cost(np.full(n_firms, 10.0))
+
+        assert np.allclose(unit_cost, 3.0)
+
     def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries

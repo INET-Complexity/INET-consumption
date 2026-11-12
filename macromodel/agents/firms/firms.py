@@ -268,9 +268,14 @@ class Firms(Agent):
         ``used_capital_inputs`` (a * y) at current prices, so the unit cost is
         sum_g a_g * p_g. Zero under ``surplus_pool``, where that charge is not
         deducted from profits.
+
+        Pricing runs after the period's production is appended but before its
+        used capital costs are, so the cost is divided by production from the
+        same period as the cost, not by the latest production.
         """
         usage_costs = np.asarray(self.capital_compensation_accounting_costs(), dtype=float)
-        production = np.asarray(self.ts.current("production"), dtype=float)
+        n_cost_periods = len(self.ts.historic("used_capital_inputs_costs"))
+        production = np.asarray(self.ts.historic("production")[n_cost_periods - 1], dtype=float)
         unit_cost = np.divide(
             usage_costs,
             production,

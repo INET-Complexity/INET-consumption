@@ -261,11 +261,36 @@ class Firms(Agent):
         normal_output[~self._valid_positive(normal_output)] = np.nan
         return normal_output
 
+    def compute_pricing_usage_capital_unit_cost(self) -> np.ndarray:
+        """Usage-based capital wear charged in accounting, per unit of realised output.
+
+        Under ``production_cost`` the accounting charge is the physical wear
+        ``used_capital_inputs`` (a * y) at current prices, so the unit cost is
+        sum_g a_g * p_g. Zero under ``surplus_pool``, where that charge is not
+        deducted from profits.
+        """
+        usage_costs = np.asarray(self.capital_compensation_accounting_costs(), dtype=float)
+        production = np.asarray(self.ts.current("production"), dtype=float)
+        unit_cost = np.divide(
+            usage_costs,
+            production,
+            out=np.zeros_like(usage_costs, dtype=float),
+            where=np.isfinite(usage_costs) & (usage_costs >= 0.0) & self._valid_positive(production),
+        )
+        unit_cost[~(np.isfinite(unit_cost) & (unit_cost >= 0.0))] = 0.0
+        return unit_cost
+
     def compute_pricing_depreciation_unit_cost(self, pricing_normal_output: np.ndarray) -> np.ndarray:
-        """Compute CFC unit cost by allocating normal depreciation over normal output."""
+        """Capital cost per unit used in the pricing average-cost floor.
+
+        Charges the same capital cost as profits and unit costs: usage-based wear
+        per unit of realised output (``production_cost``) plus CFC allocated over
+        normal output (``eurostat_cfc``).
+        """
+        usage_unit_cost = self.compute_pricing_usage_capital_unit_cost()
         mode = self.configuration.parameters.capital_depreciation_accounting_mode
         if mode == "none":
-            return np.zeros(self.ts.current("n_firms"), dtype=float)
+            return usage_unit_cost
         if mode != "eurostat_cfc":
             raise ValueError(
                 f"Unknown capital_depreciation_accounting_mode {mode!r}; expected 'none' or 'eurostat_cfc'."
@@ -295,7 +320,7 @@ class Firms(Agent):
             & self._valid_positive(normal_output),
         )
         depreciation_unit_cost[~(np.isfinite(depreciation_unit_cost) & (depreciation_unit_cost >= 0.0))] = 0.0
-        return depreciation_unit_cost
+        return usage_unit_cost + depreciation_unit_cost
 
     def get_effective_capital_coefficients(self) -> np.ndarray:
         """Get the effective capital input coefficients for each firm.

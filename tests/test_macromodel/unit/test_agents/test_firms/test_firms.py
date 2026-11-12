@@ -760,6 +760,7 @@ class TestFirms:
 
     def test__pricing_depreciation_unit_cost_allocates_cfc_over_normal_output(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
         test_firms.configuration.parameters.capital_depreciation_accounting_mode = "eurostat_cfc"
         test_firms.ts.override_current("capital_depreciation_costs", np.full(n_firms, 30.0))
         pricing_normal_output = np.full(n_firms, 10.0)
@@ -769,6 +770,24 @@ class TestFirms:
 
         assert depreciation_unit_cost[0] == pytest.approx(2.0)
         assert np.allclose(depreciation_unit_cost[1:], 3.0)
+
+    def test__pricing_depreciation_unit_cost_charges_usage_wear_per_unit_output(self, test_firms):
+        """macro-main alignment: pricing charges the same a*y wear as profits."""
+        n_firms = test_firms.ts.current("n_firms")
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "none"
+        test_firms.ts.override_current("used_capital_inputs_costs", np.full(n_firms, 12.0))
+        production = np.full(n_firms, 4.0)
+        production[0] = 0.0
+        test_firms.ts.override_current("production", production)
+
+        unit_cost = test_firms.compute_pricing_depreciation_unit_cost(np.full(n_firms, 10.0))
+
+        assert unit_cost[0] == pytest.approx(0.0)
+        assert np.allclose(unit_cost[1:], 3.0)
+
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
+        assert np.allclose(test_firms.compute_pricing_depreciation_unit_cost(np.full(n_firms, 10.0)), 0.0)
 
     def test__equity_reflects_stocks_and_deposits_not_non_cash_depreciation(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")

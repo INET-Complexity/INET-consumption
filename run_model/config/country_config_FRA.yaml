@@ -317,8 +317,8 @@ FRA:
         name: TFPAdjustedTargetCapitalInputsSetter
         path_name: target_capital_inputs
         parameters:
-          credit_gap_fraction: 0
-          target_capital_inputs_fraction: 0.25
+          credit_gap_fraction: 0  # inactive under post_credit_cash_budget
+          target_capital_inputs_fraction: 0.05
       target_credit:
         name: DefaultTargetCreditSetter
         path_name: target_credit
@@ -383,7 +383,11 @@ FRA:
         - 0
         - 0
       capital_inputs_utilisation_rate: 0.85  # 1.0
-      capital_compensation_accounting_mode: surplus_pool
+      # Capital wear aligned with macro-main (2026-11-12): physical wear, profits,
+      # unit costs and pricing all charge used_capital_inputs = a*y. Previously
+      # surplus_pool + eurostat_cfc wore K out by a*y but charged CFC delta*K in
+      # profits (wedge 3.5% -> 19%). Must match data_config_FRA.yaml.
+      capital_compensation_accounting_mode: production_cost
       # LIVE, made explicit 2026-09-01 (was unset and taking this same default).
       # Exponent psi on the CPI deflator applied to the nominal wage obligation
       # (firms.py:1420): indexation = CPI**psi, so 1.0 = full pass-through
@@ -396,8 +400,8 @@ FRA:
       # It is the second indexation channel alongside the wage_setter's
       # `incumbent_indexation_pass_through` (alpha); keep both visible together.
       wage_cpi_indexation_elasticity: 1.0
-      capital_depreciation_accounting_mode: eurostat_cfc
-      capital_replacement_matrix_source: eurostat_cfc_output
+      capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
+      capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
       firm_activity_finance_revision_mode: post_credit_cash_budget
       depreciation_rates:
         - 0.0

@@ -422,6 +422,7 @@ class Country:
         self._consumption_run_id = 0
         self.firms = firms
         self.central_government = central_government
+        self.firms.states["Capital Formation Tax"] = central_government.states["Firm Capital Formation Tax"]
         self.government_entities = government_entities
         self.banks = banks
         self.central_bank = central_bank
@@ -878,6 +879,11 @@ class Country:
             ],
             tax_data=synthetic_country.tax_data,
             n_industries=n_industries,
+        )
+        firms.states["Capital Formation Tax"] = central_government.states["Firm Capital Formation Tax"]
+        firms.ts.override_current(
+            "capital_formation_taxes_paid",
+            firms.capital_formation_tax_on_purchases(firms.ts.current("total_capital_inputs_bought_costs")),
         )
         tax_overrides = country_configuration.central_government.tax_overrides
         if tax_overrides.value_added_tax_rate is not None or tax_overrides.household_investment_vat_rate is not None:
@@ -3519,6 +3525,7 @@ class Country:
             - self.firms.direct_tfp_investment_cash_expense()
             - self.firms.ts.current("taxes_paid_on_production")
             - self.firms.ts.current("corporate_taxes_paid")
+            - self.firms.ts.current("capital_formation_taxes_paid")
             - self.firms.ts.current("interest_paid")
             - self.firms.ts.current("debt_installments")
             - self.firms.ts.current("operating_revolving_repayment")
@@ -3816,6 +3823,14 @@ class Country:
         )
         self.firms.ts.capital_inputs_stock_industry.append(self.firms.ts.current("capital_inputs_stock").sum(axis=0))
         self.firms.ts.capital_depreciation_costs.append(self.firms.compute_capital_depreciation_costs())
+
+        # Record the same realised acquisition levy that government receives.
+        self.firms.states["Capital Formation Tax"] = self.central_government.states["Firm Capital Formation Tax"]
+        self.firms.ts.capital_formation_taxes_paid.append(
+            self.firms.capital_formation_tax_on_purchases(
+                self.firms.ts.current("total_capital_inputs_bought_costs")
+            )
+        )
 
         # D1. FIRM FINANCIAL METRICS
         # Update firm financial positions

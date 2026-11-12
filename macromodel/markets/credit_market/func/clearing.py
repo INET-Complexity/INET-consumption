@@ -78,6 +78,7 @@ def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray
         "nominal_amount_spent_in_lcu",
         "taxes_paid_on_production",
         "corporate_taxes_paid",
+        "capital_formation_taxes_paid",
     )
     histories = {name: firms.ts.historic(name) for name in cfads_components}
     available_periods = min(window, *(len(history) for history in histories.values()))
@@ -93,6 +94,7 @@ def _compute_firm_cfads(firms: Firms, window: int, haircut: float) -> np.ndarray
             + goods_purchases
             + np.asarray(histories["taxes_paid_on_production"][period], dtype=float)
             + np.asarray(histories["corporate_taxes_paid"][period], dtype=float)
+            + np.asarray(histories["capital_formation_taxes_paid"][period], dtype=float)
         )
 
         period_value = cash_sales - costs

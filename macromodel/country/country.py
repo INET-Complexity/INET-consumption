@@ -3827,9 +3827,7 @@ class Country:
         # Record the same realised acquisition levy that government receives.
         self.firms.states["Capital Formation Tax"] = self.central_government.states["Firm Capital Formation Tax"]
         self.firms.ts.capital_formation_taxes_paid.append(
-            self.firms.capital_formation_tax_on_purchases(
-                self.firms.ts.current("total_capital_inputs_bought_costs")
-            )
+            self.firms.capital_formation_tax_on_purchases(self.firms.ts.current("total_capital_inputs_bought_costs"))
         )
 
         # D1. FIRM FINANCIAL METRICS

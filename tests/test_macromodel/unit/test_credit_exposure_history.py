@@ -7,9 +7,7 @@ from macromodel.simulation import Simulation
 
 
 def test_firm_credit_exposure_records_one_settled_value_per_period(datawrapper):
-    configuration = SimulationConfiguration(
-        country_configurations={"FRA": CountryConfiguration()}, seed=12, t_max=3
-    )
+    configuration = SimulationConfiguration(country_configurations={"FRA": CountryConfiguration()}, seed=12, t_max=3)
     simulation = Simulation.from_datawrapper(datawrapper=datawrapper, simulation_configuration=configuration)
     firms = simulation.countries["FRA"].firms
     initial_exposure = np.asarray(firms.ts.current("total_credit_exposure")).copy()

@@ -25,9 +25,17 @@ class TargetCapitalInputsSetter(ABC):
             stock considered available for future production
         credit_gap_fraction (float): How much to reduce capital targets
             when facing credit constraints (between 0 and 1)
+        financed_share_memory (bool): When True, the expansion part of the
+            capital gap is scaled by the share of last period's planned capital
+            purchases that was financed (revision B)
     """
 
-    def __init__(self, target_capital_inputs_fraction: float, credit_gap_fraction: float):
+    def __init__(
+        self,
+        target_capital_inputs_fraction: float,
+        credit_gap_fraction: float,
+        financed_share_memory: bool = False,
+    ):
         """Initialize the target capital inputs setter.
 
         Args:
@@ -35,9 +43,12 @@ class TargetCapitalInputsSetter(ABC):
                 stock considered available for future production
             credit_gap_fraction (float): How much to reduce capital targets
                 when facing credit constraints (between 0 and 1)
+            financed_share_memory (bool): Scale the expansion gap by last
+                period's financed share. Defaults to False.
         """
         self.target_capital_inputs_fraction = target_capital_inputs_fraction
         self.credit_gap_fraction = credit_gap_fraction
+        self.financed_share_memory = financed_share_memory
 
     @abstractmethod
     def compute_unconstrained_target_capital_inputs(
@@ -53,6 +64,7 @@ class TargetCapitalInputsSetter(ABC):
         extra_taxes: Optional[np.ndarray] = None,
         current_tfp_multiplier: Optional[np.ndarray] = None,
         initial_tfp_multiplier: Optional[np.ndarray] = None,
+        financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate unconstrained target capital inputs for each firm.
 
@@ -140,6 +152,7 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         extra_taxes: Optional[np.ndarray] = None,
         current_tfp_multiplier: Optional[np.ndarray] = None,
         initial_tfp_multiplier: Optional[np.ndarray] = None,
+        financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate unconstrained capital input targets with stock adjustment.
 
@@ -165,34 +178,28 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         Returns:
             np.ndarray: Unconstrained target capital inputs by firm and type
         """
-        target_capital_inputs = np.multiply(
+        replacement = np.multiply(
             current_target_production[:, None],
             capital_input_use_matrix,
             out=np.zeros_like(capital_input_use_matrix),
         )
+        benchmark_stock = (
+            np.divide(
+                current_target_production,
+                initial_production,
+                out=np.zeros_like(current_target_production),
+                where=initial_production != 0.0,
+            )
+        )[:, None] * initial_capital_inputs_stock
+        capital_gap = benchmark_stock - prev_capital_inputs_stock
 
-        # Take current stock of capital inputs into accounts
-        target_capital_inputs = np.maximum(
-            0.0,
-            target_capital_inputs
-            - self.target_capital_inputs_fraction
-            * (
-                prev_capital_inputs_stock
-                - (
-                    (
-                        np.divide(
-                            current_target_production,
-                            initial_production,
-                            out=np.zeros_like(current_target_production),
-                            where=initial_production != 0.0,
-                        )
-                    )[:, None]
-                    * initial_capital_inputs_stock
-                )
-            ),
-        )
+        # Revision B: firms close only the financed share of an expansion gap;
+        # replacement and disinvestment toward the benchmark are not scaled.
+        gap_scale = np.ones_like(capital_gap)
+        if self.financed_share_memory and financed_share is not None:
+            gap_scale = np.where(capital_gap > 0.0, np.asarray(financed_share, dtype=float)[:, None], 1.0)
 
-        return target_capital_inputs
+        return np.maximum(0.0, replacement + self.target_capital_inputs_fraction * gap_scale * capital_gap)
 
     def compute_target_capital_inputs(
         self,
@@ -256,6 +263,7 @@ class TFPAdjustedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter):
         extra_taxes: Optional[np.ndarray] = None,
         current_tfp_multiplier: Optional[np.ndarray] = None,
         initial_tfp_multiplier: Optional[np.ndarray] = None,
+        financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         if current_tfp_multiplier is None or initial_tfp_multiplier is None:
             raise ValueError(
@@ -286,6 +294,7 @@ class TFPAdjustedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter):
             previous_good_prices=previous_good_prices,
             substitution_bundle_matrix=substitution_bundle_matrix,
             extra_taxes=extra_taxes,
+            financed_share=financed_share,
         )
 
 
@@ -307,6 +316,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
         target_capital_inputs_fraction: float,
         credit_gap_fraction: float,
         beta: float = 1.0,
+        financed_share_memory: bool = False,
     ) -> None:
         """Initialize the bundle-weighted target capital inputs setter.
 
@@ -318,7 +328,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
             beta (float, optional): Parameter controlling the sensitivity of weights
                 to price and capital-use coefficient differences. Defaults to 1.0.
         """
-        super().__init__(target_capital_inputs_fraction, credit_gap_fraction)
+        super().__init__(target_capital_inputs_fraction, credit_gap_fraction, financed_share_memory)
         self.beta = beta
 
     def compute_unconstrained_target_capital_inputs(
@@ -334,6 +344,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
         extra_taxes: Optional[np.ndarray] = None,
         current_tfp_multiplier: Optional[np.ndarray] = None,
         initial_tfp_multiplier: Optional[np.ndarray] = None,
+        financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate bundle-weighted unconstrained capital input targets.
 
@@ -376,6 +387,7 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
             extra_taxes,
             current_tfp_multiplier,
             initial_tfp_multiplier,
+            financed_share,
         )
 
         # Calculate average price (using nanmean to handle potential NaN values)

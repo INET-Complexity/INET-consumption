@@ -748,6 +748,9 @@ class Firms(Agent):
             estimated_inflation: Expected inflation rate
             current_good_prices (np.ndarray): Industry-level average prices
         """
+        # Fixed for the whole period: later capital plans in this period run after
+        # this period's planned and financed costs are recorded.
+        self.capital_financed_share = self.compute_capital_financed_share()
         goods_criticality_by_firm = self.current_goods_criticality_by_firm()
         self.ts.limiting_intermediate_inputs.append(
             self.functions["production"].compute_limiting_intermediate_inputs_stock(
@@ -1640,6 +1643,22 @@ class Firms(Agent):
             current_good_prices,
         )
 
+    def compute_capital_financed_share(self) -> np.ndarray:
+        """Share of last period's planned capital purchases that was financed.
+
+        s = min(1, feasible / planned) where planned > 0, else 1. Read at the start
+        of the period, before this period's costs are recorded.
+        """
+        planned = np.asarray(self.ts.current("planned_capital_purchase_expected_costs"), dtype=float)
+        feasible = np.asarray(self.ts.current("feasible_capital_purchase_expected_costs"), dtype=float)
+        share = np.divide(
+            feasible,
+            planned,
+            out=np.ones_like(planned),
+            where=np.isfinite(planned) & np.isfinite(feasible) & (planned > 0.0),
+        )
+        return np.clip(np.nan_to_num(share, nan=1.0), 0.0, 1.0)
+
     def compute_unconstrained_demand_for_capital_inputs(
         self, good_prices: np.ndarray, extra_taxes: Optional[np.ndarray] = None
     ) -> np.ndarray:
@@ -1671,6 +1690,7 @@ class Firms(Agent):
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
+            financed_share=getattr(self, "capital_financed_share", None),
         )
 
     def compute_unconstrained_demand_for_capital_inputs_value(self, current_good_prices: np.ndarray) -> np.ndarray:
@@ -2598,6 +2618,7 @@ class Firms(Agent):
             initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
+            financed_share=getattr(self, "capital_financed_share", None),
         )
         intermediate_costs = (target_intermediate * expected_lcu_prices[None, :]).sum(axis=1)
         capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)

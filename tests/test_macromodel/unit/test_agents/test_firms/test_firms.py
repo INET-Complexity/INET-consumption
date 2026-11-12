@@ -789,6 +789,21 @@ class TestFirms:
         test_firms.configuration.parameters.capital_compensation_accounting_mode = "surplus_pool"
         assert np.allclose(test_firms.compute_pricing_depreciation_unit_cost(np.full(n_firms, 10.0)), 0.0)
 
+    def test__capital_financed_share_is_last_period_feasible_over_planned(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        planned = np.full(n_firms, 10.0)
+        planned[0] = 0.0  # no plan: no information, s = 1
+        feasible = np.full(n_firms, 4.0)
+        feasible[1] = 15.0  # financed more than planned: capped at 1
+        test_firms.ts.override_current("planned_capital_purchase_expected_costs", planned)
+        test_firms.ts.override_current("feasible_capital_purchase_expected_costs", feasible)
+
+        share = test_firms.compute_capital_financed_share()
+
+        assert share[0] == pytest.approx(1.0)
+        assert share[1] == pytest.approx(1.0)
+        assert np.allclose(share[2:], 0.4)
+
     def test__pricing_usage_unit_cost_uses_production_from_the_cost_period(self, test_firms):
         """Pricing sees this period's production before this period's capital cost is booked."""
         n_firms = test_firms.ts.current("n_firms")

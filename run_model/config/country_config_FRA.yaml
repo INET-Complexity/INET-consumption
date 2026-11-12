@@ -319,6 +319,9 @@ FRA:
         parameters:
           credit_gap_fraction: 0  # inactive under post_credit_cash_budget
           target_capital_inputs_fraction: 0.05
+          # Revision B (2026-11-12): expansion gap scaled by last period's financed
+          # share s = min(1, feasible/planned capital costs); effective speed phi*s.
+          financed_share_memory: true
       target_credit:
         name: DefaultTargetCreditSetter
         path_name: target_credit

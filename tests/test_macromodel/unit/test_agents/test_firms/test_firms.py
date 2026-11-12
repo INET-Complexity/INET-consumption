@@ -3107,3 +3107,25 @@ class TestFirms:
         test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
         test_firms.ts.override_current("limiting_capital_inputs", np.full(n_firms, 8.0))
         np.testing.assert_allclose(test_firms.compute_target_intermediate_inputs_production(), 8.0)
+
+    def test__pricing_labour_inputs_are_tfp_effective(self, test_firms):
+        # Labour MC must be wage bill per unit of output: w / (tfp * L).
+        n_firms = test_firms.ts.current("production").shape[0]
+        tfp = np.full(n_firms, 1.25)
+        test_firms.states["tfp_multiplier"] = tfp
+        test_firms.ts.override_current("labour_inputs", np.full(n_firms, 8.0))
+        captured = {}
+        price_setter = test_firms.functions["prices"]
+        original = price_setter.compute_price
+
+        def capture(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        price_setter.compute_price = capture
+        test_firms.compute_price(
+            current_estimated_ppi_inflation=0.0,
+            previous_average_good_prices=np.ones(test_firms.n_industries),
+            ppi_during=np.ones(2),
+        )
+        np.testing.assert_allclose(captured["pricing_effective_labour_inputs"], 10.0)

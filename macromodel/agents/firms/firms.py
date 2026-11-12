@@ -1139,9 +1139,9 @@ class Firms(Agent):
         Determines production based on:
         - Operative feasible activity, when post-credit/post-labour planning has run
         - Behavioural target production otherwise
-        - Labor input constraints (scaled by TFP)
-        - Intermediate input constraints (scaled by TFP)
-        - Capital input constraints (scaled by TFP)
+        - Labor input constraints (scaled by TFP: labour-augmenting)
+        - Intermediate input constraints (not scaled by TFP)
+        - Capital input constraints (not scaled by TFP)
 
         Returns:
             np.ndarray: Actual production quantity for each firm
@@ -1156,7 +1156,7 @@ class Firms(Agent):
             current_labour_inputs=self.ts.current("labour_inputs"),
             current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            tfp_multiplier=self.states.get("tfp_multiplier"),
+            tfp_multiplier=self.states["tfp_multiplier"],
         )
 
     def compute_total_sales(self) -> np.ndarray:
@@ -1534,7 +1534,8 @@ class Firms(Agent):
             capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
         )
         pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
-        pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
+        # Labour MC per unit of output: wage bill / (tfp * L).
+        pricing_effective_labour_inputs = np.asarray(self.effective_labour_inputs(), dtype=float)
         prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,
@@ -2555,7 +2556,7 @@ class Firms(Agent):
         return np.maximum(0.0, remaining_finance - affordable_costs), scale
 
     def _activity_finance_tfp_for_feasible_labour(self) -> np.ndarray:
-        tfp_multiplier = np.asarray(self.ts.current("tfp_multiplier"), dtype=float).copy()
+        tfp_multiplier = np.asarray(self.states["tfp_multiplier"], dtype=float).copy()
         valid_tfp = np.isfinite(tfp_multiplier) & (tfp_multiplier > 1e-12)
         economy_positive_tfp = tfp_multiplier[valid_tfp]
         economy_fallback = np.median(economy_positive_tfp) if economy_positive_tfp.size > 0 else 1.0

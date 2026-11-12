@@ -319,6 +319,9 @@ FRA:
         parameters:
           credit_gap_fraction: 0  # inactive under post_credit_cash_budget
           target_capital_inputs_fraction: 0.05
+          # Revision B (2026-11-12): expansion gap scaled by last period's financed
+          # share s = min(1, feasible/planned capital costs); effective speed phi*s.
+          financed_share_memory: true
       target_credit:
         name: DefaultTargetCreditSetter
         path_name: target_credit
@@ -495,8 +498,10 @@ FRA:
       household_investment_vat_rate: 0.13
       # Do not apply a second capital-formation tax to this household flow.
       household_capital_formation_rate: 0.0
-      # Provisional firm-side rate applied once to realised capital-goods purchases.
-      firm_capital_formation_rate: 0.24856698371134814
+      # Disable the additional firm investment levy and its GDP valuation markup.
+      # The former all-sector/dwellings ratio does not identify an NFC tax rate;
+      # household investment VAT remains separate. See the 2026-11-12 fiscal audit.
+      firm_capital_formation_rate: 0.0
       # Scale factor on the shared production-tax vector. The vector now holds
       # both the input-output tax on intermediate use and D29X39, so the 2.0
       # that stood in for the missing tax is no longer needed. Tested on 20

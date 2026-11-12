@@ -359,6 +359,7 @@ class FirmTimeSeries(TimeSeries):
             pricing_cost_normalization_status=np.zeros(data.shape[0]),
             taxes_paid_on_production=data["Taxes paid on Production"].values,
             corporate_taxes_paid=data["Corporate Taxes Paid"].values,
+            capital_formation_taxes_paid=np.zeros(data.shape[0]),
             equity=data["Equity"].values,
             #
             estimated_demand=data["Demand"].values,
@@ -778,6 +779,7 @@ def create_firms_timeseries(
         pricing_cost_normalization_status=np.zeros(data.shape[0]),
         taxes_paid_on_production=data["Taxes paid on Production"].values,
         corporate_taxes_paid=data["Corporate Taxes Paid"].values,
+        capital_formation_taxes_paid=np.zeros(data.shape[0]),
         equity=data["Equity"].values,
         #
         estimated_demand=data["Demand"].values,

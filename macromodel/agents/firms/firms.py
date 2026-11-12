@@ -748,6 +748,9 @@ class Firms(Agent):
             estimated_inflation: Expected inflation rate
             current_good_prices (np.ndarray): Industry-level average prices
         """
+        # Fixed for the whole period: later capital plans in this period run after
+        # this period's planned and financed costs are recorded.
+        self.capital_financed_share = self.compute_capital_financed_share()
         goods_criticality_by_firm = self.current_goods_criticality_by_firm()
         self.ts.limiting_intermediate_inputs.append(
             self.functions["production"].compute_limiting_intermediate_inputs_stock(
@@ -876,6 +879,7 @@ class Firms(Agent):
         expected_prices = (1 + estimated_inflation) * current_good_prices
         # Target capital inputs are in real units, so multiply by expected prices to get costs
         expected_capital_costs = np.matmul(self.ts.current("target_capital_inputs"), expected_prices)
+        expected_capital_costs += self.capital_formation_tax_on_purchases(expected_capital_costs)
 
         # Calculate available cash for productivity investment
         # First ensure capital replacement is covered, then use remaining capacity
@@ -1640,6 +1644,22 @@ class Firms(Agent):
             current_good_prices,
         )
 
+    def compute_capital_financed_share(self) -> np.ndarray:
+        """Share of last period's planned capital purchases that was financed.
+
+        s = min(1, feasible / planned) where planned > 0, else 1. Read at the start
+        of the period, before this period's costs are recorded.
+        """
+        planned = np.asarray(self.ts.current("planned_capital_purchase_expected_costs"), dtype=float)
+        feasible = np.asarray(self.ts.current("feasible_capital_purchase_expected_costs"), dtype=float)
+        share = np.divide(
+            feasible,
+            planned,
+            out=np.ones_like(planned),
+            where=np.isfinite(planned) & np.isfinite(feasible) & (planned > 0.0),
+        )
+        return np.clip(np.nan_to_num(share, nan=1.0), 0.0, 1.0)
+
     def compute_unconstrained_demand_for_capital_inputs(
         self, good_prices: np.ndarray, extra_taxes: Optional[np.ndarray] = None
     ) -> np.ndarray:
@@ -1671,6 +1691,7 @@ class Firms(Agent):
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
+            financed_share=getattr(self, "capital_financed_share", None),
         )
 
     def compute_unconstrained_demand_for_capital_inputs_value(self, current_good_prices: np.ndarray) -> np.ndarray:
@@ -1765,8 +1786,13 @@ class Firms(Agent):
         planned_tfp_investment_costs = (
             self.ts.current("planned_tfp_investment") if len(self.ts.planned_tfp_investment) > 0 else np.zeros(n_firms)
         )
+        planned_technical_investment_costs = (
+            planned_technical_investment_costs
+            + self.capital_formation_tax_on_purchases(planned_technical_investment_costs)
+        )
         intermediate_costs = self.ts.current("unconstrained_target_intermediate_inputs_costs")
         capital_costs = self.ts.current("unconstrained_target_capital_inputs_costs")
+        capital_costs = capital_costs + self.capital_formation_tax_on_purchases(capital_costs)
         working_capital_budget = intermediate_costs
         investment_budget = capital_costs + planned_technical_investment_costs + planned_tfp_investment_costs
         cash_after_hard_obligations = internal_cash - hard_obligations
@@ -2069,6 +2095,7 @@ class Firms(Agent):
             - self.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
             - self.direct_tfp_investment_cash_expense()
             - taxes_paid_on_production
+            - self.ts.current("capital_formation_taxes_paid")
             - interest_paid_on_deposits
         )
         corporate_tax_reserve = np.maximum(0.0, corporate_tax_obligation_preview)
@@ -2225,6 +2252,7 @@ class Firms(Agent):
             - direct_tfp_investment_cash_expense
             - taxes_paid_on_production
             - corporate_taxes_paid
+            - self.ts.current("capital_formation_taxes_paid")
             - interest_paid
             + operating_revolving_current_draw
             - received_operating_refinance_credit
@@ -2244,6 +2272,7 @@ class Firms(Agent):
                 np.abs(direct_tfp_investment_cash_expense),
                 np.abs(taxes_paid_on_production),
                 np.abs(corporate_taxes_paid),
+                np.abs(self.ts.current("capital_formation_taxes_paid")),
                 np.abs(interest_paid),
                 np.abs(operating_revolving_current_draw),
                 np.abs(received_operating_refinance_credit),
@@ -2598,6 +2627,7 @@ class Firms(Agent):
             initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
+            financed_share=getattr(self, "capital_financed_share", None),
         )
         intermediate_costs = (target_intermediate * expected_lcu_prices[None, :]).sum(axis=1)
         capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
@@ -2662,7 +2692,9 @@ class Firms(Agent):
 
         planned_intermediate_costs = (target_intermediate * expected_lcu_prices[None, :]).sum(axis=1)
         planned_capital_costs = (target_capital * expected_lcu_prices[None, :]).sum(axis=1)
+        planned_capital_costs += self.capital_formation_tax_on_purchases(planned_capital_costs)
         planned_technical_costs = planned_technical.sum(axis=1)
+        planned_technical_costs += self.capital_formation_tax_on_purchases(planned_technical_costs)
         planned_tfp_costs = planned_tfp.copy()
         if mode == "none":
             self._append_activity_finance_diagnostics(
@@ -3002,6 +3034,7 @@ class Firms(Agent):
             expected_lcu_prices,
         )
         candidate_labour = self._activity_finance_feasible_labour(candidate_output, tfp_for_labour)
+        capital_costs += self.capital_formation_tax_on_purchases(capital_costs)
         costs = wage_cost_rate * candidate_labour + intermediate_costs + capital_costs
         return np.where(np.isfinite(costs), np.maximum(0.0, costs), np.inf)
 
@@ -3738,6 +3771,16 @@ class Firms(Agent):
         """
         return tau_firm * np.maximum(0.0, self.ts.current("profits"))
 
+    def capital_formation_tax_on_purchases(self, purchases: np.ndarray) -> np.ndarray:
+        """Return the additional acquisition levy, excluding recoverable VAT.
+
+        Purchases remain tax-exclusive in goods-market and physical-stock
+        accounts. Financing budgets add this levy; settlement debits the
+        recorded realised tax separately from payments to goods suppliers.
+        """
+        rate = float(self.states.get("Capital Formation Tax", 0.0))
+        return rate * np.maximum(0.0, np.asarray(purchases, dtype=float))
+
     def compute_deposits(self) -> np.ndarray:
         """Calculate end-of-period deposit balances.
 
@@ -3759,6 +3802,7 @@ class Firms(Agent):
             - self.direct_tfp_investment_cash_expense()
             - self.ts.current("taxes_paid_on_production")
             - self.ts.current("corporate_taxes_paid")
+            - self.ts.current("capital_formation_taxes_paid")
             - self.ts.current("interest_paid")
             + self.ts.current("received_credit")
             + self.ts.current("operating_revolving_current_draw")

@@ -122,7 +122,10 @@ def compile_industry_data(
         if capital_depreciation_data is not None:
             for column in capital_depreciation_data.columns:
                 industry_vectors[column] = capital_depreciation_data[column].reindex(industry_vectors.index).values
-        if depreciation_mode == "eurostat_cfc":
+        # The Eurostat wage and production-tax calibration uses ratios from the same
+        # table as CFC, so it applies whenever that table is loaded, independent of
+        # how capital wear is charged in firm accounts.
+        if capital_depreciation_data is not None:
             labour_lcu = _labour_compensation_lcu(country_name, industry_vectors, yearly_factor)
             production_taxes_lcu = _production_taxes_lcu(industry_vectors)
             industry_vectors["Labour Compensation in LCU"] = labour_lcu

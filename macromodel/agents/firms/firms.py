@@ -983,19 +983,21 @@ class Firms(Agent):
             interest_paid_on_loans=self.ts.current("interest_paid_on_loans"),
         )
 
-    def _effective_planning_limits(self) -> dict[str, np.ndarray]:
-        """Input limits for purchase planning, in the effective units production uses.
+    def effective_labour_inputs(self) -> np.ndarray:
+        """Labour inputs in output units: ``tfp * labour_inputs``.
 
-        ``labour_inputs`` and ``limiting_*_inputs`` are stored before TFP, while
-        ``compute_production`` caps output at ``tfp * limit``. Comparing raw limits
-        with ``target_production`` reads labour that is sufficient in effective
-        units as short by ``1/tfp``, so input purchases fall below use as TFP grows.
+        TFP is labour-augmenting, y = min(tfp * L, b * II, K / a): ``labour_inputs``
+        is stored before TFP and must be scaled before it is compared with output.
+        Stock limits are already in output units and are not scaled.
         """
-        tfp = np.asarray(self.states.get("tfp_multiplier", 1.0), dtype=float)
+        return self.ts.current("labour_inputs") * self.states["tfp_multiplier"]
+
+    def _planning_limits(self) -> dict[str, np.ndarray]:
+        """Input limits for purchase planning, in the same units production uses."""
         return {
-            "current_limiting_labour_inputs": self.ts.current("labour_inputs") * tfp,
-            "current_limiting_intermediate_inputs": self.ts.current("limiting_intermediate_inputs") * tfp,
-            "current_limiting_capital_inputs": self.ts.current("limiting_capital_inputs") * tfp,
+            "current_limiting_labour_inputs": self.effective_labour_inputs(),
+            "current_limiting_intermediate_inputs": self.ts.current("limiting_intermediate_inputs"),
+            "current_limiting_capital_inputs": self.ts.current("limiting_capital_inputs"),
         }
 
     def compute_target_intermediate_inputs_production(self) -> np.ndarray:
@@ -1016,7 +1018,7 @@ class Firms(Agent):
         ].compute_constrained_intermediate_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            **self._effective_planning_limits(),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1045,7 +1047,7 @@ class Firms(Agent):
         ].compute_constrained_capital_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            **self._effective_planning_limits(),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1697,8 +1699,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=self.ts.current("production"),
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
@@ -2495,7 +2495,7 @@ class Firms(Agent):
             target_production=self.ts.current("target_production"),
             limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            limiting_labour_inputs=self.ts.current("labour_inputs"),
+            limiting_labour_inputs=self.effective_labour_inputs(),
         )
 
     def _append_activity_finance_diagnostics(
@@ -2634,8 +2634,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=target_production,
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
             financed_share=getattr(self, "capital_financed_share", None),

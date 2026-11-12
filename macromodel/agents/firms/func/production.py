@@ -34,8 +34,8 @@ class ProductionSetter(ABC):
 
         Determines feasible production by taking the minimum of:
         - Desired production targets
-        - Available labor inputs (scaled by TFP)
-        - Available intermediate and capital inputs (scaled by TFP)
+        - Available labor inputs (scaled by TFP: labour-augmenting)
+        - Available intermediate and capital inputs (not scaled: input use is y/b)
 
         Args:
             desired_production (np.ndarray): Target production levels
@@ -55,16 +55,11 @@ class ProductionSetter(ABC):
             current_limiting_capital_inputs,
         )
 
-        # Apply TFP multiplier if provided
-        if tfp_multiplier is not None:
-            # TFP scales effective capacity from inputs
-            effective_labour = current_labour_inputs * tfp_multiplier
-            effective_limiting_stock = limiting_stock * tfp_multiplier
-        else:
-            effective_labour = current_labour_inputs
-            effective_limiting_stock = limiting_stock
+        # TFP is labour-augmenting. Stocks are not scaled: input use is y / b, so
+        # scaling the stock limit would let output exceed what the stock supplies.
+        effective_labour = current_labour_inputs if tfp_multiplier is None else current_labour_inputs * tfp_multiplier
 
-        return np.amin([desired_production, effective_labour, effective_limiting_stock], axis=0)
+        return np.amin([desired_production, effective_labour, limiting_stock], axis=0)
 
     @abstractmethod
     def compute_limiting_intermediate_inputs_stock(

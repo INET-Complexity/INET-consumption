@@ -58,7 +58,8 @@ class TestDesiredLabourSetter:
             np.array([50.0, 50.0]),
         )
 
-    def test__tfp_adjusts_target_before_raw_input_constraints(self):
+    def test__stock_limits_bind_in_output_units_then_convert_to_labour(self):
+        # Labour-augmenting TFP: y = min(y*, A*L, II_lim, K_lim). Output plan min(100, 60) = 60 needs 60 / 2 labour.
         assert np.allclose(
             DefaultDesiredLabourSetter(
                 consider_intermediate_inputs=True,
@@ -69,21 +70,22 @@ class TestDesiredLabourSetter:
                 current_limiting_capital_inputs=np.array([200.0]),
                 current_tfp_multiplier=np.array([2.0]),
             ),
-            np.array([50.0]),
+            np.array([30.0]),
         )
 
-    def test__raw_input_constraints_still_bind_after_tfp_adjustment(self):
+    def test__desired_labour_matches_production_when_capital_binds(self):
+        # y* = 10, A = 1.25, K/a = 9: production caps output at 9, which needs 9 / 1.25 = 7.2 labour.
         assert np.allclose(
             DefaultDesiredLabourSetter(
-                consider_intermediate_inputs=True,
+                consider_intermediate_inputs=False,
                 consider_capital_inputs=True,
             ).compute_desired_labour(
-                current_target_production=np.array([100.0]),
-                current_limiting_intermediate_inputs=np.array([40.0]),
-                current_limiting_capital_inputs=np.array([200.0]),
-                current_tfp_multiplier=np.array([2.0]),
+                current_target_production=np.array([10.0]),
+                current_limiting_intermediate_inputs=np.array([100.0]),
+                current_limiting_capital_inputs=np.array([9.0]),
+                current_tfp_multiplier=np.array([1.25]),
             ),
-            np.array([40.0]),
+            np.array([7.2]),
         )
 
     def test__tfp_multiplier_none_leaves_desired_labour_unchanged(self):

@@ -2573,19 +2573,14 @@ class Firms(Agent):
         target_production: np.ndarray,
         tfp_multiplier: np.ndarray,
     ) -> np.ndarray:
-        base_labour = np.divide(
-            target_production,
-            tfp_multiplier,
-            out=target_production.copy(),
-            where=tfp_multiplier > 0.0,
-        )
+        # Stock limits are in output units; a missing limit does not bind.
         limiting_intermediate_inputs = np.asarray(self.ts.current("limiting_intermediate_inputs"), dtype=float).copy()
         invalid_intermediate = ~np.isfinite(limiting_intermediate_inputs)
-        limiting_intermediate_inputs[invalid_intermediate] = base_labour[invalid_intermediate]
+        limiting_intermediate_inputs[invalid_intermediate] = target_production[invalid_intermediate]
         limiting_intermediate_inputs = np.maximum(0.0, limiting_intermediate_inputs)
         limiting_capital_inputs = np.asarray(self.ts.current("limiting_capital_inputs"), dtype=float).copy()
         invalid_capital = ~np.isfinite(limiting_capital_inputs)
-        limiting_capital_inputs[invalid_capital] = base_labour[invalid_capital]
+        limiting_capital_inputs[invalid_capital] = target_production[invalid_capital]
         limiting_capital_inputs = np.maximum(0.0, limiting_capital_inputs)
         return self.functions["desired_labour"].compute_desired_labour(
             current_target_production=target_production,

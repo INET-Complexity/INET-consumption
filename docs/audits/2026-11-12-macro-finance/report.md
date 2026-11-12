@@ -1,21 +1,24 @@
 # Fiscal, firm-finance, credit and inflation audit — 12 November 2026
 
-**Status update:** findings **8 and 9 fixed in `dfde7397`** (144 tests passed).
+**Reviewed 12 November 2026:** findings **8 and 9 fixed in `dfde7397`**;
+the 144 focused tests passed again in an isolated copy of that revision.
 Finding **7 resolved for the frozen `dfde7397` baseline at φ=0.05**:
-four fresh seeds pass provenance and stability checks; see
-[validation report](phi005-validation/report.md). The newer concurrent
-capital-accounting changes are outside that validation. Findings 1–6 remain
-open. Numbers below retain the original φ=0.25 audit basis.
+four seeds pass provenance and stability checks; see
+[validation report](phi005-validation/report.md). The FRA default and
+`investment_adjustment` preset are both selected at 0.05 in the publication
+branch. The separate capital-accounting changes on local `main` are outside
+this validation and push. Findings 1–6 remain open. Economic numbers in the
+original audit below retain the φ=0.25 basis.
 
 The largest confirmed accounting defect is a firm capital-purchase tax recorded
 as government revenue without a matching firm cash debit. The lending collapse
 is real and is reproduced by borrower DSCR capacity, despite abundant reported
 bank capital capacity. Low inflation and persistent fiscal deficits are also
 present, but their economic remedies require specification choices rather than
-an arbitrary parameter adjustment. Two shock semantics need correction or
-explicit disclosure before paper IRFs.
+an arbitrary parameter adjustment. The government-spending shock semantics
+still need correction or explicit disclosure before paper IRFs (finding 3).
 
-## Evidence and limits
+## Original audit evidence and limits
 
 - Inspected the current working source on `main`, HEAD `dd034a54`, preserving
   existing edits. No model source/config/notebook was changed by this audit.
@@ -28,10 +31,11 @@ explicit disclosure before paper IRFs.
   aggregate evidence to `quarterly_evidence.csv` and `summary.json`.
 - Reconstructed saved CFADS to within €0.000005 and firm closing deposits to
   within €0.000031. Government debt increments equal reported deficits.
-- Deterministic probes reproduce the government-shock persistence and
-  monetary-floor bypass. No fresh stochastic simulations or causal policy
-  counterfactuals were run. One seed establishes accounting/rule behaviour,
-  not robustness of macro magnitudes.
+- The original deterministic probes reproduced government-shock persistence
+  and the pre-fix monetary-floor bypass. The live replay now verifies the
+  repaired floor. No fresh stochastic simulations were run during the original
+  audit; the later finding-7 validation is recorded separately. One original
+  seed establishes accounting/rule behaviour, not robust macro magnitudes.
 - The chain “government deficit → firm cash accumulation → lending collapse”
   is **not established**. The magnitudes coexist; a complete sector transaction
   matrix and paired interventions are still needed to attribute the flows.
@@ -274,10 +278,14 @@ memory of credit refusal. Existing four-seed grid evidence in the vault finds
 detrended GDP SD 3.9% at φ=0.25 versus 1.5% at 0.05. This audit did not rerun
 that grid. Baseline cycles can alter IRF dispersion and shock-phase dependence.
 
-**Remedy:** use the embedded configuration of each actual baseline and shock
-artifact in the paper manifest; preserve uniquely named outputs. Validate the
-0.05 baseline after the accounting fixes before selecting additional capital
-rule changes. Configuration selection is easy; economic validation is not.
+**Implemented and reviewed:** explicit φ=0.05 selection, uniquely named output
+paths, copied population/YAML inputs, effective configurations and hashes,
+and independent seed-40 HDF5 verification. All four effective configurations
+use 0.05; mean detrended GDP SD is 1.43% (range 1.11–1.68%). The original
+φ=0.25 HDF5 was preserved. Input/configuration hashes and the frozen source
+were checked again during review. This validates provenance and the registered
+stability gate, not fiscal/credit/inflation acceptance or the separate newer
+capital-accounting specification.
 
 ## 8. The easing-shock wrapper bypasses the zero lower bound
 
@@ -294,11 +302,13 @@ period shock. In a deterministic quarterly example, baseline is zero and a
 Passing the same annual innovation through the native Taylor rule gives zero.
 The current notebook's +100bp shock does not trigger this negative-rate case.
 
-**Remedy:** decide whether the experiment is a bounded Taylor innovation or
-an imposed rate path. For bounded innovations, pass annual shock units into
-the rule before the bound; the wrapper currently holds period units. For an
-imposed path, declare the deliberate override and its bound convention. Add
-both signs and an at-floor case to tests. This is a small, local repair.
+**Implemented and reviewed:** retain an additive rate-path intervention on the
+bounded baseline rate, then enforce the configured annual floor converted to
+model-period units. This preserves existing positive-shock behaviour rather
+than introducing a shadow Taylor innovation. Tests cover both shock signs,
+monthly/quarterly frequency, zero/positive/negative floors, no floor, positional
+and keyword calls, and expiry. Easing at a zero floor now yields zero. Existing
+saved IRFs are not rewritten by this code fix.
 
 ## 9. Firm exposure history is appended twice
 
@@ -317,25 +327,39 @@ access at the end of the step is correct; time-indexed histories can be shifted,
 truncated or interleaved with zeros. This does not explain the actual lending
 collapse, which is independently verified from borrower arrays.
 
-**Remedy:** stage/override rather than append twice, ensuring one final
-observation per quarter. Check the runtime diagnostic reader's alignment and
-regenerate affected charts from sound borrower-level fields. Add a two-period
-history-length/value regression.
+**Implemented and reviewed:** keep the staged settlement observation and final
+override; remove only the extra append in realised metrics. The three-period
+regression checks every value, history length, nonzero exposure and preservation
+of the initial observation. The new FRA HDF5 independently has 51 rows for 51
+dates. Historical malformed files remain unchanged; affected old charts still
+need regeneration or reconstruction from borrower-level fields.
 
-## Validation performed and next order
+## Review and validation of findings 7–9
 
-- Focused fiscal and DSCR suite: **33 passed**.
-- IRF shock suite: **15 passed**, with two pre-existing pandas deprecation
-  warnings. The passing tests do not cover the sequential spending-target
-  feedback or an easing shock at the policy floor demonstrated here.
-- Aggregate replay and both deterministic shock probes pass; Ruff checks pass.
-- No fresh baseline/IRF run, no production fixes, no commits and no changes to
-  the user's four modified files. The diagnostic artifacts are the only new
-  repository files.
+- **Review verdict: no blocking defects found in the fixes for 8/9 or the
+  recorded finding-7 evidence.** GitNexus impact is LOW for the shock proxy,
+  realised-metrics change and preset selection. Dynamic dispatch limits the
+  graph; review also checked the actual staging/override path and raw diffs.
+- **144 tests passed again** against isolated `dfde7397`: IRF shocks, policy
+  rules, firm exposure history and firm accounting. Three existing pandas
+  deprecation warnings; no failures. The full repository suite was not rerun.
+- Finding 7: smoke plus four seeds × 50 quarters; all provenance/stability
+  gates pass. The review independently checked copied population/YAML hashes,
+  all effective-configuration hashes, embedded HDF5 settings and exposure
+  shape. No duplicate full simulation campaign was needed for this review.
+- Original fiscal/DSCR audit checks: **33 passed**. Aggregate replay and live
+  deterministic probes pass; Ruff and diff checks pass.
+- Implementation and evidence were already committed in `dfde7397` and
+  `037ef111`. The review update and φ default selection accompany them on
+  `fix/macro-audit-7-9`, excluding the separate capital-wear commit `c52e597f`.
+- Remaining limits: the government shock persistence in finding 3 is not
+  repaired; old IRFs/history files are not migrated; newer capital accounting
+  requires a compatible rebuilt population and separate validation. Other
+  working-copy model/notebook edits are preserved outside this commit scope.
 
 Recommended repair order: funded capital-tax accounting → expenditure-consistent
 CFADS and chosen investment underwriting concept → explicit fiscal shock
 semantics → baseline fiscal/firm-stock reconciliation → multi-seed inflation
-and credit validation → frozen paper IRFs. The small floor and exposure-history
-repairs can be made independently. A passing unit suite alone is not economic
+and credit validation → frozen paper IRFs. Findings 7–9 do not close the
+economic issues in findings 1–6. A passing unit suite alone is not economic
 acceptance.

@@ -3073,3 +3073,37 @@ class TestFirms:
         test_firms.ts.override_current("deposits", np.r_[-1.0, np.zeros(n_firms - 1)])
 
         assert np.isclose(test_firms.compute_total_credit_exposure()[0], 13.0)
+
+    @pytest.mark.parametrize("which", ["intermediate", "capital"])
+    def test__input_planning_uses_tfp_effective_labour(self, test_firms, which):
+        # Labour exactly sufficient in effective units (tfp * L == y*), stocks slack:
+        # the planning base must equal y*. With raw L it would be cut by w_L * (1 - 1/tfp).
+        n_firms = test_firms.ts.current("production").shape[0]
+        y_star, tfp, w_labour = np.full(n_firms, 10.0), np.full(n_firms, 1.25), 0.5
+        setter = test_firms.functions["target_production"]
+        setattr(setter, f"{which}_inputs_target_considers_labour_inputs", w_labour)
+        test_firms.states["tfp_multiplier"] = tfp
+        test_firms.ts.override_current("target_production", y_star)
+        test_firms.ts.override_current("labour_inputs", y_star / tfp)
+        test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_capital_inputs", 2 * y_star)
+        compute = getattr(test_firms, f"compute_target_{which}_inputs_production")
+        np.testing.assert_allclose(compute(), y_star)
+
+        # Without TFP growth the same raw labour binds: y* + w_L * (L - y*) = 10 - 0.5 * 2 = 9.
+        test_firms.states["tfp_multiplier"] = np.ones(n_firms)
+        np.testing.assert_allclose(compute(), y_star - w_labour * (y_star - y_star / tfp))
+
+    def test__input_planning_does_not_scale_stock_limits_by_tfp(self, test_firms):
+        n_firms = test_firms.ts.current("production").shape[0]
+        y_star = np.full(n_firms, 10.0)
+        setter = test_firms.functions["target_production"]
+        setter.intermediate_inputs_target_considers_labour_inputs = 0.0
+        setter.intermediate_inputs_target_considers_intermediate_inputs = 0.0
+        setter.intermediate_inputs_target_considers_capital_inputs = 1.0
+        test_firms.states["tfp_multiplier"] = np.full(n_firms, 1.25)
+        test_firms.ts.override_current("target_production", y_star)
+        test_firms.ts.override_current("labour_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_capital_inputs", np.full(n_firms, 8.0))
+        np.testing.assert_allclose(test_firms.compute_target_intermediate_inputs_production(), 8.0)

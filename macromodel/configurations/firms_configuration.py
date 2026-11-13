@@ -218,13 +218,12 @@ class Production(BaseModel):
 class TargetCapitalInputs(BaseModel):
     """
     The function used to setting firms desired capital inputs.
-    Options: FinancialTargetCapitalInputsSetter, TFPAdjustedTargetCapitalInputsSetter,
+    Options: FinancialTargetCapitalInputsSetter,
     BundleWeightedTargetCapitalInputsSetter
     """
 
     name: Literal[
         "FinancialTargetCapitalInputsSetter",
-        "TFPAdjustedTargetCapitalInputsSetter",
         "BundleWeightedTargetCapitalInputsSetter",
     ] = "FinancialTargetCapitalInputsSetter"
     path_name: str = "target_capital_inputs"

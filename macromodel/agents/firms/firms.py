@@ -983,6 +983,23 @@ class Firms(Agent):
             interest_paid_on_loans=self.ts.current("interest_paid_on_loans"),
         )
 
+    def effective_labour_inputs(self) -> np.ndarray:
+        """Labour inputs in output units: ``tfp * labour_inputs``.
+
+        TFP is labour-augmenting, y = min(tfp * L, b * II, K / a): ``labour_inputs``
+        is stored before TFP and must be scaled before it is compared with output.
+        Stock limits are already in output units and are not scaled.
+        """
+        return self.ts.current("labour_inputs") * self.states["tfp_multiplier"]
+
+    def _planning_limits(self) -> dict[str, np.ndarray]:
+        """Input limits for purchase planning, in the same units production uses."""
+        return {
+            "current_limiting_labour_inputs": self.effective_labour_inputs(),
+            "current_limiting_intermediate_inputs": self.ts.current("limiting_intermediate_inputs"),
+            "current_limiting_capital_inputs": self.ts.current("limiting_capital_inputs"),
+        }
+
     def compute_target_intermediate_inputs_production(self) -> np.ndarray:
         """Calculate target intermediate input production levels.
 
@@ -1001,9 +1018,7 @@ class Firms(Agent):
         ].compute_constrained_intermediate_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1032,9 +1047,7 @@ class Firms(Agent):
         ].compute_constrained_capital_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1126,9 +1139,9 @@ class Firms(Agent):
         Determines production based on:
         - Operative feasible activity, when post-credit/post-labour planning has run
         - Behavioural target production otherwise
-        - Labor input constraints (scaled by TFP)
-        - Intermediate input constraints (scaled by TFP)
-        - Capital input constraints (scaled by TFP)
+        - Labor input constraints (scaled by TFP: labour-augmenting)
+        - Intermediate input constraints (not scaled by TFP)
+        - Capital input constraints (not scaled by TFP)
 
         Returns:
             np.ndarray: Actual production quantity for each firm
@@ -1143,7 +1156,7 @@ class Firms(Agent):
             current_labour_inputs=self.ts.current("labour_inputs"),
             current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            tfp_multiplier=self.states.get("tfp_multiplier"),
+            tfp_multiplier=self.states["tfp_multiplier"],
         )
 
     def compute_total_sales(self) -> np.ndarray:
@@ -1521,6 +1534,7 @@ class Firms(Agent):
             capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
         )
         pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
+        # Raw labour on purpose: W/(tfp*L) with theta ~ 0 causes a deflation spiral (#189).
         pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
         prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
@@ -1686,8 +1700,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=self.ts.current("production"),
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
@@ -2484,7 +2496,7 @@ class Firms(Agent):
             target_production=self.ts.current("target_production"),
             limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            limiting_labour_inputs=self.ts.current("labour_inputs"),
+            limiting_labour_inputs=self.effective_labour_inputs(),
         )
 
     def _append_activity_finance_diagnostics(
@@ -2544,7 +2556,7 @@ class Firms(Agent):
         return np.maximum(0.0, remaining_finance - affordable_costs), scale
 
     def _activity_finance_tfp_for_feasible_labour(self) -> np.ndarray:
-        tfp_multiplier = np.asarray(self.ts.current("tfp_multiplier"), dtype=float).copy()
+        tfp_multiplier = np.asarray(self.states["tfp_multiplier"], dtype=float).copy()
         valid_tfp = np.isfinite(tfp_multiplier) & (tfp_multiplier > 1e-12)
         economy_positive_tfp = tfp_multiplier[valid_tfp]
         economy_fallback = np.median(economy_positive_tfp) if economy_positive_tfp.size > 0 else 1.0
@@ -2561,19 +2573,14 @@ class Firms(Agent):
         target_production: np.ndarray,
         tfp_multiplier: np.ndarray,
     ) -> np.ndarray:
-        base_labour = np.divide(
-            target_production,
-            tfp_multiplier,
-            out=target_production.copy(),
-            where=tfp_multiplier > 0.0,
-        )
+        # Stock limits are in output units; a missing limit does not bind.
         limiting_intermediate_inputs = np.asarray(self.ts.current("limiting_intermediate_inputs"), dtype=float).copy()
         invalid_intermediate = ~np.isfinite(limiting_intermediate_inputs)
-        limiting_intermediate_inputs[invalid_intermediate] = base_labour[invalid_intermediate]
+        limiting_intermediate_inputs[invalid_intermediate] = target_production[invalid_intermediate]
         limiting_intermediate_inputs = np.maximum(0.0, limiting_intermediate_inputs)
         limiting_capital_inputs = np.asarray(self.ts.current("limiting_capital_inputs"), dtype=float).copy()
         invalid_capital = ~np.isfinite(limiting_capital_inputs)
-        limiting_capital_inputs[invalid_capital] = base_labour[invalid_capital]
+        limiting_capital_inputs[invalid_capital] = target_production[invalid_capital]
         limiting_capital_inputs = np.maximum(0.0, limiting_capital_inputs)
         return self.functions["desired_labour"].compute_desired_labour(
             current_target_production=target_production,
@@ -2623,8 +2630,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=target_production,
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
             financed_share=getattr(self, "capital_financed_share", None),

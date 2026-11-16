@@ -247,6 +247,7 @@ def _shock_specs_frame(shock_specs: tuple[ShockSpec, ...]) -> pd.DataFrame:
                 "shock_magnitude": spec.magnitude,
                 "shock_duration": spec.duration,
                 "shock_mode": spec.mode,
+                "shock_random_log_sd": spec.random_log_sd,
             }
             for spec in shock_specs
         ]

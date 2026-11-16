@@ -197,6 +197,7 @@ class Exogenous:
                 self.exchange_rates_data_before,
             ],
             axis=1,
+            sort=True,
         )
         self.compiled_historic_data.columns = [
             field.replace(" ", "_").upper() for field in self.compiled_historic_data.columns

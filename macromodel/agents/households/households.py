@@ -2792,11 +2792,29 @@ class Households(Agent):
             )
         runtime_state = self._income_belief_runtime_state(priors)
         zeta = self._income_belief_zeta(priors)
+        period = len(self.ts.historic("income"))
         common_log_ratio = 0.0 if common_permanent_income_log_ratio is None else common_permanent_income_log_ratio
         common_variance = 0.0 if common_forecast_variance is None else common_forecast_variance
         individual_log_ratio = float(zeta) * runtime_state["posterior_mean"]
         common_log_ratio_arr = np.full(runtime_state["posterior_mean"].shape, float(common_log_ratio), dtype=float)
-        uncertainty = compute_income_uncertainty(runtime_state["posterior_variance"], zeta, common_variance)
+        n_households = runtime_state["posterior_variance"].size
+        shock_state = self.states.get("income_uncertainty_shock_factors")
+        if shock_state is not None and shock_state.get("period") == period:
+            common_shock_factor = float(shock_state.get("common", 1.0))
+            individual_shock_factors = np.asarray(shock_state.get("individual", np.ones(n_households)), dtype=float)
+        else:
+            common_shock_factor = 1.0
+            individual_shock_factors = np.ones(n_households, dtype=float)
+        if (
+            not np.isfinite(common_shock_factor)
+            or common_shock_factor <= 0.0
+            or individual_shock_factors.shape != (n_households,)
+            or not np.all(np.isfinite(individual_shock_factors))
+            or np.any(individual_shock_factors <= 0.0)
+        ):
+            raise ValueError("Income-uncertainty shock factors must be finite, positive and household-aligned.")
+        individual_uncertainty = compute_income_uncertainty(runtime_state["posterior_variance"], zeta, 0.0)
+        uncertainty = individual_uncertainty * individual_shock_factors + common_variance * common_shock_factor
         bridge_diagnostics = {}
         if monetary_income_components is not None:
             from macromodel.util.permanent_monetary_income import monetary_income_moments
@@ -2809,13 +2827,13 @@ class Households(Agent):
                 **monetary_income_components, log_mean=raw_individual, log_variance=raw_variance
             )
             individual_log_ratio = bridge["mean"]
-            uncertainty = bridge["variance"] + common_variance
+            individual_uncertainty = bridge["variance"]
+            uncertainty = individual_uncertainty * individual_shock_factors + common_variance * common_shock_factor
             bridge_diagnostics = {
                 "income_bridge_raw_individual": raw_individual,
                 "income_bridge_raw_variance": raw_variance,
                 **{"income_bridge_" + key: value for key, value in bridge.items() if key != "mean"},
             }
-        period = len(self.ts.historic("income"))
         uncertainty_state = self.states.get("income_uncertainty_runtime_state")
         definition = "monetary" if monetary_income_components is not None else "earnings"
         if uncertainty_state is not None and uncertainty_state.get("definition", "earnings") != definition:

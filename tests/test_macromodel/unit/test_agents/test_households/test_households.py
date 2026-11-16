@@ -690,12 +690,8 @@ class TestHouseholds:
 
         expected_uncertainty = baseline["income_uncertainty"] * individual_factors + 0.03 * common_factor
         np.testing.assert_allclose(shocked["income_uncertainty"], expected_uncertainty)
-        np.testing.assert_allclose(
-            shocked["uncertainty_delta"], expected_uncertainty - previous["income_uncertainty"]
-        )
-        np.testing.assert_allclose(
-            shocked["permanent_income_log_ratio"], baseline["permanent_income_log_ratio"]
-        )
+        np.testing.assert_allclose(shocked["uncertainty_delta"], expected_uncertainty - previous["income_uncertainty"])
+        np.testing.assert_allclose(shocked["permanent_income_log_ratio"], baseline["permanent_income_log_ratio"])
 
     def test__current_income_belief_learning_inputs_zero_common_reduces_to_individual(self, test_households):
         # None common terms (forecast unavailable) reduce each output to its pure

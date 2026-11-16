@@ -47,12 +47,8 @@ country_configs:
     employer_social_insurance_rate: 0.30552085148943465
     eu_proxy_country: null
     carbon_price: 0.0
-    # Worker productivity rho (wage-competition spec Step 0). Requires, in
-    # country_config_FRA.yaml: initial_rate_source: individual,
-    # offer_base: per_labour_input, sorted_firing: false. Rebuild the cache.
-    # 13544 = net annual SMIC 2014 (1128.70 EUR/month x 12), survey year 2014.
-    worker_productivity:
-      annual_wage_floor: 13544.0
+    # Worker productivity rho is off in the base config. Switch it on with the
+    # run_model scenario preset `workers_productivity` (config.py).
 
 row_data_config:
   fit_imports: false

@@ -876,3 +876,37 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             )
 
         return f
+
+
+def validate_worker_productivity_configuration(rho_built: bool, wage_setter: object) -> None:
+    """Refuse a run whose wage setter is inconsistent with worker productivity rho.
+
+    When the synthetic population was built with ``worker_productivity`` (rho),
+    each worker's stored rate already contains rho and offers are multiplied by
+    the worker's labour input. The wage setter must then seed rates from each
+    worker (``initial_rate_source: individual``) and average them per unit of
+    labour input (``offer_base: per_labour_input``); ``per_head`` counts the
+    firm's mean rho twice in every offer.
+
+    The converse is not enforced: without rho all labour inputs equal one, so
+    ``per_labour_input`` equals ``per_head``, and ``individual`` (HFCS starting
+    pay) is a valid configuration of its own.
+
+    Args:
+        rho_built (bool): Whether the population carries rho (``Benefit Weight`` present).
+        wage_setter (object): The firms' wage-setter instance.
+
+    Raises:
+        ValueError: If rho is built and the wage setter does not meet both conditions.
+    """
+    if not rho_built:
+        return
+    initial_rate_source = getattr(wage_setter, "initial_rate_source", None)
+    offer_base = getattr(wage_setter, "offer_base", None)
+    if initial_rate_source != "individual" or offer_base != "per_labour_input":
+        raise ValueError(
+            "The population was built with worker_productivity (rho), which requires "
+            "ContractWageSetter with initial_rate_source='individual' and "
+            f"offer_base='per_labour_input'; got {type(wage_setter).__name__} with "
+            f"initial_rate_source={initial_rate_source!r}, offer_base={offer_base!r}."
+        )

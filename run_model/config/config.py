@@ -71,6 +71,9 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
+    "workers_productivity": {
+        "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
+    },
     "investment_adjustment": {
         "firms.functions.target_capital_inputs.parameters['target_capital_inputs_fraction']": 0.05,
     },
@@ -179,6 +182,7 @@ MACRO_COLUMNS = [
     # Activity and demand
     "real_gdp",
     "real_gdp_yoy_growth",
+    "firm_real_capital_to_real_gdp",
     "total_consumption_to_gdp",
     "household_consumption_to_gdp",
     "government_consumption_to_gdp",

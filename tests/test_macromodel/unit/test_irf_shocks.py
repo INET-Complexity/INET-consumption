@@ -106,9 +106,7 @@ def test_income_uncertainty_shock_is_reproducible_and_clears_after_window(kind):
         for seed in range(1024):
             sample = simulation(seed=seed)
             hook(sample, 2020, 4)
-            common_draws.append(
-                sample.countries["FRA"].households.states["income_uncertainty_shock_factors"]["common"]
-            )
+            common_draws.append(sample.countries["FRA"].households.states["income_uncertainty_shock_factors"]["common"])
         log_draws = np.log(common_draws)
         assert np.mean(log_draws) == pytest.approx(np.log1p(0.10) - 0.5 * 0.25**2, abs=0.02)
         assert np.std(log_draws) == pytest.approx(0.25, abs=0.02)
@@ -215,10 +213,7 @@ def test_income_uncertainty_shock_changes_full_simulation_household_demand(dataw
         shocked_inputs[2]["uncertainty_delta"],
     )
     assert np.any(
-        np.abs(
-            shocked_demand["target_consumption_uncertainty"]
-            - baseline_demand["target_consumption_uncertainty"]
-        )
+        np.abs(shocked_demand["target_consumption_uncertainty"] - baseline_demand["target_consumption_uncertainty"])
         > 1e-12
     )
 

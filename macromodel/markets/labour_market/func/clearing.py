@@ -71,7 +71,14 @@ class LabourMarketClearer(ABC):
         individuals_quitting_temperature: Quit decision randomness
         compare_with_normalised_inputs: Use normalized productivity
         round_target_employment: Round employment targets
+        on_the_job_search: Whether employed workers can move firm without
+            passing through unemployment
+        searcher_priority: ``"pooled"`` puts searchers and the unemployed in
+            one candidate pool; ``"unemployed_first"`` considers searchers only
+            when no unemployed candidate qualifies
     """
+
+    supports_on_the_job_search = False
 
     def __init__(
         self,
@@ -88,6 +95,8 @@ class LabourMarketClearer(ABC):
         individuals_quitting_temperature: float,
         compare_with_normalised_inputs: float,
         round_target_employment: bool,
+        on_the_job_search: bool = False,
+        searcher_priority: str = "pooled",
     ):
         """Initialize the market clearer with specified parameters.
 
@@ -105,7 +114,24 @@ class LabourMarketClearer(ABC):
             individuals_quitting_temperature: Quit randomness
             compare_with_normalised_inputs: Use normalized values
             round_target_employment: Round targets
+            on_the_job_search: Each quarter an employed worker searches with
+                probability ``1 - exp(-individuals_quitting_temperature)``,
+                keeps the job while searching, and moves only to a firm whose
+                offered rate beats the rate the worker would carry by staying
+            searcher_priority: ``"pooled"`` or ``"unemployed_first"``
         """
+        if searcher_priority not in ("pooled", "unemployed_first"):
+            raise ValueError(f"searcher_priority must be 'pooled' or 'unemployed_first', got {searcher_priority!r}")
+        if on_the_job_search and not self.supports_on_the_job_search:
+            raise ValueError(f"{type(self).__name__} does not implement on_the_job_search.")
+        if on_the_job_search and individuals_quitting:
+            raise ValueError(
+                "on_the_job_search and individuals_quitting both read individuals_quitting_temperature; enable one."
+            )
+        self.on_the_job_search = on_the_job_search
+        self.searcher_priority = searcher_priority
+        self.last_num_job_to_job = 0
+        self._search_rng = np.random.default_rng()
         self.hiring_speed = hiring_speed
         self.firing_speed = firing_speed
         self.random_firing_probability = random_firing_probability
@@ -119,6 +145,15 @@ class LabourMarketClearer(ABC):
         self.individuals_quitting_temperature = individuals_quitting_temperature
         self.compare_with_normalised_inputs = compare_with_normalised_inputs
         self.round_target_employment = round_target_employment
+
+    def set_run_seed(self, seed: int | None, stream: int = 0) -> None:
+        """Seed the generator that draws on-the-job searchers.
+
+        Searcher draws use their own generator, so switching search on does not
+        consume the global random stream that orders firms in hiring and firing.
+        ``stream`` separates countries that share one run seed.
+        """
+        self._search_rng = np.random.default_rng(None if seed is None else [int(seed), 1, int(stream)])
 
     @abstractmethod
     def clear(
@@ -492,6 +527,9 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         current_individual_wages: np.ndarray,  # noqa
         average_industry_productivity: np.ndarray,
         current_individual_started_new_job: np.ndarray | None = None,
+        searchers: np.ndarray | None = None,
+        searcher_stay_rate: np.ndarray | None = None,
+        offered_rate_by_firm: np.ndarray | None = None,
     ) -> tuple[np.ndarray, int]:
         """Match unemployed workers with firms needing labour.
 
@@ -512,14 +550,26 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             individual_reservation_wages: Minimum acceptable wages
             current_individual_wages: Current wages
             average_industry_productivity: Productivity by industry
+            searchers: Employed workers searching this quarter (boolean mask),
+                or None when on-the-job search is off
+            searcher_stay_rate: Rate each worker carries this quarter by
+                staying (carried rate times the own firm's indexation factor)
+            offered_rate_by_firm: Offered rate per unit of labour input,
+                before the benefit floor
 
         Returns:
             tuple:
             - np.ndarray: Hiring costs by firm
-            - int: Number of new hires
+            - int: Number of new hires from unemployment. Job-to-job moves are
+              counted in ``self.last_num_job_to_job``.
         """
         hiring_costs = np.zeros_like(desired_labour_inputs)
         num_newly_joining = 0
+        self.last_num_job_to_job = 0
+        if searchers is not None:
+            # Workers fired since the draw are unemployed candidates, not searchers.
+            searchers = searchers & (current_individuals_activity == ActivityStatus.EMPLOYED)
+            firm_size = np.array([len(employees) for employees in firm_employments])
         missing_productivity = desired_labour_inputs - prev_labour_inputs
         initial_missing_productivity = missing_productivity.copy()
 
@@ -534,6 +584,18 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
 
             # Iterate until we're happy
             while True:
+                # Searchers who would gain by moving to this firm. The last
+                # employee of a firm cannot leave.
+                if searchers is None:
+                    searcher_candidates = None
+                else:
+                    searcher_candidates = (
+                        searchers
+                        & (individuals_corresponding_firm != firm_id)
+                        & (firm_size[individuals_corresponding_firm] > 1)
+                        & (prev_individuals_productivity * offered_rate_by_firm[firm_id] > searcher_stay_rate)
+                    )
+
                 # Find an appropriate employee
                 ind_chosen = self.scout_for_employee(
                     unemployed_ind=unemployed_ind,
@@ -547,20 +609,44 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
                     offered_wage=offered_wage,
                     average_industry_productivity=average_industry_productivity,
                     allow_switching_industries=self.allow_switching_industries,
+                    searcher_candidates=searcher_candidates,
                 )
                 if ind_chosen is None:
                     break
 
-                # Employ them
-                hire_individual(
-                    firm_employments=firm_employments,
-                    current_individuals_activity=current_individuals_activity,
-                    individuals_corresponding_firm=individuals_corresponding_firm,
-                    current_individuals_industry=current_individuals_industry,
-                    firm_id=firm_id,
-                    firm_industry=firm_industries[firm_id],
-                    ind_chosen=ind_chosen,  # noqa
-                )
+                if searchers is not None and searchers[ind_chosen]:
+                    # Job-to-job move: the worker stays employed, and the firm
+                    # it leaves is short of that worker's labour input.
+                    old_firm_id = move_individual(
+                        firm_employments=firm_employments,
+                        individuals_corresponding_firm=individuals_corresponding_firm,
+                        current_individuals_industry=current_individuals_industry,
+                        firm_id=firm_id,
+                        firm_industry=firm_industries[firm_id],
+                        ind_chosen=ind_chosen,
+                    )
+                    missing_productivity[old_firm_id] += (
+                        average_industry_productivity[firm_industries[old_firm_id]]
+                        * prev_individuals_productivity[ind_chosen]
+                    )
+                    searchers[ind_chosen] = False
+                    firm_size[old_firm_id] -= 1
+                    firm_size[firm_id] += 1
+                    self.last_num_job_to_job += 1
+                else:
+                    hire_individual(
+                        firm_employments=firm_employments,
+                        current_individuals_activity=current_individuals_activity,
+                        individuals_corresponding_firm=individuals_corresponding_firm,
+                        current_individuals_industry=current_individuals_industry,
+                        firm_id=firm_id,
+                        firm_industry=firm_industries[firm_id],
+                        ind_chosen=ind_chosen,  # noqa
+                    )
+                    num_newly_joining += 1
+                    unemployed_ind[ind_chosen] = False
+                    if searchers is not None:
+                        firm_size[firm_id] += 1
                 if current_individual_started_new_job is not None:
                     current_individual_started_new_job[ind_chosen] = True
 
@@ -571,12 +657,6 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
 
                 # Calculate hiring costs
                 hiring_costs[firm_id] += self.hiring_cost_fraction * offered_wage[ind_chosen]
-
-                # Count
-                num_newly_joining += 1
-
-                # Update
-                unemployed_ind[ind_chosen] = False
 
                 # Frictions
                 labour_supply_gained += (
@@ -600,6 +680,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         offered_wage: np.ndarray,
         average_industry_productivity: np.ndarray,
         allow_switching_industries: bool,
+        searcher_candidates: np.ndarray | None = None,
     ) -> int | None:
         """Find suitable unemployed worker for a position.
 
@@ -617,6 +698,9 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             individual_reservation_wages: Minimum wages
             offered_wage: Array to store offered wages
             average_industry_productivity: Industry productivity
+            searcher_candidates: Employed searchers who accept this firm's
+                offer (boolean mask), or None. They skip the reservation-wage
+                test: their test compares rates and is applied by the caller.
 
         Returns:
             int | None: ID of chosen worker or None if none found
@@ -629,6 +713,11 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
 
         # Record offered wages
         offered_wage[unemployed_ind] = current_offered_wage[unemployed_ind]
+
+        # Employed searchers join the pool
+        if searcher_candidates is not None:
+            only_unemployed = unemployed_ind
+            unemployed_ind = np.logical_or(unemployed_ind, searcher_candidates)
 
         # If we're rounding
         if self.round_target_employment:
@@ -645,6 +734,12 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
                 current_individuals_industry == firm_industry,
             )
 
+        # Searchers are considered only if no unemployed candidate qualifies
+        if searcher_candidates is not None and self.searcher_priority == "unemployed_first":
+            qualified_unemployed = np.logical_and(unemployed_ind, only_unemployed)
+            if qualified_unemployed.any():
+                unemployed_ind = qualified_unemployed
+
         # Check if anyone would accept the offer
         if len(prev_individuals_productivity[unemployed_ind]) == 0:
             return None
@@ -660,11 +755,27 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         else:
             ind = np.random.choice(np.where(unemployed_ind)[0])
 
+        # A searcher's offer is recorded only if the searcher is chosen
+        offered_wage[ind] = current_offered_wage[ind]
+
         return ind
 
 
 class ReservationWageBindingDefaultLabourMarketClearer(DefaultLabourMarketClearer):
-    """Default clearer variant where accepted offers bind realised wages for new hires."""
+    """Default clearer variant where accepted offers bind realised wages for new hires.
+
+    With ``on_the_job_search`` each employed worker searches with probability
+    ``1 - exp(-individuals_quitting_temperature)``. A searcher keeps the job and
+    joins the hiring pool. It moves to firm ``j'`` only if
+
+        labour_input_i * offered_rate[j'] > wage_rate_i * indexation[j]
+
+    that is, if the rate it would carry at the new firm beats the rate it will
+    carry by staying at firm ``j`` this quarter. Effort and the benefit floor
+    are not part of the comparison. Nobody becomes unemployed through search.
+    """
+
+    supports_on_the_job_search = True
 
     def clear(
         self,
@@ -717,6 +828,20 @@ class ReservationWageBindingDefaultLabourMarketClearer(DefaultLabourMarketCleare
         else:
             num_newly_randomly_quit = 0
 
+        searchers, searcher_stay_rate, offered_rate_by_firm = None, None, None
+        if self.on_the_job_search:
+            # One draw per individual, employed or not, so the search stream
+            # stays aligned across runs whose employment paths differ.
+            search_probability = 1.0 - np.exp(-self.individuals_quitting_temperature)
+            draws = self._search_rng.random(len(current_individuals_activity))
+            searchers = (current_individuals_activity == ActivityStatus.EMPLOYED) & (draws < search_probability)
+            offered_rate_by_firm, indexation_by_firm = firms.functions["wage_setter"].search_comparison_rates()
+            searcher_stay_rate = np.full(len(current_individuals_activity), np.inf)
+            searcher_stay_rate[searchers] = (
+                individuals.states["Wage Rate"][searchers]
+                * indexation_by_firm[individuals_corresponding_firm[searchers]]
+            )
+
         firing_costs_regular, num_newly_fired = self.firing(
             firm_employments=firm_employments,
             current_individuals_activity=current_individuals_activity,
@@ -744,6 +869,9 @@ class ReservationWageBindingDefaultLabourMarketClearer(DefaultLabourMarketCleare
             current_individual_wages=current_individual_wages,
             average_industry_productivity=firms.states["Labour Productivity by Industry"],
             current_individual_started_new_job=individuals.states["Started New Job"],
+            searchers=searchers,
+            searcher_stay_rate=searcher_stay_rate,
+            offered_rate_by_firm=offered_rate_by_firm,
         )
 
         return (
@@ -934,6 +1062,28 @@ def hire_individual(
     individuals_corresponding_firm[ind_chosen] = firm_id
     current_individuals_industry[ind_chosen] = firm_industry
     firm_employments[firm_id].append(ind_chosen)
+
+
+def move_individual(
+    firm_employments: list[list],
+    individuals_corresponding_firm: np.ndarray,
+    current_individuals_industry: np.ndarray,
+    firm_id: int,
+    firm_industry: int,
+    ind_chosen: int,
+) -> int:
+    """Move an employed worker to another firm in one step.
+
+    The worker stays EMPLOYED throughout. Returns the id of the firm it left.
+    """
+    old_firm_id = int(individuals_corresponding_firm[ind_chosen])
+    assert old_firm_id >= 0 and old_firm_id != firm_id
+    assert len(firm_employments[old_firm_id]) > 1
+    firm_employments[old_firm_id].remove(ind_chosen)
+    individuals_corresponding_firm[ind_chosen] = firm_id
+    current_individuals_industry[ind_chosen] = firm_industry
+    firm_employments[firm_id].append(ind_chosen)
+    return old_firm_id
 
 
 def check_employed_correspondence(activity_array: np.ndarray, firm_employments: list):

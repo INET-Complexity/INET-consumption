@@ -642,6 +642,8 @@ FRA:
           random_firing_probability: 0.0
           round_target_employment: true
           sorted_firing: false  # random firing (C34); true fires lowest labour input first, by array position when inputs are equal
+          on_the_job_search: false  # true: employed workers search with probability 1 - exp(-individuals_quitting_temperature)
+          searcher_priority: pooled  # pooled | unemployed_first
 
   housing_market:
     functions:

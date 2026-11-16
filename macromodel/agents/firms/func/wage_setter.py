@@ -559,6 +559,21 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         self.last_offer_slack_factor = None
         self._rates_seeded = False
         self.last_contract_rate_mean = None
+        self.last_offer_indexation_ratio = None
+
+    def search_comparison_rates(self) -> tuple[np.ndarray, np.ndarray]:
+        """Rates an on-the-job searcher compares, from this quarter's offers.
+
+        Returns:
+            tuple:
+            - np.ndarray: Offered rate by firm, before the benefit floor. The
+              offer to worker ``i`` is its labour input times this rate.
+            - np.ndarray: Factor by firm applied this quarter to the carried
+              rate of a worker who stays.
+        """
+        if self.last_wage_offer_level is None or self.last_offer_indexation_ratio is None:
+            raise ValueError("Offers must be built before on-the-job searchers compare rates.")
+        return self.last_wage_offer_level, self.last_offer_indexation_ratio
 
     def _slack_factor(
         self,
@@ -866,6 +881,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         self.last_wage_offer_productivity_ratio = effort_ratio.copy()
         self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
         self.last_wage_offer_level = offered_rate.copy()
+        self.last_offer_indexation_ratio = indexation_ratio.copy()
         self.last_wage_offer_historic_average_available = has_workforce.copy()
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:

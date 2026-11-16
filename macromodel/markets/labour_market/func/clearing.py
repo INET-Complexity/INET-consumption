@@ -531,7 +531,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         searcher_stay_rate: np.ndarray | None = None,
         offered_rate_by_firm: np.ndarray | None = None,
     ) -> tuple[np.ndarray, int]:
-        """Match unemployed workers with firms needing labour.
+        """Match unemployed workers, and employed searchers if given, with firms needing labour.
 
         This method implements the hiring process, matching available
         workers with firms based on productivity and wages.

@@ -575,3 +575,30 @@ def test__offer_floor_accepts_a_benefit_per_person():
 def test__unknown_offer_base_raises():
     with pytest.raises(ValueError, match="offer_base"):
         _setter(offer_base="per_hour")
+
+
+def test__search_comparison_rates_require_offers():
+    with pytest.raises(ValueError, match="Offers must be built"):
+        _setter().search_comparison_rates()
+
+
+def test__search_comparison_rates_match_the_offer_and_the_incumbent_update():
+    """An on-the-job searcher compares the offered rate with the rate a stayer will carry."""
+    setter = _setter(incumbent_indexation_pass_through=0.5)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    offer = _offer(setter, carried)
+    offered_rate, stay_factor = setter.search_comparison_rates()
+
+    np.testing.assert_allclose(stay_factor, (TFP / PREV_TFP) ** 0.5)
+    # Before the benefit floor, the offer to a worker is its labour input times the offered rate.
+    np.testing.assert_allclose(offered_rate[0], offer(0, 1.0))
+    np.testing.assert_allclose(offer(1, 2.0), 2.0 * offered_rate[1])
+
+    # A stayer's carried rate becomes rate x stay factor; a mover's becomes the accepted offer.
+    updated = carried.copy()
+    new_job = np.array([False, False, True, False, False])
+    accepted = np.zeros(5)
+    accepted[2] = 33.0
+    _run(setter, updated, new_job=new_job, offered=accepted)
+    np.testing.assert_allclose(updated[[0, 1, 3]], carried[[0, 1, 3]] * stay_factor[FIRM_OF_EMPLOYEE[[0, 1, 3]]])
+    assert updated[2] == 33.0

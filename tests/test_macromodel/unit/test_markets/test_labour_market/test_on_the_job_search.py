@@ -245,12 +245,12 @@ def _random_economy(rng):
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
-def test_search_off_reproduces_the_clearer_without_the_feature(seed):
-    """Off: identical outcome and identical use of the global random stream."""
+def test_search_with_no_searchers_equals_search_off_and_leaves_the_global_stream(seed):
+    """The search step draws from the clearer's own generator, never from the global stream."""
     outcomes = []
     for search_parameters in (
         {"on_the_job_search": False},
-        {"on_the_job_search": False, "searcher_priority": "pooled"},
+        {"on_the_job_search": True, "individuals_quitting_temperature": 0.0},
     ):
         economy = _random_economy(np.random.default_rng(seed))
         clearer = _clearer(firing_speed=1.0, **search_parameters)
@@ -262,12 +262,12 @@ def test_search_off_reproduces_the_clearer_without_the_feature(seed):
                 individuals.states["Corresponding Firm ID"].copy(),
                 individuals.states["Offered Wage of Accepted Job"].copy(),
                 result[1:],
-                np.random.random(),
+                np.random.random(),  # position of the global stream after clearing
             )
         )
-    assert clearer.last_num_job_to_job == 0
-    for a, b in zip(outcomes[0], outcomes[1]):
-        np.testing.assert_array_equal(a, b)
+        assert clearer.last_num_job_to_job == 0
+    for off, on in zip(outcomes[0], outcomes[1]):
+        np.testing.assert_array_equal(off, on)
 
 
 @pytest.mark.parametrize("seed", [0, 1, 2])
@@ -312,3 +312,24 @@ def test_invalid_configurations_are_refused():
         _clearer(individuals_quitting=True)
     with pytest.raises(ValueError, match="searcher_priority"):
         _clearer(searcher_priority="employed_first")
+
+
+def test_run_seed_reaches_every_country_clearer_with_its_own_stream():
+    from macromodel.simulation import seed_labour_market_clearers
+
+    def countries():
+        return {
+            name: SimpleNamespace(labour_market=SimpleNamespace(functions={"clearing": _clearer()}))
+            for name in ("FRA", "DEU")
+        }
+
+    def draws(seed):
+        built = countries()
+        seed_labour_market_clearers(built, seed)
+        return [country.labour_market.functions["clearing"]._search_rng.random(4) for country in built.values()]
+
+    first, second = draws(11), draws(11)
+    np.testing.assert_array_equal(first[0], second[0])
+    np.testing.assert_array_equal(first[1], second[1])
+    assert not np.array_equal(first[0], first[1])
+    assert not np.array_equal(first[0], draws(12)[0])

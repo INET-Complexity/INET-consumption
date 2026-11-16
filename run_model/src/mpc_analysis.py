@@ -867,6 +867,12 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
             "income": np.asarray(households.ts.current("income"), dtype=float),
             "net_wealth": np.asarray(households.ts.current("net_wealth"), dtype=float),
             "net_liquid_financial_assets": liquid_financial_assets - consumption_loan_debt,
+            # Preserve the legacy consumer-debt-only measure and export the
+            # components for explicit alternative liquidity rankings.
+            "liquid_financial_assets": liquid_financial_assets,
+            "consumption_loan_debt": consumption_loan_debt,
+            "mortgage_debt": mortgage_debt,
+            "net_liquid_financial_assets_all_debt": liquid_financial_assets - debt,
             "illiquid_financial_assets": illiquid_financial_assets,
             "housing_wealth": wealth_main + wealth_other_property,
             "debt": debt,

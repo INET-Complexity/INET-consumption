@@ -1534,8 +1534,12 @@ class Firms(Agent):
             capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
         )
         pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
-        # Raw labour on purpose: W/(tfp*L) with theta ~ 0 causes a deflation spiral (#189).
-        pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
+        # 'raw' divides the wage bill by L. 'tfp_effective' divides it by tfp * L, the wage
+        # bill per unit of output, which deflates unless wage rates rise with TFP (#189).
+        if getattr(self.configuration.parameters, "pricing_labour_units", "raw") == "tfp_effective":
+            pricing_effective_labour_inputs = np.asarray(self.effective_labour_inputs(), dtype=float)
+        else:
+            pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
         prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,

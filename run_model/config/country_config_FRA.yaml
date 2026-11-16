@@ -404,6 +404,7 @@ FRA:
       # It is the second indexation channel alongside the wage_setter's
       # `incumbent_indexation_pass_through` (alpha); keep both visible together.
       wage_cpi_indexation_elasticity: 1.0
+      pricing_labour_units: raw  # raw | tfp_effective (wage bill per unit of output; deflates unless wage rates rise with TFP, #189)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
       firm_activity_finance_revision_mode: post_credit_cash_budget

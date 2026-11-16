@@ -3107,3 +3107,32 @@ class TestFirms:
         test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
         test_firms.ts.override_current("limiting_capital_inputs", np.full(n_firms, 8.0))
         np.testing.assert_allclose(test_firms.compute_target_intermediate_inputs_production(), 8.0)
+
+    @pytest.mark.parametrize("units, expected", [("raw", 8.0), ("tfp_effective", 10.0)])
+    def test__pricing_labour_inputs_follow_pricing_labour_units(self, test_firms, units, expected):
+        # 'raw': wage bill / L. 'tfp_effective': wage bill / (tfp * L), per unit of output.
+        n_firms = test_firms.ts.current("production").shape[0]
+        test_firms.states["tfp_multiplier"] = np.full(n_firms, 1.25)
+        test_firms.ts.override_current("labour_inputs", np.full(n_firms, 8.0))
+        test_firms.configuration.parameters.pricing_labour_units = units
+        captured = {}
+        price_setter = test_firms.functions["prices"]
+        original = price_setter.compute_price
+
+        def capture(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        price_setter.compute_price = capture
+        test_firms.compute_price(
+            current_estimated_ppi_inflation=0.0,
+            previous_average_good_prices=np.ones(test_firms.n_industries),
+            ppi_during=np.ones(2),
+        )
+        np.testing.assert_allclose(captured["pricing_effective_labour_inputs"], expected)
+
+    def test__pricing_labour_units_defaults_to_raw_and_refuses_unknown_values(self, test_firms):
+        parameters = type(test_firms.configuration.parameters)
+        assert parameters().pricing_labour_units == "raw"
+        with pytest.raises(ValueError):
+            parameters(pricing_labour_units="per_output")

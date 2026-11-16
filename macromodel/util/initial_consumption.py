@@ -2,16 +2,22 @@
 
 import numpy as np
 
-from macro_data.util.consumption_initialisation import allocate_hfcs_ratio_consumption
+from macro_data.util.consumption_initialisation import (
+    allocate_hfcs_ratio_consumption,
+    allocate_hfcs_with_legacy_reserve,
+)
 
 
-def initialise_hfcs_consumption(country, source_ratios):
+def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True):
     """Replace opening expenditure without changing income, assets or transfers.
 
     The raw aligned income includes the model's net-interest/imputed-rent
     bridge, before its planning-income floor and smoothing. Aggregate goods
     already include housing inputs; no separate housing-goods amount is added.
-    Infeasible household inputs fail rather than invoking a new support rule.
+    Finite infeasible households retain their existing legacy goods consumption.
+    Feasible households absorb the remaining aggregate goods budget. This is an
+    opening-state fallback, not an income floor or a new support payment.
+    legacy_fallback=False retains strict validation for explicit diagnostics.
     """
     hh = country.households
     if "expected_behavioural_income_raw" not in hh.ts.dicts:
@@ -26,13 +32,16 @@ def initialise_hfcs_consumption(country, source_ratios):
         raise ValueError("Opening sector goods must be a finite nonnegative vector.")
     if not np.isfinite(price) or price <= 0:
         raise ValueError("Opening consumer price level must be finite and positive.")
-    result = allocate_hfcs_ratio_consumption(
+    allocator = allocate_hfcs_with_legacy_reserve if legacy_fallback else allocate_hfcs_ratio_consumption
+    fallback_inputs = {"legacy_goods": hh.ts.current("consumption")} if legacy_fallback else {}
+    result = allocator(
         hfcs_c_y=source_ratios,
         model_income=income,
         cash_rent=hh.ts.current("rent"),
         imputed_rent=hh.ts.current("rent_imputed"),
         vat=vat,
         aggregate_net_goods=float(sectors.sum()),
+        **fallback_inputs,
     )
     # A common opening sector basket preserves both the aggregate sector totals
     # and the new household totals. Dynamic household preferences are unchanged.
@@ -49,12 +58,14 @@ def initialise_hfcs_consumption(country, source_ratios):
     }
     for name, values in replacements.items():
         hh.ts.override_current(name, values)
+    final_ratios = np.divide(result.total, income, out=np.full_like(result.total, np.nan), where=income > 0)
+    fallback = result.legacy_fallback if result.legacy_fallback is not None else np.zeros(len(income), dtype=bool)
     for name, values in {
         "initial_hfcs_source_c_y": np.asarray(source_ratios, dtype=float).copy(),
         "initial_hfcs_comparable_income": np.asarray(income, dtype=float).copy(),
         "initial_hfcs_candidate_total": result.candidate_total,
-        "initial_hfcs_final_c_y": result.total / income,
-        "initial_hfcs_goods_scale": np.full(len(result.goods), result.goods_scale),
+        "initial_hfcs_final_c_y": final_ratios,
+        "initial_hfcs_goods_scale": np.where(fallback, 1.0, result.goods_scale),
     }.items():
         hh.ts[name] = values
     # National-accounts goods and VAT aggregates are unchanged by redistribution.

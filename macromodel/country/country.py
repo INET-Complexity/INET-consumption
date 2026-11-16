@@ -852,6 +852,17 @@ class Country:
             cu_weights=subsistence_floor.cu_weights,
         )
 
+        # The cached household employee carrier includes unemployment benefits.
+        # Seed wage-only receipts from individuals before Country adds benefits
+        # to social transfers. Keep cached cash income and initial budgets intact.
+        opening_wages = households.aggregate_individual_amount(
+            individual_amount=individuals.ts.current("employee_income"),
+            corr_households=individuals.states["Corresponding Household ID"],
+        )
+        households.ts.override_current("income_employee", opening_wages.copy())
+        households.ts.override_current("expected_income_employee", opening_wages.copy())
+        households.ts.override_current("total_income_employee", [opening_wages.sum()])
+
         average_initial_price = synthetic_country.industry_data["industry_vectors"]["Average Initial Price"].values
         firm_exo_prices = synthetic_country.firm_exo_prices
         if firm_exo_prices is not None:

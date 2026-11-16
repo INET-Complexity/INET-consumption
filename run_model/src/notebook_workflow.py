@@ -417,6 +417,8 @@ def _benchmark_data_cache_spec(cfg: Config, raw_data_path: Path, config: Noteboo
         )
     return {
         "public_pension_schema": "individual_receipts_retirement_v3",
+        "opening_income_schema": "separate_wages_unemployment_v1",
+        "opening_consumption_schema": "hfcs_reserved_legacy_v1",
         "household_consumption": consumption_signature,
         "country_iso3": cfg.country_iso3,
         "raw_data_path": str(raw_data_path),

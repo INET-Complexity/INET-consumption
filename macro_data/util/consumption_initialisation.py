@@ -14,6 +14,7 @@ class InitialConsumptionAllocation:
     goods: np.ndarray
     total: np.ndarray
     goods_scale: float
+    legacy_fallback: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -155,3 +156,69 @@ def allocate_hfcs_ratio_consumption(
     if not np.isfinite(goods_scale) or not np.all(np.isfinite(total)):
         raise ValueError("Reconciled initial expenditure must remain finite.")
     return InitialConsumptionAllocation(candidate_total, candidate_goods, goods, total, goods_scale)
+
+
+def allocate_hfcs_with_legacy_reserve(
+    *, hfcs_c_y, model_income, cash_rent, imputed_rent, vat, aggregate_net_goods, legacy_goods
+) -> InitialConsumptionAllocation:
+    """Retain legacy goods for finite infeasible states; allocate the remainder.
+
+    This changes opening consumption only. It neither repairs income nor books
+    financing/transfers. Missing or malformed inputs remain errors. The candidate
+    total remains the raw HFCS target; candidate goods use legacy amounts on the
+    fallback subset. The scale factor applies only to feasible households.
+    """
+    values = {
+        name: np.asarray(value, dtype=float)
+        for name, value in {
+            "hfcs_c_y": hfcs_c_y,
+            "model_income": model_income,
+            "cash_rent": cash_rent,
+            "imputed_rent": imputed_rent,
+            "legacy_goods": legacy_goods,
+        }.items()
+    }
+    shape = values["model_income"].shape
+    if len(shape) != 1 or any(a.shape != shape for a in values.values()):
+        raise ValueError("Initial consumption inputs must be aligned household vectors.")
+    for name, array in values.items():
+        if not np.isfinite(array).all() or (name != "model_income" and (array < 0).any()):
+            raise ValueError(f"{name} must be finite and nonnegative, except finite negative model income.")
+    for name, value in (("vat", vat), ("aggregate_net_goods", aggregate_net_goods)):
+        scalar = np.asarray(value, dtype=float)
+        if scalar.shape != () or not np.isfinite(scalar) or scalar < 0:
+            raise ValueError(f"{name} must be a finite nonnegative scalar.")
+    candidate = values["hfcs_c_y"] * values["model_income"]
+    housing = values["cash_rent"] + values["imputed_rent"]
+    if not np.isfinite(candidate).all() or not np.isfinite(housing).all():
+        raise ValueError("Initial expenditure arithmetic must remain finite.")
+    fallback = (values["model_income"] <= 0) | (candidate < housing)
+    reserved = values["legacy_goods"][fallback].sum()
+    remaining = float(aggregate_net_goods) - reserved
+    if not np.isfinite(reserved) or (
+        remaining < 0 and not np.isclose(remaining, 0, rtol=0, atol=1e-12 * float(aggregate_net_goods))
+    ):
+        raise ValueError("Reserved legacy goods exceed the aggregate consumption budget.")
+    remaining = max(0.0, remaining)
+    feasible = ~fallback
+    goods = values["legacy_goods"].copy()
+    candidate_goods = goods.copy()
+    goods_scale = 1.0
+    if feasible.any():
+        allocation = allocate_hfcs_ratio_consumption(
+            hfcs_c_y=values["hfcs_c_y"][feasible],
+            model_income=values["model_income"][feasible],
+            cash_rent=values["cash_rent"][feasible],
+            imputed_rent=values["imputed_rent"][feasible],
+            vat=vat,
+            aggregate_net_goods=remaining,
+        )
+        goods[feasible] = allocation.goods
+        candidate_goods[feasible] = allocation.candidate_goods
+        goods_scale = allocation.goods_scale
+    elif not np.isclose(remaining, 0, rtol=0, atol=1e-12 * float(aggregate_net_goods)):
+        raise ValueError("No feasible households can absorb the remaining aggregate goods budget.")
+    total = (1 + float(vat)) * goods + housing
+    if not np.isfinite(total).all():
+        raise ValueError("Reconciled initial expenditure must remain finite.")
+    return InitialConsumptionAllocation(candidate, candidate_goods, goods, total, goods_scale, fallback)

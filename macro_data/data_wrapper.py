@@ -410,8 +410,8 @@ class DataWrapper:
                 time_unit=configuration.time_unit,
                 country_configuration=configuration.country_configs[country],
                 **(
-                    {"consumption_source": consumption_sources[country.value]}
-                    if country.value in consumption_sources
+                    {"consumption_source": consumption_sources[getattr(country, "value", str(country))]}
+                    if getattr(country, "value", str(country)) in consumption_sources
                     else {}
                 ),
                 industries=industries,
@@ -434,7 +434,7 @@ class DataWrapper:
 
         for country in country_names:
             if not country.is_eu_country:
-                if country.value in consumption_sources:
+                if getattr(country, "value", str(country)) in consumption_sources:
                     raise ValueError("hfcs_cy source wiring currently requires an EU survey country.")
                 synthetic_countries[country] = SyntheticCountry.proxied_synthetic_country(
                     country=country,

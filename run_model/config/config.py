@@ -71,8 +71,15 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
+    # Worker productivity rho (wage-competition spec Step 0). The `data.` key is
+    # applied to the data configuration and builds a separate data cache; the
+    # other three keys are country-config settings rho requires.
+    # 13544 = net annual SMIC 2014 (1128.70 EUR/month x 12), survey year 2014.
     "workers_productivity": {
+        "data.worker_productivity": {"annual_wage_floor": 13544.0},
         "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
+        "firms.functions.wage_setter.parameters['offer_base']": "per_labour_input",
+        "labour_market.functions.clearing.parameters['sorted_firing']": False,
     },
     "investment_adjustment": {
         "firms.functions.target_capital_inputs.parameters['target_capital_inputs_fraction']": 0.05,

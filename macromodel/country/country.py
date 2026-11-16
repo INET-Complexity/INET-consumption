@@ -66,6 +66,7 @@ from macromodel.agents.banks.banks import Banks
 from macromodel.agents.central_bank.central_bank import CentralBank
 from macromodel.agents.central_government.central_government import CentralGovernment
 from macromodel.agents.firms import Firms
+from macromodel.agents.firms.func.wage_setter import validate_worker_productivity_configuration
 from macromodel.agents.government_entities.government_entities import GovernmentEntities
 from macromodel.agents.households.consumption_inputs import (
     ConsumptionInputAdapter,
@@ -454,6 +455,10 @@ class Country:
         validate_portfolio_settlement_configuration(
             households.functions["wealth"],
             configuration.households.parameters.uses_feasibility_resolver,
+        )
+        validate_worker_productivity_configuration(
+            rho_built="Benefit Weight" in individuals.states,
+            wage_setter=firms.functions["wage_setter"],
         )
 
         self.add_emissions = add_emissions

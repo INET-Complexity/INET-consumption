@@ -19,13 +19,22 @@ ShockKind = Literal[
     "income_tax",
     "policy_rate",
     "unemployment_rate",
+    "common_income_uncertainty",
+    "individual_income_uncertainty",
 ]
 _SAFE_SHOCK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass(frozen=True)
 class ShockSpec:
-    """Description of an exogenous shock arm for paired IRF experiments."""
+    """Description of an exogenous shock arm for paired IRF experiments.
+
+    For income-uncertainty shocks, ``magnitude`` is the expected proportional
+    change in the relevant variance component, and ``random_log_sd`` is the
+    standard deviation of its lognormal multiplier. Those kinds require
+    ``mode="multiplicative"``. Common shocks draw one multiplier shared by all
+    households; individual shocks draw one multiplier per household.
+    """
 
     name: str
     kind: ShockKind
@@ -33,8 +42,15 @@ class ShockSpec:
     magnitude: float
     duration: int = 1
     mode: Literal["additive", "multiplicative"] = "additive"
+    random_log_sd: float | None = None
 
     def __post_init__(self) -> None:
+        try:
+            magnitude = np.asarray(self.magnitude, dtype=float)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("ShockSpec.magnitude must be a finite scalar.") from exc
+        if magnitude.ndim != 0 or not np.isfinite(magnitude.item()):
+            raise ValueError("ShockSpec.magnitude must be a finite scalar.")
         if not self.name:
             raise ValueError("ShockSpec.name must be non-empty.")
         if not _SAFE_SHOCK_NAME.fullmatch(self.name):
@@ -246,6 +262,8 @@ def create_tax_rate_shock_hook(
         if not _active_period(spec, initial_year, time_unit, year, month):
             return
         shocked = _shock_values(np.asarray(baseline, dtype=float), spec=spec)
+        if not np.all(np.isfinite(shocked)) or np.any((shocked < 0.0) | (shocked > 1.0)):
+            raise ValueError(f"Income-tax shock {spec.name!r} would set tax rates outside [0, 1].")
         states[tax_state] = shocked if isinstance(baseline, np.ndarray) else float(shocked)
         logging.info("Applied tax-rate shock %s to %s at %s-%s", spec.name, tax_state, year, month)
 
@@ -399,4 +417,74 @@ def create_irf_shock_hook(
             time_unit=time_unit,
             spec=spec,
         )
+    if spec.kind in {"common_income_uncertainty", "individual_income_uncertainty"}:
+        return create_income_uncertainty_shock_hook(
+            country_code=country_code,
+            initial_year=initial_year,
+            time_unit=time_unit,
+            spec=spec,
+        )
     raise ValueError(f"Unsupported IRF shock kind: {spec.kind!r}.")
+
+
+def create_income_uncertainty_shock_hook(
+    *,
+    country_code: str,
+    initial_year: int,
+    time_unit: int,
+    spec: ShockSpec,
+) -> Callable[[Simulation, int, int], None]:
+    """Create a reproducible common or household-specific variance shock.
+
+    The lognormal multipliers keep variance components positive. Their
+    expected value is ``1 + magnitude``; ``random_log_sd`` sets dispersion
+    around that mean. Draws are keyed by simulation seed, shock specification
+    and economic period, so repeated planning calls in one period see the same
+    values and separate IRF arms do not consume the model's shared random
+    stream.
+    """
+    if spec.kind not in {"common_income_uncertainty", "individual_income_uncertainty"}:
+        raise ValueError("Income-uncertainty hook requires a common or individual uncertainty kind.")
+    if not np.isfinite(spec.magnitude) or spec.magnitude <= -1.0:
+        raise ValueError("Income-uncertainty shock magnitude must be finite and greater than -1.")
+    if spec.random_log_sd is None or not np.isfinite(spec.random_log_sd) or spec.random_log_sd <= 0.0:
+        raise ValueError("Income-uncertainty shocks require a finite, positive random_log_sd.")
+    if spec.mode != "multiplicative":
+        raise ValueError("Income-uncertainty shocks require mode='multiplicative'.")
+    if spec.period < 1:
+        raise ValueError("Income-uncertainty shocks must start after the first initialization period.")
+
+    def income_uncertainty_shock_hook(simulation: Simulation, year: int, month: int) -> None:
+        if country_code not in simulation.countries:
+            raise ValueError(f"Income-uncertainty shock cannot find country '{country_code}'.")
+        model_period = _year_month_to_period(initial_year, time_unit, year, month)
+        # Simulation periods are zero-based; the household mapper keys periods
+        # by income-history length, which starts at one for the first run step.
+        household_period = model_period + 1
+        country = simulation.countries[country_code]
+        n_households = _as_scalar_int(country.households.ts.current("n_households"))
+        common_factor = 1.0
+        individual_factors = np.ones(n_households, dtype=float)
+
+        if _active_period(spec, initial_year, time_unit, year, month):
+            rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, model_period))
+            log_sd = float(spec.random_log_sd)
+            log_mean = np.log1p(float(spec.magnitude)) - 0.5 * log_sd**2
+            if spec.kind == "common_income_uncertainty":
+                common_factor = float(rng.lognormal(mean=log_mean, sigma=log_sd))
+            else:
+                individual_factors = rng.lognormal(
+                    mean=log_mean,
+                    sigma=log_sd,
+                    size=n_households,
+                )
+
+        # Store one period's draw for the household learning-input mapper.
+        # Reassigning each period also clears the pulse after its duration.
+        country.households.states["income_uncertainty_shock_factors"] = {
+            "period": household_period,
+            "common": common_factor,
+            "individual": individual_factors,
+        }
+
+    return income_uncertainty_shock_hook

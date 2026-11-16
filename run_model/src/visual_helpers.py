@@ -36,6 +36,8 @@ IRF_PANEL_LABELS = {
     "household_employment": "Employed individuals, %",
     "firm_real_wage_per_employee": "Real wage per employee, %",
     "household_real_employee_income": "Real employee income, %",
+    "income_uncertainty_delta": "Income uncertainty index change, ×100",
+    "consumption_uncertainty_contribution": "Consumption-rule uncertainty contribution, ×100",
     "real_household_income": "Real household income, %",
     "firm_loan_rate": "Short-term firm loan rate, pp",
     "firm_long_term_loan_rate": "Long-term firm loan rate, pp",
@@ -76,6 +78,8 @@ IRF_RATE_VARIABLES = {
     "household_mortgage_rate",
     "household_deposit_rate",
     "firm_deposit_rate",
+    "income_uncertainty_delta",
+    "consumption_uncertainty_contribution",
 }
 IRF_COUNT_VARIABLES = {
     "firm_production",
@@ -106,6 +110,10 @@ IRF_PANEL_GROUPS = {
         "firm_production",
         "firm_employees",
         "firm_real_wage_per_employee",
+    ),
+    "Income uncertainty": (
+        "income_uncertainty_delta",
+        "consumption_uncertainty_contribution",
     ),
     "Households": (
         "household_consumption_loan_rate",

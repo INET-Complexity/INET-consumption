@@ -647,6 +647,56 @@ class TestHouseholds:
         assert np.any(components["target_consumption_permanent_income"] != 0.0)
         np.testing.assert_allclose(components["target_consumption_uncertainty"], 0.1 * 0.02)
 
+    def test__income_uncertainty_shock_scales_only_its_variance_components(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        lagged_income = np.linspace(100.0, 120.0, n_households)
+        current_income = lagged_income * np.linspace(1.05, 1.15, n_households)
+        test_households.ts.expected_income.append(lagged_income)
+        test_households.ts.expected_income.append(current_income)
+        priors = {
+            "income_belief_mu": np.zeros(n_households),
+            "income_belief_p": np.zeros(n_households),
+            "income_belief_rho": np.full(n_households, 0.5),
+            "sigma2_v": np.ones(n_households),
+            "sigma2_xi": np.full(n_households, 3.0),
+        }
+        test_households.states["income_belief_priors"] = priors
+        test_households.functions["consumption"] = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            permanent_income_propensity=0.1,
+            uncertainty_propensity=0.1,
+            uses_income_belief_learning=True,
+            income_belief_learning_horizon={"delta": 0.95, "S": 40},
+        )
+        test_households.update_income_belief_learning_state(
+            current_income=current_income,
+            lagged_income=lagged_income,
+        )
+
+        previous = test_households.current_income_belief_learning_inputs(common_forecast_variance=0.0)
+        test_households.ts.income.append(test_households.ts.current("income").copy())
+        baseline = test_households.current_income_belief_learning_inputs(common_forecast_variance=0.0)
+        common_factor = 1.5
+        individual_factors = np.linspace(0.5, 1.5, n_households)
+        period = len(test_households.ts.historic("income"))
+        test_households.states["income_uncertainty_shock_factors"] = {
+            "period": period,
+            "common": common_factor,
+            "individual": individual_factors,
+        }
+        shocked = test_households.current_income_belief_learning_inputs(common_forecast_variance=0.03)
+
+        expected_uncertainty = baseline["income_uncertainty"] * individual_factors + 0.03 * common_factor
+        np.testing.assert_allclose(shocked["income_uncertainty"], expected_uncertainty)
+        np.testing.assert_allclose(
+            shocked["uncertainty_delta"], expected_uncertainty - previous["income_uncertainty"]
+        )
+        np.testing.assert_allclose(
+            shocked["permanent_income_log_ratio"], baseline["permanent_income_log_ratio"]
+        )
+
     def test__current_income_belief_learning_inputs_zero_common_reduces_to_individual(self, test_households):
         # None common terms (forecast unavailable) reduce each output to its pure
         # individual component, matching the pre-Increment-5 fallback contract.

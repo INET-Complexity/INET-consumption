@@ -23,6 +23,7 @@ from src.visual_helpers import (  # noqa: E402
     plot_cpi_comparison,
     plot_cumulative_insolvent_firms_by_sector,
     plot_employment_by_sector,
+    plot_irf_panels,
     plot_ppi_comparison,
     plot_production_by_sector,
     plot_sector_tfp_investment_desired_mb_mc_ratio,
@@ -760,3 +761,34 @@ def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():
     ]
     assert [trace.line.color for trace in cpi_fig.data[:3]] == ["#1f77b4", "#2ca02c", "#d62728"]
     assert [trace.line.color for trace in ppi_fig.data[:3]] == ["#1f77b4", "#2ca02c", "#d62728"]
+
+
+def test_plot_irf_panels_includes_income_uncertainty_series_in_scaled_units():
+    panel = pd.DataFrame(
+        [
+            {
+                "seed": 1,
+                "shock_name": "common_uncertainty",
+                "horizon": 0,
+                "variable": variable,
+                "pct_delta": np.nan,
+                "delta": delta,
+            }
+            for variable, delta in (
+                ("income_uncertainty_delta", 0.02),
+                ("consumption_uncertainty_contribution", 0.004),
+            )
+        ]
+    )
+
+    figures = plot_irf_panels(panel, ["common_uncertainty"], show=False)
+
+    assert len(figures) == 1
+    figure = figures[0]
+    assert "Income uncertainty" in figure._suptitle.get_text()
+    axes = figure.axes
+    assert len(axes) == 2
+    assert axes[0].get_title() == "Income uncertainty index change, ×100"
+    assert axes[1].get_title() == "Consumption-rule uncertainty contribution, ×100"
+    np.testing.assert_allclose(axes[0].lines[0].get_ydata(), [2.0])
+    np.testing.assert_allclose(axes[1].lines[0].get_ydata(), [0.4])

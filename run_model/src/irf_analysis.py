@@ -47,6 +47,16 @@ IRF_CHANNEL_VARIABLES: tuple[IRFVariable, ...] = (
         ratio_denominator_path="{country}/firms/number_of_employees",
     ),
     IRFVariable("household_real_employee_income", "{country}/individuals/employee_income", "mean"),
+    IRFVariable(
+        "income_uncertainty_delta",
+        "{country}/households/target_consumption_uncertainty_delta",
+        "mean",
+    ),
+    IRFVariable(
+        "consumption_uncertainty_contribution",
+        "{country}/households/target_consumption_uncertainty",
+        "mean",
+    ),
     IRFVariable("firm_loan_interest_paid", "{country}/firms/interest_paid_on_loans", "sum"),
     IRFVariable("firm_received_credit", "{country}/firms/received_credit", "sum"),
     IRFVariable("firm_debt", "{country}/firms/debt", "sum"),

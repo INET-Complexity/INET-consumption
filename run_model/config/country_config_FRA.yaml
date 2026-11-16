@@ -642,6 +642,11 @@ FRA:
           random_firing_probability: 0.0
           round_target_employment: true
           sorted_firing: false  # random firing (C34); true fires lowest labour input first, by array position when inputs are equal
+          # on_the_job_search reads individuals_quitting_temperature as the search intensity T:
+          # search probability = 1 - exp(-T). T is not calibrated. The value 1.0 above gives 63%
+          # a quarter; set T together with the switch (one-seed trial: T = 0.05 gives 1-2% moves).
+          on_the_job_search: false
+          searcher_priority: pooled  # pooled | unemployed_first
 
   housing_market:
     functions:

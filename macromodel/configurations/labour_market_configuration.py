@@ -35,6 +35,9 @@ class Clearing(BaseModel):
             - optimised_hiring (bool): Use optimized hiring strategy
             - random_firing_probability (float): Random termination chance
             - sorted_firing (bool): Use ordered termination
+            - on_the_job_search (bool): Employed workers can move firm; the
+              search probability is 1 - exp(-individuals_quitting_temperature)
+            - searcher_priority (str): "pooled" or "unemployed_first"
         path_name (str): Module path for clearing functions
     """
 
@@ -58,6 +61,8 @@ class Clearing(BaseModel):
         "optimised_hiring": True,
         "random_firing_probability": 0.0,
         "sorted_firing": True,
+        "on_the_job_search": False,
+        "searcher_priority": "pooled",
     }
     path_name: str = "clearing"
 

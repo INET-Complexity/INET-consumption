@@ -289,6 +289,7 @@ class Simulation:
             np.random.seed(simulation_configuration.seed)
             set_seed(simulation_configuration.seed)
         seed_household_consumption_rules(countries, simulation_configuration.seed)
+        seed_labour_market_clearers(countries, simulation_configuration.seed)
 
         aggregator = (
             RegionalAggregator(
@@ -340,6 +341,7 @@ class Simulation:
             np.random.seed(configuration.seed)
             set_seed(configuration.seed)
         seed_household_consumption_rules(self.countries, configuration.seed)
+        seed_labour_market_clearers(self.countries, configuration.seed)
 
     @property
     def t_max(self):
@@ -750,6 +752,15 @@ def seed_household_consumption_rules(countries, seed: int | None) -> None:
         setter = getattr(rule, "set_run_seed", None)
         if setter is not None:
             setter(seed)
+
+
+def seed_labour_market_clearers(countries, seed: int | None) -> None:
+    """Push the run seed into each labour clearer's own generator (on-the-job search draws)."""
+    for stream, country in enumerate(countries.values()):
+        clearer = getattr(country.labour_market, "functions", {}).get("clearing")
+        setter = getattr(clearer, "set_run_seed", None)
+        if setter is not None:
+            setter(seed, stream)
 
 
 @njit

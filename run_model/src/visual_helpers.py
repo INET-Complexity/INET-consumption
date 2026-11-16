@@ -1309,6 +1309,12 @@ def build_macro_output_df(model, country_code):
     firm_inventory_nominal = aggregate_agent_ts(firms_ts, "inventory_nominal")
     firm_intermediate_stock_value = aggregate_agent_ts(firms_ts, "intermediate_inputs_stock_value")
     firm_capital_stock_value = aggregate_agent_ts(firms_ts, "capital_inputs_stock_value")
+    # Kaldor diagnostic: firm capital at PPI-deflated value / period real GDP.
+    # Both numerator and denominator use the same price basis; Y is value added.
+    real_gdp = get_column("real_gdp")
+    if firm_capital_stock_value is not None and ppi is not None and real_gdp is not None:
+        real_capital = firm_capital_stock_value / ppi.where(ppi > 0)
+        add_column("firm_real_capital_to_real_gdp", real_capital / real_gdp.where(real_gdp > 0))
     firm_deposits = aggregate_agent_ts(firms_ts, "deposits")
     if (
         firm_inventory_nominal is not None

@@ -424,6 +424,7 @@ def test__public_pension_household_source_is_mapped_to_retired_individuals(monke
         {
             "Corresponding Household ID": [0, 0, 1],
             "Is Retired": [True, False, True],
+            "Individual Public Pension Income": [10.0, 0.0, 20.0],
         }
     )
     monkeypatch.setattr(hfcs_population_module, "apply_iterative_imputer", lambda data, *_args, **_kwargs: data)

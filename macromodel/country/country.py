@@ -59,6 +59,7 @@ from macro_data.readers.permanent_income_mapping import (
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
+from macro_data.util.consumption_source_config import CONSUMPTION_DATA_STAGE, require_completed_consumption_allocation
 from macro_data.util.frequency import periods_per_year
 from macro_data.util.rates import annualized_fisher_real_rate
 from macromodel.agents.agent import Agent
@@ -98,6 +99,7 @@ from macromodel.rest_of_the_world import RestOfTheWorld
 from macromodel.timeseries import TimeSeries
 from macromodel.util.behavioural_income import reconcile_behavioural_income
 from macromodel.util.get_histogram import get_histogram
+from macromodel.util.initial_consumption import initialise_hfcs_consumption
 
 
 def _positive_int_or_default(value: object, default: int) -> int:
@@ -698,7 +700,7 @@ class Country:
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Return realised pension, unemployment, other-transfer, and Stage 5 components."""
         public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
-            retirement_eligibility=self.individuals.states["Is Retired"],
+            retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
             public_pension_weights=self.individuals.states["Public Pension Weight"],
         )
         current_cpi = self.economy.current_consumer_price_level()
@@ -731,7 +733,7 @@ class Country:
         self.individuals.ts.override_current(
             "public_pension_benefits",
             self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Is Retired"],
+                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
                 public_pension_weights=self.individuals.states["Public Pension Weight"],
             ),
         )
@@ -779,6 +781,7 @@ class Country:
         Returns:
             Country: Initialized country economy
         """
+        require_completed_consumption_allocation(synthetic_country)
         scale = synthetic_country.scale
         production_tax_vector_scale = country_configuration.central_government.tax_overrides.production_tax_vector_scale
         if production_tax_vector_scale is not None:
@@ -812,6 +815,11 @@ class Country:
         n_industries = len(industries)
 
         synthetic_population = synthetic_country.population
+        if "Public Pension Income" in synthetic_population.household_data and not {
+            "Public Pension Recipient",
+            "Individual Public Pension Income",
+        }.issubset(synthetic_population.individual_data.columns):
+            raise ValueError("Stale public-pension cache: rebuild the synthetic population with individual receipts.")
         individuals = Individuals.from_pickled_agent(
             synthetic_population=synthetic_population,
             configuration=country_configuration.individuals,
@@ -1122,6 +1130,10 @@ class Country:
             permanent_income_forecast_inputs=permanent_income_forecast_inputs,
             permanent_income_design_matrix=permanent_income_design_matrix,
         )
+        if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
+            initialise_hfcs_consumption(
+                country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
+            )
         return country
 
     @staticmethod
@@ -1653,7 +1665,7 @@ class Country:
         )
         self.individuals.ts.public_pension_benefits.append(
             self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Is Retired"],
+                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
                 public_pension_weights=self.individuals.states["Public Pension Weight"],
             )
         )
@@ -1698,7 +1710,7 @@ class Country:
         )
         expected_public_pension_by_individual = (
             self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Is Retired"],
+                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
                 public_pension_weights=self.individuals.states["Public Pension Weight"],
             )
         )

@@ -14,6 +14,16 @@ aggregation_structure: null
 
 country_configs:
   FRA:
+    hfcs_implicate: 1  # Same first-implicate extraction in both methods.
+    # First implicate, registered source. Set method: legacy for comparison.
+    # Source paths are relative to RAW_DATA_PATH. Opening allocation is pending.
+    household_consumption_initialisation:
+      method: hfcs_cy
+      implicate: 1
+      source_file: hfcs/consumption_initialisation/FRA_2014.parquet
+      source_sha256: edf089b68d517f4a303127b458bb91c2ab167c3894036b6343af51b19339bc45
+      registration_file: hfcs/consumption_initialisation/FRA_2014.registration.json
+      registration_sha256: 4cc18938b7076f9a00276d3a51712a0967cb6fc9283a10d54c02186331a84053
     firms_configuration:
       constructor: Default
       zero_initial_deposits: false

@@ -47,9 +47,10 @@ Example:
 """
 
 from datetime import date
+from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from macromodel.configurations.bank_configuration import BankParameters
 
@@ -173,6 +174,28 @@ class WorkerProductivityConfiguration(BaseModel):
     top_quantile: float = 0.999
 
 
+class HouseholdConsumptionInitialisationConfiguration(BaseModel):
+    """Select legacy allocation or a registered first-implicate HFCS source."""
+
+    method: Literal["legacy", "hfcs_cy"] = "legacy"
+    source_file: Optional[Path] = None
+    registration_file: Optional[Path] = None
+    source_sha256: Optional[str] = None
+    registration_sha256: Optional[str] = None
+    implicate: Literal[1] = 1
+
+    @model_validator(mode="after")
+    def validate_source(self):
+        if self.method == "hfcs_cy":
+            if self.source_file is None or self.registration_file is None:
+                raise ValueError("hfcs_cy requires source_file and registration_file (relative to raw_data_path).")
+            for name in ("source_sha256", "registration_sha256"):
+                digest = getattr(self, name)
+                if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+                    raise ValueError(f"hfcs_cy requires a lowercase {name}.")
+        return self
+
+
 class CountryDataConfiguration(BaseModel):
     """
     Comprehensive configuration for a single country's economic agents and parameters.
@@ -202,6 +225,10 @@ class CountryDataConfiguration(BaseModel):
     single_firm_per_industry: bool
     single_government_entity: bool
     scale: int
+    hfcs_implicate: Optional[Literal[1]] = None
+    household_consumption_initialisation: HouseholdConsumptionInitialisationConfiguration = Field(
+        default_factory=HouseholdConsumptionInitialisationConfiguration
+    )
     eu_proxy_country: Optional[Country] = None
     carbon_price: float = 0.0
     worker_productivity: Optional[WorkerProductivityConfiguration] = None

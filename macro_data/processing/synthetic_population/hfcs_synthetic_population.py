@@ -27,6 +27,7 @@ from macro_data.readers.default_readers import DataReaders
 from macro_data.readers.exogenous_data import ExogenousCountryData
 from macro_data.readers.io_tables.industries import ALL_INDUSTRIES
 from macro_data.util.clean_data import remove_outliers
+from macro_data.util.hfcs_consumption_source import HFCSConsumptionSource, source_ids_fingerprint
 from macro_data.util.imputation import apply_iterative_imputer
 from macro_data.util.regressions import fit_linear
 
@@ -115,7 +116,13 @@ CONVERT_HH_COLS = [
     "Outstanding Balance of other Non-Mortgage Loans",
 ]
 
-CONVERT_IND_COLS = ["Employee Income", "Income from Unemployment Benefits", "Income"]
+CONVERT_IND_COLS = [
+    "Employee Income",
+    "Income from Unemployment Benefits",
+    "Income",
+    "Individual Public Pension Income",
+    "Individual Occupational and Private Pension Income",
+]
 
 
 def _numeric_series(data: pd.DataFrame, aliases: list[str], *, required: bool = True) -> pd.Series:
@@ -312,6 +319,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         proxied_country: str | Country = None,
         yearly_factor: float = 4.0,
         worker_productivity=None,
+        consumption_source: Optional[HFCSConsumptionSource] = None,
     ) -> "SyntheticHFCSPopulation":
         """
         Creates a synthetic population from data readers.
@@ -350,8 +358,14 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         else:
             output_shares = None
 
+        if consumption_source is not None and consumption_source.wave != year:
+            raise ValueError("HFCS consumption source wave must match the population survey year.")
         household_data, individual_data = sample_households(
-            hfcs_households_data, hfcs_individuals_data, n_households, output_shares=output_shares
+            hfcs_households_data,
+            hfcs_individuals_data,
+            n_households,
+            output_shares=output_shares,
+            consumption_source=consumption_source,
         )
 
         unemployment_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Unemployment Rate (Value)"].iloc[0]
@@ -401,6 +415,8 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
 
         household_data = household_data.loc[household_data["Corresponding Individuals ID"].notna()]
 
+        if consumption_source is not None and len(household_data) != n_households:
+            raise ValueError("HFCS-ratio population processing changed the requested household count.")
         household_data = set_household_types(household_data, individual_data)
 
         # DANGER if we don't have total unemployment benefits
@@ -467,7 +483,8 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
 
     def restrict(self) -> None:
-        self.household_data = self.household_data[RESTRICT_COLS]
+        diagnostics = [c for c in ("HFCS Source ID", "HFCS Consumption Ratio") if c in self.household_data]
+        self.household_data = self.household_data[RESTRICT_COLS + diagnostics]
 
     def compute_household_wealth(self, independents: Optional[list[str]] = None) -> None:
         """
@@ -801,32 +818,38 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         household_public_pension_source: pd.Series,
         public_pension_budget: float,
     ) -> None:
-        """Map household HFCS pension source weights to eligible retirees.
+        """Allocate the macro pension envelope using observed individual receipts.
 
-        The HFCS public-pension amount is household-level. It is therefore
-        split equally among that household's HFCS-retired members, then
-        normalized over the eligible population. A missing/zero source uses an
-        equal eligible-recipient fallback; a positive budget without any
-        retired individual is an invalid synthetic population.
+        Source amounts remain annual, unscaled diagnostics. No age or activity
+        restriction changes the receipt weights. Household amounts determine
+        household shares; observed individual amounts determine within-household
+        shares. A positive household amount requires observed recipients.
         """
-        if not hasattr(self, "individual_data") or "Is Retired" not in self.individual_data:
+        if not hasattr(self, "individual_data"):
             return
-        retired = self.individual_data["Is Retired"].to_numpy(dtype=bool)
-        weights = np.zeros(len(self.individual_data), dtype=float)
+        source_column = "Individual Public Pension Income"
+        if source_column not in self.individual_data:
+            raise ValueError("Individual public-pension source (PG0310) is missing; rebuild from HFCS.")
+        source = pd.to_numeric(self.individual_data[source_column], errors="raise").fillna(0.0).to_numpy(float)
+        if not np.isfinite(source).all() or (source < 0.0).any():
+            raise ValueError("Individual public-pension source amounts must be finite and non-negative.")
+        weights = np.zeros_like(source)
         for household_id, individual_ids in self.household_data["Corresponding Individuals ID"].items():
+            # Match the household allocator's existing nonnegative-source convention.
+            amount = max(float(household_public_pension_source.loc[household_id]), 0.0)
             ids = np.asarray(individual_ids, dtype=int)
-            eligible_ids = ids[retired[ids]]
-            if eligible_ids.size:
-                weights[eligible_ids] = (
-                    max(float(household_public_pension_source.loc[household_id]), 0.0) / eligible_ids.size
-                )
-        if weights.sum() <= 0.0:
-            if retired.sum() == 0 and public_pension_budget > 0.0:
-                raise ValueError("Public-pension budget requires at least one HFCS-retired individual.")
-            weights[retired] = 1.0
-        if weights.sum() > 0.0:
-            weights /= weights.sum()
+            observed_total = source[ids].sum()
+            if not np.isfinite(amount) or (amount > 0.0 and observed_total <= 0.0):
+                raise ValueError("Household public pensions require matching observed individual recipients.")
+            if observed_total > 0.0:
+                weights[ids] = amount * source[ids] / observed_total
+        total = weights.sum()
+        if total <= 0.0 and public_pension_budget > 0.0:
+            raise ValueError("Public-pension budget requires observed individual pension receipts.")
+        if total > 0.0:
+            weights /= total
         self.individual_data["Public Pension Weight"] = weights
+        self.individual_data["Public Pension Recipient"] = weights > 0.0
         self.individual_data["Public Pension Benefits"] = public_pension_budget * weights
 
     def set_household_income_from_financial_assets(self, total_property_income: Optional[float] = None) -> None:
@@ -1180,11 +1203,45 @@ def split_array(array_to_split: np.ndarray) -> list[list[int]]:
     return result
 
 
+def eligible_hfcs_consumption_households(
+    households: pd.DataFrame, individuals: pd.DataFrame, source: HFCSConsumptionSource
+) -> pd.DataFrame:
+    """Attach registered ratios and exclude hard-invalid records before draws.
+
+    Reader data must use the same complete source extraction as registration.
+    Missing members and mismatched identifiers are errors, not silent sample
+    restrictions. Reader survey weights are retained for the existing weighted
+    sampler; they must match the registered source weights at source load time.
+    """
+    if "HFCS Source ID" not in households:
+        raise ValueError("HFCS-ratio sampling requires explicit HFCS Source ID from the source reader.")
+    if not households.index.is_unique:
+        raise ValueError("HFCS reader household indices must be unique.")
+    ids = households["HFCS Source ID"].to_numpy()
+    if source_ids_fingerprint(ids) != source_ids_fingerprint(source.source_ids):
+        raise ValueError("HFCS reader source population differs from the registered source ID set.")
+    positions = pd.Index(source.source_ids).get_indexer(ids)
+    eligible = households.loc[source.winsorised.valid[positions]].copy()
+    if eligible.empty:
+        raise ValueError("No hard-valid HFCS households remain for sampling.")
+    if not eligible.index.isin(individuals["Corresponding Household ID"]).all():
+        raise ValueError("An eligible HFCS household has no linked individuals.")
+    weights = pd.to_numeric(eligible["Weight"], errors="coerce").to_numpy(float)
+    if not np.all(np.isfinite(weights)) or np.any(weights <= 0) or not np.isfinite(weights.sum()):
+        raise ValueError("Eligible HFCS survey weights must be finite and positive.")
+    expected_weights = source.survey_weights[positions][source.winsorised.valid[positions]]
+    if not np.allclose(weights, expected_weights, rtol=1e-12, atol=1e-8):
+        raise ValueError("HFCS reader weights differ from the registered source survey weights.")
+    eligible["HFCS Consumption Ratio"] = source.ratios_for(eligible["HFCS Source ID"].to_numpy())
+    return eligible
+
+
 def sample_households(
     hfcs_households_data: pd.DataFrame,
     hfcs_individuals_data: pd.DataFrame,
     n_households: int,
     output_shares: Optional[dict[str, pd.Series]] = None,
+    consumption_source: Optional[HFCSConsumptionSource] = None,
 ) -> (pd.DataFrame, pd.DataFrame):
     """
     This function samples a specified number of households from the given HFCS households data,
@@ -1208,6 +1265,10 @@ def sample_households(
     3. Adds the list of individuals per household to the selected households DataFrame.
     4. Resets the indices of the returned DataFrames for consistency.
     """
+    if consumption_source is not None:
+        hfcs_households_data = eligible_hfcs_consumption_households(
+            hfcs_households_data, hfcs_individuals_data, consumption_source
+        )
     # Step 1: Sample households with replacement
     weights = hfcs_households_data["Weight"] / hfcs_households_data["Weight"].sum()
     sampled_household_indices = np.random.choice(hfcs_households_data.index, n_households, p=weights, replace=True)

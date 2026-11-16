@@ -65,6 +65,12 @@ from macro_data.readers.emissions.emissions_reader import (
 )
 from macro_data.readers.exogenous_data import ExogenousCountryData, convert_growth_rates_to_model_period
 from macro_data.readers.io_tables.icio_reader import ICIOReader
+from macro_data.util.consumption_source_config import (
+    CONSUMPTION_DATA_STAGE,
+    configured_hfcs_extractions,
+    consumption_data_signature,
+    load_configured_consumption_sources,
+)
 
 
 def _quarter_start_date(year: int, quarter: int) -> pd.Timestamp:
@@ -180,6 +186,7 @@ class DataWrapper:
     emissions_energy_factors: Optional[EmissionsEnergyFactors] = None
     aggregation_structure: Optional[dict[Country, list[Country | Region]]] = None
     time_unit: int = 3
+    household_consumption_signature: Optional[dict] = None
 
     def __post_init__(self) -> None:
         _repair_linear_regression_compatibility(self)
@@ -279,6 +286,15 @@ class DataWrapper:
                 if configuration.aggregate_industries:
                     raise ValueError("Cannot disaggregate industries when using provincial Canadian data")
 
+        consumption_signature = consumption_data_signature(
+            configuration, raw_data_path, single_hfcs_survey=single_hfcs_survey
+        )
+        consumption_sources = load_configured_consumption_sources(configuration, raw_data_path)
+        hfcs_extractions = {
+            **configured_hfcs_extractions(configuration),
+            **{country: 1 for country in consumption_sources},
+        }
+
         readers = DataReaders.from_raw_data(
             raw_data_path=raw_data_path,
             country_names=country_names,
@@ -287,6 +303,7 @@ class DataWrapper:
             scale_dict=scale_dict,
             prune_date=prune_date,
             force_single_hfcs_survey=single_hfcs_survey,
+            **({"hfcs_num_surveys": hfcs_extractions} if hfcs_extractions else {}),
             single_icio_survey=single_icio_survey,
             proxy_country_dict=proxy_country_dict,
             aggregate_industries=configuration.aggregate_industries,
@@ -392,6 +409,11 @@ class DataWrapper:
                 quarter=quarter,
                 time_unit=configuration.time_unit,
                 country_configuration=configuration.country_configs[country],
+                **(
+                    {"consumption_source": consumption_sources[country.value]}
+                    if country.value in consumption_sources
+                    else {}
+                ),
                 industries=industries,
                 readers=readers,
                 exogenous_country_data=exogenous_data[country],
@@ -412,6 +434,8 @@ class DataWrapper:
 
         for country in country_names:
             if not country.is_eu_country:
+                if country.value in consumption_sources:
+                    raise ValueError("hfcs_cy source wiring currently requires an EU survey country.")
                 synthetic_countries[country] = SyntheticCountry.proxied_synthetic_country(
                     country=country,
                     proxy_country=configuration.country_configs[country].eu_proxy_country,
@@ -459,7 +483,12 @@ class DataWrapper:
         origin_trade_proportions = readers.icio[year].get_origin_trade_proportions()
         destination_trade_proportions = readers.icio[year].get_destination_trade_proportions()
 
+        for country, source in consumption_sources.items():
+            population = synthetic_countries[country].population
+            population.household_consumption_stage = CONSUMPTION_DATA_STAGE
+            population.hfcs_consumption_source_sha256 = source.sha256
         return cls(
+            household_consumption_signature=consumption_signature,
             synthetic_countries=synthetic_countries,
             synthetic_rest_of_the_world=synthetic_row,
             exchange_rates=exchange_rates,

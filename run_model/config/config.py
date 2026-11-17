@@ -180,7 +180,9 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
 #   B:  Step 1, contract rates and offers indexed to firm TFP growth, alpha = 0.1.
 #   C:  Step 2a, on-the-job search; search probability 1.5% a quarter (not calibrated
 #       to the job-to-job rate: that is an open calibration issue).
-#   D:  Step 3d, offer ceiling at value added net of the user cost of capital.
+#   D:  Step 3a, offer ceiling at value added. Variant 3d (net of the user cost of
+#       capital) caps every real-estate (L) and public-administration (O) firm from
+#       t = 1 because of L's dwelling-like capital stock; 3a until that is fixed.
 #   E:  Step 4, offers fall with excess labour, kappa_down = 0.05.
 _WAGE_PLAN_STEPS: dict[str, dict[str, Any]] = {
     "A5": {"firms.parameters.pricing_labour_units": "tfp_effective"},
@@ -192,7 +194,7 @@ _WAGE_PLAN_STEPS: dict[str, dict[str, Any]] = {
         "labour_market.functions.clearing.parameters['on_the_job_search']": True,
         "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": -math.log(1.0 - 0.015),
     },
-    "D": {"firms.functions.wage_setter.parameters['offer_ceiling']": "value_added_net_user_cost"},
+    "D": {"firms.functions.wage_setter.parameters['offer_ceiling']": "value_added"},
     "E": {"firms.functions.wage_setter.parameters['slack_response_down']": 0.05},
 }
 

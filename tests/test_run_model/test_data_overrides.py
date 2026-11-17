@@ -77,7 +77,7 @@ def test_wage_plan_presets_are_cumulative_and_build_on_worker_productivity():
     assert full["firms.functions.wage_setter.parameters['indexation_base']"] == "tfp_multiplier"
     assert full["labour_market.functions.clearing.parameters['on_the_job_search']"] is True
     search_intensity = full["labour_market.functions.clearing.parameters['individuals_quitting_temperature']"]
-    assert abs((1.0 - math.exp(-search_intensity)) - 0.015) < 1e-12
+    assert abs((1.0 - math.exp(-search_intensity)) - 0.033) < 1e-12
     assert full["firms.functions.wage_setter.parameters['offer_ceiling']"] == "value_added"
     assert full["firms.functions.wage_setter.parameters['slack_response_down']"] == 0.05
     data, _ = nw.split_scenario_overrides(full)

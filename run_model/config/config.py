@@ -178,8 +178,10 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
 # arm runs in run_model.ipynb by setting SCENARIO_NAME to its key.
 #   A5: Step 5, unit-consistent pricing (wage bill per unit of output).
 #   B:  Step 1, contract rates and offers indexed to firm TFP growth, alpha = 0.1.
-#   C:  Step 2a, on-the-job search; search probability 1.5% a quarter (not calibrated
-#       to the job-to-job rate: that is an open calibration issue).
+#   C:  Step 2a, on-the-job search; search probability 3.3% a quarter: INSEE Enquete
+#       Emploi 2017, employed actively searching for a replacement job (8.7% wish to
+#       change x 38% search; 4-week window, so a lower bound for a quarter). Success
+#       given search is endogenous; data 15% a quarter (vault france-labour-market-flows-data).
 #   D:  Step 3a, offer ceiling at value added. Variant 3d (net of the user cost of
 #       capital) caps every real-estate (L) and public-administration (O) firm from
 #       t = 1 because of L's dwelling-like capital stock; 3a until that is fixed.
@@ -192,7 +194,7 @@ _WAGE_PLAN_STEPS: dict[str, dict[str, Any]] = {
     },
     "C": {
         "labour_market.functions.clearing.parameters['on_the_job_search']": True,
-        "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": -math.log(1.0 - 0.015),
+        "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": -math.log(1.0 - 0.033),
     },
     "D": {"firms.functions.wage_setter.parameters['offer_ceiling']": "value_added"},
     "E": {"firms.functions.wage_setter.parameters['slack_response_down']": 0.05},
@@ -205,8 +207,8 @@ def _wage_plan_presets() -> dict[str, dict[str, Any]]:
     for arm, step in _WAGE_PLAN_STEPS.items():
         overrides = {**overrides, **step}
         presets[f"wage_plan_{arm}"] = overrides
-    # Exploratory variants of arms C, D and E with a search probability of 3% a quarter
-    # (the 1.5% data moment is a move rate and about half the searchers move).
+    # Exploratory variants of arms C, D and E with a search probability of 3% a quarter.
+    # Superseded: the base arms now use the INSEE value 3.3%; kept for old notebooks.
     search_key = "labour_market.functions.clearing.parameters['individuals_quitting_temperature']"
     for arm in ("C", "D", "E"):
         presets[f"wage_plan_{arm}_search3"] = {**presets[f"wage_plan_{arm}"], search_key: -math.log(1.0 - 0.03)}

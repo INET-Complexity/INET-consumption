@@ -197,6 +197,7 @@ def _offer(
     prev_tfp=PREV_TFP,
     benefits=0.0,
     corresponding_firm=CORRESPONDING_FIRM,
+    **extra,
 ):
     return setter.get_offered_wage_given_labour_inputs_function(
         corresponding_firm=corresponding_firm,
@@ -218,6 +219,7 @@ def _offer(
         current_tfp_multiplier=tfp,
         prev_tfp_multiplier=prev_tfp,
         carried_wage_rate=carried,
+        **extra,
     )
 
 
@@ -602,3 +604,70 @@ def test__search_comparison_rates_match_the_offer_and_the_incumbent_update():
     _run(setter, updated, new_job=new_job, offered=accepted)
     np.testing.assert_allclose(updated[[0, 1, 3]], carried[[0, 1, 3]] * stay_factor[FIRM_OF_EMPLOYEE[[0, 1, 3]]])
     assert updated[2] == 33.0
+
+
+# --- Offer ceiling (wage plan, Step 3) ---------------------------------------
+
+CARRIED = np.array([10.0, 20.0, 30.0, 40.0, 5.0])  # firm means: 15, 30, 40
+
+
+def _uncapped_rates():
+    setter = _setter()
+    _offer(setter, CARRIED)
+    return setter.search_comparison_rates()[0]
+
+
+def test__invalid_offer_ceiling_is_rejected():
+    with pytest.raises(ValueError, match="offer_ceiling"):
+        _setter(offer_ceiling="profits")
+
+
+def test__offer_ceiling_requires_the_ratio():
+    with pytest.raises(ValueError, match="offer_ceiling_ratio"):
+        _offer(_setter(offer_ceiling="value_added"), CARRIED)
+
+
+def test__offer_ceiling_none_ignores_the_ratio():
+    setter = _setter()
+    _offer(setter, CARRIED, offer_ceiling_ratio=np.full(N_FIRMS, 0.5))
+    np.testing.assert_allclose(setter.search_comparison_rates()[0], _uncapped_rates())
+    np.testing.assert_array_equal(setter.last_offer_ceiling_binding, 0.0)
+
+
+def test__offer_ceiling_caps_at_mean_rate_over_labour_share():
+    """c_j = mean carried rate x numerator / wage bill = mean rate / labour share."""
+    uncapped = _uncapped_rates()
+    setter = _setter(offer_ceiling="value_added_net_user_cost")
+    ratio = np.array([0.9, 5.0, 1.0])  # firm 0: labour share above one; firm 1: far from the cap
+    offer = _offer(setter, CARRIED, offer_ceiling_ratio=ratio)
+    capped = setter.search_comparison_rates()[0]
+
+    assert uncapped[0] > 15.0 * 0.9
+    np.testing.assert_allclose(capped[0], 15.0 * 0.9)
+    np.testing.assert_allclose(capped[1], uncapped[1])
+    np.testing.assert_allclose(capped[2], min(uncapped[2], 40.0))
+    np.testing.assert_array_equal(setter.last_offer_ceiling_binding, (uncapped > np.array([13.5, 150.0, 40.0])) * 1.0)
+    # The ceiling never raises an offer, and the offer function uses the capped rate.
+    assert np.all(capped <= uncapped)
+    np.testing.assert_allclose(offer(0, 2.0), 2.0 * capped[0])
+
+
+def test__offer_ceiling_is_skipped_without_a_positive_finite_ratio():
+    uncapped = _uncapped_rates()
+    setter = _setter(offer_ceiling="value_added")
+    _offer(setter, CARRIED, offer_ceiling_ratio=np.array([-0.3, np.nan, 0.0]))
+    np.testing.assert_allclose(setter.search_comparison_rates()[0], uncapped)
+    np.testing.assert_array_equal(setter.last_offer_ceiling_binding, 0.0)
+
+
+def test__offer_ceiling_is_skipped_for_a_firm_without_workforce():
+    no_firm_2 = np.array([0, 0, 1, -1, -1])
+    setter = _setter(offer_ceiling="value_added")
+    _offer(setter, CARRIED, corresponding_firm=no_firm_2, offer_ceiling_ratio=np.full(N_FIRMS, 0.1))
+    assert setter.last_offer_ceiling_binding.tolist() == [1.0, 1.0, 0.0]
+
+
+def test__benefit_floor_applies_after_the_offer_ceiling():
+    setter = _setter(offer_ceiling="value_added")
+    offer = _offer(setter, CARRIED, benefits=14.0, offer_ceiling_ratio=np.full(N_FIRMS, 0.5))
+    assert offer(0, 1.0) == 14.0  # capped rate 7.5 is below the benefit

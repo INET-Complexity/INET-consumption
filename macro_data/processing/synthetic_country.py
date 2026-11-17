@@ -113,6 +113,7 @@ from macro_data.readers.emission_fraction.emission_fraction_reader import Emissi
 from macro_data.readers.emissions.emissions_reader import CH4EmissionsDataCAN, EmissionsData
 from macro_data.readers.exo_prices.exo_prices_reader import SectorExoPrices
 from macro_data.readers.exogenous_data import ExogenousCountryData
+from macro_data.util.hfcs_consumption_source import HFCSConsumptionSource
 
 
 @dataclass
@@ -194,6 +195,7 @@ class SyntheticCountry:
         year_range: int,
         goods_criticality_matrix: pd.DataFrame,
         emission_factors: Optional[EmissionsData] = None,
+        consumption_source: Optional[HFCSConsumptionSource] = None,
     ) -> "SyntheticCountry":
         """
         Create a synthetic country object for a European Union member country.
@@ -271,6 +273,7 @@ class SyntheticCountry:
             exogenous_data=exogenous_country_data,
             yearly_factor=yearly_factor,
             worker_productivity=country_configuration.worker_productivity,
+            consumption_source=consumption_source,
         )
         population.worker_productivity = country_configuration.worker_productivity
 

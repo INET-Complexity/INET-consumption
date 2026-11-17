@@ -264,6 +264,7 @@ class DataReaders:
         allow_missing_emissions: bool = False,
         yearly_factor: float = 4.0,
         simulation_quarter: int = 1,
+        hfcs_num_surveys: Optional[dict[str, int]] = None,
     ):
         if regions_dict:
             all_regions = [region for regions in regions_dict.values() for region in regions]
@@ -330,7 +331,7 @@ class DataReaders:
                 hfcs_data_path=datapaths.hfcs_path,
                 year=simulation_year,
                 exchange_rates=exchange_rates,
-                num_surveys=1 if force_single_hfcs_survey else 5,
+                num_surveys=(hfcs_num_surveys or {}).get(proxy_country.value, 1 if force_single_hfcs_survey else 5),
             )
             for country_name, proxy_country in zip(country_names, proxified)
         }

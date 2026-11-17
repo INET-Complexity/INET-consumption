@@ -257,6 +257,34 @@ class TestCountry:
         )
 
         assert country is not None
+        # Opening wages and benefits must be separate receipts, while keeping
+        # exactly the cash-income budget supplied by the synthetic population.
+        population = synthetic_country.population
+        source = population.household_data
+        people = population.individual_data
+        wages = country.households.aggregate_individual_amount(
+            people["Employee Income"].to_numpy(float), people["Corresponding Household ID"].to_numpy(int)
+        )
+        benefits = country.households.aggregate_individual_amount(
+            people["Income from Unemployment Benefits"].to_numpy(float),
+            people["Corresponding Household ID"].to_numpy(int),
+        )
+        assert (benefits > 0).any()
+        np.testing.assert_allclose(wages + benefits, source["Employee Income"], rtol=1e-12, atol=1e-6)
+        for prefix in ("", "expected_"):
+            np.testing.assert_allclose(country.households.ts.current(prefix + "income_employee"), wages)
+            np.testing.assert_allclose(country.households.ts.current(prefix + "income_unemployment_benefits"), benefits)
+            np.testing.assert_allclose(
+                country.households.ts.current(prefix + "income_social_transfers"),
+                source["Regular Social Transfers"].to_numpy(float) + benefits,
+            )
+            np.testing.assert_allclose(country.households.ts.current(prefix + "income"), source["Income"])
+            np.testing.assert_allclose(
+                country.households.ts.current(prefix + "income_employee")
+                + country.households.ts.current(prefix + "income_social_transfers"),
+                source["Employee Income"].to_numpy(float) + source["Regular Social Transfers"].to_numpy(float),
+            )
+        assert country.households.ts.current("total_income_employee")[0] == pytest.approx(wages.sum())
 
     def test__country(self, test_country):
         assert test_country is not None

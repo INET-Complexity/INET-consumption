@@ -1196,6 +1196,8 @@ class Firms(Agent):
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
         carried_wage_rate: np.ndarray = None,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
+        reuse_offer_ceiling_ratio: bool = False,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create function that computes offered wages.
 
@@ -1217,6 +1219,13 @@ class Firms(Agent):
             carried_wage_rate (np.ndarray): Per-individual contract wage rate,
                 ``individuals.states["Wage Rate"]``. Used by stateful setters
                 such as ``ContractWageSetter``; ignored by stateless ones.
+            bank_interest_rates_on_long_term_firm_loans (np.ndarray): Long-term
+                firm loan rates by bank, per period. Needed only by the
+                ``value_added_net_user_cost`` offer ceiling.
+            reuse_offer_ceiling_ratio (bool): Reuse the ceiling ratio computed
+                by the previous call. Offers are rebuilt after credit clearing,
+                when the banks have already set this quarter's loan rates; the
+                ceiling must keep last quarter's rate, like its other inputs.
 
         Returns:
             np.ndarray: Wage offers for each firm
@@ -1230,6 +1239,16 @@ class Firms(Agent):
             desired_labour, realised_labour = self.latest_matched_labour_gap_inputs()
             offer_kwargs["desired_labour_inputs"] = desired_labour
             offer_kwargs["realised_labour_inputs"] = realised_labour
+            offer_ceiling = self.functions["wage_setter"].offer_ceiling
+            if offer_ceiling != "none":
+                cached = getattr(self, "_offer_ceiling_ratio", None)
+                n_firms = self.ts.current("total_wage").shape
+                if not (reuse_offer_ceiling_ratio and cached is not None and cached.shape == n_firms):
+                    self._offer_ceiling_ratio = self.compute_offer_ceiling_ratio(
+                        variant=offer_ceiling,
+                        bank_interest_rates_on_long_term_firm_loans=bank_interest_rates_on_long_term_firm_loans,
+                    )
+                offer_kwargs["offer_ceiling_ratio"] = self._offer_ceiling_ratio
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1253,6 +1272,46 @@ class Firms(Agent):
             prev_tfp_multiplier=self.ts.prev("tfp_multiplier"),
             **offer_kwargs,
         )
+
+    def compute_offer_ceiling_ratio(
+        self,
+        variant: str,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Ceiling numerator over the wage bill, by firm, from the latest completed quarter.
+
+        Offers are set before production, so every ``current`` value read here
+        belongs to last quarter. The numerator by variant:
+
+        - ``value_added``: revenue - intermediate input costs - production taxes
+        - ``value_added_net_capital``: value added - capital costs charged in firm accounting
+        - ``value_added_net_user_cost``: the above - max(long-term loan rate, 0) x capital stock value
+
+        A firm's mean wage rate times this ratio is the rate at which its wage
+        bill would absorb the whole numerator. NaN where the wage bill is zero.
+        """
+        numerator = (
+            self.ts.current("price") * self.ts.current("production")
+            - self.ts.current("used_intermediate_inputs_costs")
+            - self.ts.current("taxes_paid_on_production")
+        )
+        if variant in ("value_added_net_capital", "value_added_net_user_cost"):
+            numerator = (
+                numerator - self.capital_compensation_accounting_costs() - self.capital_depreciation_accounting_costs()
+            )
+        if variant == "value_added_net_user_cost":
+            if bank_interest_rates_on_long_term_firm_loans is None:
+                raise ValueError("The value_added_net_user_cost offer ceiling requires long-term firm loan rates.")
+            loan_rate = np.asarray(bank_interest_rates_on_long_term_firm_loans, dtype=float)[
+                self.states["Corresponding Bank ID"]
+            ]
+            # A negative loan rate must not raise the ceiling.
+            numerator = numerator - np.maximum(loan_rate, 0.0) * self.ts.current("capital_inputs_stock_value")
+        elif variant not in ("value_added", "value_added_net_capital"):
+            raise ValueError(f"Unknown offer ceiling variant {variant!r}.")
+        wage_bill = np.asarray(self.ts.current("total_wage"), dtype=float)
+        numerator = np.asarray(numerator, dtype=float)
+        return np.divide(numerator, wage_bill, out=np.full(wage_bill.shape, np.nan), where=wage_bill > 0.0)
 
     def compute_realised_productivity_ratio(self, window: int = 4) -> np.ndarray:
         """Growth in smoothed realised labour productivity, output per labour input.

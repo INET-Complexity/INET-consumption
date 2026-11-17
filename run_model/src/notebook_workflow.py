@@ -28,6 +28,11 @@ from macro_data.readers.permanent_income_mapping import (
     build_permanent_income_forecast_regressors,
     rebase_real_pc_income_index,
 )
+from macro_data.util.consumption_source_config import (
+    consumption_cache_requires_rebuild,
+    consumption_data_signature,
+    preserve_consumption_cache,
+)
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration, load_country_configuration
 from macromodel.simulation import Simulation
 
@@ -407,7 +412,15 @@ def _benchmark_data_cache_spec(cfg: Config, raw_data_path: Path, config: Noteboo
     """Describe the synthetic benchmark data inputs stored in the pickle cache."""
     data_config_path = Path(cfg.config_dir) / f"data_config_{cfg.country_iso3}.yaml"
     country_config_path = Path(cfg.config_dir) / f"country_config_{cfg.country_iso3}.yaml"
+    with data_config_path.open() as source_config_file:
+        consumption_signature = consumption_data_signature(
+            yaml.safe_load(source_config_file), raw_data_path, single_hfcs_survey=config.single_hfcs_survey
+        )
     return {
+        "public_pension_schema": "individual_receipts_retirement_v3",
+        "opening_income_schema": "separate_wages_unemployment_v1",
+        "opening_consumption_schema": "hfcs_reserved_legacy_v1",
+        "household_consumption": consumption_signature,
         "country_iso3": cfg.country_iso3,
         "raw_data_path": str(raw_data_path),
         "single_hfcs_survey": config.single_hfcs_survey,
@@ -425,6 +438,8 @@ REQUIRED_INDIVIDUAL_POPULATION_COLUMNS = frozenset(
         "college",
         "HFCS Labour Status",
         "Is Retired",
+        "Public Pension Recipient",
+        "Individual Public Pension Income",
         "Activity Status",
         "Employment Industry",
         "Employee Income",
@@ -692,8 +707,14 @@ def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | 
 
     if data_pkl_path.exists() and not config.force_rebuild_data:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
-        if _requires_cfc_rate_cache_rebuild(data, data_config):
-            print(f"Rebuilding stale CFC-rate data cache: {data_pkl_path}")
+        if consumption_cache_requires_rebuild(
+            data, data_config, raw_data_path, single_hfcs_survey=config.single_hfcs_survey
+        ) or _requires_cfc_rate_cache_rebuild(data, data_config):
+            if consumption_cache_requires_rebuild(
+                data, data_config, raw_data_path, single_hfcs_survey=config.single_hfcs_survey
+            ):
+                preserve_consumption_cache(data_pkl_path)
+            print(f"Rebuilding stale consumption/CFC-rate data cache: {data_pkl_path}")
             creator = DataWrapper.from_config(
                 configuration=data_config,
                 raw_data_path=raw_data_path,
@@ -702,6 +723,7 @@ def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | 
             creator.save(str(data_pkl_path))
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
         elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+            preserve_consumption_cache(data_pkl_path)
             print(f"Rebuilding stale population-schema data cache: {data_pkl_path}")
             creator = DataWrapper.from_config(
                 configuration=data_config,
@@ -713,6 +735,8 @@ def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | 
         else:
             creator = data
     else:
+        if data_pkl_path.exists():
+            preserve_consumption_cache(data_pkl_path)
         creator = DataWrapper.from_config(
             configuration=data_config,
             raw_data_path=raw_data_path,
@@ -843,8 +867,14 @@ def run_benchmark(
     cached_data_spec = _read_json_cache_spec(data_cache_spec_path)
     if data_pkl_path.exists() and cached_data_spec == data_cache_spec and not config.force_rerun_benchmark:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
-        if _requires_cfc_rate_cache_rebuild(data, data_config):
-            print(f"Rebuilding stale benchmark CFC-rate data cache: {data_pkl_path}")
+        if consumption_cache_requires_rebuild(
+            data, data_config, raw_data_path, single_hfcs_survey=config.single_hfcs_survey
+        ) or _requires_cfc_rate_cache_rebuild(data, data_config):
+            if consumption_cache_requires_rebuild(
+                data, data_config, raw_data_path, single_hfcs_survey=config.single_hfcs_survey
+            ):
+                preserve_consumption_cache(data_pkl_path)
+            print(f"Rebuilding stale benchmark consumption/CFC-rate data cache: {data_pkl_path}")
             data = DataWrapper.from_config(
                 configuration=data_config,
                 raw_data_path=raw_data_path,
@@ -854,6 +884,7 @@ def run_benchmark(
             _write_json_cache_spec(data_cache_spec_path, data_cache_spec)
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
         elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+            preserve_consumption_cache(data_pkl_path)
             print(f"Rebuilding stale benchmark population-schema data cache: {data_pkl_path}")
             data = DataWrapper.from_config(
                 configuration=data_config,
@@ -864,8 +895,10 @@ def run_benchmark(
             _write_json_cache_spec(data_cache_spec_path, data_cache_spec)
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
     else:
-        if data_pkl_path.exists() and not config.force_rerun_benchmark:
-            print(f"Rebuilding stale benchmark data cache: {data_pkl_path}")
+        if data_pkl_path.exists():
+            preserve_consumption_cache(data_pkl_path)
+            if not config.force_rerun_benchmark:
+                print(f"Rebuilding stale benchmark data cache: {data_pkl_path}")
         data = DataWrapper.from_config(
             configuration=data_config,
             raw_data_path=raw_data_path,

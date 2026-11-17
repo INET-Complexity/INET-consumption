@@ -299,7 +299,9 @@ BALANCE_SHEET_COLUMNS = (
 # used to deflate housing flows in real GDP (issue #197).
 HOUSING_COLUMNS = (
     "hpi",
-    "rpi",
+    "rpi_actual",
+    "rpi_imputed",
+    "social_rent_price",
     # "hpi_inflation",
     # "estimated_hpi_inflation",
     "total_real_rent_paid",
@@ -380,8 +382,9 @@ _SERIES_LABEL_OVERRIDES = {
     "household_credit_demand_mortgage": "Household mortgage-credit demand",
     "household_credit_received_mortgage": "Household mortgage-credit received",
     "hpi": "House price index (HPI)",
-    "rpi": "Rental price index (RPI)",
-    "rpi_inflation": "Rental price index growth (per period)",
+    "rpi_actual": "Actual rent price index",
+    "rpi_imputed": "Imputed rent price index",
+    "social_rent_price": "Social rent price index",
     "hpi_inflation": "House price index growth (per period)",
     "estimated_hpi_inflation": "Expected house price index growth (per period)",
     "total_real_rent_paid": "Rent paid (total, nominal LCU)",

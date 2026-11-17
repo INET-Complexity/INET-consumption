@@ -3429,6 +3429,12 @@ class Households(Agent):
         )
         rent_by_household[ind_social_housing] = social_housing_rent
         self.states["Rent paid to Government"] = social_housing_rent.sum()
+        self.states["Social Rent per Adult"] = float(
+            social_housing_function.compute_social_housing_rent(
+                current_unemployment_benefits_by_individual=current_unemployment_benefits_by_individual,
+                current_household_size=np.ones(1),
+            )[0]
+        )
 
         # Households renting
         ind_renting = np.all(

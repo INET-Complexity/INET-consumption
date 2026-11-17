@@ -205,6 +205,37 @@ def _resolve_frm_coefficients_path(
     return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
 
 
+def floor_initial_rents(
+    household_data: pd.DataFrame,
+    housing_data: pd.DataFrame,
+    minimum_annual_rental_yield: float,
+    time_unit: int,
+) -> None:
+    """Apply the rent/value floor to the initial rents, in place (issue #197).
+
+    The same floor binds on every later rent update. Applying it at t=0 keeps
+    the floor out of the first period's rent inflation. Households pay or
+    impute the rent of the dwelling they live in, so each raise is passed on to
+    "Rent Paid" (tenure 3) or "Rent Imputed" (tenure 1, 2, 4).
+    """
+    if minimum_annual_rental_yield == 0.0:
+        return
+    floor = minimum_annual_rental_yield * (time_unit / 12.0) * housing_data["Value"].to_numpy(dtype=float)
+    old_rent = housing_data["Rent"].to_numpy(dtype=float)
+    raise_by_house = pd.Series(np.maximum(floor - old_rent, 0.0), index=housing_data.index)
+    housing_data["Rent"] = old_rent + raise_by_house.to_numpy()
+
+    house_id = household_data["Corresponding Inhabited House ID"].fillna(-1).astype(int).to_numpy()
+    housed = house_id != -1
+    raise_by_household = np.zeros(len(household_data))
+    raise_by_household[housed] = raise_by_house.reindex(house_id[housed]).fillna(0.0).to_numpy()
+    tenure = household_data["Tenure Status of the Main Residence"].to_numpy()
+    renting = tenure == 3
+    owning = np.isin(tenure, [1, 2, 4])
+    household_data.loc[renting, "Rent Paid"] += raise_by_household[renting]
+    household_data.loc[owning, "Rent Imputed"] += raise_by_household[owning]
+
+
 def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
     """Apply a model-level production-tax calibration to all initial tax views."""
     if scale <= 0.0:
@@ -794,6 +825,19 @@ class Country:
             # scale multiplicatively instead of reapplying it once each time.
             synthetic_country = deepcopy(synthetic_country)
             _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
+
+        minimum_annual_rental_yield = country_configuration.households.functions.property.parameters.get(
+            "minimum_annual_rental_yield", 0.0
+        )
+        if minimum_annual_rental_yield > 0.0:
+            # Floor a private copy: synthetic_country may be shared across seeds (see above).
+            synthetic_country = deepcopy(synthetic_country)
+            floor_initial_rents(
+                household_data=synthetic_country.population.household_data,
+                housing_data=synthetic_country.housing_market.housing_market_data,
+                minimum_annual_rental_yield=minimum_annual_rental_yield,
+                time_unit=time_unit,
+            )
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
         add_emissions = all([industry in industries for industry in emission_industries])
@@ -2342,6 +2386,20 @@ class Country:
             self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
         )
 
+    def _dwelling_tenure(self) -> np.ndarray:
+        """Tenure code of each dwelling's inhabitant (-1 if vacant), in property order.
+
+        Uses the household tenure codes, the same split as the rent flows in GDP.
+        """
+        properties = self.housing_market.states["properties"]
+        house_id = np.asarray(self.households.states["Corresponding Inhabited House ID"], dtype=int)
+        tenure = np.asarray(self.households.states["Tenure Status of the Main Residence"])
+        housed = house_id != -1
+        by_house = pd.Series(tenure[housed], index=house_id[housed])
+        if by_house.index.has_duplicates:
+            raise ValueError("Each dwelling must have at most one inhabitant household.")
+        return by_house.reindex(properties.index).fillna(-1).to_numpy(dtype=int)
+
     def clear_housing_market(self) -> None:
         """Execute housing market clearing.
 
@@ -3731,9 +3789,11 @@ class Country:
             current_property_values=self.housing_market.ts.current("property_values"),
             previous_property_values=self.housing_market.ts.prev("property_values"),
         )
-        self.economy.compute_rental_price_index(
+        self.economy.compute_rent_price_indices(
             current_property_rents=self.housing_market.ts.current("property_rents"),
             previous_property_rents=self.housing_market.ts.prev("property_rents"),
+            dwelling_tenure=self._dwelling_tenure(),
+            social_rent_per_adult=self.households.states["Social Rent per Adult"],
         )
         self.economy.compute_labour_market_aggregates(
             current_individual_activity_status=self.individuals.states["Activity Status"],
@@ -3750,6 +3810,7 @@ class Country:
             real_rent_paid=self.households.ts.current("rent"),
             imp_rent_paid=self.households.ts.current("rent_imputed"),
             rental_income=self.households.ts.current("income_rental"),
+            social_rent_paid=self.households.states["Rent paid to Government"],
         )
 
         # B1. GLOBAL TRADE AND CAPITAL FORMATION

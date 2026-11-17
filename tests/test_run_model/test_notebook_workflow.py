@@ -926,3 +926,100 @@ def test_build_permanent_income_forecast_contribution_table_recovers_missing_sou
     assert result["regressor"].tolist() == ["time_trend"]
     assert result["simulation_source"].tolist() == ["simulation_period_index"]
     assert result["is_fixed"].tolist() == [False]
+
+
+def _consumption_source_config_files(env_cfg):
+    import hashlib
+
+    files = {}
+    for kind in ("source", "registration"):
+        path = env_cfg.raw_data_path / f"{kind}.private"
+        path.write_bytes(kind.encode())
+        files[kind + "_file"] = path.name
+        files[kind + "_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {"method": "hfcs_cy", "implicate": 1, **files}
+
+
+def test_benchmark_signature_tracks_private_source_content(tmp_path):
+    import hashlib
+
+    import yaml
+
+    cfg = _fake_env_config(tmp_path)
+    fields = _consumption_source_config_files(cfg)
+    config_path = cfg.config_dir / "data_config_ESP.yaml"
+
+    def write():
+        config_path.write_text(
+            yaml.safe_dump({"country_configs": {"ESP": {"household_consumption_initialisation": fields}}})
+        )
+
+    write()
+    before = nw._benchmark_data_cache_spec(cfg, cfg.raw_data_path, nw.NotebookRunConfig())
+    path = cfg.raw_data_path / fields["source_file"]
+    path.write_bytes(b"changed source")
+    fields["source_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    write()
+    after = nw._benchmark_data_cache_spec(cfg, cfg.raw_data_path, nw.NotebookRunConfig())
+    assert before["household_consumption"] != after["household_consumption"]
+
+
+def test_prepare_data_preserves_legacy_pickle_before_method_switch(tmp_path, monkeypatch):
+    from macro_data.util.consumption_source_config import consumption_data_signature
+
+    cfg = _fake_env_config(tmp_path)
+    fields = _consumption_source_config_files(cfg)
+    config = {"country_configs": {"ESP": {"household_consumption_initialisation": fields}}}
+    accounts = pd.DataFrame({"GDP (Value)": [1.0]})
+    data = SimpleNamespace(
+        n_industries=2,
+        synthetic_countries={"ESP": SimpleNamespace(exogenous_data=SimpleNamespace(national_accounts=accounts))},
+    )
+    path = cfg.output_path / "data.pkl"
+    path.write_bytes(b"original legacy pickle")
+
+    class FakeData:
+        @staticmethod
+        def init_from_pickle(path):
+            return data
+
+        @staticmethod
+        def from_config(**kwargs):
+            data.household_consumption_signature = consumption_data_signature(config, cfg.raw_data_path)
+            return SimpleNamespace(save=lambda p: Path(p).write_bytes(b"new pickle"))
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: cfg))
+    monkeypatch.setattr(nw, "_load_data_config", lambda _: config)
+    monkeypatch.setattr(nw, "DataWrapper", FakeData)
+    nw.prepare_data(nw.NotebookRunConfig(country_iso3="ESP"))
+    assert path.read_bytes() == b"new pickle"
+    backups = list(cfg.output_path.glob("data.consumption-backup-*.pkl"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"original legacy pickle"
+
+
+def test_prepare_data_force_rebuild_also_preserves_previous_pickle(tmp_path, monkeypatch):
+    cfg = _fake_env_config(tmp_path)
+    path = cfg.output_path / "data.pkl"
+    path.write_bytes(b"old forced cache")
+    accounts = pd.DataFrame({"GDP (Value)": [1.0]})
+    data = SimpleNamespace(
+        n_industries=2,
+        synthetic_countries={"ESP": SimpleNamespace(exogenous_data=SimpleNamespace(national_accounts=accounts))},
+    )
+
+    class FakeData:
+        @staticmethod
+        def init_from_pickle(path):
+            return data
+
+        @staticmethod
+        def from_config(**kwargs):
+            return SimpleNamespace(save=lambda p: Path(p).write_bytes(b"rebuilt"))
+
+    monkeypatch.setattr(nw.Config, "from_env", classmethod(lambda cls: cfg))
+    monkeypatch.setattr(nw, "_load_data_config", lambda _: SimpleNamespace())
+    monkeypatch.setattr(nw, "DataWrapper", FakeData)
+    nw.prepare_data(nw.NotebookRunConfig(country_iso3="ESP", force_rebuild_data=True))
+    assert path.read_bytes() == b"rebuilt"
+    backups = list(cfg.output_path.glob("data.consumption-backup-*.pkl"))
+    assert len(backups) == 1 and backups[0].read_bytes() == b"old forced cache"

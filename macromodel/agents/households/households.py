@@ -439,6 +439,7 @@ class Households(Agent):
                     "Corresponding Renters",
                     "Corresponding Additionally Owned Houses ID",
                 ]
+                + (["HFCS Source ID"] if "HFCS Source ID" in synthetic_population.household_data else []),
             )
             .astype(float)
             .rename_axis("Household ID")

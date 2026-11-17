@@ -208,6 +208,13 @@ def _wage_plan_presets() -> dict[str, dict[str, Any]]:
     search_key = "labour_market.functions.clearing.parameters['individuals_quitting_temperature']"
     for arm in ("C", "D", "E"):
         presets[f"wage_plan_{arm}_search3"] = {**presets[f"wage_plan_{arm}"], search_key: -math.log(1.0 - 0.03)}
+    # Arm E with partial CPI indexation of wages (psi < 1): inflation has a finite steady state
+    # without a working policy rule (plan section 2.7).
+    for label, psi in (("psi08", 0.8), ("psi05", 0.5)):
+        presets[f"wage_plan_E_{label}"] = {
+            **presets["wage_plan_E"],
+            "firms.parameters.wage_cpi_indexation_elasticity": psi,
+        }
     return presets
 
 

@@ -203,6 +203,11 @@ def _wage_plan_presets() -> dict[str, dict[str, Any]]:
     for arm, step in _WAGE_PLAN_STEPS.items():
         overrides = {**overrides, **step}
         presets[f"wage_plan_{arm}"] = overrides
+    # Exploratory variants of arms C, D and E with a search probability of 3% a quarter
+    # (the 1.5% data moment is a move rate and about half the searchers move).
+    search_key = "labour_market.functions.clearing.parameters['individuals_quitting_temperature']"
+    for arm in ("C", "D", "E"):
+        presets[f"wage_plan_{arm}_search3"] = {**presets[f"wage_plan_{arm}"], search_key: -math.log(1.0 - 0.03)}
     return presets
 
 

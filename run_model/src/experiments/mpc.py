@@ -24,9 +24,12 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from src.experiments.selected_output import select_names, write_selected  # noqa: E402
 from src.mpc_analysis import (  # noqa: E402
     HOUSEHOLD_LABOR_STATE_COLUMNS,
     MPC_PLOT_MEASURES,
+    MPC_REGIME_INPUTS,
+    MPC_WINDOW_OUTCOMES,
     MPCFilterConfig,
     add_mpc_bins,
     build_household_mpc_panel,
@@ -144,13 +147,14 @@ def _run_one(
     shock_exempt_from_support: bool = False,
     cpi_source: str = "cpi_fixed_basket",
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
 
     The household series the MPC panel needs (measurement-window rows only) are
     always written to ``mpc_window.npz`` in the seed directory. The full per-agent
     HDF5 is written to ``multi_country_simulation.h5`` only with ``keep_full_h5``;
-    otherwise it exists transiently in a temporary directory.
+    otherwise only analysis inputs are serialized in a temporary directory.
 
     ``shock_period`` is a zero-based simulation iteration. Since HDF5 row ``0``
     is the initial state, metadata for binning is captured at HDF5 row
@@ -240,8 +244,31 @@ def _run_one(
     else:
         # Scratch HDF5 lives in its own temp dir so an existing full file at the fixed path is never touched.
         with tempfile.TemporaryDirectory(dir=seed_dir, prefix=".scratch-") as scratch:
-            model.save(save_dir=scratch, file_name=FULL_H5_NAME)
+            fields = {"consumption", "target_consumption", "income", *MPC_REGIME_INPUTS}
+            outcome_fields = {
+                "cash": {"consumption_cash_expenditure", "rent", "total_consumption", "total_consumption_before_vat"},
+                "total": {
+                    "consumption_including_housing",
+                    "consumption_cash_expenditure",
+                    "rent",
+                    "rent_imputed",
+                    "total_consumption",
+                    "total_consumption_before_vat",
+                },
+                "imputed_rent": {"rent_imputed"},
+                "behavioural_total_target": {"target_consumption_calibrated_total", "target_consumption_total_mpc"},
+                "target_consumption_total_mpc": {"target_consumption_total_mpc"},
+            }
+            for name in select_names(output_variables, MPC_WINDOW_OUTCOMES):
+                fields.update(outcome_fields[name])
+            paths = [f"{country_code}/households/{name}" for name in sorted(fields)]
+            paths += [f"{country_code}/economy/{cpi_source}", f"{country_code}/economy/subsistence_consumption"]
+            write_selected(model, Path(scratch) / FULL_H5_NAME, country_code, paths)
             window = extract_mpc_window(Path(scratch) / FULL_H5_NAME, country_code, **window_kwargs)
+    selected = select_names(output_variables, MPC_WINDOW_OUTCOMES)
+    window = {
+        name: values for name, values in window.items() if not name.startswith("outcome_") or name[8:] in selected
+    }
     write_mpc_window(seed_dir / WINDOW_NAME, window)
     return result
 
@@ -262,6 +289,7 @@ def _run_seed_pair(
     shock_exempt_from_support: bool = False,
     cpi_source: str = "cpi_fixed_basket",
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed.
 
@@ -285,6 +313,7 @@ def _run_seed_pair(
         shock_exempt_from_support=shock_exempt_from_support,
         cpi_source=cpi_source,
         keep_full_h5=keep_full_h5,
+        output_variables=output_variables,
     )
     shock_metadata = _run_one(
         data=data,
@@ -301,6 +330,7 @@ def _run_seed_pair(
         shock_exempt_from_support=shock_exempt_from_support,
         cpi_source=cpi_source,
         keep_full_h5=keep_full_h5,
+        output_variables=output_variables,
     )
     shock_state_columns = [
         column
@@ -468,8 +498,15 @@ def run_mpc_experiment(
     labor_income_tolerance: float | None = None,
     shock_exempt_from_support: bool = False,
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
+
+    ``output_variables`` selects additive household outcomes: cash, total,
+    behavioural_total_target, imputed_rent, target_consumption_total_mpc.
+    None keeps all outcomes. Core goods/target MPCs, CPI, income, regime and
+    grouping/filter metadata are always retained as calculation dependencies.
+    Working model histories remain available during simulation.
 
     Per arm and seed only the measurement-window household series are persisted
     (``mpc_window.npz``). ``keep_full_h5=True`` also keeps the full per-agent HDF5
@@ -490,6 +527,7 @@ def run_mpc_experiment(
     aggregated worked-hours bin, and labour-income bin are each constant across
     the full baseline-plus-shock MPC window.
     """
+    output_variables = list(select_names(output_variables, MPC_WINDOW_OUTCOMES))
     seed_list = _validate_unique_seeds(seeds)
     if n_jobs == 0:
         raise ValueError("n_jobs must be non-zero.")
@@ -546,6 +584,7 @@ def run_mpc_experiment(
             shock_exempt_from_support=shock_exempt_from_support,
             cpi_source=cpi_source,
             keep_full_h5=keep_full_h5,
+            output_variables=output_variables,
         )
         for seed in seed_list
     )
@@ -564,7 +603,7 @@ def run_mpc_experiment(
         [plotted_mpc_column] if mpc_plot_measure is not None else [real_cumulative_mpc_column, cumulative_mpc_column]
     )
 
-    run_file = FULL_H5_NAME if keep_full_h5 else WINDOW_NAME
+    run_file = WINDOW_NAME  # Apply outcome selection even when full debug output is retained.
     panels = []
     for seed in seed_list:
         seed_metadata = metadata.loc[metadata["seed"] == int(seed)].copy()
@@ -640,6 +679,12 @@ def run_mpc_experiment(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run household MPC distribution experiment.")
+    parser.add_argument(
+        "--output-variables",
+        nargs="+",
+        default=None,
+        help="Names of analysis outputs to save; default: all supported outputs.",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
     parser.add_argument("--t-max", type=int, default=DEFAULT_T_MAX)
     parser.add_argument("--country", default=None, help="Optional country ISO3 override.")
@@ -754,6 +799,7 @@ def main() -> None:
         labor_income_tolerance=parsed.labor_income_tolerance,
         shock_exempt_from_support=parsed.shock_exempt_from_support,
         keep_full_h5=parsed.keep_full_h5,
+        output_variables=parsed.output_variables,
     )
     print(
         {

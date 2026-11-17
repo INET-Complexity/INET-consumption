@@ -1,0 +1,20 @@
+# Increment 3 review and remaining scope — 2026-11-16
+
+## Verdict
+
+No additional correctness defect found within the explicit registered single-implicate sampling path. Rechecked 66 focused tests (pass) and the earlier 36 existing population regressions. Reviewed source identity, registered-weight alignment, hard-valid filtering before draws, full population count, replacement-draw duplication of individuals, leading-zero preservation, derived-file joins and preservation of diagnostic columns. This is not acceptance of the complete initialisation change.
+
+## Integration blocker: reader defaults to five implicates
+
+`eligible_hfcs_consumption_households` requires a unique original-source ID set. `NotebookRunConfig.single_hfcs_survey` defaults to False and `DataReaders.from_raw_data` consequently reads five implicates. The actual French five-implicate reader produces 60,175 household rows but only 12,035 distinct SA0010 IDs; the new path rejects them with `Source identifiers must be unique for registration.` The earlier real-data smoke explicitly used num_surveys=1.
+
+Before enabling the new default, make the registered extraction explicit in data configuration and consistently select the matched source implicate, or provide an appropriately registered multi-implicate design. Do not silently deduplicate: the implicates have different imputed data. Keep the legacy extraction available for comparisons. Evidence: vault `outputs/audits/2026-11-16-initial-cy/increment3-review.json`.
+
+## What remains to complete the user-requested change
+
+1. **Config and source build:** add the data-config method selector, new default and explicit legacy option; configure the preparation/source/registration paths and consistent survey extraction. Turn the audited generated-ID→raw-SA0010 translation and source export into a supported reproducible handoff, rather than relying on private temporary files and vault review scripts that inspect calibration locals. Pass the loaded source through country construction into `SyntheticHFCSPopulation.from_readers`.
+2. **Opening consumption:** construct comparable, unfloored model-period income; apply the winsorised source ratio and the increment-1 allocation helper. Wire both methods into the authoritative opening accounts. Preserve effective VAT and housing accounting; do not subsequently reapply fitted saving rates, legacy share alignment or the extra housing-input-goods allocation. Initialise any still-required saving-rate field as an implication of the resulting accounts. Ensure initial_state epsilon anchors this final budget, including reset/rebuild paths. Address nonpositive model income or candidate consumption below model housing explicitly; current helpers reject these states.
+3. **Cache lifecycle:** fingerprint method, extraction, source/registration and relevant settings; rebuild or explicitly reject stale data for every supported runner. Missing source metadata in old caches must not silently select a legacy allocation when the new method is requested. Preserve reusable legacy caches for comparison.
+4. **Acceptance:** run full new/legacy data-build and Country construction checks, verify realised initial C/Y and candidate/post-macro-alignment distributions, aggregate goods/housing totals, population/individual links, VAT and initial-budget identities, reset consistency and both-direction cache switching. The new `from_readers` forwarding test stops at the sampler boundary; the actual-data replay exercises raw reader plus sampler, not the whole new initialisation pipeline. A behavioural MPC simulation is separate from these construction checks.
+
+The registered C/Y values currently appear only as carried household diagnostics. `SyntheticCountry.initialise_pop_wealth_income` still calls legacy saving-rate normalisation, and `create_households_timeseries` still aligns legacy Consumption shares and adds housing-input goods. No new default, runtime initialisation or cache switch is active. No code changes were made during this review.

@@ -363,6 +363,8 @@ FRA:
           indexation_base: realised_productivity
           realised_productivity_window: 4
           incumbent_indexation_pass_through: 0.0
+          slack_response_down: 0.0  # kappa_down: offers fall when the firm has more labour than it wants
+          offer_ceiling: none  # none | value_added | value_added_net_capital | value_added_net_user_cost (solvency bound on offers)
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:
       arbitrage_intensity: 2.0
@@ -404,6 +406,7 @@ FRA:
       # It is the second indexation channel alongside the wage_setter's
       # `incumbent_indexation_pass_through` (alpha); keep both visible together.
       wage_cpi_indexation_elasticity: 1.0
+      pricing_labour_units: raw  # raw | tfp_effective (wage bill per unit of output; deflates unless wage rates rise with TFP, #189)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
       firm_activity_finance_revision_mode: post_credit_cash_budget

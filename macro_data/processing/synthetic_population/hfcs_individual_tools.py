@@ -3,11 +3,10 @@ import logging
 import numpy as np
 import pandas as pd
 
-# Age from which active people are removed from the labour force first when the participation rate
-# has to be lowered
 from macro_data.processing.synthetic_matching.worker_productivity import apply_wage_floor
 from macro_data.util.imputation import apply_iterative_imputer
 
+# Model cutoff, also used to retire observed pension recipients at initialisation.
 RETIREMENT_AGE = 65
 
 
@@ -75,11 +74,16 @@ def process_individual_data(
     individual_data = fill_individual_education(individual_data)
     individual_data["college"] = (individual_data["Education"] > 3).astype(int)
     individual_data = fill_individual_labour_status(individual_data)
-    # HFCS has a retirement labour-status category but the simulation has no
-    # ageing transition.  Preserve it as a static eligibility state, separate
-    # from the simulated employment/unemployment activity status.
+    # Retain the source status. Pension receipt below the model retirement age
+    # does not imply retirement; older observed recipients are retired by assumption.
     individual_data["HFCS Labour Status"] = individual_data["Labour Status"].astype(int)
-    individual_data["Is Retired"] = individual_data["HFCS Labour Status"] == 5
+    pension_source = pd.to_numeric(
+        individual_data.get("Individual Public Pension Income", pd.Series(0.0, index=individual_data.index)),
+        errors="raise",
+    ).fillna(0.0)
+    individual_data["Is Retired"] = (individual_data["HFCS Labour Status"] == 5) | (
+        (individual_data["Age"] >= RETIREMENT_AGE) & (pension_source > 0.0)
+    )
     individual_data = set_individual_activity_status(
         individual_data=individual_data,
         unemployment_rate=unemployment_rate,
@@ -135,6 +139,11 @@ def process_individual_data(
             "Corresponding Household ID",
             "Relation to Reference Person",
             *(["Effective Hours"] if worker_productivity else []),
+            *[
+                column
+                for column in ("Individual Public Pension Income", "Individual Occupational and Private Pension Income")
+                if column in individual_data
+            ],
         ]
     ].copy()
 
@@ -252,6 +261,10 @@ def set_individual_activity_status(
     individual_data["Activity Status"] = individual_data["Labour Status"].map(
         convert_labour_status_to_activity_status,
     )
+
+    # Retired recipients are inactive and must not be reactivated by calibration.
+    retired = individual_data.get("Is Retired", pd.Series(False, index=individual_data.index))
+    individual_data.loc[retired, "Activity Status"] = 3
 
     # Adjust according to the participation rate
     current_participation_rate = np.sum(
@@ -426,7 +439,8 @@ def increase_participation_rate(individual_data: pd.DataFrame, participation_rat
     n_additional_unemployed = int(participation_rate * np.sum(individual_data["Age"] >= 16) - economically_active.sum())
     not_economically_active = np.logical_and(
         individual_data["Activity Status"] == 3,
-        individual_data["Age"] >= 16,
+        (individual_data["Age"] >= 16)
+        & ~individual_data.get("Is Retired", pd.Series(False, index=individual_data.index)),
     )
     rnd_ind = np.random.choice(
         np.flatnonzero(not_economically_active),

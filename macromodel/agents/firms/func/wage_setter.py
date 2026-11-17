@@ -462,6 +462,9 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         return f
 
 
+OFFER_CEILING_VARIANTS = ("none", "value_added", "value_added_net_capital", "value_added_net_user_cost")
+
+
 class ContractWageSetter(WorkEffortFirmWageSetter):
     """Wage setter with a persistent per-worker contract wage rate.
 
@@ -521,6 +524,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         slack_response_up: float = 0.0,
         slack_response_down: float = 0.0,
         max_offer_log_cut: float = 0.02,
+        offer_ceiling: str = "none",
         **kwargs,
     ):
         super().__init__(
@@ -555,6 +559,10 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         self.slack_response_up = float(slack_response_up)
         self.slack_response_down = float(slack_response_down)
         self.max_offer_log_cut = float(max_offer_log_cut)
+        if offer_ceiling not in OFFER_CEILING_VARIANTS:
+            raise ValueError(f"offer_ceiling must be one of {OFFER_CEILING_VARIANTS}, got {offer_ceiling!r}")
+        self.offer_ceiling = offer_ceiling
+        self.last_offer_ceiling_binding = None
         self.last_offer_slack_gap = None
         self.last_offer_slack_factor = None
         self._rates_seeded = False
@@ -792,6 +800,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         realised_productivity_ratio: np.ndarray = None,
         desired_labour_inputs: np.ndarray = None,
         realised_labour_inputs: np.ndarray = None,
+        offer_ceiling_ratio: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Build the offer function from carried contract rates.
 
@@ -813,6 +822,14 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         Args:
             carried_wage_rate (np.ndarray): Per-individual contract wage rate,
                 ``individuals.states["Wage Rate"]``. Required.
+            offer_ceiling_ratio (np.ndarray): By firm, last quarter's ceiling
+                numerator (value added, by variant) over last quarter's wage
+                bill. Required unless ``offer_ceiling`` is ``"none"``. The
+                offered rate is capped at the firm's mean carried rate times
+                this ratio, which is the mean rate over the labour share. The
+                cap is a solvency bound: it never raises an offer. It is
+                skipped where the ratio is not positive and finite or the firm
+                has no workforce. The benefit floor applies after the cap.
             (remaining arguments as in the parent class)
 
         Returns:
@@ -875,6 +892,17 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             reference_rate * indexation_ratio * effort_ratio * (1.0 + current_wage_tightness_markup) * slack_factor
         )
         offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
+
+        ceiling_binding = np.zeros(n_firms, dtype=bool)
+        if self.offer_ceiling != "none":
+            if offer_ceiling_ratio is None:
+                raise ValueError(f"offer_ceiling={self.offer_ceiling!r} requires offer_ceiling_ratio.")
+            ratio = np.asarray(offer_ceiling_ratio, dtype=float)
+            usable = np.isfinite(ratio) & (ratio > 0.0) & has_workforce
+            ceiling = np.where(usable, reference_rate * np.where(usable, ratio, 1.0), np.inf)
+            ceiling_binding = offered_rate > ceiling
+            offered_rate = np.minimum(offered_rate, ceiling)
+        self.last_offer_ceiling_binding = ceiling_binding.astype(float)
 
         self.last_wage_offer_historic_base = reference_rate.copy()
         self.last_wage_offer_tfp_ratio = tfp_ratio.copy()

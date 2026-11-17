@@ -1,5 +1,6 @@
 """Scenario overrides that change the data configuration (e.g. worker productivity rho)."""
 
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,3 +62,23 @@ def test_data_overrides_get_their_own_cache_file():
 def test_country_overrides_refuse_data_keys():
     with pytest.raises(ValueError, match="must be applied when the data are built"):
         nw.apply_country_config_overrides(SimpleNamespace(), {"data.worker_productivity": {}})
+
+
+def test_wage_plan_presets_are_cumulative_and_build_on_worker_productivity():
+    arms = ["A5", "B", "C", "D", "E"]
+    previous = SCENARIO_PRESETS["workers_productivity"]
+    for arm in arms:
+        preset = SCENARIO_PRESETS[f"wage_plan_{arm}"]
+        assert previous.items() < preset.items()  # strict superset: one step added, nothing changed
+        previous = preset
+    full = SCENARIO_PRESETS["wage_plan_E"]
+    assert full["firms.parameters.pricing_labour_units"] == "tfp_effective"
+    assert full["firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']"] == 0.1
+    assert full["firms.functions.wage_setter.parameters['indexation_base']"] == "tfp_multiplier"
+    assert full["labour_market.functions.clearing.parameters['on_the_job_search']"] is True
+    search_intensity = full["labour_market.functions.clearing.parameters['individuals_quitting_temperature']"]
+    assert abs((1.0 - math.exp(-search_intensity)) - 0.015) < 1e-12
+    assert full["firms.functions.wage_setter.parameters['offer_ceiling']"] == "value_added_net_user_cost"
+    assert full["firms.functions.wage_setter.parameters['slack_response_down']"] == 0.05
+    data, _ = nw.split_scenario_overrides(full)
+    assert data == {"worker_productivity": {"annual_wage_floor": 13544.0}}

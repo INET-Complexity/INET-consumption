@@ -58,6 +58,7 @@ var_mapping = {
     "HID": "Corresponding Household ID",  # Link to household
     "hid": "Corresponding Household ID",  # Alternative household link
     "iid": "Corresponding Individuals ID",  # Individual within household
+    "SA0010": "HFCS Source ID",  # Stable source identifier, distinct from draw and implicate IDs
     "HW0010": "Weight",  # Survey weight
     "DHHTYPE": "Type",  # Household type
     "RA0100": "Relation to Reference Person",  # Relation to Reference Person
@@ -69,6 +70,8 @@ var_mapping = {
     "PE0600": "Weekly Hours",  # Hours per week in main job
     "PG0110": "Employee Income",  # Income from employment
     "PG0210": "Self-Employment Income",  # Income from self-employment
+    "PG0310": "Individual Public Pension Income",  # Observed gross annual receipts
+    "PG0410": "Individual Occupational and Private Pension Income",
     "DI1300": "Rental Income from Real Estate",  # Income from property
     "DI1400": "Income from Financial Assets",  # Investment income
     "DI1500": "Income from Pensions",  # Legacy aggregate pension income
@@ -140,6 +143,8 @@ var_numerical = [
     "Employee Income",  # Employment earnings
     "Weekly Hours",  # Hours per week in main job
     "Self-Employment Income",  # Business income
+    "Individual Public Pension Income",
+    "Individual Occupational and Private Pension Income",
     "Rental Income from Real Estate",  # Property income
     "Income from Financial Assets",  # Investment returns
     "Income from Pensions",  # Pension payments
@@ -333,6 +338,8 @@ class HFCSReader:
                 axis=0,
             )
             derived_df.drop("Weight", axis=1, inplace=True)
+            # Source identity comes from the household file, not the derived-file join.
+            derived_df.drop(columns=["HFCS Source ID"], errors="ignore", inplace=True)
         else:
             derived_df = pd.DataFrame()
 
@@ -356,8 +363,9 @@ class HFCSReader:
     ) -> pd.DataFrame:
         """Preserve HFCS income components before model-side aggregation.
 
-        Pension and regular social-transfer income are household fields in HFCS;
-        unemployment income is reported on individuals and is aggregated here so
+        Household pension and regular-transfer totals are retained here;
+        individual pension amounts are preserved separately from PG0310/PG0410.
+        Unemployment income is reported on individuals and is aggregated here so
         all three diagnostics have the household index used by the model.
         """
         households_df = households_df.copy()
@@ -529,12 +537,19 @@ class HFCSReader:
         """
         # Load data
         df = pd.read_csv(path, encoding="unicode_escape", engine="pyarrow")
+        if "SA0010" in df:
+            # pandas' Arrow parser can infer numeric values before casting to
+            # string, losing leading zeros. Read this identity column as text.
+            source_ids = pd.read_csv(path, encoding="unicode_escape", usecols=["SA0010"], dtype="string")
+            df["SA0010"] = source_ids["SA0010"]
 
         # Filter for country and keep only mapped variables
         df = df[df["SA0100"] == country_name_short]
         df = df[[col for col in var_mapping.keys() if col in df.columns]]
         df.rename(columns=var_mapping, inplace=True)
         df.set_index("ID", inplace=True)
+        if "HFCS Source ID" in df:
+            df["HFCS Source ID"] = df["HFCS Source ID"].astype("string")
 
         # Convert monetary values to local currency
         var_numerical_union = [v for v in var_numerical if v in df.columns]

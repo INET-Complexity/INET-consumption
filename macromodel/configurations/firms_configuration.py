@@ -423,6 +423,16 @@ class FirmsParameters(BaseModel):
             "indexation, so real wages absorb part of past inflation (hypothesis H4)."
         ),
     )
+    pricing_labour_units: Literal["raw", "tfp_effective"] = Field(
+        "raw",
+        description=(
+            "Labour quantity that divides the wage bill in the pricing marginal cost. "
+            "'raw' (default) uses labour inputs L, so TFP growth does not lower the labour cost "
+            "in prices. 'tfp_effective' uses tfp * L, the wage bill per unit of output: "
+            "prices then carry the full TFP growth, and deflate unless contract wage rates "
+            "rise with TFP (issue #189)."
+        ),
+    )
     capital_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     intermediate_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     tfp_base_growth_rate: float = Field(0.0025, ge=0.0, le=0.1, description="Base TFP growth rate (quarterly)")

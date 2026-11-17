@@ -356,7 +356,7 @@ FRA:
         name: ContractWageSetter
         path_name: wage_setter
         parameters:
-          labour_market_tightness_markup_scale: 0.05
+          labour_market_tightness_markup_scale: 0.5  # s: offer markup per unit of 4-quarter mean hiring shortfall. Not identified by the literature (vault concepts/tightness-markup-scale-s-calibration); assumption. Was 0.05.
           markup_time_span: 4
           initial_rate_source: individual  # firm_anchor (homegenous across firms) or individual (income heterogeneity)
           offer_base: per_labour_input  # per_head double-counts firm mean rho in offers when rho is on

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -172,10 +173,46 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
+# Wage-competition plan (knowledge-vault plan 2026-11-13). Each arm adds one step
+# to the previous one and all build on worker productivity rho (Step 0), so an
+# arm runs in run_model.ipynb by setting SCENARIO_NAME to its key.
+#   A5: Step 5, unit-consistent pricing (wage bill per unit of output).
+#   B:  Step 1, contract rates and offers indexed to firm TFP growth, alpha = 0.1.
+#   C:  Step 2a, on-the-job search; search probability 1.5% a quarter (not calibrated
+#       to the job-to-job rate: that is an open calibration issue).
+#   D:  Step 3d, offer ceiling at value added net of the user cost of capital.
+#   E:  Step 4, offers fall with excess labour, kappa_down = 0.05.
+_WAGE_PLAN_STEPS: dict[str, dict[str, Any]] = {
+    "A5": {"firms.parameters.pricing_labour_units": "tfp_effective"},
+    "B": {
+        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.1,
+        "firms.functions.wage_setter.parameters['indexation_base']": "tfp_multiplier",
+    },
+    "C": {
+        "labour_market.functions.clearing.parameters['on_the_job_search']": True,
+        "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": -math.log(1.0 - 0.015),
+    },
+    "D": {"firms.functions.wage_setter.parameters['offer_ceiling']": "value_added_net_user_cost"},
+    "E": {"firms.functions.wage_setter.parameters['slack_response_down']": 0.05},
+}
+
+
+def _wage_plan_presets() -> dict[str, dict[str, Any]]:
+    presets: dict[str, dict[str, Any]] = {}
+    overrides = dict(EXPERIMENTAL_OVERRIDE_PRESETS["workers_productivity"])
+    for arm, step in _WAGE_PLAN_STEPS.items():
+        overrides = {**overrides, **step}
+        presets[f"wage_plan_{arm}"] = overrides
+    return presets
+
+
+WAGE_PLAN_PRESETS: dict[str, dict[str, Any]] = _wage_plan_presets()
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,
+    **WAGE_PLAN_PRESETS,
 }
 
 FIGURE_SIZES = {

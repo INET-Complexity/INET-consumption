@@ -363,6 +363,8 @@ FRA:
           indexation_base: realised_productivity
           realised_productivity_window: 4
           incumbent_indexation_pass_through: 0.0
+          slack_response_down: 0.0  # kappa_down: offers fall when the firm has more labour than it wants
+          offer_ceiling: none  # none | value_added | value_added_net_capital | value_added_net_user_cost (solvency bound on offers)
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:
       arbitrage_intensity: 2.0

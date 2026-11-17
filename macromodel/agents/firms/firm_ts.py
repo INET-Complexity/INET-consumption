@@ -79,6 +79,7 @@ class FirmTimeSeries(TimeSeries):
     - wage_offer_growth_tightness: Tightness contribution to log growth
     - wage_offer_growth_residual: Residual from fallback/floor/non-multiplicative effects
     - wage_offer_historic_average_available: Indicator that a historic wage average was available
+    - wage_offer_ceiling_binding: Indicator that the offer ceiling capped the firm's offered rate
 
     Inventory & Inputs:
     - inventory: Stock of finished goods
@@ -308,6 +309,7 @@ class FirmTimeSeries(TimeSeries):
             wage_offer_growth_tightness=np.zeros(data.shape[0]),
             wage_offer_growth_residual=np.zeros(data.shape[0]),
             wage_offer_historic_average_available=(data["Number of Employees"].values > 0).astype(float),
+            wage_offer_ceiling_binding=np.zeros(data.shape[0]),
             n_firms_by_industry=get_n_firms_by_industry(data, n_industries),
             number_of_employees=data["Number of Employees"].values.astype(int),
             number_of_employees_histogram=get_histogram(data["Number of Employees"].values.astype(int), None),
@@ -728,6 +730,7 @@ def create_firms_timeseries(
         wage_offer_growth_tightness=np.zeros(data.shape[0]),
         wage_offer_growth_residual=np.zeros(data.shape[0]),
         wage_offer_historic_average_available=(data["Number of Employees"].values > 0).astype(float),
+        wage_offer_ceiling_binding=np.zeros(data.shape[0]),
         n_firms_by_industry=get_n_firms_by_industry(data, n_industries),
         number_of_employees=data["Number of Employees"].values.astype(int),
         number_of_employees_histogram=get_histogram(data["Number of Employees"].values.astype(int), None),

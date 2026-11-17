@@ -3136,3 +3136,41 @@ class TestFirms:
         assert parameters().pricing_labour_units == "raw"
         with pytest.raises(ValueError):
             parameters(pricing_labour_units="per_output")
+
+    def test__offer_ceiling_ratio_by_variant(self, test_firms):
+        n_firms = test_firms.ts.current("production").shape[0]
+        for name, value in (
+            ("price", 2.0),
+            ("production", 100.0),
+            ("used_intermediate_inputs_costs", 60.0),
+            ("taxes_paid_on_production", 10.0),
+            ("used_capital_inputs_costs", 20.0),
+            ("capital_inputs_stock_value", 400.0),
+            ("total_wage", 50.0),
+        ):
+            test_firms.ts.override_current(name, np.full(n_firms, value))
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "none"
+        n_banks = int(test_firms.states["Corresponding Bank ID"].max()) + 1
+
+        # Value added 200 - 60 - 10 = 130; net of capital 110; net of user cost 110 - 0.05 x 400 = 90.
+        np.testing.assert_allclose(test_firms.compute_offer_ceiling_ratio("value_added"), 130.0 / 50.0)
+        np.testing.assert_allclose(test_firms.compute_offer_ceiling_ratio("value_added_net_capital"), 110.0 / 50.0)
+        np.testing.assert_allclose(
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(n_banks, 0.05)), 90.0 / 50.0
+        )
+        # A negative loan rate does not raise the ceiling.
+        np.testing.assert_allclose(
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(n_banks, -0.05)), 110.0 / 50.0
+        )
+        with pytest.raises(ValueError, match="loan rates"):
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost")
+        with pytest.raises(ValueError, match="Unknown offer ceiling"):
+            test_firms.compute_offer_ceiling_ratio("profits")
+
+    def test__offer_ceiling_ratio_is_nan_without_a_wage_bill(self, test_firms):
+        wage_bill = np.asarray(test_firms.ts.current("total_wage"), dtype=float).copy()
+        wage_bill[0] = 0.0
+        test_firms.ts.override_current("total_wage", wage_bill)
+        ratio = test_firms.compute_offer_ceiling_ratio("value_added")
+        assert np.isnan(ratio[0]) and np.isfinite(ratio[1:]).all()

@@ -1384,6 +1384,7 @@ class Country:
             income_taxes=self.central_government.states["Income Tax"],
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
+            bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current("interest_rates_on_long_term_firm_loans"),
         )
         self._append_wage_offer_diagnostics(replace_current=replace_current)
 
@@ -1424,6 +1425,11 @@ class Country:
                 getattr(wage_setter, "last_wage_offer_historic_average_available", None)
             ),
         }
+        ceiling_binding = getattr(wage_setter, "last_offer_ceiling_binding", None)
+        ceiling_binding = np.zeros(n_firms) if ceiling_binding is None else np.asarray(ceiling_binding, dtype=float)
+        current["wage_offer_ceiling_binding"] = (
+            ceiling_binding if ceiling_binding.shape == (n_firms,) else np.zeros(n_firms)
+        )
         if current["wage_offer_historic_base"] is None or current["wage_offer_level"] is None:
             neutral_wage = np.asarray(ts.current("real_wage_per_capita"), dtype=float).copy()
             current["wage_offer_historic_base"] = neutral_wage

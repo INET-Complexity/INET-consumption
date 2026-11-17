@@ -475,19 +475,25 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
 
     Stored rate versus paid earnings are distinct objects::
 
-        w_rate[j,t] = w_rate[j,t-1] * TFP[i,t] / TFP[i,t-1]     (stored)
-        earnings[j,t] = w_rate[j,t] * u[i,t]                    (paid)
+        w_rate[j,t] = w_rate[j,t-1] * (B[i,t] / B[i,t-1])**alpha    (stored, incumbents)
+        w_rate[j,t] = w_ref[i] + lambda * (w_offer[i] - w_ref[i])     (stored, new hires)
+        earnings[j,t] = w_rate[j,t] * u[i,t]                          (paid)
 
-    The tightness markup ``(1+m)`` does not appear **in the stored rate**: it is
-    a hiring instrument and applies to offers only. It is emphatically NOT
-    inert in the model. This class never touches
-    ``self.labour_market_tightness_markup_scale`` in its own body -- the markup
-    is computed by the parent's :meth:`compute_wage_tightness_markup` and
-    arrives here as the ``current_wage_tightness_markup`` argument, entering
-    the offer as the ``(1+m)`` factor in
-    :meth:`get_offered_wage_given_labour_inputs_function`::
+    ``B`` is the indexation base (``indexation_base``: the TFP multiplier or
+    smoothed realised productivity), ``alpha`` is
+    ``incumbent_indexation_pass_through`` and ``lambda`` is
+    ``new_hire_offer_pass_through``; ``w_ref`` is the firm's incumbent mean rate.
 
-        w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1+m[i])
+    The tightness markup ``(1+m)`` does not appear **in the incumbent update**:
+    it is a hiring instrument and applies to offers only, so it reaches stored
+    rates only through new hires. It is emphatically NOT inert in the model.
+    This class never touches ``self.labour_market_tightness_markup_scale`` in
+    its own body -- the markup is computed by the parent's
+    :meth:`compute_wage_tightness_markup` and arrives here as the
+    ``current_wage_tightness_markup`` argument, entering the offer as the
+    ``(1+m)`` factor in :meth:`get_offered_wage_given_labour_inputs_function`::
+
+        w_offer[i] = min(w_ref[i] * (B ratio)**alpha * u_ratio[i] * (1+m[i]) * slack[i], ceiling[i])
 
     So ``labour_market_tightness_markup_scale`` (FRA: 0.05) and
     ``markup_time_span`` (FRA: 4, the averaging span inside that markup) are
@@ -509,6 +515,16 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             ``"firm_anchor"`` overwrites every worker at a firm with the firm's
             initial wage per capita on first use, reproducing the parent class's
             firm-level uniformity. Arm switch; see the plan's section 4c.
+        indexation_base: ``"tfp_multiplier"`` or ``"realised_productivity"``.
+        incumbent_indexation_pass_through: ``alpha``; 0 disables indexation.
+        new_hire_offer_pass_through: ``lambda``; 1 binds the accepted offer.
+        offer_base: ``"per_head"`` or ``"per_labour_input"`` (use the latter
+            when worker productivity rho is on).
+        slack_response_up, slack_response_down, max_offer_log_cut: signed
+            offer response to the firm's labour gap; see :meth:`_slack_factor`.
+        offer_ceiling: ``"none"``, ``"value_added"``,
+            ``"value_added_net_capital"`` or ``"value_added_net_user_cost"``;
+            solvency cap on offers (wage-competition plan, Step 3).
     """
 
     def __init__(
@@ -807,7 +823,15 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         The reference wage is the firm's average *rate* over its current
         workforce, read from ``carried_wage_rate``:
 
-            w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1 + m[i])
+            w_offer[i] = w_ref[i] * (B ratio)**alpha * u_ratio[i] * (1 + m[i]) * slack[i]
+            w_offer[i] = min(w_offer[i], w_ref[i] * offer_ceiling_ratio[i])   (if offer_ceiling != "none")
+            offer to worker k = max(benefit, labour_input[k] * w_offer[i])
+
+        ``(B ratio)**alpha`` is the same indexation factor applied to
+        incumbents (1 when ``alpha = 0``); ``slack`` is :meth:`_slack_factor`
+        (1 when both slack responses are 0). With
+        ``offer_base = "per_labour_input"``, ``w_ref`` is the rate per unit of
+        labour input.
 
         This replaces the parent's ``previous_employee_income`` base. That base
         is unusable here because ``employee_income`` now holds earnings
@@ -816,8 +840,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
 
         ``u_ratio`` is deliberately retained: ``(1+m) >= 1`` by the ``max(0,.)``
         floor in :meth:`compute_wage_tightness_markup`, and TFP ratios are
-        normally ``>= 1``, so ``u_ratio`` is the only factor able to fall below
-        one. Dropping it would make offers monotonically non-decreasing.
+        normally ``>= 1``, so with the slack response off ``u_ratio`` is the
+        only factor able to fall below one. Dropping it would make offers
+        monotonically non-decreasing.
 
         Args:
             carried_wage_rate (np.ndarray): Per-individual contract wage rate,

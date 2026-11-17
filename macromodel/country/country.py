@@ -1385,6 +1385,8 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             bank_interest_rates_on_long_term_firm_loans=self.banks.ts.current("interest_rates_on_long_term_firm_loans"),
+            # The rebuild after credit clearing must not pick up this quarter's loan rates.
+            reuse_offer_ceiling_ratio=replace_current,
         )
         self._append_wage_offer_diagnostics(replace_current=replace_current)
 

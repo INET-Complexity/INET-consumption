@@ -3174,3 +3174,59 @@ class TestFirms:
         test_firms.ts.override_current("total_wage", wage_bill)
         ratio = test_firms.compute_offer_ceiling_ratio("value_added")
         assert np.isnan(ratio[0]) and np.isfinite(ratio[1:]).all()
+
+    def _capture_offer_kwargs(self, test_firms, offer_ceiling):
+        from macromodel.agents.firms.func.wage_setter import ContractWageSetter
+
+        setter = ContractWageSetter(
+            labour_market_tightness_markup_scale=0.05, markup_time_span=4, offer_ceiling=offer_ceiling
+        )
+        captured = []
+        setter.get_offered_wage_given_labour_inputs_function = lambda **kwargs: captured.append(kwargs)
+        test_firms.functions["wage_setter"] = setter
+        n_banks = int(test_firms.states["Corresponding Bank ID"].max()) + 1
+
+        def build(rate, reuse):
+            test_firms.compute_offered_wage_function(
+                corresponding_firm=np.array([0]),
+                current_individual_labour_inputs=np.array([1.0]),
+                previous_employee_income=np.array([1.0]),
+                unemployment_benefits_by_individual=0.0,
+                income_taxes=0.0,
+                employee_social_insurance_tax=0.0,
+                employer_social_insurance_tax=0.0,
+                carried_wage_rate=np.array([1.0]),
+                bank_interest_rates_on_long_term_firm_loans=np.full(n_banks, rate),
+                reuse_offer_ceiling_ratio=reuse,
+            )
+            return captured[-1]
+
+        return build
+
+    def test__offer_function_receives_no_ceiling_ratio_when_the_ceiling_is_off(self, test_firms):
+        build = self._capture_offer_kwargs(test_firms, "none")
+        assert "offer_ceiling_ratio" not in build(0.01, reuse=False)
+
+    def test__offer_rebuild_after_credit_clearing_keeps_last_quarters_loan_rate(self, test_firms):
+        build = self._capture_offer_kwargs(test_firms, "value_added_net_user_cost")
+        first = build(0.01, reuse=False)["offer_ceiling_ratio"].copy()
+        np.testing.assert_allclose(
+            first,
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(1000, 0.01)),
+            equal_nan=True,
+        )
+        # Banks have set a new rate: the rebuilt offers reuse the ratio from the first call.
+        np.testing.assert_array_equal(build(0.05, reuse=True)["offer_ceiling_ratio"], first)
+        # A new quarter recomputes it with the rate current at that time.
+        fresh = build(0.05, reuse=False)["offer_ceiling_ratio"]
+        assert np.nanmax(np.abs(fresh - first)) > 0.0
+
+    def test__offer_ceiling_ratio_subtracts_depreciation_costs_when_they_are_charged(self, test_firms):
+        base = test_firms.compute_offer_ceiling_ratio("value_added")
+        net = test_firms.compute_offer_ceiling_ratio("value_added_net_capital")
+        charged = (
+            test_firms.capital_compensation_accounting_costs() + test_firms.capital_depreciation_accounting_costs()
+        )
+        wage_bill = np.asarray(test_firms.ts.current("total_wage"), dtype=float)
+        valid = wage_bill > 0
+        np.testing.assert_allclose((base - net)[valid], (charged / wage_bill)[valid])

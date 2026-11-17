@@ -1197,6 +1197,7 @@ class Firms(Agent):
         employer_social_insurance_tax: float,
         carried_wage_rate: np.ndarray = None,
         bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
+        reuse_offer_ceiling_ratio: bool = False,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create function that computes offered wages.
 
@@ -1221,6 +1222,10 @@ class Firms(Agent):
             bank_interest_rates_on_long_term_firm_loans (np.ndarray): Long-term
                 firm loan rates by bank, per period. Needed only by the
                 ``value_added_net_user_cost`` offer ceiling.
+            reuse_offer_ceiling_ratio (bool): Reuse the ceiling ratio computed
+                by the previous call. Offers are rebuilt after credit clearing,
+                when the banks have already set this quarter's loan rates; the
+                ceiling must keep last quarter's rate, like its other inputs.
 
         Returns:
             np.ndarray: Wage offers for each firm
@@ -1236,10 +1241,14 @@ class Firms(Agent):
             offer_kwargs["realised_labour_inputs"] = realised_labour
             offer_ceiling = self.functions["wage_setter"].offer_ceiling
             if offer_ceiling != "none":
-                offer_kwargs["offer_ceiling_ratio"] = self.compute_offer_ceiling_ratio(
-                    variant=offer_ceiling,
-                    bank_interest_rates_on_long_term_firm_loans=bank_interest_rates_on_long_term_firm_loans,
-                )
+                cached = getattr(self, "_offer_ceiling_ratio", None)
+                n_firms = self.ts.current("total_wage").shape
+                if not (reuse_offer_ceiling_ratio and cached is not None and cached.shape == n_firms):
+                    self._offer_ceiling_ratio = self.compute_offer_ceiling_ratio(
+                        variant=offer_ceiling,
+                        bank_interest_rates_on_long_term_firm_loans=bank_interest_rates_on_long_term_firm_loans,
+                    )
+                offer_kwargs["offer_ceiling_ratio"] = self._offer_ceiling_ratio
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,

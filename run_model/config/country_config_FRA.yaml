@@ -642,7 +642,7 @@ FRA:
           individuals_quitting: false
           individuals_quitting_temperature: 1.0
           optimised_hiring: true
-          random_firing_probability: 0.0
+          random_firing_probability: 0.017  # q, per worker per quarter: INSEE E->U 1.9% minus model endogenous E->U 0.18% (vault concepts/france-labour-market-flows-data). Provisional; recalibrate once other labour-market issues are fixed. Firms with one employee are exempt (clearing.random_firing).
           round_target_employment: true
           sorted_firing: false  # random firing (C34); true fires lowest labour input first, by array position when inputs are equal
           # on_the_job_search reads individuals_quitting_temperature as the search intensity T:

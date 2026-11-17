@@ -489,7 +489,7 @@ def load_mpc_window(
 
 
 def _window_outcomes(window: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    return {name: window[f"outcome_{name}"] for name in MPC_WINDOW_OUTCOMES}
+    return {name: window[f"outcome_{name}"] for name in MPC_WINDOW_OUTCOMES if f"outcome_{name}" in window}
 
 
 def _window_regime_inputs(window: dict[str, np.ndarray]) -> dict[str, np.ndarray] | None:
@@ -649,6 +649,8 @@ def build_household_mpc_panel(
     shock_outcomes = _window_outcomes(shock_window)
     additions = {}
     for name in ("cash", "total", "behavioural_total_target", "imputed_rent"):
+        if name not in baseline_outcomes:
+            continue
         base = baseline_outcomes[name]
         shocked = shock_outcomes[name]
         additions[f"baseline_{name}_consumption_impact"] = base[shock_row]
@@ -670,7 +672,8 @@ def build_household_mpc_panel(
                 )[1]
                 additions[f"{name}_{measure}cmpc_{suffix}"] = cumulative_value / denominator
     for arm, outcomes in (("baseline", baseline_outcomes), ("shock", shock_outcomes)):
-        additions[f"{arm}_target_consumption_total_mpc"] = outcomes["target_consumption_total_mpc"][shock_row]
+        if "target_consumption_total_mpc" in outcomes:
+            additions[f"{arm}_target_consumption_total_mpc"] = outcomes["target_consumption_total_mpc"][shock_row]
     regime_inputs = _window_regime_inputs(baseline_window)
     if regime_inputs is None:
         additions["mpc_regime"] = np.full(len(panel), MPC_REGIME_UNKNOWN, dtype=object)

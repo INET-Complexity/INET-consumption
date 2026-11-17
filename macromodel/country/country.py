@@ -32,7 +32,7 @@ to their behavioral rules and interactions.
 
 import hashlib
 import logging
-from copy import copy, deepcopy
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional
 
@@ -76,7 +76,6 @@ from macromodel.agents.households.consumption_inputs import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
-from macromodel.agents.households.func.property import rent_floor
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -206,46 +205,22 @@ def _resolve_frm_coefficients_path(
     return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
 
 
-def floor_initial_rents(
-    household_data: pd.DataFrame,
-    housing_data: pd.DataFrame,
-    minimum_annual_rental_yield: float,
-    time_unit: int,
-    rental_income_tax: float,
-) -> None:
-    """Apply the rent/value floor to the initial rents, in place (issue #197).
+def resolve_minimum_annual_rental_yield(
+    country_configuration: CountryConfiguration, data_minimum_annual_rental_yield: float
+) -> CountryConfiguration:
+    """Fill an unset runtime rent/value floor with the data value (issue #197).
 
-    The same floor binds on every later rent update. Applying it at t=0 keeps
-    it out of the first period's rent inflation. Each raise is passed on to
-    both sides of the flow, as the synthetic data and compute_rental_income do:
-    the inhabitant's "Rent Paid" (tenure 3) or "Rent Imputed" (tenure 1, 2, 4),
-    and, for a let dwelling, the landlord's "Rental Income from Real Estate"
-    net of the rental income tax.
+    The data configuration floors the initial rents. The runtime rule uses the
+    same value unless the country configuration sets one for a scenario.
     """
-    if minimum_annual_rental_yield == 0.0:
-        return
-    floor = rent_floor(minimum_annual_rental_yield, housing_data["Value"].to_numpy(dtype=float), time_unit)
-    old_rent = housing_data["Rent"].to_numpy(dtype=float)
-    raise_by_dwelling = np.maximum(floor - old_rent, 0.0)
-    housing_data["Rent"] = old_rent + raise_by_dwelling
-    raise_by_house = pd.Series(raise_by_dwelling, index=housing_data["House ID"].astype(int).to_numpy())
-
-    house_id = household_data["Corresponding Inhabited House ID"].fillna(-1).astype(int).to_numpy()
-    housed = house_id != -1
-    raise_by_household = np.zeros(len(household_data))
-    raise_by_household[housed] = raise_by_house.reindex(house_id[housed]).fillna(0.0).to_numpy()
-    tenure = household_data["Tenure Status of the Main Residence"].to_numpy()
-    renting = tenure == 3
-    owning = np.isin(tenure, [1, 2, 4])
-    household_data.loc[renting, "Rent Paid"] += raise_by_household[renting]
-    household_data.loc[owning, "Rent Imputed"] += raise_by_household[owning]
-
-    owner = housing_data["Corresponding Owner Household ID"].fillna(-1).astype(int).to_numpy()
-    inhabitant = housing_data["Corresponding Inhabitant Household ID"].fillna(-1).astype(int).to_numpy()
-    let_out = (owner >= 0) & (inhabitant >= 0) & (owner != inhabitant) & (raise_by_dwelling > 0.0)
-    landlord_raise = np.zeros(len(household_data))
-    np.add.at(landlord_raise, owner[let_out], (1.0 - rental_income_tax) * raise_by_dwelling[let_out])
-    household_data["Rental Income from Real Estate"] += landlord_raise
+    parameters = country_configuration.households.functions.property.parameters
+    if parameters.get("minimum_annual_rental_yield") is not None:
+        return country_configuration
+    country_configuration = country_configuration.model_copy(deep=True)
+    country_configuration.households.functions.property.parameters["minimum_annual_rental_yield"] = float(
+        data_minimum_annual_rental_yield
+    )
+    return country_configuration
 
 
 def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
@@ -840,25 +815,12 @@ class Country:
             synthetic_country = deepcopy(synthetic_country)
             _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
 
-        minimum_annual_rental_yield = country_configuration.households.functions.property.parameters.get(
-            "minimum_annual_rental_yield", 0.0
+        data_minimum_annual_rental_yield = getattr(
+            synthetic_country.country_configuration, "minimum_annual_rental_yield", 0.0
         )
-        if minimum_annual_rental_yield > 0.0:
-            # Floor private copies of the two tables: synthetic_country may be shared across seeds (see above).
-            synthetic_country = copy(synthetic_country)
-            synthetic_country.population = copy(synthetic_country.population)
-            synthetic_country.population.household_data = synthetic_country.population.household_data.copy()
-            synthetic_country.housing_market = copy(synthetic_country.housing_market)
-            synthetic_country.housing_market.housing_market_data = (
-                synthetic_country.housing_market.housing_market_data.copy()
-            )
-            floor_initial_rents(
-                household_data=synthetic_country.population.household_data,
-                housing_data=synthetic_country.housing_market.housing_market_data,
-                minimum_annual_rental_yield=minimum_annual_rental_yield,
-                time_unit=time_unit,
-                rental_income_tax=synthetic_country.tax_data.income_tax,
-            )
+        country_configuration = resolve_minimum_annual_rental_yield(
+            country_configuration, data_minimum_annual_rental_yield
+        )
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
         add_emissions = all([industry in industries for industry in emission_industries])
@@ -1206,6 +1168,7 @@ class Country:
             permanent_income_forecast_inputs=permanent_income_forecast_inputs,
             permanent_income_design_matrix=permanent_income_design_matrix,
         )
+        country.data_minimum_annual_rental_yield = data_minimum_annual_rental_yield
         if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
             initialise_hfcs_consumption(
                 country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
@@ -1316,6 +1279,9 @@ class Country:
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise
 
+        configuration = resolve_minimum_annual_rental_yield(
+            configuration, getattr(self, "data_minimum_annual_rental_yield", 0.0)
+        )
         self.individuals.reset(configuration=configuration.individuals)
         self.households.reset(configuration=configuration.households)
         self.firms.reset(configuration=configuration.firms)
@@ -2408,25 +2374,6 @@ class Country:
     def _current_property_rents(self) -> np.ndarray:
         """Rent of every dwelling, in property order (clearing does not change rents)."""
         return self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
-
-    def _dwelling_tenure(self) -> np.ndarray:
-        """Tenure code of each dwelling's inhabitant (-1 if vacant), in property order.
-
-        Uses the household tenure codes, the same split as the rent flows in GDP.
-        """
-        properties = self.housing_market.states["properties"]
-        house_id = np.asarray(self.households.states["Corresponding Inhabited House ID"], dtype=int)
-        tenure = np.asarray(self.households.states["Tenure Status of the Main Residence"])
-        housed = house_id != -1
-        by_house = pd.Series(tenure[housed], index=house_id[housed])
-        if by_house.index.has_duplicates:
-            # Should not happen; keep the run going and index each dwelling once.
-            logging.warning(
-                "Dwellings with more than one inhabitant household: %s",
-                sorted(set(by_house.index[by_house.index.duplicated()].tolist())),
-            )
-            by_house = by_house[~by_house.index.duplicated()]
-        return by_house.reindex(properties.index).fillna(-1).to_numpy(dtype=int)
 
     def clear_housing_market(self) -> None:
         """Execute housing market clearing.
@@ -3820,7 +3767,7 @@ class Country:
         self.economy.compute_rent_price_indices(
             current_property_rents=self._current_property_rents(),
             previous_property_rents=self._previous_property_rents,
-            dwelling_tenure=self._dwelling_tenure(),
+            dwelling_tenure=self.households.states["Dwelling Tenure"],
             social_rent_per_adult=self.households.states["Social Rent per Adult"],
         )
         self._previous_property_rents = self._current_property_rents()

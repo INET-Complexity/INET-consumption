@@ -1,10 +1,8 @@
 """Rent price indices for the three housing flows in GDP (issue #197)."""
 
 import numpy as np
-import pandas as pd
 import pytest
 
-from macromodel.country.country import floor_initial_rents
 from macromodel.economy.economy import Economy
 from macromodel.timeseries import TimeSeries
 
@@ -87,52 +85,3 @@ def test_zero_social_price_carries_the_last_price_forward():
     assert economy.ts.current("social_rent_price")[0] == 1.0
     compute(economy, [10.0], [10.0], [TENANT], social=2.2)
     assert economy.ts.current("social_rent_price")[0] == pytest.approx(1.1)
-
-
-def make_initial_data(rents, house_ids=None):
-    # Dwellings: the first two are let by household 3 to households 0 and 1; the third is owner-occupied by 2.
-    house_ids = [10, 11, 12] if house_ids is None else house_ids
-    housing = pd.DataFrame(
-        {
-            "House ID": house_ids,
-            "Value": [1000.0, 1000.0, 1000.0],
-            "Rent": rents,
-            "Corresponding Owner Household ID": [3, 3, 2],
-            "Corresponding Inhabitant Household ID": [0, 1, 2],
-        }
-    )
-    households = pd.DataFrame(
-        {
-            "Corresponding Inhabited House ID": [house_ids[0], house_ids[1], house_ids[2], -1],
-            "Tenure Status of the Main Residence": [TENANT, TENANT, OWNER, OWNER],
-            "Rent Paid": [rents[0], rents[1], 0.0, 0.0],
-            "Rent Imputed": [0.0, 0.0, rents[2], 0.0],
-            "Rental Income from Real Estate": [0.0, 0.0, 0.0, 0.75 * (rents[0] + rents[1])],
-        }
-    )
-    return housing, households
-
-
-def test_initial_floor_raises_both_sides_of_each_rent_flow():
-    housing, households = make_initial_data([2.0, 9.0, 1.0])
-    # 2% a year on 1000 is 5 a quarter; rental income tax 25%.
-    floor_initial_rents(households, housing, 0.02, time_unit=3, rental_income_tax=0.25)
-    np.testing.assert_allclose(housing["Rent"], [5.0, 9.0, 5.0])
-    np.testing.assert_allclose(households["Rent Paid"], [5.0, 9.0, 0.0, 0.0])
-    np.testing.assert_allclose(households["Rent Imputed"], [0.0, 0.0, 5.0, 0.0])
-    # Landlord income stays equal to rent paid net of tax.
-    np.testing.assert_allclose(households["Rental Income from Real Estate"], [0.0, 0.0, 0.0, 0.75 * 14.0])
-
-
-def test_initial_floor_matches_households_on_house_id_not_row_position():
-    housing, households = make_initial_data([2.0, 9.0, 1.0], house_ids=[12, 10, 11])
-    housing.index = [0, 1, 2]
-    floor_initial_rents(households, housing, 0.02, time_unit=3, rental_income_tax=0.25)
-    np.testing.assert_allclose(households["Rent Paid"], [5.0, 9.0, 0.0, 0.0])
-    np.testing.assert_allclose(households["Rent Imputed"], [0.0, 0.0, 5.0, 0.0])
-
-
-def test_zero_floor_leaves_initial_rents_unchanged():
-    housing, households = make_initial_data([1.0, 1.0, 1.0])
-    floor_initial_rents(households, housing, 0.0, time_unit=3, rental_income_tax=0.25)
-    assert housing["Rent"].tolist() == [1.0, 1.0, 1.0]

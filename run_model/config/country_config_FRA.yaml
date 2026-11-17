@@ -98,7 +98,9 @@ FRA:
           # Annual gross rent/value floor phi (issue #197). Rents are indexed to CPI both ways
           # and floored at phi * (time_unit / 12) * value, for sitting tenants and new lets.
           # Provisional user choice 2026-11-17; initial FRA yields: owner p1 3.5%, rented p10 1.9%.
-          minimum_annual_rental_yield: 0.02  # 0.0
+          # null = the data value (data_config_FRA.yaml, which also floors the initial rents).
+          # A number overrides it for scenario analysis; the gap then binds from period 1.
+          minimum_annual_rental_yield: null  # was 0.02
           price_initial_markup: 0.01  # first asking price = 1.01 x value (user decision 2026-11-10)
           # Monthly-frequency Carro calibration: probability that an unsold listing reduces price in a month.
           price_decrease_probability_monthly: 0.0703  # 0.0

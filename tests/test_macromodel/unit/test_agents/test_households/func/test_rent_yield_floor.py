@@ -1,10 +1,16 @@
 """Rent indexation is symmetric and floored at an annual rent/value yield (issue #197)."""
 
+from types import SimpleNamespace
+
 import numpy as np
+import pandas as pd
 import pytest
 
 from macromodel.agents.households.func.property import DefaultHouseholdDemandForProperty
+from macromodel.agents.households.households import Households
+from macromodel.configurations import CountryConfiguration
 from macromodel.configurations.households_configuration import HouseholdsConfiguration
+from macromodel.country.country import resolve_minimum_annual_rental_yield
 
 
 def make_property_function(minimum_annual_rental_yield: float = 0.02, indexation: float = 1.0):
@@ -114,6 +120,37 @@ def test_invalid_floor_is_rejected(bad):
         make_property_function(minimum_annual_rental_yield=bad)
 
 
-def test_default_configuration_disables_the_floor():
+def test_default_configuration_takes_the_floor_from_the_data():
     parameters = HouseholdsConfiguration().functions.property.parameters
-    assert parameters["minimum_annual_rental_yield"] == 0.0
+    assert parameters["minimum_annual_rental_yield"] is None
+    # An unresolved value builds a function without a floor.
+    assert make_property_function(minimum_annual_rental_yield=None).minimum_annual_rental_yield == 0.0
+
+
+def test_update_rent_indexes_sitting_rents_but_only_floors_listings():
+    housing = pd.DataFrame(
+        {
+            "Rent": [10.0, 10.0, 1.0],
+            "Value": [1000.0, 1000.0, 1000.0],
+            "Up for Rent": [False, True, True],
+        }
+    )
+    households = SimpleNamespace(functions={"property": make_property_function()})
+    Households.update_rent(
+        households,
+        housing_data=housing,
+        historic_inflation=[np.array([0.10])],
+        exogenous_inflation_before=np.array([]),
+        time_unit=QUARTER,
+    )
+    # Sitting rent +10%; a listing keeps its asking rent; a listing below the floor is raised to 5.
+    np.testing.assert_allclose(housing["Rent"], [11.0, 10.0, 5.0])
+
+
+def test_runtime_floor_defaults_to_the_data_value_and_a_scenario_value_overrides_it():
+    config = CountryConfiguration()
+    resolved = resolve_minimum_annual_rental_yield(config, 0.02)
+    assert resolved.households.functions.property.parameters["minimum_annual_rental_yield"] == 0.02
+    assert config.households.functions.property.parameters["minimum_annual_rental_yield"] is None
+    config.households.functions.property.parameters["minimum_annual_rental_yield"] = 0.03
+    assert resolve_minimum_annual_rental_yield(config, 0.02) is config

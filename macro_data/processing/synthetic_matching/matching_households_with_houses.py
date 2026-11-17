@@ -61,6 +61,7 @@ from macro_data.processing.synthetic_population.synthetic_population import (
 )
 from macro_data.util.clean_data import remove_outliers
 from macro_data.util.imputation import apply_iterative_imputer
+from macro_data.util.rent_floor import rent_floor
 
 
 def rents_net_of_housing_inputs(
@@ -104,12 +105,61 @@ def rescale_rents(household_data: pd.DataFrame, housing_df: pd.DataFrame, total_
     housing_df.loc[~housing_df["Is Owner-Occupied"], "Rent"] *= factor
 
 
+def apply_rent_yield_floor(
+    household_data: pd.DataFrame,
+    housing_df: pd.DataFrame,
+    minimum_annual_rental_yield: float,
+    time_unit: int,
+    rental_income_taxes: float,
+) -> None:
+    """Raise dwelling rents below the rent/value floor to the floor, in place (issue #197).
+
+    Runs after the rents are final, before household income, saving and
+    investment are derived from them. Each raise is passed on as
+    match_renters_to_properties built the flows: the tenant's "Rent Paid"
+    (tenure 3) or the owner's "Rent Imputed" (tenure 1, 2, 4), and, for a
+    dwelling let to a tenant, the landlord's "Rental Income from Real Estate"
+    net of the rental income tax.
+    """
+    if minimum_annual_rental_yield == 0.0:
+        return
+    floor = rent_floor(minimum_annual_rental_yield, housing_df["Value"].to_numpy(dtype=float), time_unit)
+    old_rent = housing_df["Rent"].to_numpy(dtype=float)
+    raise_by_dwelling = np.maximum(floor - old_rent, 0.0)
+    housing_df["Rent"] = old_rent + raise_by_dwelling
+    raise_by_house = pd.Series(raise_by_dwelling, index=housing_df["House ID"].astype(int).to_numpy())
+
+    house_id = household_data["Corresponding Inhabited House ID"].fillna(-1).astype(int).to_numpy()
+    housed = house_id != -1
+    raise_by_household = np.zeros(len(household_data))
+    raise_by_household[housed] = raise_by_house.reindex(house_id[housed]).fillna(0.0).to_numpy()
+    tenure = household_data["Tenure Status of the Main Residence"].to_numpy()
+    renting = housed & (tenure == 3)
+    owning = housed & np.isin(tenure, [1, 2, 4])
+    household_data.loc[renting, "Rent Paid"] += raise_by_household[renting]
+    household_data.loc[owning, "Rent Imputed"] += raise_by_household[owning]
+
+    # Same rule as match_renters_to_properties: let, inhabited, not owner-occupied.
+    let_out = (
+        housing_df["Corresponding Inhabitant Household ID"].notna().to_numpy()
+        & ~housing_df["Is Owner-Occupied"].astype(bool).to_numpy()
+        & (raise_by_dwelling > 0.0)
+    )
+    landlord_raise = (
+        pd.Series((1.0 - rental_income_taxes) * raise_by_dwelling[let_out])
+        .groupby(housing_df["Corresponding Owner Household ID"].to_numpy(dtype=int)[let_out])
+        .sum()
+    )
+    household_data.loc[landlord_raise.index.values, "Rental Income from Real Estate"] += landlord_raise.values
+
+
 def set_housing_df(
     synthetic_population: SyntheticPopulation,
     rental_income_taxes: float,
     social_housing_rent: float,
     total_imputed_rent: float,
     total_actual_rent: Optional[float] = None,
+    minimum_annual_rental_yield: float = 0.0,
 ) -> pd.DataFrame:
     """Create and harmonize the housing market dataset.
 
@@ -216,6 +266,14 @@ def set_housing_df(
 
     if total_actual_rent is not None:
         rescale_rents(synthetic_population.household_data, housing_df, total_actual_rent)
+
+    apply_rent_yield_floor(
+        household_data=synthetic_population.household_data,
+        housing_df=housing_df,
+        minimum_annual_rental_yield=minimum_annual_rental_yield,
+        time_unit=round(12 / synthetic_population.yearly_factor),
+        rental_income_taxes=rental_income_taxes,
+    )
 
     return housing_df
 

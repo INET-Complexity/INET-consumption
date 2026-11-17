@@ -3329,17 +3329,26 @@ class Households(Agent):
             exogenous_inflation_before (np.ndarray): External inflation
             time_unit (int): Months per model period (scales the annual rent/value floor)
         """
-        housing_data["Rent"] = self.functions["property"].compute_rent(
-            current_rent=housing_data["Rent"].values,
+        # Sitting tenancies and owner-occupied dwellings are indexed to CPI and floored.
+        # Listings already got this period's asking rent (new lets) or random cut
+        # (unlet listings) in the listing step, so they are only floored (issue #197).
+        listed = housing_data["Up for Rent"].fillna(False).astype(bool).to_numpy()
+        property_function = self.functions["property"]
+        rent = housing_data["Rent"].to_numpy(dtype=float, copy=True)
+        value = housing_data["Value"].to_numpy(dtype=float)
+        rent[~listed] = property_function.compute_rent(
+            current_rent=rent[~listed],
             historic_inflation=np.concatenate(
                 (
                     exogenous_inflation_before,
                     np.array(historic_inflation).flatten(),
                 )
             ),
-            property_value=housing_data["Value"].values,
+            property_value=value[~listed],
             time_unit=time_unit,
         )
+        rent[listed] = property_function.apply_rent_floor(rent[listed], value[listed], time_unit)
+        housing_data["Rent"] = rent
 
     def process_housing_market_clearing(
         self,
@@ -3429,10 +3438,7 @@ class Households(Agent):
         rent_by_household[ind_social_housing] = social_housing_rent
         self.states["Rent paid to Government"] = social_housing_rent.sum()
         self.states["Social Rent per Adult"] = float(
-            social_housing_function.compute_social_housing_rent(
-                current_unemployment_benefits_by_individual=current_unemployment_benefits_by_individual,
-                current_household_size=np.ones(1),
-            )[0]
+            social_housing_function.rent_as_fraction_of_unemployment_rate * current_unemployment_benefits_by_individual
         )
 
         # Households renting
@@ -3464,6 +3470,15 @@ class Households(Agent):
             "Rent",
         ].values
         imputed_rent_by_household[ind_owning] = rent
+
+        # Tenure code of each dwelling's inhabitant, in housing_data order (-1 if vacant):
+        # the same split as the two flows above, used to group the rent price indices.
+        dwelling_tenure = pd.Series(-1, index=housing_data.index, dtype=int)
+        tenure = self.states["Tenure Status of the Main Residence"]
+        house_id = self.states["Corresponding Inhabited House ID"]
+        for group in (ind_renting, ind_owning):
+            dwelling_tenure.loc[house_id[group]] = tenure[group]
+        self.states["Dwelling Tenure"] = dwelling_tenure.to_numpy()
 
         return rent_by_household, imputed_rent_by_household
 

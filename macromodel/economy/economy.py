@@ -331,7 +331,17 @@ class Economy:
         initial_potential_output = initial_real_gross_output
         initial_output_gap = 0.0
 
+        # Social rent at t=0: kappa * U per adult, paid by households without a private dwelling.
+        initial_social_rent_per_adult = float(
+            central_government.functions["social_housing"].rent_as_fraction_of_unemployment_rate
+            * central_government.ts.current("unemployment_benefits_by_individual")[0]
+        )
+        in_social_housing = np.asarray(households.states["Corresponding Inhabited House ID"]) == -1
+        initial_social_rent_paid = float(np.asarray(households.ts.current("rent"))[in_social_housing].sum())
+
         ts = create_economy_timeseries(
+            initial_social_rent_per_adult=initial_social_rent_per_adult,
+            initial_social_rent_paid=initial_social_rent_paid,
             country_name=country_name,
             all_country_names=all_country_names,
             n_industries=firms.n_industries,

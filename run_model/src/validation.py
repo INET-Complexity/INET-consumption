@@ -21,7 +21,7 @@ from macro_data.util.frequency import annual_to_period
 
 # Simulated/actual column pairs for the validation comparison.
 #
-# Deflation: the model builds `real_gdp = gdp / ppi` (visual_helpers.py:836) and
+# Deflation: the model builds `real_gdp_ppi = gdp / ppi` (visual_helpers.py) and
 # the actuals build "Real GDP (Value)" as nominal/PPI. Series carrying a
 # `*_deflator` key are put on that same PPI-real basis so both sides match.
 #
@@ -31,7 +31,7 @@ from macro_data.util.frequency import annual_to_period
 # net, firm-level measure with a gross, all-sector one.
 VALIDATION_SERIES = {
     "real_gdp": {
-        "simulated": "real_gdp",  # already gdp / ppi
+        "simulated": "real_gdp_ppi",  # gdp / ppi, same basis as the actuals
         "actual": "Real GDP (Value)",  # already nominal / PPI
     },
     "real_consumption": {

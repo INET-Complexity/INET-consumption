@@ -3301,6 +3301,7 @@ class Households(Agent):
         ].compute_offered_rent_for_new_properties(
             property_value=housing_data.loc[housing_data["Newly on the Rental Market"], "Value"].values,
             observed_fraction_rent_value=observed_fraction_rent_value,
+            time_unit=time_unit,
         )
         housing_data.loc[not_newly_up_for_rent, "Rent"] = self.functions[
             "property"
@@ -3314,6 +3315,7 @@ class Households(Agent):
         housing_data: pd.DataFrame,
         historic_inflation: list[np.ndarray],
         exogenous_inflation_before: np.ndarray,
+        time_unit: int,
     ) -> None:
         """Update rental prices.
 
@@ -3326,6 +3328,7 @@ class Households(Agent):
             housing_data (pd.DataFrame): Property market data
             historic_inflation (list[np.ndarray]): Past inflation rates
             exogenous_inflation_before (np.ndarray): External inflation
+            time_unit (int): Months per model period (scales the annual rent/value floor)
         """
         housing_data["Rent"] = self.functions["property"].compute_rent(
             current_rent=housing_data["Rent"].values,
@@ -3335,6 +3338,8 @@ class Households(Agent):
                     np.array(historic_inflation).flatten(),
                 )
             ),
+            property_value=housing_data["Value"].values,
+            time_unit=time_unit,
         )
 
     def process_housing_market_clearing(

@@ -1087,7 +1087,22 @@ def build_macro_output_df(model, country_code):
     if gdp is not None:
         add_column("gdp_growth", gdp.pct_change())
     if gdp is not None and ppi is not None:
-        real_gdp = add_column("real_gdp", gdp / ppi)
+        # Comparable with the actuals, which deflate all of GDP by the PPI.
+        add_column("real_gdp_ppi", gdp / ppi)
+        # Housing flows (actual and imputed rent) are deflated by the model's
+        # rental price index, everything else by the PPI (issue #197).
+        economy_ts = getattr(getattr(country, "economy", None), "ts", None)
+        rpi_values = _safe_ts_values(economy_ts, "rpi")
+        rent_values = [_safe_ts_values(economy_ts, name) for name in ("total_real_rent_paid", "total_imp_rent_paid")]
+        if rpi_values is not None and all(values is not None for values in rent_values):
+            rpi = add_column("rpi", as_output_series(rpi_values))
+            housing = add_column(
+                "housing_services",
+                as_output_series(rent_values[0]) + as_output_series(rent_values[1]),
+            )
+            real_gdp = add_column("real_gdp", (gdp - housing) / ppi + housing / rpi)
+        else:
+            real_gdp = add_column("real_gdp", gdp / ppi)
         add_column("real_gdp_yoy_growth", real_gdp / real_gdp.shift(yoy_periods) - 1.0)
     if ppi is not None:
         add_column("ppi_yoy_change", ppi / ppi.shift(yoy_periods) - 1.0)

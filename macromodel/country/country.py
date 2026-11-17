@@ -2336,6 +2336,10 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             historic_inflation=self.economy.historic_consumer_period_inflation(),
             exogenous_inflation_before=self.exogenous.inflation_before["CPI Inflation"].values,
+            time_unit=self.economy.time_unit,
+        )
+        self.housing_market.ts.property_rents.append(
+            self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
         )
 
     def clear_housing_market(self) -> None:
@@ -3726,6 +3730,10 @@ class Country:
         self.economy.compute_house_price_index(
             current_property_values=self.housing_market.ts.current("property_values"),
             previous_property_values=self.housing_market.ts.prev("property_values"),
+        )
+        self.economy.compute_rental_price_index(
+            current_property_rents=self.housing_market.ts.current("property_rents"),
+            previous_property_rents=self.housing_market.ts.prev("property_rents"),
         )
         self.economy.compute_labour_market_aggregates(
             current_individual_activity_status=self.individuals.states["Activity Status"],

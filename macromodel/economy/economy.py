@@ -955,6 +955,26 @@ class Economy:
         self.ts.potential_output.append([current_potential_output])
         self.ts.output_gap.append([np.log(safe_real_output) - np.log(safe_potential_output)])
 
+    def compute_rental_price_index(
+        self,
+        current_property_rents: np.ndarray,
+        previous_property_rents: np.ndarray,
+    ) -> None:
+        """Fixed-stock rental price index: sum of rents over the same properties.
+
+        Rents of all properties (contract rents and asking rents of listings)
+        are compared with the previous period's rents of the same properties.
+        Used to deflate the housing components of GDP (issue #197).
+        """
+        current = np.asarray(current_property_rents, dtype=float)
+        previous = np.asarray(previous_property_rents, dtype=float)
+        if current.shape != previous.shape:
+            raise ValueError("Rental price index needs rents of the same properties in both periods.")
+        previous_total = previous.sum()
+        inflation = 0.0 if previous_total == 0.0 else current.sum() / previous_total - 1.0
+        self.ts.rpi_inflation.append([inflation])
+        self.ts.rpi.append([(1.0 + inflation) * self.ts.current("rpi")[0]])
+
     def compute_house_price_index(
         self,
         current_property_values: np.ndarray,

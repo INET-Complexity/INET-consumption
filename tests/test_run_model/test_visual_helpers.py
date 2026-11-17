@@ -78,6 +78,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "potential_output": [92.0, 96.0, 101.0],
         "output_gap": [-0.02, -0.01, 0.0],
         "hpi": [1.0, 1.02, 1.04],
+        "rpi": [1.0, 1.0, 0.5],
         "hpi_inflation": [0.0, 0.02, 0.02],
         "estimated_hpi_inflation": [0.01, 0.011, 0.012],
         "total_real_rent_paid": [10.0, 11.0, 12.0],
@@ -223,6 +224,13 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
     assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
     assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
+    # Housing flows (actual + imputed rent) are deflated by the RPI, the rest by the PPI (issue #197).
+    gdp = np.array([100.0, 110.0, 121.0])
+    ppi = np.array([1.0, 1.02, 1.04])
+    housing = np.array([13.0, 14.1, 15.2])
+    rpi = np.array([1.0, 1.0, 0.5])
+    np.testing.assert_allclose(output["real_gdp_ppi"], gdp / ppi)
+    np.testing.assert_allclose(output["real_gdp"], (gdp - housing) / ppi + housing / rpi)
     assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
     assert output["public_pension_benefits"].tolist() == [3.0, 3.1, 3.2]
     assert output["other_social_transfers"].tolist() == [2.0, 2.1, 2.2]

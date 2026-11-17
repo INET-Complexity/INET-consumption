@@ -110,6 +110,9 @@ class HouseholdDemandForProperty(ABC):
         std_of_rent_percentage_reduction (float): Monthly standard deviation of rent reduction in percentage points
         partial_rent_inflation_indexation (float): Inflation pass-through
         partial_rent_inflation_delay (int): Inflation adjustment lag
+        minimum_annual_rental_yield (float): Annual gross rent/value floor phi.
+            Every rent and new asking rent is at least phi * (time_unit / 12) * value.
+            0 disables the floor.
     """
 
     def __init__(
@@ -134,6 +137,7 @@ class HouseholdDemandForProperty(ABC):
         std_of_rent_percentage_reduction: float,
         partial_rent_inflation_indexation: float,
         partial_rent_inflation_delay: int,
+        minimum_annual_rental_yield: float = 0.0,
     ):
         self.probability_stay_in_rented_property = probability_stay_in_rented_property
         self.probability_stay_in_owned_property = probability_stay_in_owned_property
@@ -155,6 +159,19 @@ class HouseholdDemandForProperty(ABC):
         self.std_of_rent_percentage_reduction = std_of_rent_percentage_reduction
         self.partial_rent_inflation_indexation = partial_rent_inflation_indexation
         self.partial_rent_inflation_delay = partial_rent_inflation_delay
+        if not np.isfinite(minimum_annual_rental_yield) or minimum_annual_rental_yield < 0.0:
+            raise ValueError("minimum_annual_rental_yield must be finite and non-negative.")
+        self.minimum_annual_rental_yield = minimum_annual_rental_yield
+
+    def rent_floor(self, property_value: np.ndarray, time_unit: int) -> np.ndarray:
+        """Per-period rent floor phi * (time_unit / 12) * value, with phi annual."""
+        return self.minimum_annual_rental_yield * (time_unit / 12.0) * np.asarray(property_value, dtype=float)
+
+    def apply_rent_floor(self, rent: np.ndarray, property_value: np.ndarray, time_unit: int) -> np.ndarray:
+        """Raise rents below the yield floor to the floor; no-op when phi = 0."""
+        if self.minimum_annual_rental_yield == 0.0:
+            return rent
+        return np.maximum(rent, self.rent_floor(property_value, time_unit))
 
     @abstractmethod
     def compute_demand(
@@ -229,12 +246,16 @@ class HouseholdDemandForProperty(ABC):
         self,
         current_rent: np.ndarray,
         historic_inflation: np.ndarray,
+        property_value: np.ndarray,
+        time_unit: int,
     ) -> np.ndarray:
         """Calculate rental prices.
 
         Args:
             current_rent (np.ndarray): Current rents
             historic_inflation (np.ndarray): Past inflation rates
+            property_value (np.ndarray): Values of the same properties
+            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Updated rental prices
@@ -246,12 +267,14 @@ class HouseholdDemandForProperty(ABC):
         self,
         property_value: np.ndarray,
         observed_fraction_rent_value: np.ndarray,
+        time_unit: int,
     ) -> np.ndarray:
         """Calculate initial rental offers.
 
         Args:
             property_value (np.ndarray): Property values
             observed_fraction_rent_value (np.ndarray): Rent/value ratios
+            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Initial rental prices
@@ -495,6 +518,8 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         self,
         current_rent: np.ndarray,
         historic_inflation: np.ndarray,
+        property_value: np.ndarray,
+        time_unit: int,
     ) -> np.ndarray:
         """Calculate rental prices using default behavior.
 
@@ -506,22 +531,23 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         Args:
             current_rent (np.ndarray): Current rents
             historic_inflation (np.ndarray): Past inflation rates
+            property_value (np.ndarray): Values of the same properties
+            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Updated rental prices
         """
-        return (
-            1
-            + np.maximum(
-                0.0,
-                self.partial_rent_inflation_indexation * historic_inflation[-self.partial_rent_inflation_delay],
-            )
+        # Symmetric indexation: rents fall with deflation, down to the yield floor (issue #197).
+        indexed_rent = (
+            1 + self.partial_rent_inflation_indexation * historic_inflation[-self.partial_rent_inflation_delay]
         ) * current_rent
+        return self.apply_rent_floor(indexed_rent, property_value, time_unit)
 
     def compute_offered_rent_for_new_properties(
         self,
         property_value: np.ndarray,
         observed_fraction_rent_value: np.ndarray,
+        time_unit: int,
     ) -> np.ndarray:
         """Calculate initial rental offers using default behavior.
 
@@ -533,13 +559,15 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         Args:
             property_value (np.ndarray): Property values
             observed_fraction_rent_value (np.ndarray): Rent/value ratios
+            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Initial rental prices
         """
-        return (1 + self.rent_initial_markup) * (
+        offered_rent = (1 + self.rent_initial_markup) * (
             observed_fraction_rent_value[0] * property_value + observed_fraction_rent_value[1]
         )
+        return self.apply_rent_floor(offered_rent, property_value, time_unit)
 
     def compute_offered_rent_for_existing_properties(
         self,

@@ -236,6 +236,8 @@ def create_economy_timeseries(
         output_gap=[initial_output_gap],
         #
         hpi=[1.0],
+        rpi=[1.0],
+        rpi_inflation=[0.0],
         hpi_inflation=[initial_hpi_inflation],
         estimated_hpi_inflation=np.array([np.nan]),
         net_smic_base=[np.nan],

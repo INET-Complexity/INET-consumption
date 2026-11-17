@@ -3175,6 +3175,22 @@ class TestFirms:
         ratio = test_firms.compute_offer_ceiling_ratio("value_added")
         assert np.isnan(ratio[0]) and np.isfinite(ratio[1:]).all()
 
+    def test__wage_markup_compares_matched_quarters_not_this_quarters_plan(self, test_firms):
+        from macromodel.agents.firms.func.wage_setter import ContractWageSetter
+
+        n = len(test_firms.ts.current("labour_inputs"))
+        test_firms.ts.labour_inputs.append(np.full(n, 90.0))
+        test_firms.ts.desired_labour_inputs.append(np.full(n, 100.0))
+        # Plan for the coming quarter, appended before labour clearing: no realised counterpart yet.
+        test_firms.ts.desired_labour_inputs.append(np.full(n, 500.0))
+        n_realised = len(test_firms.ts.historic("labour_inputs"))
+        setter = ContractWageSetter(labour_market_tightness_markup_scale=1.0, markup_time_span=1, offer_ceiling="none")
+        test_firms.functions["wage_setter"] = setter
+        # Matched quarter: (100 - 90) / 100 = 0.1. Misaligned (500 vs 90) would give 0.82.
+        markup = test_firms.compute_wages_markup()
+        np.testing.assert_allclose(markup, 0.1)
+        assert len(test_firms.ts.historic("desired_labour_inputs")) == n_realised + 1  # history is not mutated
+
     def _capture_offer_kwargs(self, test_firms, offer_ceiling):
         from macromodel.agents.firms.func.wage_setter import ContractWageSetter
 

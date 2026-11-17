@@ -1181,9 +1181,16 @@ class Firms(Agent):
         Returns:
             np.ndarray: Wage markup factor for each firm
         """
+        desired = self.ts.historic("desired_labour_inputs")
+        realised = self.ts.historic("labour_inputs")
+        # The current quarter's plan is appended before labour clearing, so it
+        # has no realised counterpart yet. Compare completed quarters only
+        # (D_{t-k} vs L_{t-k}), as latest_matched_labour_gap_inputs does.
+        if len(desired) > len(realised):
+            desired = desired[: len(realised)]
         return self.functions["wage_setter"].compute_wage_tightness_markup(
-            historic_desired_labour_inputs=self.ts.historic("desired_labour_inputs"),
-            historic_realised_labour_inputs=self.ts.historic("labour_inputs"),
+            historic_desired_labour_inputs=desired,
+            historic_realised_labour_inputs=realised,
         )
 
     def compute_offered_wage_function(

@@ -80,13 +80,22 @@ def test_floor_binds_only_below_it():
     np.testing.assert_allclose(rent, [5.7, 5.0])
 
 
-def test_floor_applies_to_new_lets():
-    offered = make_property_function().compute_offered_rent_for_new_properties(
+def test_new_let_asking_rent_is_floored_by_the_rent_update():
+    # compute_offered_rent_for_new_properties leaves the floor to compute_rent,
+    # which update_rent applies to every rent, new listings included.
+    function = make_property_function()
+    offered = function.compute_offered_rent_for_new_properties(
         property_value=VALUE,
         observed_fraction_rent_value=np.array([0.001, 0.0]),
+    )
+    np.testing.assert_allclose(offered, [1.0, 1.0])
+    rent = function.compute_rent(
+        current_rent=offered,
+        historic_inflation=np.array([0.0]),
+        property_value=VALUE,
         time_unit=QUARTER,
     )
-    np.testing.assert_allclose(offered, [5.0, 5.0])
+    np.testing.assert_allclose(rent, [5.0, 5.0])
 
 
 def test_zero_floor_is_pure_symmetric_indexation():

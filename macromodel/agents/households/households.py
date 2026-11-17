@@ -3301,7 +3301,6 @@ class Households(Agent):
         ].compute_offered_rent_for_new_properties(
             property_value=housing_data.loc[housing_data["Newly on the Rental Market"], "Value"].values,
             observed_fraction_rent_value=observed_fraction_rent_value,
-            time_unit=time_unit,
         )
         housing_data.loc[not_newly_up_for_rent, "Rent"] = self.functions[
             "property"

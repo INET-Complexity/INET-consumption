@@ -80,6 +80,11 @@ def convert_monthly_reduction_calibration_to_period(
     return probability_period, conditional_mean * 100.0, conditional_variance**0.5 * 100.0
 
 
+def rent_floor(minimum_annual_rental_yield: float, property_value: np.ndarray, time_unit: int) -> np.ndarray:
+    """Per-period rent floor phi * (time_unit / 12) * value, with phi an annual rent/value yield (issue #197)."""
+    return minimum_annual_rental_yield * (time_unit / 12.0) * np.asarray(property_value, dtype=float)
+
+
 class HouseholdDemandForProperty(ABC):
     """Abstract base class for household property demand behavior.
 
@@ -165,7 +170,7 @@ class HouseholdDemandForProperty(ABC):
 
     def rent_floor(self, property_value: np.ndarray, time_unit: int) -> np.ndarray:
         """Per-period rent floor phi * (time_unit / 12) * value, with phi annual."""
-        return self.minimum_annual_rental_yield * (time_unit / 12.0) * np.asarray(property_value, dtype=float)
+        return rent_floor(self.minimum_annual_rental_yield, property_value, time_unit)
 
     def apply_rent_floor(self, rent: np.ndarray, property_value: np.ndarray, time_unit: int) -> np.ndarray:
         """Raise rents below the yield floor to the floor; no-op when phi = 0."""
@@ -267,14 +272,15 @@ class HouseholdDemandForProperty(ABC):
         self,
         property_value: np.ndarray,
         observed_fraction_rent_value: np.ndarray,
-        time_unit: int,
     ) -> np.ndarray:
         """Calculate initial rental offers.
+
+        The yield floor is applied afterwards by compute_rent, which runs on
+        every rent in the same update.
 
         Args:
             property_value (np.ndarray): Property values
             observed_fraction_rent_value (np.ndarray): Rent/value ratios
-            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Initial rental prices
@@ -547,7 +553,6 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         self,
         property_value: np.ndarray,
         observed_fraction_rent_value: np.ndarray,
-        time_unit: int,
     ) -> np.ndarray:
         """Calculate initial rental offers using default behavior.
 
@@ -559,15 +564,13 @@ class DefaultHouseholdDemandForProperty(HouseholdDemandForProperty):
         Args:
             property_value (np.ndarray): Property values
             observed_fraction_rent_value (np.ndarray): Rent/value ratios
-            time_unit (int): Months per model period
 
         Returns:
             np.ndarray: Initial rental prices
         """
-        offered_rent = (1 + self.rent_initial_markup) * (
+        return (1 + self.rent_initial_markup) * (
             observed_fraction_rent_value[0] * property_value + observed_fraction_rent_value[1]
         )
-        return self.apply_rent_floor(offered_rent, property_value, time_unit)
 
     def compute_offered_rent_for_existing_properties(
         self,

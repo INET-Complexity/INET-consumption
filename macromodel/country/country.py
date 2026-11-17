@@ -32,7 +32,7 @@ to their behavioral rules and interactions.
 
 import hashlib
 import logging
-from copy import deepcopy
+from copy import copy, deepcopy
 from pathlib import Path
 from typing import Any, Mapping, NamedTuple, Optional
 
@@ -76,6 +76,7 @@ from macromodel.agents.households.consumption_inputs import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+from macromodel.agents.households.func.property import rent_floor
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -210,20 +211,24 @@ def floor_initial_rents(
     housing_data: pd.DataFrame,
     minimum_annual_rental_yield: float,
     time_unit: int,
+    rental_income_tax: float,
 ) -> None:
     """Apply the rent/value floor to the initial rents, in place (issue #197).
 
     The same floor binds on every later rent update. Applying it at t=0 keeps
-    the floor out of the first period's rent inflation. Households pay or
-    impute the rent of the dwelling they live in, so each raise is passed on to
-    "Rent Paid" (tenure 3) or "Rent Imputed" (tenure 1, 2, 4).
+    it out of the first period's rent inflation. Each raise is passed on to
+    both sides of the flow, as the synthetic data and compute_rental_income do:
+    the inhabitant's "Rent Paid" (tenure 3) or "Rent Imputed" (tenure 1, 2, 4),
+    and, for a let dwelling, the landlord's "Rental Income from Real Estate"
+    net of the rental income tax.
     """
     if minimum_annual_rental_yield == 0.0:
         return
-    floor = minimum_annual_rental_yield * (time_unit / 12.0) * housing_data["Value"].to_numpy(dtype=float)
+    floor = rent_floor(minimum_annual_rental_yield, housing_data["Value"].to_numpy(dtype=float), time_unit)
     old_rent = housing_data["Rent"].to_numpy(dtype=float)
-    raise_by_house = pd.Series(np.maximum(floor - old_rent, 0.0), index=housing_data.index)
-    housing_data["Rent"] = old_rent + raise_by_house.to_numpy()
+    raise_by_dwelling = np.maximum(floor - old_rent, 0.0)
+    housing_data["Rent"] = old_rent + raise_by_dwelling
+    raise_by_house = pd.Series(raise_by_dwelling, index=housing_data["House ID"].astype(int).to_numpy())
 
     house_id = household_data["Corresponding Inhabited House ID"].fillna(-1).astype(int).to_numpy()
     housed = house_id != -1
@@ -234,6 +239,13 @@ def floor_initial_rents(
     owning = np.isin(tenure, [1, 2, 4])
     household_data.loc[renting, "Rent Paid"] += raise_by_household[renting]
     household_data.loc[owning, "Rent Imputed"] += raise_by_household[owning]
+
+    owner = housing_data["Corresponding Owner Household ID"].fillna(-1).astype(int).to_numpy()
+    inhabitant = housing_data["Corresponding Inhabitant Household ID"].fillna(-1).astype(int).to_numpy()
+    let_out = (owner >= 0) & (inhabitant >= 0) & (owner != inhabitant) & (raise_by_dwelling > 0.0)
+    landlord_raise = np.zeros(len(household_data))
+    np.add.at(landlord_raise, owner[let_out], (1.0 - rental_income_tax) * raise_by_dwelling[let_out])
+    household_data["Rental Income from Real Estate"] += landlord_raise
 
 
 def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
@@ -467,6 +479,8 @@ class Country:
         self.labour_market = labour_market
         self.credit_market = credit_market
         self.housing_market = housing_market
+        # Last period's dwelling rents, the base of the rent price indices (issue #197).
+        self._previous_property_rents = self._current_property_rents()
 
         # Exchange rate
         self.exchange_rate_usd_to_lcu = 1
@@ -830,13 +844,20 @@ class Country:
             "minimum_annual_rental_yield", 0.0
         )
         if minimum_annual_rental_yield > 0.0:
-            # Floor a private copy: synthetic_country may be shared across seeds (see above).
-            synthetic_country = deepcopy(synthetic_country)
+            # Floor private copies of the two tables: synthetic_country may be shared across seeds (see above).
+            synthetic_country = copy(synthetic_country)
+            synthetic_country.population = copy(synthetic_country.population)
+            synthetic_country.population.household_data = synthetic_country.population.household_data.copy()
+            synthetic_country.housing_market = copy(synthetic_country.housing_market)
+            synthetic_country.housing_market.housing_market_data = (
+                synthetic_country.housing_market.housing_market_data.copy()
+            )
             floor_initial_rents(
                 household_data=synthetic_country.population.household_data,
                 housing_data=synthetic_country.housing_market.housing_market_data,
                 minimum_annual_rental_yield=minimum_annual_rental_yield,
                 time_unit=time_unit,
+                rental_income_tax=synthetic_country.tax_data.income_tax,
             )
 
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
@@ -1308,6 +1329,7 @@ class Country:
         self.labour_market.reset(configuration=configuration.labour_market)
         self.credit_market.reset(configuration=configuration.credit_market)
         self.housing_market.reset(configuration=configuration.housing_market)
+        self._previous_property_rents = self._current_property_rents()
 
         self.exogenous.reset()
 
@@ -2382,9 +2404,10 @@ class Country:
             exogenous_inflation_before=self.exogenous.inflation_before["CPI Inflation"].values,
             time_unit=self.economy.time_unit,
         )
-        self.housing_market.ts.property_rents.append(
-            self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
-        )
+
+    def _current_property_rents(self) -> np.ndarray:
+        """Rent of every dwelling, in property order (clearing does not change rents)."""
+        return self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
 
     def _dwelling_tenure(self) -> np.ndarray:
         """Tenure code of each dwelling's inhabitant (-1 if vacant), in property order.
@@ -2397,7 +2420,12 @@ class Country:
         housed = house_id != -1
         by_house = pd.Series(tenure[housed], index=house_id[housed])
         if by_house.index.has_duplicates:
-            raise ValueError("Each dwelling must have at most one inhabitant household.")
+            # Should not happen; keep the run going and index each dwelling once.
+            logging.warning(
+                "Dwellings with more than one inhabitant household: %s",
+                sorted(set(by_house.index[by_house.index.duplicated()].tolist())),
+            )
+            by_house = by_house[~by_house.index.duplicated()]
         return by_house.reindex(properties.index).fillna(-1).to_numpy(dtype=int)
 
     def clear_housing_market(self) -> None:
@@ -3790,11 +3818,12 @@ class Country:
             previous_property_values=self.housing_market.ts.prev("property_values"),
         )
         self.economy.compute_rent_price_indices(
-            current_property_rents=self.housing_market.ts.current("property_rents"),
-            previous_property_rents=self.housing_market.ts.prev("property_rents"),
+            current_property_rents=self._current_property_rents(),
+            previous_property_rents=self._previous_property_rents,
             dwelling_tenure=self._dwelling_tenure(),
             social_rent_per_adult=self.households.states["Social Rent per Adult"],
         )
+        self._previous_property_rents = self._current_property_rents()
         self.economy.compute_labour_market_aggregates(
             current_individual_activity_status=self.individuals.states["Activity Status"],
             current_firm_labour_inputs=self.firms.ts.current("labour_inputs"),

@@ -295,8 +295,8 @@ BALANCE_SHEET_COLUMNS = (
 )
 
 # Housing prices, rental flows, and mortgage-market activity. HPI is the
-# model's aggregate house-price index; RPI is the fixed-stock rental price index
-# used to deflate housing flows in real GDP (issue #197).
+# model's aggregate house-price index. The actual, imputed and social rent price
+# indices deflate the three housing flows in real GDP (issue #197).
 HOUSING_COLUMNS = (
     "hpi",
     "rpi_actual",

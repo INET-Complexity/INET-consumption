@@ -65,7 +65,6 @@ def create_housing_market_timeseries(
             - rent_value_histogram: Distribution of rent/value ratios
             - property_values: Current property values
             - property_values_histogram: Distribution of values
-            - property_rents: Rent of every property after the period's rent update
             - total_number_of_houses_rented: Rented properties
             - total_number_of_houses_owner_occupied: Owner-occupied
             - total_number_of_houses_unoccupied: Vacant properties
@@ -87,7 +86,6 @@ def create_housing_market_timeseries(
         #
         property_values=data["Value"].values,
         property_values_histogram=get_histogram(data["Value"].values, scale),
-        property_rents=data["Rent"].values,
         #
         total_number_of_houses_rented=[
             np.sum(

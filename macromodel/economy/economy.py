@@ -960,7 +960,11 @@ class Economy:
         """Ratio of sums over dwellings in the group now that had a rent last period."""
         matched = in_group & (previous_rents > 0.0)
         previous_total = previous_rents[matched].sum()
-        return 0.0 if previous_total == 0.0 else current_rents[matched].sum() / previous_total - 1.0
+        current_total = current_rents[matched].sum()
+        # Hold the index flat when either sum is zero: a zero level could never recover.
+        if previous_total <= 0.0 or current_total <= 0.0:
+            return 0.0
+        return current_total / previous_total - 1.0
 
     def compute_rent_price_indices(
         self,
@@ -991,12 +995,14 @@ class Economy:
         actual = self._matched_rent_inflation(current, previous, tenure == 3)
         imputed = self._matched_rent_inflation(current, previous, np.isin(tenure, [1, 2, 4]))
         previous_social = self.ts.current("social_rent_per_adult")[0]
-        social = (
-            social_rent_per_adult / previous_social - 1.0
-            if np.isfinite(previous_social) and previous_social > 0.0
-            else 0.0
+        if social_rent_per_adult > 0.0 and np.isfinite(previous_social) and previous_social > 0.0:
+            social = social_rent_per_adult / previous_social - 1.0
+        else:
+            social = 0.0
+        # A zero price carries the last positive one forward, so the index never sticks at 0.
+        self.ts.social_rent_per_adult.append(
+            [social_rent_per_adult if social_rent_per_adult > 0.0 else previous_social]
         )
-        self.ts.social_rent_per_adult.append([social_rent_per_adult])
         for name, inflation in (("rpi_actual", actual), ("rpi_imputed", imputed), ("social_rent_price", social)):
             getattr(self.ts, f"{name}_inflation").append([inflation])
             getattr(self.ts, name).append([(1.0 + inflation) * self.ts.current(name)[0]])

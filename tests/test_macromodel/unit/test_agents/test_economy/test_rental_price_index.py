@@ -73,32 +73,66 @@ def test_mismatched_dwelling_sets_are_rejected():
         compute(make_economy(), [1.0, 2.0], [1.0], [TENANT, TENANT])
 
 
-def test_initial_rents_are_floored_and_passed_to_household_flows():
-    housing = pd.DataFrame({"Value": [1000.0, 1000.0, 1000.0], "Rent": [2.0, 9.0, 1.0]}, index=[0, 1, 2])
-    households = pd.DataFrame(
+def test_zero_current_rents_hold_the_index_flat():
+    economy = make_economy()
+    compute(economy, [0.0, 5.0], [10.0, 5.0], [TENANT, OWNER])
+    assert economy.ts.current("rpi_actual")[0] == 1.0
+    compute(economy, [12.0, 5.0], [10.0, 5.0], [TENANT, OWNER])
+    assert economy.ts.current("rpi_actual")[0] == pytest.approx(1.2)
+
+
+def test_zero_social_price_carries_the_last_price_forward():
+    economy = make_economy(previous_social_rent=2.0)
+    compute(economy, [10.0], [10.0], [TENANT], social=0.0)
+    assert economy.ts.current("social_rent_price")[0] == 1.0
+    compute(economy, [10.0], [10.0], [TENANT], social=2.2)
+    assert economy.ts.current("social_rent_price")[0] == pytest.approx(1.1)
+
+
+def make_initial_data(rents, house_ids=None):
+    # Dwellings: the first two are let by household 3 to households 0 and 1; the third is owner-occupied by 2.
+    house_ids = [10, 11, 12] if house_ids is None else house_ids
+    housing = pd.DataFrame(
         {
-            "Corresponding Inhabited House ID": [0, 1, 2, -1],
-            "Tenure Status of the Main Residence": [TENANT, TENANT, OWNER, -1],
-            "Rent Paid": [2.0, 9.0, 0.0, 4.0],
-            "Rent Imputed": [0.0, 0.0, 1.0, 0.0],
+            "House ID": house_ids,
+            "Value": [1000.0, 1000.0, 1000.0],
+            "Rent": rents,
+            "Corresponding Owner Household ID": [3, 3, 2],
+            "Corresponding Inhabitant Household ID": [0, 1, 2],
         }
     )
-    # 2% a year on 1000 is 5 a quarter.
-    floor_initial_rents(households, housing, minimum_annual_rental_yield=0.02, time_unit=3)
+    households = pd.DataFrame(
+        {
+            "Corresponding Inhabited House ID": [house_ids[0], house_ids[1], house_ids[2], -1],
+            "Tenure Status of the Main Residence": [TENANT, TENANT, OWNER, OWNER],
+            "Rent Paid": [rents[0], rents[1], 0.0, 0.0],
+            "Rent Imputed": [0.0, 0.0, rents[2], 0.0],
+            "Rental Income from Real Estate": [0.0, 0.0, 0.0, 0.75 * (rents[0] + rents[1])],
+        }
+    )
+    return housing, households
+
+
+def test_initial_floor_raises_both_sides_of_each_rent_flow():
+    housing, households = make_initial_data([2.0, 9.0, 1.0])
+    # 2% a year on 1000 is 5 a quarter; rental income tax 25%.
+    floor_initial_rents(households, housing, 0.02, time_unit=3, rental_income_tax=0.25)
     np.testing.assert_allclose(housing["Rent"], [5.0, 9.0, 5.0])
-    np.testing.assert_allclose(households["Rent Paid"], [5.0, 9.0, 0.0, 4.0])
+    np.testing.assert_allclose(households["Rent Paid"], [5.0, 9.0, 0.0, 0.0])
+    np.testing.assert_allclose(households["Rent Imputed"], [0.0, 0.0, 5.0, 0.0])
+    # Landlord income stays equal to rent paid net of tax.
+    np.testing.assert_allclose(households["Rental Income from Real Estate"], [0.0, 0.0, 0.0, 0.75 * 14.0])
+
+
+def test_initial_floor_matches_households_on_house_id_not_row_position():
+    housing, households = make_initial_data([2.0, 9.0, 1.0], house_ids=[12, 10, 11])
+    housing.index = [0, 1, 2]
+    floor_initial_rents(households, housing, 0.02, time_unit=3, rental_income_tax=0.25)
+    np.testing.assert_allclose(households["Rent Paid"], [5.0, 9.0, 0.0, 0.0])
     np.testing.assert_allclose(households["Rent Imputed"], [0.0, 0.0, 5.0, 0.0])
 
 
 def test_zero_floor_leaves_initial_rents_unchanged():
-    housing = pd.DataFrame({"Value": [1000.0], "Rent": [1.0]})
-    households = pd.DataFrame(
-        {
-            "Corresponding Inhabited House ID": [0],
-            "Tenure Status of the Main Residence": [TENANT],
-            "Rent Paid": [1.0],
-            "Rent Imputed": [0.0],
-        }
-    )
-    floor_initial_rents(households, housing, minimum_annual_rental_yield=0.0, time_unit=3)
-    assert housing["Rent"].tolist() == [1.0]
+    housing, households = make_initial_data([1.0, 1.0, 1.0])
+    floor_initial_rents(households, housing, 0.0, time_unit=3, rental_income_tax=0.25)
+    assert housing["Rent"].tolist() == [1.0, 1.0, 1.0]

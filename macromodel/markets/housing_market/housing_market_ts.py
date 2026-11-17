@@ -83,6 +83,7 @@ def create_housing_market_timeseries(
         price_value_histogram=get_histogram(np.array([]), None),
         observed_fraction_rent_value=initial_observed_fraction_rent_value,
         rent_value_histogram=get_histogram(np.array([]), None),
+        average_rental_yield=np.nan,
         #
         property_values=data["Value"].values,
         property_values_histogram=get_histogram(data["Value"].values, scale),

@@ -442,18 +442,37 @@ class HousingMarket:
             np.ndarray: The initial rent/value coefficients.
 
         Note:
-            The initial coefficients are the pricing rule; the histogram helps
-            track realised rental yields without changing that rule.
+            The initial coefficients are the pricing rule. The average yield
+            is total rent divided by total property value across currently
+            rented properties; the histogram covers completed rental
+            agreements. Neither changes the pricing rule.
         """
         current_rentals = self.states["current_sales"].loc[self.states["current_sales"]["sales_types"] == "Rental"]
+        properties = self.states["properties"]
+        inhabitant_ids = properties["Corresponding Inhabitant Household ID"]
+        owner_ids = properties["Corresponding Owner Household ID"]
+        rented_properties = properties.loc[
+            (inhabitant_ids != -1) & (inhabitant_ids != owner_ids)
+        ]
+        property_values = rented_properties["Value"].to_numpy(dtype=float, copy=False)
+        rents = rented_properties["Rent"].to_numpy(dtype=float, copy=False)
+        valid_properties = np.isfinite(property_values) & np.isfinite(rents) & (property_values > 0.0)
+        total_property_value = float(property_values[valid_properties].sum())
+        average_yield = (
+            float(rents[valid_properties].sum() / total_property_value)
+            if total_property_value > 0.0
+            else np.nan
+        )
+        self.ts.average_rental_yield.append(average_yield)
+
         if len(current_rentals) == 0:
             self.ts.rent_value_histogram.append(get_histogram(np.array([], dtype=float), None))
             return self.ts.current("observed_fraction_rent_value")
-        property_values = current_rentals["property_value"].to_numpy(dtype=float, copy=False)
-        rents = current_rentals["price_or_rent"].to_numpy(dtype=float, copy=False)
+        rental_sales_values = current_rentals["property_value"].to_numpy(dtype=float, copy=False)
+        rental_sales_rents = current_rentals["price_or_rent"].to_numpy(dtype=float, copy=False)
         self.ts.rent_value_histogram.append(
             get_histogram(
-                rents / property_values,
+                rental_sales_rents / rental_sales_values,
                 None,
             )
         )

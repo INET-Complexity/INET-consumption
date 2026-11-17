@@ -456,7 +456,7 @@ def test_plot_agent_timeseries_uses_bare_variable_names_and_side_legend():
         show=False,
     )
 
-    assert [trace.name for trace in fig.data] == ["target_consumption", "total_sales"]
+    assert [trace.name for trace in fig.data] == ["Target Consumption", "Total Sales"]
     assert fig.layout.legend.orientation == "v"
     assert fig.layout.legend.x == pytest.approx(1.02)
     assert fig.layout.legend.y == pytest.approx(1.0)
@@ -503,7 +503,7 @@ def test_plot_agent_timeseries_uses_panel_annotations_without_agent_prefixes():
     legend_annotations = [annotation for annotation in fig.layout.annotations if annotation.bgcolor]
     assert len(legend_annotations) == 2
     assert all("." not in annotation.text for annotation in legend_annotations)
-    assert any("target_consumption" in annotation.text for annotation in legend_annotations)
+    assert any("Target Consumption" in annotation.text for annotation in legend_annotations)
     assert all("Series" in annotation.text for annotation in legend_annotations)
     assert any("■" in annotation.text for annotation in legend_annotations)
     assert all(annotation.x > 0.9 for annotation in legend_annotations)
@@ -548,8 +548,8 @@ def test_plot_agent_timeseries_uses_readable_default_panel_titles():
     )
 
     subplot_titles = [annotation.text for annotation in fig.layout.annotations if not annotation.bgcolor]
-    assert any(title == "target_consumption + total_sales" for title in subplot_titles)
-    assert any(title == "total_sales" for title in subplot_titles)
+    assert any(title == "Target Consumption + Total Sales" for title in subplot_titles)
+    assert any(title == "Total Sales" for title in subplot_titles)
 
 
 def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():

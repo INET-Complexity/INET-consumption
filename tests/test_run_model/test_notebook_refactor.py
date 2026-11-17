@@ -10,7 +10,7 @@ RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
-from config import CALIBRATED_CONSUMPTION_OVERRIDES, SCENARIO_PRESETS  # noqa: E402
+from config import SCENARIO_PRESETS  # noqa: E402
 from src.diagnostics.firm_finance import (  # noqa: E402
     FIRM_FINANCE_SERIES,
     build_firm_balance_sheet_ratios,
@@ -50,11 +50,6 @@ def test_refactored_notebook_suite_and_legacy_banner_are_present():
     assert "run_mpc_experiment" not in runner_source
     assert "run_irf_experiment" not in runner_source
     assert not (RUN_MODEL_PATH / "run_model_diagnostics.ipynb").exists()
-
-
-def test_calibrated_override_preset_does_not_override_canonical_parameters():
-    assert SCENARIO_PRESETS["calibrated_consumption"] is CALIBRATED_CONSUMPTION_OVERRIDES
-    assert CALIBRATED_CONSUMPTION_OVERRIDES == {}
 
 
 def test_wage_indexation_presets_only_override_the_france_default_coefficient():

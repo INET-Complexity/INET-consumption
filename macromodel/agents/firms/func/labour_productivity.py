@@ -23,10 +23,10 @@ class LabourProductivitySetter(ABC):
             productivity factor after work-effort adjustment
         max_labour_utilisation_factor (float): Maximum allowed increase in
             productivity through work effort
-        consider_intermediate_inputs (float): Weight given to intermediate
-            input constraints (deprecated, retained for config compatibility)
-        consider_capital_inputs (float): Weight given to capital input
-            constraints (deprecated, retained for config compatibility)
+        consider_intermediate_inputs (float): Weight in [0, 1] of the
+            intermediate-input limit in the effort target
+        consider_capital_inputs (float): Weight in [0, 1] of the capital
+            limit in the effort target
         work_effort_increase_speed (float): Rate at which work effort
             adjustments are implemented
     """
@@ -44,11 +44,10 @@ class LabourProductivitySetter(ABC):
         Args:
             max_labour_utilisation_factor (float): Maximum allowed increase in
                 productivity through work effort
-            consider_intermediate_inputs (float): Deprecated compatibility
-                parameter; input constraints are handled by desired labour and
-                production.
-            consider_capital_inputs (float): Deprecated compatibility parameter;
-                input constraints are handled by desired labour and production.
+            consider_intermediate_inputs (float): Weight of the
+                intermediate-input limit in the effort target (clipped to [0, 1])
+            consider_capital_inputs (float): Weight of the capital limit in
+                the effort target (clipped to [0, 1])
             work_effort_increase_speed (float): Rate of work effort adjustment
                 implementation
             min_labour_utilisation_factor (float): Minimum allowed labour
@@ -87,12 +86,10 @@ class LabourProductivitySetter(ABC):
 
         Args:
             current_target_production (np.ndarray): Target production levels
-            current_limiting_intermediate_inputs (np.ndarray): Deprecated and
-                ignored. Input constraints belong in desired labour and
-                production.
-            current_limiting_capital_inputs (np.ndarray): Deprecated and
-                ignored. Input constraints belong in desired labour and
-                production.
+            current_limiting_intermediate_inputs (np.ndarray): Output the
+                intermediate-input stock allows
+            current_limiting_capital_inputs (np.ndarray): Output the capital
+                stock allows
             labour_inputs_from_employees (np.ndarray): Current labor input levels
             industry_labour_productivity_by_firm (np.ndarray): Industry standard
                 productivity levels by firm
@@ -111,15 +108,13 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
     """Implementation of productivity setting based on work effort.
 
     This class implements a strategy that:
-    1. Compares target production with normal labour capacity
-    2. Calculates labour utilisation or required work effort
-    3. Limits increases to feasible ranges
+    1. Caps target production at the intermediate and capital limits
+    2. Compares the capped target with normal labour capacity
+    3. Limits the factor to [min, max] utilisation
     4. Implements changes at specified speed
 
-    The approach ensures that:
-    - Input constraints do not directly reduce labour utilisation
-    - Adjustments stay within feasible bounds
-    - Changes occur at appropriate speeds
+    Workers are not paid extra effort for output the inputs cannot support.
+    The utilisation floor bounds the fall when inputs are scarce.
     """
 
     def compute_labour_productivity_factor(
@@ -134,16 +129,18 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
         """Calculate productivity factors based on work effort adjustments.
 
         The method:
-        1. Compares target production with normal labour capacity
-        2. Calculates utilisation or required productivity increase
-        3. Applies speed and maximum constraints
+        1. Caps target production at the input limits (weighted)
+        2. Compares the capped target with normal labour capacity
+        3. Applies speed, floor and ceiling
 
         Args:
             current_target_production (np.ndarray): Target production levels
-            current_limiting_intermediate_inputs (np.ndarray): Intermediate
-                input production capacity. Ignored by this calculation.
-            current_limiting_capital_inputs (np.ndarray): Capital input
-                production capacity. Ignored by this calculation.
+            current_limiting_intermediate_inputs (np.ndarray): Output the
+                intermediate-input stock allows; caps the effort target with
+                weight consider_intermediate_inputs.
+            current_limiting_capital_inputs (np.ndarray): Output the capital
+                stock allows; caps the effort target with weight
+                consider_capital_inputs.
             labour_inputs_from_employees (np.ndarray): Current labor inputs
             industry_labour_productivity_by_firm (np.ndarray): Industry
                 standard productivity levels
@@ -162,11 +159,23 @@ class WorkEffortLabourProductivitySetter(LabourProductivitySetter):
             if current_tfp_multiplier is not None
             else np.ones_like(current_target_production, dtype=float)
         )
+        # Effort serves output the inputs allow: min(target, II limit, K limit),
+        # weighted as in desired labour. Production uses the same limits, so
+        # lowering effort to this level never reduces output.
+        effort_target = np.asarray(current_target_production, dtype=float).copy()
+        effort_target = np.minimum(
+            effort_target,
+            effort_target + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - effort_target),
+        )
+        effort_target = np.minimum(
+            effort_target,
+            effort_target + self.consider_capital_inputs * (current_limiting_capital_inputs - effort_target),
+        )
         normal_labour_capacity = labour_inputs_from_employees * industry_labour_productivity_by_firm * tfp_multiplier
         required_productivity_factor = np.divide(
-            current_target_production,
+            effort_target,
             normal_labour_capacity,
-            out=np.ones_like(current_target_production, dtype=float),
+            out=np.ones_like(effort_target),
             where=normal_labour_capacity > 0,
         )
         labour_productivity_factor = 1.0 + self.work_effort_increase_speed * (required_productivity_factor - 1.0)

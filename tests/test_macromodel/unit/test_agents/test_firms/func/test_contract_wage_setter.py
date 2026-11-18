@@ -714,7 +714,7 @@ def test__uniform_growth_passes_through_in_full_for_any_alpha(alpha):
     np.testing.assert_allclose(carried[:4], before[:4] * 1.02)
 
 
-def _offer(setter, effort, prev_effort):
+def _offer_with_effort(setter, effort, prev_effort):
     carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
     return setter.get_offered_wage_given_labour_inputs_function(
         corresponding_firm=CORRESPONDING_FIRM,
@@ -741,5 +741,5 @@ def _offer(setter, effort, prev_effort):
 
 @pytest.mark.parametrize(("switch", "expected"), [(True, 15.0 * 1.2), (False, 15.0)])
 def test__offer_effort_ratio_switch(switch, expected):
-    f = _offer(_setter(offer_effort_ratio=switch), effort=np.full(N_FIRMS, 1.2), prev_effort=np.ones(N_FIRMS))
+    f = _offer_with_effort(_setter(offer_effort_ratio=switch), effort=np.full(N_FIRMS, 1.2), prev_effort=np.ones(N_FIRMS))
     assert f(0, 1.0) == pytest.approx(expected)

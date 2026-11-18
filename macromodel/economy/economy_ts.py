@@ -88,6 +88,8 @@ def create_economy_timeseries(
     initial_real_gross_output: float,
     initial_potential_output: float,
     initial_output_gap: float,
+    initial_social_rent_per_adult: float = np.nan,
+    initial_social_rent_paid: float = np.nan,
 ) -> TimeSeries:
     """Create and initialize economy-wide time series data.
 
@@ -236,6 +238,13 @@ def create_economy_timeseries(
         output_gap=[initial_output_gap],
         #
         hpi=[1.0],
+        rpi_actual=[1.0],
+        rpi_actual_inflation=[0.0],
+        rpi_imputed=[1.0],
+        rpi_imputed_inflation=[0.0],
+        social_rent_price=[1.0],
+        social_rent_price_inflation=[0.0],
+        social_rent_per_adult=[initial_social_rent_per_adult],
         hpi_inflation=[initial_hpi_inflation],
         estimated_hpi_inflation=np.array([np.nan]),
         net_smic_base=[np.nan],
@@ -245,6 +254,7 @@ def create_economy_timeseries(
         total_real_rent_paid=[initial_real_rent_paid.sum()],
         total_imp_rent_paid=[initial_imp_rent_paid.sum()],
         total_real_rent_rec=[initial_hh_rental_income.sum()],
+        total_social_rent_paid=[initial_social_rent_paid],
         #
         num_insolvent_firms_by_sector=np.zeros(n_industries),
         #

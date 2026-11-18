@@ -405,7 +405,10 @@ FRA:
       # growth at t=50, against 0.400pp from incumbent productivity indexation.
       # It is the second indexation channel alongside the wage_setter's
       # `incumbent_indexation_pass_through` (alpha); keep both visible together.
-      wage_cpi_indexation_elasticity: 1.0
+      # Set to 0.9 (user decision 2026-11-18): with psi = 1 and the policy rate at its floor
+      # inflation has no steady state (it integrates real unit labour cost growth); psi < 1
+      # gives pi_ss = (p - theta) tau_hat / (1 - psi). Vault plan 2026-11-13, sections 2.6 and 2.11.
+      wage_cpi_indexation_elasticity: 0.9
       pricing_labour_units: raw  # raw | tfp_effective (wage bill per unit of output; deflates unless wage rates rise with TFP, #189)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
@@ -647,8 +650,8 @@ FRA:
           # mid-rho unemployed stock, so employed searchers win (45% of hires from ~10% of candidates).
           # With true: searcher success 64-68% a quarter, U->E 7-11% (France: 12-15%, 26.8%).
           # With false (random choice among qualified), 3 seeds, q51-98: success 30-33%, U->E 14-22%.
-          # Vault: concepts/france-labour-market-flows-data. Switch to false pending user decision.
-          optimised_hiring: true
+          # Vault: concepts/france-labour-market-flows-data. Set to false (user decision 2026-11-18).
+          optimised_hiring: false
           random_firing_probability: 0.017  # q, per worker per quarter: INSEE E->U 1.9% minus model endogenous E->U 0.18% (vault concepts/france-labour-market-flows-data). Provisional; recalibrate once other labour-market issues are fixed. Firms with one employee are exempt (clearing.random_firing).
           round_target_employment: true
           sorted_firing: false  # random firing (C34); true fires lowest labour input first, by array position when inputs are equal

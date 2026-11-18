@@ -112,7 +112,9 @@ class HouseholdDemandForProperty(ABC):
         partial_rent_inflation_indexation (float): Inflation pass-through
         partial_rent_inflation_delay (int): Inflation adjustment lag
         minimum_annual_rental_yield (float): Annual gross rent/value floor phi.
-            Every rent and new asking rent is at least phi * (time_unit / 12) * value.
+            Every rent and new asking rent is at least phi * (time_unit / 12) * the
+            value at quoting, before clearing. Later transaction revaluation feeds
+            the next period's floor; an agreed rent is not repriced after clearing.
             0 disables the floor.
     """
 

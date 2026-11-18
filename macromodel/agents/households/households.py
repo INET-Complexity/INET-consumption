@@ -3329,13 +3329,18 @@ class Households(Agent):
             exogenous_inflation_before (np.ndarray): External inflation
             time_unit (int): Months per model period (scales the annual rent/value floor)
         """
+        # Quote rents against the valuation available before clearing. Transactions
+        # can revalue dwellings later in this period; those values enter the next
+        # quote, without repricing a signed rental or its financing reservation.
+        # Keep an independent snapshot so the floor remains auditable after clearing.
+        housing_data["Rent Floor Reference Value"] = housing_data["Value"].to_numpy(dtype=float, copy=True)
         # Sitting tenancies and owner-occupied dwellings are indexed to CPI and floored.
         # Listings already got this period's asking rent (new lets) or random cut
         # (unlet listings) in the listing step, so they are only floored (issue #197).
         listed = housing_data["Up for Rent"].fillna(False).astype(bool).to_numpy()
         property_function = self.functions["property"]
         rent = housing_data["Rent"].to_numpy(dtype=float, copy=True)
-        value = housing_data["Value"].to_numpy(dtype=float)
+        value = housing_data["Rent Floor Reference Value"].to_numpy(dtype=float)
         rent[~listed] = property_function.compute_rent(
             current_rent=rent[~listed],
             historic_inflation=np.concatenate(

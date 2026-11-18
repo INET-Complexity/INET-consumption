@@ -96,7 +96,8 @@ FRA:
           partial_rent_inflation_delay: 1
           partial_rent_inflation_indexation: 1.0  # 0.0
           # Annual gross rent/value floor phi (issue #197). Rents are indexed to CPI both ways
-          # and floored at phi * (time_unit / 12) * value, for sitting tenants and new lets.
+          # and floored at phi * (time_unit / 12) * the pre-clearing value, for sitting tenants
+          # and new lets. Transaction revaluation enters the next period's floor.
           # Provisional user choice 2026-11-17; initial FRA yields: owner p1 3.5%, rented p10 1.9%.
           # null = the data value (data_config_FRA.yaml, which also floors the initial rents).
           # A number overrides it for scenario analysis; the gap then binds from period 1.

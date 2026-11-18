@@ -371,8 +371,8 @@ FRA:
           realised_productivity_window: 4
           incumbent_indexation_pass_through: 0.1  # alpha: rent-sharing elasticity, Card et al. (2018) range 0.05-0.15; literature value, not estimated for France. Was 0.0
           slack_response_down: 0.0  # kappa_down: offers fall when the firm has more labour than it wants
-          offer_effort_ratio: true  # false drops u/u_prev from offers (effort is paid via earnings; avoids storing a temporary deviation in hires' rates)
-          indexation_common_component: none  # none | lagged_full (Step 1b: common TFP growth, lagged one quarter, in full; alpha on the firm-specific part)
+          offer_effort_ratio: false  # default since 2026-11-18 (user).  true keeps u/u_prev in offers; false drops u/u_prev from offers (effort is paid via earnings; avoids storing a temporary deviation in hires' rates)
+          indexation_common_component: lagged_full  # default since 2026-11-18 (user).  none = alpha on total TFP; none | lagged_full (Step 1b: common TFP growth, lagged one quarter, in full; alpha on the firm-specific part)
           offer_ceiling: none  # none | value_added | value_added_net_capital | value_added_net_user_cost (solvency bound on offers)
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:

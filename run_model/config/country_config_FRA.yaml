@@ -360,9 +360,9 @@ FRA:
           markup_time_span: 4
           initial_rate_source: individual  # firm_anchor (homegenous across firms) or individual (income heterogeneity)
           offer_base: per_labour_input  # per_head double-counts firm mean rho in offers when rho is on
-          indexation_base: realised_productivity
+          indexation_base: tfp_multiplier  # Step 1 requires the firm TFP multiplier as base (plan 3.2); was realised_productivity
           realised_productivity_window: 4
-          incumbent_indexation_pass_through: 0.0
+          incumbent_indexation_pass_through: 0.1  # alpha: rent-sharing elasticity, Card et al. (2018) range 0.05-0.15; literature value, not estimated for France. Was 0.0
           slack_response_down: 0.0  # kappa_down: offers fall when the firm has more labour than it wants
           offer_ceiling: none  # none | value_added | value_added_net_capital | value_added_net_user_cost (solvency bound on offers)
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
@@ -409,7 +409,7 @@ FRA:
       # inflation has no steady state (it integrates real unit labour cost growth); psi < 1
       # gives pi_ss = (p - theta) tau_hat / (1 - psi). Vault plan 2026-11-13, sections 2.6 and 2.11.
       wage_cpi_indexation_elasticity: 0.9
-      pricing_labour_units: raw  # raw | tfp_effective (wage bill per unit of output; deflates unless wage rates rise with TFP, #189)
+      pricing_labour_units: tfp_effective  # raw | tfp_effective: labour marginal cost W/(tau L), consistent with labour-augmenting TFP (Step 5). Base default since 2026-11-18 (user)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
       firm_activity_finance_revision_mode: post_credit_cash_budget

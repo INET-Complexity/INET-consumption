@@ -525,6 +525,12 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         offer_ceiling: ``"none"``, ``"value_added"``,
             ``"value_added_net_capital"`` or ``"value_added_net_user_cost"``;
             solvency cap on offers (wage-competition plan, Step 3).
+        indexation_common_component: ``"none"`` indexes by ``(B ratio)**alpha``.
+            ``"lagged_full"`` (Step 1b) indexes by ``g * (B ratio / g)**alpha``,
+            where ``g`` is last quarter's employment-weighted geometric mean
+            of ``B ratio`` across firms: the common part passes through in
+            full and alpha applies to the firm-specific part. Offers use the
+            same factor, so they stay anchored to incumbent rates.
     """
 
     def __init__(
@@ -541,6 +547,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         slack_response_down: float = 0.0,
         max_offer_log_cut: float = 0.02,
         offer_ceiling: str = "none",
+        indexation_common_component: str = "none",
         **kwargs,
     ):
         super().__init__(
@@ -578,6 +585,14 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         if offer_ceiling not in OFFER_CEILING_VARIANTS:
             raise ValueError(f"offer_ceiling must be one of {OFFER_CEILING_VARIANTS}, got {offer_ceiling!r}")
         self.offer_ceiling = offer_ceiling
+        if indexation_common_component not in ("none", "lagged_full"):
+            raise ValueError(
+                f"indexation_common_component must be 'none' or 'lagged_full', got {indexation_common_component!r}"
+            )
+        self.indexation_common_component = indexation_common_component
+        # Employment-weighted geometric mean of last quarter's base growth across firms
+        # (the common component). 1.0 until the first quarter has been observed.
+        self._lagged_common_growth = 1.0
         self.last_offer_ceiling_binding = None
         self.last_offer_slack_gap = None
         self.last_offer_slack_factor = None
@@ -662,14 +677,33 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         (+4.13% against +2.04% over t=15-50), and that wedge is what pushes real
         unit labour cost up every period.
         """
+        valid_ratio = self._base_ratio(tfp_ratio, realised_productivity_ratio)
+        if self.indexation_common_component == "lagged_full":
+            # Step 1b: the common part of productivity growth (last quarter's employment-weighted
+            # mean) passes through in full; alpha applies to the firm-specific deviation only.
+            g = self._lagged_common_growth
+            return g * np.power(valid_ratio / g, self.incumbent_indexation_pass_through)
+        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
+
+    def _base_ratio(
+        self,
+        tfp_ratio: np.ndarray,
+        realised_productivity_ratio: np.ndarray | None,
+    ) -> np.ndarray:
+        """Growth factor of the indexation base by firm; non-finite or non-positive values become 1."""
         if self.indexation_base == "tfp_multiplier":
             ratio = np.asarray(tfp_ratio, dtype=float)
         else:
             if realised_productivity_ratio is None:
                 raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
             ratio = np.asarray(realised_productivity_ratio, dtype=float)
-        valid_ratio = np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
-        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
+        return np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
+
+    def _update_common_growth(self, base_ratio: np.ndarray, employment_by_firm: np.ndarray) -> None:
+        """Store this quarter's employment-weighted geometric mean base growth for next quarter."""
+        total = float(employment_by_firm.sum())
+        if total > 0:
+            self._lagged_common_growth = float(np.exp(np.sum(employment_by_firm * np.log(base_ratio)) / total))
 
     def _seed_rates(
         self,
@@ -790,6 +824,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         earnings[employed] = carried_wage_rate[employed] * effort_by_individual[employed]
 
         self.last_contract_rate_mean = float(np.mean(carried_wage_rate[employed])) if employed.any() else np.nan
+        if self.indexation_common_component == "lagged_full":
+            employment_by_firm = np.bincount(corresponding_firm[employed], minlength=n_firms).astype(float)
+            self._update_common_growth(self._base_ratio(tfp_ratio, realised_productivity_ratio), employment_by_firm)
         return earnings
 
     def get_offered_wage_given_labour_inputs_function(

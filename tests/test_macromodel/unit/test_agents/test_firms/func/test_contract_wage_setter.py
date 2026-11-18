@@ -671,3 +671,44 @@ def test__benefit_floor_applies_after_the_offer_ceiling():
     setter = _setter(offer_ceiling="value_added")
     offer = _offer(setter, CARRIED, benefits=14.0, offer_ceiling_ratio=np.full(N_FIRMS, 0.5))
     assert offer(0, 1.0) == 14.0  # capped rate 7.5 is below the benefit
+
+
+# Step 1b: the common part of TFP growth passes through in full (lagged one quarter);
+# alpha applies to the firm-specific deviation only.
+
+
+def test__invalid_indexation_common_component_is_rejected():
+    with pytest.raises(ValueError, match="indexation_common_component"):
+        _setter(indexation_common_component="nonsense")
+
+
+def test__common_component_first_quarter_equals_alpha_only():
+    carried_none = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    carried_1b = carried_none.copy()
+    _run(_setter(incumbent_indexation_pass_through=0.1), carried_none)
+    _run(_setter(incumbent_indexation_pass_through=0.1, indexation_common_component="lagged_full"), carried_1b)
+    np.testing.assert_allclose(carried_1b, carried_none)
+
+
+def test__common_component_uses_last_quarter_employment_weighted_growth():
+    alpha = 0.1
+    setter = _setter(incumbent_indexation_pass_through=alpha, indexation_common_component="lagged_full")
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    _run(setter, carried)  # quarter 1: employment by firm (2, 1, 1), TFP growth (5%, 10%, 0%)
+    g = np.exp((2 * np.log(1.05) + np.log(1.10) + 0.0) / 4)
+    before = carried.copy()
+    _run(setter, carried)  # quarter 2: same firm growth
+    expected = g * (TFP / g) ** alpha
+    np.testing.assert_allclose(carried[:4], before[:4] * expected[FIRM_OF_EMPLOYEE])
+    assert carried[4] == before[4]
+
+
+@pytest.mark.parametrize("alpha", [0.0, 0.1, 0.5])
+def test__uniform_growth_passes_through_in_full_for_any_alpha(alpha):
+    setter = _setter(incumbent_indexation_pass_through=alpha, indexation_common_component="lagged_full")
+    uniform = np.full(N_FIRMS, 1.02)
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    _run(setter, carried, tfp=uniform)
+    before = carried.copy()
+    _run(setter, carried, tfp=uniform)
+    np.testing.assert_allclose(carried[:4], before[:4] * 1.02)

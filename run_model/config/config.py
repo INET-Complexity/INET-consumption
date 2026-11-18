@@ -219,6 +219,11 @@ def _wage_plan_presets() -> dict[str, dict[str, Any]]:
             **presets["wage_plan_E"],
             "firms.parameters.wage_cpi_indexation_elasticity": psi,
         }
+    # Step 1b on arm E: common TFP growth passed to incumbents and offers in full (lagged one quarter).
+    presets["wage_plan_E1b"] = {
+        **presets["wage_plan_E"],
+        "firms.functions.wage_setter.parameters['indexation_common_component']": "lagged_full",
+    }
     return presets
 
 

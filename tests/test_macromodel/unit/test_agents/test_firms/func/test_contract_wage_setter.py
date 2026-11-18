@@ -712,3 +712,34 @@ def test__uniform_growth_passes_through_in_full_for_any_alpha(alpha):
     before = carried.copy()
     _run(setter, carried, tfp=uniform)
     np.testing.assert_allclose(carried[:4], before[:4] * 1.02)
+
+
+def _offer(setter, effort, prev_effort):
+    carried = np.array([10.0, 20.0, 30.0, 40.0, 5.0])
+    return setter.get_offered_wage_given_labour_inputs_function(
+        corresponding_firm=CORRESPONDING_FIRM,
+        current_individual_labour_inputs=np.array([1.0, 1.0, 1.0, 1.0, 0.0]),
+        previous_employee_income=np.full(5, 999.0),
+        current_target_production=np.full(N_FIRMS, 10.0),
+        current_limiting_intermediate_inputs=np.full(N_FIRMS, 10.0),
+        current_limiting_capital_inputs=np.full(N_FIRMS, 10.0),
+        industry_labour_productivity_by_firm=np.full(N_FIRMS, 1.0),
+        initial_wage_per_capita=INITIAL_WAGE,
+        current_wage_per_capita=np.full(N_FIRMS, 55.0),
+        current_labour_productivity_factor=effort,
+        prev_labour_productivity_factor=prev_effort,
+        current_wage_tightness_markup=np.zeros(N_FIRMS),
+        income_taxes=INCOME_TAX,
+        employee_social_insurance_tax=EMPLOYEE_SI,
+        employer_social_insurance_tax=EMPLOYER_SI,
+        unemployment_benefits_by_individual=0.0,
+        current_tfp_multiplier=PREV_TFP,
+        prev_tfp_multiplier=PREV_TFP,
+        carried_wage_rate=carried,
+    )
+
+
+@pytest.mark.parametrize(("switch", "expected"), [(True, 15.0 * 1.2), (False, 15.0)])
+def test__offer_effort_ratio_switch(switch, expected):
+    f = _offer(_setter(offer_effort_ratio=switch), effort=np.full(N_FIRMS, 1.2), prev_effort=np.ones(N_FIRMS))
+    assert f(0, 1.0) == pytest.approx(expected)

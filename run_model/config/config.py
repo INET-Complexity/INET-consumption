@@ -224,6 +224,15 @@ def _wage_plan_presets() -> dict[str, dict[str, Any]]:
         **presets["wage_plan_E"],
         "firms.functions.wage_setter.parameters['indexation_common_component']": "lagged_full",
     }
+    # Exploratory variants of arm E1b: no effort ratio in offers; full hiring adjustment.
+    presets["wage_plan_E1b_noeffort"] = {
+        **presets["wage_plan_E1b"],
+        "firms.functions.wage_setter.parameters['offer_effort_ratio']": False,
+    }
+    presets["wage_plan_E1b_hs1"] = {
+        **presets["wage_plan_E1b"],
+        "labour_market.functions.clearing.parameters['hiring_speed']": 1.0,
+    }
     return presets
 
 

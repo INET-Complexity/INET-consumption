@@ -531,6 +531,10 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             of ``B ratio`` across firms: the common part passes through in
             full and alpha applies to the firm-specific part. Offers use the
             same factor, so they stay anchored to incumbent rates.
+        offer_effort_ratio: True multiplies offers by the firm's effort ratio
+            ``u / u_prev``. False drops it: effort is paid through earnings
+            (rate x u), and a temporary effort deviation then does not enter
+            the stored rate of new hires.
     """
 
     def __init__(
@@ -548,6 +552,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         max_offer_log_cut: float = 0.02,
         offer_ceiling: str = "none",
         indexation_common_component: str = "none",
+        offer_effort_ratio: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -590,6 +595,7 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
                 f"indexation_common_component must be 'none' or 'lagged_full', got {indexation_common_component!r}"
             )
         self.indexation_common_component = indexation_common_component
+        self.offer_effort_ratio = bool(offer_effort_ratio)
         # Employment-weighted geometric mean of last quarter's base growth across firms
         # (the common component). 1.0 until the first quarter has been observed.
         self._lagged_common_growth = 1.0
@@ -947,6 +953,8 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             out=np.ones_like(current_labour_productivity_factor),
             where=prev_labour_productivity_factor > 0,
         )
+        if not self.offer_effort_ratio:
+            effort_ratio = np.ones_like(effort_ratio)
 
         indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
         slack_factor = self._slack_factor(desired_labour_inputs, realised_labour_inputs, n_firms)

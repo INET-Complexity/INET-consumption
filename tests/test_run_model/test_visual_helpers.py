@@ -78,6 +78,10 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
         "potential_output": [92.0, 96.0, 101.0],
         "output_gap": [-0.02, -0.01, 0.0],
         "hpi": [1.0, 1.02, 1.04],
+        "rpi_actual": [1.0, 1.0, 0.5],
+        "rpi_imputed": [1.0, 2.0, 2.0],
+        "social_rent_price": [1.0, 1.0, 4.0],
+        "total_social_rent_paid": [np.nan, 1.0, 2.0],
         "hpi_inflation": [0.0, 0.02, 0.02],
         "estimated_hpi_inflation": [0.01, 0.011, 0.012],
         "total_real_rent_paid": [10.0, 11.0, 12.0],
@@ -223,6 +227,21 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["num_insolvent_firms_by_sector_agriculture"].tolist() == [1, 3, 5]
     assert output["sector_tfp_investment_desired_mb_mc_ratio"].tolist() == [[0.9, 1.1], [1.0, 1.2], [1.1, 1.3]]
     assert output["sector_tfp_investment_desired_mb_mc_ratio_services"].tolist() == [1.1, 1.2, 1.3]
+    # Each housing flow is deflated by its own index, the rest by the PPI (issue #197).
+    gdp = np.array([100.0, 110.0, 121.0])
+    ppi = np.array([1.0, 1.02, 1.04])
+    social = np.array([0.0, 1.0, 2.0])
+    actual = np.array([10.0, 11.0, 12.0]) - social
+    imputed = np.array([3.0, 3.1, 3.2])
+    housing = actual + imputed + social
+    expected = (
+        (gdp - housing) / ppi
+        + actual / np.array([1.0, 1.0, 0.5])
+        + imputed / np.array([1.0, 2.0, 2.0])
+        + social / np.array([1.0, 1.0, 4.0])
+    )
+    np.testing.assert_allclose(output["real_gdp_ppi"], gdp / ppi)
+    np.testing.assert_allclose(output["real_gdp"], expected)
     assert output["avg_tfp_multiplier"].tolist() == pytest.approx([1.1, 1.2, 1.3])
     assert output["public_pension_benefits"].tolist() == [3.0, 3.1, 3.2]
     assert output["other_social_transfers"].tolist() == [2.0, 2.1, 2.2]
@@ -456,7 +475,7 @@ def test_plot_agent_timeseries_uses_bare_variable_names_and_side_legend():
         show=False,
     )
 
-    assert [trace.name for trace in fig.data] == ["target_consumption", "total_sales"]
+    assert [trace.name for trace in fig.data] == ["Target Consumption", "Total Sales"]
     assert fig.layout.legend.orientation == "v"
     assert fig.layout.legend.x == pytest.approx(1.02)
     assert fig.layout.legend.y == pytest.approx(1.0)
@@ -503,7 +522,7 @@ def test_plot_agent_timeseries_uses_panel_annotations_without_agent_prefixes():
     legend_annotations = [annotation for annotation in fig.layout.annotations if annotation.bgcolor]
     assert len(legend_annotations) == 2
     assert all("." not in annotation.text for annotation in legend_annotations)
-    assert any("target_consumption" in annotation.text for annotation in legend_annotations)
+    assert any("Target Consumption" in annotation.text for annotation in legend_annotations)
     assert all("Series" in annotation.text for annotation in legend_annotations)
     assert any("■" in annotation.text for annotation in legend_annotations)
     assert all(annotation.x > 0.9 for annotation in legend_annotations)
@@ -548,8 +567,8 @@ def test_plot_agent_timeseries_uses_readable_default_panel_titles():
     )
 
     subplot_titles = [annotation.text for annotation in fig.layout.annotations if not annotation.bgcolor]
-    assert any(title == "target_consumption + total_sales" for title in subplot_titles)
-    assert any(title == "total_sales" for title in subplot_titles)
+    assert any(title == "Target Consumption + Total Sales" for title in subplot_titles)
+    assert any(title == "Total Sales" for title in subplot_titles)
 
 
 def test_cumulative_insolvent_firms_by_sector_uses_expanded_sector_columns():

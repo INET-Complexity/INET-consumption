@@ -11,6 +11,7 @@ if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
 import run_irf_experiment as irf_runner  # noqa: E402
+from src.irf_analysis import DEFAULT_IRF_VARIABLES  # noqa: E402
 
 
 def _write_irf_smoke_h5(path: Path, *, shock_kind: str | None = None) -> None:
@@ -100,6 +101,7 @@ def test_run_irf_experiment_writes_nonzero_responses_for_supported_shocks(tmp_pa
         output_dir=tmp_path,
         country_iso3="FRA",
         n_jobs=1,
+        output_variables=[v.name for v in DEFAULT_IRF_VARIABLES],
     )
 
     panel = pd.read_csv(paths["analysis_dir"] / "irf_panel.csv")
@@ -198,6 +200,9 @@ def test_run_one_writes_aggregates_and_only_keeps_full_h5_on_request(tmp_path, m
             _write_irf_smoke_h5(Path(save_dir) / file_name)
 
     monkeypatch.setattr(irf_module, "_build_simulation", lambda **kwargs: FakeModel())
+    monkeypatch.setattr(
+        irf_module, "write_selected", lambda model, path, country, paths: model.save(path.parent, path.name)
+    )
     seed_dir = tmp_path / "arm" / "seed-12"
     seed_dir.mkdir(parents=True)
     stale = seed_dir / "multi_country_simulation.h5"
@@ -212,10 +217,12 @@ def test_run_one_writes_aggregates_and_only_keeps_full_h5_on_request(tmp_path, m
         output_dir=tmp_path / "arm",
         shock_spec=None,
         keep_full_h5=keep_full_h5,
+        output_variables=["household_consumption"],
     )
 
     npz = seed_dir / "irf_aggregates.npz"
     series = irf_analysis.read_irf_series(npz)
+    assert set(series) == {"household_consumption"}
     assert series["household_consumption"].tolist() == [100.0] * 4
     assert not list(seed_dir.glob(".scratch-*"))
     if keep_full_h5:

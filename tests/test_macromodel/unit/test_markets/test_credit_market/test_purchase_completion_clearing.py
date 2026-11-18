@@ -11,6 +11,9 @@ from macromodel.agents.households.func.financial_feasibility import (
     PostGrantFeasiblePlan,
     forced_liquidation_cash,
 )
+from macromodel.agents.households.func.property import DefaultHouseholdDemandForProperty
+from macromodel.agents.households.households import Households
+from macromodel.configurations.households_configuration import HouseholdsConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.markets.housing_market.housing_market import HousingMarket
 from macromodel.markets.housing_market.purchase_completion import PurchaseCompletionInputs
@@ -375,6 +378,38 @@ def test_sale_that_does_not_complete_stays_listed_and_its_asking_price_enters_th
     assert not bool(properties.loc[10, "Temporarily for Sale"])
     np.testing.assert_allclose(properties["Value"].to_numpy(), [110.0, 200.0 * 1.025, 300.0 * 1.025])
     assert properties.loc[20, "Sale Price"] == 190.0
+
+
+def test_rent_floor_uses_quote_valuation_and_revaluation_enters_the_next_quote(test_config):
+    market, household_states = _market_with_three_properties(test_config)
+    properties = market.states["properties"]
+    parameters = dict(HouseholdsConfiguration().functions.property.parameters)
+    parameters["minimum_annual_rental_yield"] = 0.02
+    households = SimpleNamespace(functions={"property": DefaultHouseholdDemandForProperty(**parameters)})
+    properties["Rent"] = 0.0
+    properties["Up for Rent"] = [False, True, False]
+    original_values = properties["Value"].to_numpy(copy=True)
+    quote_floor = 0.02 * (3 / 12) * original_values
+
+    Households.update_rent(households, properties, [np.array([0.0])], np.array([]), 3)
+    np.testing.assert_allclose(properties["Rent"], quote_floor)
+    market.process_housing_market_clearing(
+        household_states=household_states,
+        household_received_mortgages=np.zeros(3),
+        household_financial_wealth=np.zeros(3),
+        kept_sales=np.array([True, False]),
+        revalue_by_transaction_prices=True,
+    )
+
+    # A completed purchase and the market-wide revaluation must not reprice
+    # the current quote. Its reference must not alias the mutable Value column.
+    np.testing.assert_allclose(properties["Value"], [110.0, 205.0, 307.5])
+    np.testing.assert_allclose(properties["Rent Floor Reference Value"], original_values)
+    np.testing.assert_allclose(properties["Rent"], quote_floor)
+
+    Households.update_rent(households, properties, [np.array([0.0])], np.array([]), 3)
+    np.testing.assert_allclose(properties["Rent Floor Reference Value"], properties["Value"])
+    np.testing.assert_allclose(properties["Rent"], 0.02 * (3 / 12) * properties["Value"])
 
 
 def test_values_fall_when_only_an_unsold_listing_below_value_is_on_the_market(test_config):

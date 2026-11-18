@@ -55,6 +55,9 @@ country_configs:
     scale: 5000
     # Same value as central_government.tax_overrides in country_config_FRA.yaml: D611 / D11, 2014.
     employer_social_insurance_rate: 0.30552085148943465
+    # Annual rent/value floor applied to the initial dwelling rents (issue #197). The runtime
+    # rent rule uses it too unless country_config_FRA.yaml sets its own value for a scenario.
+    minimum_annual_rental_yield: 0.02
     eu_proxy_country: null
     carbon_price: 0.0
     # Worker productivity rho is off in the base config. Switch it on with the

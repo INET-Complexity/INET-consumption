@@ -338,6 +338,7 @@ class SyntheticCountry:
             social_housing_rent=population.social_housing_rent,
             total_imputed_rent=total_imputed_rent,
             total_actual_rent=total_actual_rent,
+            minimum_annual_rental_yield=country_configuration.minimum_annual_rental_yield,
         )
 
         housing_market = DefaultSyntheticHousingMarket(country, housing_data)
@@ -589,6 +590,7 @@ class SyntheticCountry:
             social_housing_rent=population.social_housing_rent,
             total_imputed_rent=total_imputed_rent,
             total_actual_rent=total_actual_rent,
+            minimum_annual_rental_yield=country_configuration.minimum_annual_rental_yield,
         )
 
         housing_market = DefaultSyntheticHousingMarket(country, housing_data)
@@ -1019,6 +1021,7 @@ class SyntheticCountry:
             social_housing_rent=self.population.social_housing_rent,
             total_imputed_rent=total_rent,
             total_actual_rent=self.total_actual_rent,
+            minimum_annual_rental_yield=self.country_configuration.minimum_annual_rental_yield,
         )
 
         housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)

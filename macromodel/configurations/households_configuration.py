@@ -153,6 +153,7 @@ class PropertyFunction(BaseModel):
         "maximum_rent_income_exponent": 0.0,
         "partial_rent_inflation_indexation": 0.0,
         "partial_rent_inflation_delay": 1,
+        "minimum_annual_rental_yield": None,  # None: use the data configuration value
     }
 
 

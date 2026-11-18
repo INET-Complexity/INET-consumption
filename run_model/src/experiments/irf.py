@@ -22,6 +22,7 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+from src.experiments.selected_output import select_names, write_selected  # noqa: E402
 from src.irf_analysis import (  # noqa: E402
     ALL_IRF_VARIABLES,
     build_irf_panel,
@@ -126,14 +127,17 @@ def _run_one(
     shock_spec: ShockSpec | None,
     data_paths: DataPaths | None = None,
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> Path:
     """Run one arm and return the file the analysis stage reads.
 
     The aggregate IRF series are always written to ``irf_aggregates.npz`` in the seed
-    directory. By default that ``.npz`` is returned and the per-agent HDF5 only
-    exists transiently in a temporary directory. With ``keep_full_h5`` the full
+    directory. By default that ``.npz`` is returned and only selected analysis
+    inputs are serialized transiently in a temporary directory. With ``keep_full_h5`` the full
     HDF5 is written to ``multi_country_simulation.h5`` and returned instead.
     """
+    selected = select_names(output_variables, [v.name for v in ALL_IRF_VARIABLES])
+    variables = tuple(v for v in ALL_IRF_VARIABLES if v.name in selected)
     model = _build_simulation(
         data=data,
         country_configurations=country_configurations,
@@ -155,13 +159,17 @@ def _run_one(
     seed_dir.mkdir(parents=True, exist_ok=True)
     if keep_full_h5:
         model.save(save_dir=seed_dir, file_name=FULL_H5_NAME)
-        series, _missing = extract_irf_series(seed_dir / FULL_H5_NAME, country_code=country_code)
+        series, _missing = extract_irf_series(seed_dir / FULL_H5_NAME, country_code=country_code, variables=variables)
         write_irf_series(seed_dir / AGGREGATES_NAME, series)
         return seed_dir / FULL_H5_NAME
     # Scratch HDF5 lives in its own temp dir so an existing full file at the fixed path is never touched.
     with tempfile.TemporaryDirectory(dir=seed_dir, prefix=".scratch-") as scratch:
-        model.save(save_dir=scratch, file_name=FULL_H5_NAME)
-        series, _missing = extract_irf_series(Path(scratch) / FULL_H5_NAME, country_code=country_code)
+        paths = [v.h5_path.format(country=country_code) for v in variables]
+        paths += [v.ratio_denominator_path.format(country=country_code) for v in variables if v.ratio_denominator_path]
+        write_selected(model, Path(scratch) / FULL_H5_NAME, country_code, paths)
+        series, _missing = extract_irf_series(
+            Path(scratch) / FULL_H5_NAME, country_code=country_code, variables=variables
+        )
     return write_irf_series(seed_dir / AGGREGATES_NAME, series)
 
 
@@ -177,6 +185,7 @@ def _run_seed(
     shock_specs: tuple[ShockSpec, ...],
     data_paths: DataPaths | None = None,
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> list[dict[str, object]]:
     baseline_output = _run_one(
         data=data,
@@ -188,6 +197,7 @@ def _run_seed(
         shock_spec=None,
         data_paths=data_paths,
         keep_full_h5=keep_full_h5,
+        output_variables=output_variables,
     )
     rows: list[dict[str, object]] = []
     for spec in shock_specs:
@@ -201,6 +211,7 @@ def _run_seed(
             shock_spec=spec,
             data_paths=data_paths,
             keep_full_h5=keep_full_h5,
+            output_variables=output_variables,
         )
         rows.append(
             {
@@ -218,7 +229,9 @@ def _run_seed(
     return rows
 
 
-def _build_panel(row: dict[str, object], spec: ShockSpec, *, horizon_periods: int, country_code: str) -> pd.DataFrame:
+def _build_panel(
+    row: dict[str, object], spec: ShockSpec, *, horizon_periods: int, country_code: str, output_variables=None
+) -> pd.DataFrame:
     """Build one (seed, shock) panel from the saved aggregates, or from the full HDF5 if that was kept."""
     common = {
         "seed": int(row["seed"]),
@@ -229,7 +242,7 @@ def _build_panel(row: dict[str, object], spec: ShockSpec, *, horizon_periods: in
         "shock_duration": spec.duration,
         "shock_mode": spec.mode,
         "horizon_periods": horizon_periods,
-        "variables": ALL_IRF_VARIABLES,
+        "variables": tuple(v for v in ALL_IRF_VARIABLES if output_variables is None or v.name in output_variables),
     }
     baseline, shock = Path(row["baseline_output"]), Path(row["shock_output"])
     if baseline.suffix == ".npz":
@@ -272,13 +285,20 @@ def run_irf_experiment(
     batch_size: int = 1,
     firm_loan_dscr: bool | None = None,
     keep_full_h5: bool = False,
+    output_variables: list[str] | None = None,
 ) -> dict[str, Path]:
     """Run paired IRF simulations, aggregate responses, and write outputs.
+
+    ``output_variables`` selects variable names from ``ALL_IRF_VARIABLES``.
+    None retains all supported variables. Unknown, duplicate and empty selections
+    are rejected before simulation. Only selected variables are analysed/plotted.
+    Working model histories required for calculations are retained during the run.
 
     Only aggregate series are persisted per arm (``irf_aggregates.npz``) unless
     ``keep_full_h5`` is set, which also keeps the full per-agent HDF5 for debugging.
     """
 
+    output_variables = list(select_names(output_variables, [v.name for v in ALL_IRF_VARIABLES]))
     seed_list = _validate_unique_seeds(seeds)
     if not shock_specs:
         raise ValueError("At least one shock specification is required.")
@@ -326,6 +346,7 @@ def run_irf_experiment(
             shock_specs=shock_specs,
             data_paths=data_paths,
             keep_full_h5=keep_full_h5,
+            output_variables=output_variables,
         )
         for seed in seed_list
     )
@@ -337,7 +358,11 @@ def run_irf_experiment(
     spec_by_name = {spec.name: spec for spec in shock_specs}
     for row in run_rows:
         spec = spec_by_name[str(row["shock_name"])]
-        panels.append(_build_panel(row, spec, horizon_periods=horizon_periods, country_code=country_code))
+        panels.append(
+            _build_panel(
+                row, spec, horizon_periods=horizon_periods, country_code=country_code, output_variables=output_variables
+            )
+        )
     panel = pd.concat(panels, ignore_index=True) if panels else pd.DataFrame()
     summary = summarize_irf_panel(panel)
     panel.to_csv(analysis_dir / "irf_panel.csv", index=False)
@@ -358,6 +383,12 @@ def _load_shocks(path: str | Path) -> tuple[ShockSpec, ...]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run paired impulse-response shock experiments.")
+    parser.add_argument(
+        "--output-variables",
+        nargs="+",
+        default=None,
+        help="Names of analysis outputs to save; default: all supported outputs.",
+    )
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
     parser.add_argument("--t-max", type=int, default=DEFAULT_T_MAX)
     parser.add_argument("--country", default=None, help="Optional country ISO3 override.")
@@ -411,6 +442,7 @@ def main() -> None:
         batch_size=parsed.batch_size,
         firm_loan_dscr=None if parsed.firm_loan_dscr is None else parsed.firm_loan_dscr == "on",
         keep_full_h5=parsed.keep_full_h5,
+        output_variables=parsed.output_variables,
     )
     print({name: str(path) for name, path in outputs.items()})
 

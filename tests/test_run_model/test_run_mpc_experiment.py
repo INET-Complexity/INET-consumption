@@ -477,6 +477,9 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
         "make_household_labor_state_snapshot",
         lambda country: {name: np.zeros(2) for name in mpc_runner.HOUSEHOLD_LABOR_STATE_COLUMNS},
     )
+    monkeypatch.setattr(
+        mpc_runner, "write_selected", lambda model, path, country, paths: model.save(path.parent, path.name)
+    )
     seed_dir = tmp_path / "baseline" / "seed-1"
     seed_dir.mkdir(parents=True)
     stale = seed_dir / "multi_country_simulation.h5"
@@ -494,9 +497,11 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
         shock_fraction=0.01,
         horizon_periods=2,
         keep_full_h5=keep_full_h5,
+        output_variables=["cash"],
     )
 
     window = np.load(seed_dir / "mpc_window.npz")
+    assert {k for k in window.files if k.startswith("outcome_")} == {"outcome_cash"}
     assert window["consumption"].shape == (2, 2)
     assert int(window["shock_row"]) == 2
     assert not list(seed_dir.glob(".scratch-*"))

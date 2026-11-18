@@ -216,6 +216,9 @@ class CountryDataConfiguration(BaseModel):
         worker_productivity (WorkerProductivityConfiguration, optional): Fixed worker labour inputs
         employer_social_insurance_rate (float, optional): Build rate replacing the OECD reader value.
             Must equal the runtime central government override when one is set.
+        minimum_annual_rental_yield (float): Annual gross rent/value floor phi applied to the
+            initial dwelling rents (issue #197). The runtime rent rule uses the same value unless
+            the country configuration sets its own for a scenario. 0 disables the floor.
     """
 
     firms_configuration: FirmsDataConfiguration
@@ -233,6 +236,7 @@ class CountryDataConfiguration(BaseModel):
     carbon_price: float = 0.0
     worker_productivity: Optional[WorkerProductivityConfiguration] = None
     employer_social_insurance_rate: Optional[float] = None
+    minimum_annual_rental_yield: float = Field(default=0.0, ge=0.0)
 
 
 class ROWDataConfiguration(BaseModel):

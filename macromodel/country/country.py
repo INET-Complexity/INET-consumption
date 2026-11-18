@@ -206,6 +206,24 @@ def _resolve_frm_coefficients_path(
     return raw_data_root.joinpath(*candidate.parts[raw_data_index + 1 :])
 
 
+def resolve_minimum_annual_rental_yield(
+    country_configuration: CountryConfiguration, data_minimum_annual_rental_yield: float
+) -> CountryConfiguration:
+    """Fill an unset runtime rent/value floor with the data value (issue #197).
+
+    The data configuration floors the initial rents. The runtime rule uses the
+    same value unless the country configuration sets one for a scenario.
+    """
+    parameters = country_configuration.households.functions.property.parameters
+    if parameters.get("minimum_annual_rental_yield") is not None:
+        return country_configuration
+    country_configuration = country_configuration.model_copy(deep=True)
+    country_configuration.households.functions.property.parameters["minimum_annual_rental_yield"] = float(
+        data_minimum_annual_rental_yield
+    )
+    return country_configuration
+
+
 def _apply_production_tax_vector_scale(synthetic_country: SyntheticCountry, scale: float) -> None:
     """Apply a model-level production-tax calibration to all initial tax views."""
     if scale <= 0.0:
@@ -437,6 +455,8 @@ class Country:
         self.labour_market = labour_market
         self.credit_market = credit_market
         self.housing_market = housing_market
+        # Last period's dwelling rents, the base of the rent price indices (issue #197).
+        self._previous_property_rents = self._current_property_rents()
 
         # Exchange rate
         self.exchange_rate_usd_to_lcu = 1
@@ -800,6 +820,13 @@ class Country:
             synthetic_country = deepcopy(synthetic_country)
             _apply_production_tax_vector_scale(synthetic_country, production_tax_vector_scale)
 
+        data_minimum_annual_rental_yield = getattr(
+            synthetic_country.country_configuration, "minimum_annual_rental_yield", 0.0
+        )
+        country_configuration = resolve_minimum_annual_rental_yield(
+            country_configuration, data_minimum_annual_rental_yield
+        )
+
         emission_industries = ["B05a", "B05b", "B05c", "C19"]
         add_emissions = all([industry in industries for industry in emission_industries])
 
@@ -1146,6 +1173,7 @@ class Country:
             permanent_income_forecast_inputs=permanent_income_forecast_inputs,
             permanent_income_design_matrix=permanent_income_design_matrix,
         )
+        country.data_minimum_annual_rental_yield = data_minimum_annual_rental_yield
         if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
             initialise_hfcs_consumption(
                 country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
@@ -1256,6 +1284,9 @@ class Country:
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise
 
+        configuration = resolve_minimum_annual_rental_yield(
+            configuration, getattr(self, "data_minimum_annual_rental_yield", 0.0)
+        )
         self.individuals.reset(configuration=configuration.individuals)
         self.households.reset(configuration=configuration.households)
         self.firms.reset(configuration=configuration.firms)
@@ -1269,6 +1300,7 @@ class Country:
         self.labour_market.reset(configuration=configuration.labour_market)
         self.credit_market.reset(configuration=configuration.credit_market)
         self.housing_market.reset(configuration=configuration.housing_market)
+        self._previous_property_rents = self._current_property_rents()
 
         self.exogenous.reset()
 
@@ -2349,7 +2381,12 @@ class Country:
             housing_data=self.housing_market.states["properties"],
             historic_inflation=self.economy.historic_consumer_period_inflation(),
             exogenous_inflation_before=self.exogenous.inflation_before["CPI Inflation"].values,
+            time_unit=self.economy.time_unit,
         )
+
+    def _current_property_rents(self) -> np.ndarray:
+        """Rent of every dwelling, in property order (clearing does not change rents)."""
+        return self.housing_market.states["properties"]["Rent"].to_numpy(dtype=float, copy=True)
 
     def clear_housing_market(self) -> None:
         """Execute housing market clearing.
@@ -3740,6 +3777,13 @@ class Country:
             current_property_values=self.housing_market.ts.current("property_values"),
             previous_property_values=self.housing_market.ts.prev("property_values"),
         )
+        self.economy.compute_rent_price_indices(
+            current_property_rents=self._current_property_rents(),
+            previous_property_rents=self._previous_property_rents,
+            dwelling_tenure=self.households.states["Dwelling Tenure"],
+            social_rent_per_adult=self.households.states["Social Rent per Adult"],
+        )
+        self._previous_property_rents = self._current_property_rents()
         self.economy.compute_labour_market_aggregates(
             current_individual_activity_status=self.individuals.states["Activity Status"],
             current_firm_labour_inputs=self.firms.ts.current("labour_inputs"),
@@ -3755,6 +3799,7 @@ class Country:
             real_rent_paid=self.households.ts.current("rent"),
             imp_rent_paid=self.households.ts.current("rent_imputed"),
             rental_income=self.households.ts.current("income_rental"),
+            social_rent_paid=self.households.states["Rent paid to Government"],
         )
 
         # B1. GLOBAL TRADE AND CAPITAL FORMATION

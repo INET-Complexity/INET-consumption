@@ -1087,7 +1087,34 @@ def build_macro_output_df(model, country_code):
     if gdp is not None:
         add_column("gdp_growth", gdp.pct_change())
     if gdp is not None and ppi is not None:
-        real_gdp = add_column("real_gdp", gdp / ppi)
+        # Comparable with the actuals, which deflate all of GDP by the PPI.
+        add_column("real_gdp_ppi", gdp / ppi)
+        # Each housing flow is deflated by its own price index, everything else
+        # by the PPI (issue #197). Social rent is inside total_real_rent_paid.
+        economy_ts = getattr(getattr(country, "economy", None), "ts", None)
+        names = (
+            "rpi_actual",
+            "rpi_imputed",
+            "social_rent_price",
+            "total_real_rent_paid",
+            "total_imp_rent_paid",
+            "total_social_rent_paid",
+        )
+        series = {name: _safe_ts_values(economy_ts, name) for name in names}
+        if all(values is not None for values in series.values()):
+            rpi_actual = add_column("rpi_actual", as_output_series(series["rpi_actual"]))
+            rpi_imputed = add_column("rpi_imputed", as_output_series(series["rpi_imputed"]))
+            social_price = add_column("social_rent_price", as_output_series(series["social_rent_price"]))
+            social = as_output_series(series["total_social_rent_paid"]).fillna(0.0)
+            actual = as_output_series(series["total_real_rent_paid"]) - social
+            imputed = as_output_series(series["total_imp_rent_paid"])
+            housing = add_column("housing_services", actual + imputed + social)
+            real_gdp = add_column(
+                "real_gdp",
+                (gdp - housing) / ppi + actual / rpi_actual + imputed / rpi_imputed + social / social_price,
+            )
+        else:
+            real_gdp = add_column("real_gdp", gdp / ppi)
         add_column("real_gdp_yoy_growth", real_gdp / real_gdp.shift(yoy_periods) - 1.0)
     if ppi is not None:
         add_column("ppi_yoy_change", ppi / ppi.shift(yoy_periods) - 1.0)

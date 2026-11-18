@@ -331,7 +331,17 @@ class Economy:
         initial_potential_output = initial_real_gross_output
         initial_output_gap = 0.0
 
+        # Social rent at t=0: kappa * U per adult, paid by households without a private dwelling.
+        initial_social_rent_per_adult = float(
+            central_government.functions["social_housing"].rent_as_fraction_of_unemployment_rate
+            * central_government.ts.current("unemployment_benefits_by_individual")[0]
+        )
+        in_social_housing = np.asarray(households.states["Corresponding Inhabited House ID"]) == -1
+        initial_social_rent_paid = float(np.asarray(households.ts.current("rent"))[in_social_housing].sum())
+
         ts = create_economy_timeseries(
+            initial_social_rent_per_adult=initial_social_rent_per_adult,
+            initial_social_rent_paid=initial_social_rent_paid,
             country_name=country_name,
             all_country_names=all_country_names,
             n_industries=firms.n_industries,
@@ -955,6 +965,58 @@ class Economy:
         self.ts.potential_output.append([current_potential_output])
         self.ts.output_gap.append([np.log(safe_real_output) - np.log(safe_potential_output)])
 
+    @staticmethod
+    def _matched_rent_inflation(current_rents: np.ndarray, previous_rents: np.ndarray, in_group: np.ndarray) -> float:
+        """Ratio of sums over dwellings in the group now that had a rent last period."""
+        matched = in_group & (previous_rents > 0.0)
+        previous_total = previous_rents[matched].sum()
+        current_total = current_rents[matched].sum()
+        # Hold the index flat when either sum is zero: a zero level could never recover.
+        if previous_total <= 0.0 or current_total <= 0.0:
+            return 0.0
+        return current_total / previous_total - 1.0
+
+    def compute_rent_price_indices(
+        self,
+        current_property_rents: np.ndarray,
+        previous_property_rents: np.ndarray,
+        dwelling_tenure: np.ndarray,
+        social_rent_per_adult: float,
+    ) -> None:
+        """Chained ratio-of-sums price indices for the three housing flows in GDP (issue #197).
+
+        Matching is by dwelling: a dwelling in a group this period is compared
+        with its own rent last period, whatever its status then (contract,
+        asking or imputed rent). Re-lets and new lets therefore enter the index.
+        Groups follow the GDP split by the inhabitant's tenure code.
+
+        Args:
+            current_property_rents: Rent of every dwelling this period.
+            previous_property_rents: Rent of the same dwellings last period.
+            dwelling_tenure: Tenure code of each dwelling's inhabitant, -1 if vacant.
+                3 is a private tenant (actual rent); 1, 2, 4 are owners (imputed rent).
+            social_rent_per_adult: Social rent charged per adult this period.
+        """
+        current = np.asarray(current_property_rents, dtype=float)
+        previous = np.asarray(previous_property_rents, dtype=float)
+        tenure = np.asarray(dwelling_tenure)
+        if not current.shape == previous.shape == tenure.shape:
+            raise ValueError("Rent price indices need the same dwellings in both periods.")
+        actual = self._matched_rent_inflation(current, previous, tenure == 3)
+        imputed = self._matched_rent_inflation(current, previous, np.isin(tenure, [1, 2, 4]))
+        previous_social = self.ts.current("social_rent_per_adult")[0]
+        if social_rent_per_adult > 0.0 and np.isfinite(previous_social) and previous_social > 0.0:
+            social = social_rent_per_adult / previous_social - 1.0
+        else:
+            social = 0.0
+        # A zero price carries the last positive one forward, so the index never sticks at 0.
+        self.ts.social_rent_per_adult.append(
+            [social_rent_per_adult if social_rent_per_adult > 0.0 else previous_social]
+        )
+        for name, inflation in (("rpi_actual", actual), ("rpi_imputed", imputed), ("social_rent_price", social)):
+            getattr(self.ts, f"{name}_inflation").append([inflation])
+            getattr(self.ts, name).append([(1.0 + inflation) * self.ts.current(name)[0]])
+
     def compute_house_price_index(
         self,
         current_property_values: np.ndarray,
@@ -1247,6 +1309,7 @@ class Economy:
         real_rent_paid: np.ndarray,
         imp_rent_paid: np.ndarray,
         rental_income: np.ndarray,
+        social_rent_paid: float = 0.0,
     ) -> None:
         """Calculate and record rental market totals.
 
@@ -1264,6 +1327,8 @@ class Economy:
         self.ts.total_real_rent_paid.append([normalized_rent.sum()])
         self.ts.total_imp_rent_paid.append([normalized_imputed.sum()])
         self.ts.total_real_rent_rec.append([rental_income.sum()])
+        # Social rent is part of total_real_rent_paid; recorded separately for deflation.
+        self.ts.total_social_rent_paid.append([float(social_rent_paid)])
 
     def compute_gdp(
         self,

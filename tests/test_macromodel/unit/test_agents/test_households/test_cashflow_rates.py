@@ -11,15 +11,22 @@ from macromodel.agents.households.cashflow_rates import (
 
 def test_annual_simple_nominal_changes_cover_both_debt_types():
     _, reference = applied_debt_service_rate_changes(
-        [0.01, 0], [0.02, 0.03], [100, 0], [200, 300],
+        [0.01, 0],
+        [0.02, 0.03],
+        [100, 0],
+        [200, 300],
     )
     changes, current = applied_debt_service_rate_changes(
-        [0.0125, 0.04], [0.025, 0.02], [100, 50], [200, 300], reference=reference,
+        [0.0125, 0.04],
+        [0.025, 0.02],
+        [100, 50],
+        [200, 300],
+        reference=reference,
     )
     np.testing.assert_allclose(changes.consumer, [0.01, 0])  # first borrowing has no rate reset
     np.testing.assert_allclose(changes.mortgage, [0.02, -0.04])
-    np.testing.assert_allclose(current['mortgage_rate_annual'], [0.10, 0.08])
-    np.testing.assert_allclose(reference['mortgage_rate_annual'], [0.08, 0.12])
+    np.testing.assert_allclose(current["mortgage_rate_annual"], [0.10, 0.08])
+    np.testing.assert_allclose(reference["mortgage_rate_annual"], [0.08, 0.12])
 
 
 def test_fixed_rates_and_debt_quantity_changes_do_not_create_rate_change():
@@ -35,7 +42,7 @@ def test_initial_observation_has_no_invented_rate_shock():
     np.testing.assert_array_equal(changes.mortgage, [0])
 
 
-@pytest.mark.parametrize('consumer,mortgage', [([np.nan], [0]), ([0], [np.inf]), ([0], [0, 1])])
+@pytest.mark.parametrize("consumer,mortgage", [([np.nan], [0]), ([0], [np.inf]), ([0], [0, 1])])
 def test_rate_change_record_rejects_invalid_vectors(consumer, mortgage):
     with pytest.raises(ValueError):
         DebtServiceRateChanges(consumer, mortgage)
@@ -50,7 +57,7 @@ def test_rate_change_record_copies_and_freezes_inputs():
         record.consumer[0] = 0
 
 
-@pytest.mark.parametrize('annualization', [0, -1, np.nan])
+@pytest.mark.parametrize("annualization", [0, -1, np.nan])
 def test_invalid_annualization_rejected(annualization):
-    with pytest.raises(ValueError, match='annualization'):
+    with pytest.raises(ValueError, match="annualization"):
         applied_debt_service_rate_changes([0], [0], [0], [0], annualization=annualization)

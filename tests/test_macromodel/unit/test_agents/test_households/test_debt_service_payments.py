@@ -90,10 +90,19 @@ def test_nominal_flow_units_do_not_annualise_compound_or_deflate_the_payment_dif
     np.testing.assert_array_equal(DebtServicePayments([100], [0]).change_ratio([1000]), [0.1])
 
 
-@pytest.mark.parametrize("current,previous,income", [
-    ([-1], [0], [1]), ([0], [-1], [1]), ([np.nan], [0], [1]), ([0], [np.inf], [1]),
-    ([0], [0], [0]), ([0], [0], [-1]), ([0], [0], [np.nan]), ([1], [1, 2], [1]),
-])
+@pytest.mark.parametrize(
+    "current,previous,income",
+    [
+        ([-1], [0], [1]),
+        ([0], [-1], [1]),
+        ([np.nan], [0], [1]),
+        ([0], [np.inf], [1]),
+        ([0], [0], [0]),
+        ([0], [0], [-1]),
+        ([0], [0], [np.nan]),
+        ([1], [1, 2], [1]),
+    ],
+)
 def test_invalid_payment_records_fail(current, previous, income):
     with pytest.raises(ValueError):
         DebtServicePayments(current, previous).change_ratio(income)

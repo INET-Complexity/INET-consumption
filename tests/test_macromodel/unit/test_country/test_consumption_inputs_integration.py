@@ -73,7 +73,8 @@ def test_current_borrowing_quotes_reduce_budget_without_repricing_contracts(alig
     hh.ts.override_current("liquid_financial_assets", np.maximum(hh.ts.current("liquid_financial_assets"), 0))
     country._set_household_target_demand(replace_current=False)
     keys = (
-        "target_consumption_income_base", "target_consumption_log_permanent_income_proxy_real",
+        "target_consumption_income_base",
+        "target_consumption_log_permanent_income_proxy_real",
         "target_consumption_borrowing_lagged_annual_income_nominal",
         "target_consumption_borrowing_consumer_rate_contractual_nominal",
         "target_consumption_borrowing_mortgage_rate_contractual_nominal",
@@ -83,9 +84,12 @@ def test_current_borrowing_quotes_reduce_budget_without_repricing_contracts(alig
     budget = hh.ts.current("cacf_real_consumption_budget").copy()
     rate = hh.ts.current("target_consumption_borrowing_real_borrowing_rate").copy()
     snapshot = country._consumption_input_adapter.opening_snapshot
-    lengths = {key: len(values) for key, values in hh.ts.dicts.items() if key.startswith("target_consumption_borrowing_")}
+    lengths = {
+        key: len(values) for key, values in hh.ts.dicts.items() if key.startswith("target_consumption_borrowing_")
+    }
     for key in (
-        "interest_rates_on_household_consumption_loans", "overdraft_rate_on_household_deposits",
+        "interest_rates_on_household_consumption_loans",
+        "overdraft_rate_on_household_deposits",
         "interest_rates_on_mortgages",
     ):
         country.banks.ts.override_current(key, country.banks.ts.current(key) + 0.0025)
@@ -364,8 +368,11 @@ def test_mortgage_payment_change_enters_cashflow_and_is_frozen_between_passes(al
     expected = -0.75 * extra / hh.ts.current(prefix + "income_nominal")
     np.testing.assert_allclose(hh.ts.current("target_consumption_debt_service_cashflow"), expected)
     lengths = {key: len(v) for key, v in hh.ts.dicts.items() if key.startswith(prefix)}
-    monkeypatch.setattr(country.credit_market, "preview_opening_contractual_household_service",
-                        lambda: (_ for _ in ()).throw(AssertionError("second pass must reuse its payment snapshot")))
+    monkeypatch.setattr(
+        country.credit_market,
+        "preview_opening_contractual_household_service",
+        lambda: (_ for _ in ()).throw(AssertionError("second pass must reuse its payment snapshot")),
+    )
     country._set_household_target_demand(replace_current=True)
     np.testing.assert_allclose(hh.ts.current("target_consumption_debt_service_cashflow"), expected)
     assert lengths == {key: len(hh.ts.dicts[key]) for key in lengths}
@@ -379,13 +386,13 @@ def test_mortgage_payment_change_enters_cashflow_and_is_frozen_between_passes(al
 def test_quote_hike_does_not_reprice_fixed_contract_cashflow(aligned_country, monkeypatch):
     country, _ = aligned_country
     hh = country.households
-    monkeypatch.setattr(country, '_common_permanent_income_terms', lambda: (0.03, 0.01))
+    monkeypatch.setattr(country, "_common_permanent_income_terms", lambda: (0.03, 0.01))
     country._set_household_target_demand(replace_current=False)
-    before = hh.ts.current('target_consumption_interest_rate_cashflow').copy()
-    for key in ('interest_rates_on_household_consumption_loans', 'interest_rates_on_mortgages'):
+    before = hh.ts.current("target_consumption_interest_rate_cashflow").copy()
+    for key in ("interest_rates_on_household_consumption_loans", "interest_rates_on_mortgages"):
         country.banks.ts.override_current(key, country.banks.ts.current(key) + 0.0025)
     country._set_household_target_demand(replace_current=True)
-    np.testing.assert_array_equal(hh.ts.current('target_consumption_interest_rate_cashflow'), before)
+    np.testing.assert_array_equal(hh.ts.current("target_consumption_interest_rate_cashflow"), before)
 
 
 def test_variable_overdraft_interest_is_included_in_contractual_payment_change(aligned_country, monkeypatch):
@@ -405,7 +412,8 @@ def test_variable_overdraft_interest_is_included_in_contractual_payment_change(a
     np.testing.assert_allclose(hh.ts.current("consumption_debt_service_change_nominal"), expected_change, atol=1e-7)
     np.testing.assert_allclose(
         hh.ts.current("target_consumption_debt_service_cashflow"),
-        -0.75 * expected_change / hh.ts.current("consumption_debt_service_income_nominal"), atol=1e-12,
+        -0.75 * expected_change / hh.ts.current("consumption_debt_service_income_nominal"),
+        atol=1e-12,
     )
 
 
@@ -437,7 +445,10 @@ def test_financing_reserves_scheduled_service_once_after_behavioral_payment_resp
     consumer, mortgage = country.credit_market.preview_opening_household_service()
     expected = (
         hh.consumption_cash_factor() * hh.ts.current("target_consumption").sum(axis=1)
-        + hh.current_consumption_cash_rent() + consumer + mortgage + hh.target_investment_cash()
+        + hh.current_consumption_cash_rent()
+        + consumer
+        + mortgage
+        + hh.target_investment_cash()
         - hh.current_financing_income()
     )
     np.testing.assert_allclose(hh.ts.current("liquidity_shortfall"), expected, atol=1e-6)
@@ -455,6 +466,7 @@ def test_initial_payment_history_anchors_contractual_obligation_and_cash_income(
         np.testing.assert_array_equal(hh.ts.current(prefix + name), values)
     np.testing.assert_array_equal(hh.ts.current(prefix + "previous_total_nominal"), components["total_nominal"])
     np.testing.assert_array_equal(hh.ts.current(prefix + "change_nominal"), np.zeros(hh.ts.current("n_households")))
-    expected_income = np.maximum(hh.ts.current("expected_behavioural_income"),
-                                 country.economy.ts.current("subsistence_consumption"))
+    expected_income = np.maximum(
+        hh.ts.current("expected_behavioural_income"), country.economy.ts.current("subsistence_consumption")
+    )
     np.testing.assert_array_equal(hh.ts.current(prefix + "income_nominal"), expected_income)

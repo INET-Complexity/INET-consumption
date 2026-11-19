@@ -32,13 +32,24 @@ def prepared_inputs(scale=1.0, current_income=99999.0, current_price=2.0, layout
         income_units=units,
         subsistence_units=units,
     )
-    stocks = OpeningStockValues(*[
-        np.array(v, dtype=float) * scale for v in (
-            [200, -40, 0], [0, 0, 0], [0, 0, 0], [170, 250, 0], [90, 130, 0], [160, 240, 0], [80, 120, 0],
-        )
-    ])
+    stocks = OpeningStockValues(
+        *[
+            np.array(v, dtype=float) * scale
+            for v in (
+                [200, -40, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+                [170, 250, 0],
+                [90, 130, 0],
+                [160, 240, 0],
+                [80, 120, 0],
+            )
+        ]
+    )
     snapshot = OpeningSnapshot(2, "rate-test", units, stocks)
-    pi = PermanentIncomePayload(**tags, units=units, monetary_income_nominal=np.ones(3) * scale, pi_log_ratio_original=[0] * 3)
+    pi = PermanentIncomePayload(
+        **tags, units=units, monetary_income_nominal=np.ones(3) * scale, pi_log_ratio_original=[0] * 3
+    )
     return prepare_inputs(history, snapshot, pi, **tags)
 
 
@@ -61,11 +72,14 @@ def test_current_bank_rates_blend_and_lagged_nominal_exposures(layout):
     np.testing.assert_allclose(result["lagged_annual_income_nominal"], [800, 1600, 640])
     np.testing.assert_allclose(result["consumer_rate_nominal"][:2], [0.02, 0.03])
     np.testing.assert_array_equal(result["consumer_exposure"], [80, 160, 0])
-    np.testing.assert_allclose(result["real_borrowing_rate"], [
-        (((1.02 ** 4) - 1) * 80 + ((1.04 ** 4) - 1) * 160) / 800,
-        (((1.03 ** 4) - 1) * 160 + ((1.05 ** 4) - 1) * 240) / 1600,
-        0,
-    ])
+    np.testing.assert_allclose(
+        result["real_borrowing_rate"],
+        [
+            (((1.02**4) - 1) * 80 + ((1.04**4) - 1) * 160) / 800,
+            (((1.03**4) - 1) * 160 + ((1.05**4) - 1) * 240) / 1600,
+            0,
+        ],
+    )
     # Principal, rather than the larger ledger debt including arrears, is used.
     np.testing.assert_array_equal(result["consumer_principal"], [80, 120, 0])
 
@@ -75,7 +89,10 @@ def test_current_income_and_prices_do_not_reweight_existing_exposure():
     changed = rates(prepared_inputs(current_income=1e12, current_price=10))
     np.testing.assert_array_equal(changed["real_borrowing_rate"], reference["real_borrowing_rate"])
     np.testing.assert_allclose(
-        rates(prepared_inputs(scale=1e6))["real_borrowing_rate"], reference["real_borrowing_rate"], rtol=1e-12, atol=1e-14
+        rates(prepared_inputs(scale=1e6))["real_borrowing_rate"],
+        reference["real_borrowing_rate"],
+        rtol=1e-12,
+        atol=1e-14,
     )
 
 
@@ -100,8 +117,12 @@ def test_startup_floors_and_currency_units():
         current_consumer_price=1,
     )
     single = prepare_inputs(
-        h, p.opening_snapshot, p.pi_payload,
-        period_id=2, pass_kind="first", household_layout_key="rate-test",
+        h,
+        p.opening_snapshot,
+        p.pi_payload,
+        period_id=2,
+        pass_kind="first",
+        household_layout_key="rate-test",
     )
     np.testing.assert_allclose(lagged_annual_income_nominal(single), [40, 80, 120])
 
@@ -125,25 +146,37 @@ def test_cashflow_equation_uses_quarterly_payment_change_and_preserves_other_com
 
     prepared = prepared_inputs()
     rule = CreditAugmentedConsumption(
-        interest_rate_cashflow_propensity=-999, partial_adjustment_speed=0.56,
+        interest_rate_cashflow_propensity=-999,
+        partial_adjustment_speed=0.56,
         real_borrowing_rate_propensity=-0.72,
     )
     kwargs = dict(lagged_real_consumption_budget=prepared.income_base_real, real_borrowing_rate=0.01)
     baseline, _ = rule.evaluate_prepared_target(prepared, **kwargs)
     payments = DebtServicePayments(np.full(3, current), np.full(3, previous))
     observed, _ = rule.evaluate_prepared_target(
-        prepared, debt_service_payments=payments, consumer_debt_rate_delta=999, **kwargs,
+        prepared,
+        debt_service_payments=payments,
+        consumer_debt_rate_delta=999,
+        **kwargs,
     )
     deflator = prepared.histories.current_consumer_price / prepared.histories.initial_consumer_price
     expected = -0.75 * (current - previous) / (prepared.income_base_real * deflator)
     np.testing.assert_allclose(observed["target_consumption_debt_service_cashflow"], expected)
     np.testing.assert_allclose(
         observed["target_consumption_unguarded_delta_log_consumption"]
-        - baseline["target_consumption_unguarded_delta_log_consumption"], expected, atol=1e-14,
+        - baseline["target_consumption_unguarded_delta_log_consumption"],
+        expected,
+        atol=1e-14,
     )
     # No lambda, annualisation, debt/income weight, or old rate term enters the replacement.
     for key in (
-        "real_borrowing_rate", "real_income", "permanent_income", "wealth_contribution",
-        "partial_adjustment_gap", "income_growth", "uncertainty", "real_lagged_consumption",
+        "real_borrowing_rate",
+        "real_income",
+        "permanent_income",
+        "wealth_contribution",
+        "partial_adjustment_gap",
+        "income_growth",
+        "uncertainty",
+        "real_lagged_consumption",
     ):
         np.testing.assert_array_equal(observed["target_consumption_" + key], baseline["target_consumption_" + key])

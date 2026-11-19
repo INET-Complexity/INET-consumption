@@ -792,10 +792,17 @@ def test_net_interest_receipts_use_paired_baseline_income(baseline_income):
             ("household_deposit_interest", 0.001, change),
             ("household_income", income, 0.0),
         ]:
-            rows.append(dict(
-                seed=seed, shock_name="policy_rate_100bp", horizon=0,
-                variable=variable, baseline=baseline, delta=delta, pct_delta=12345.0,
-            ))
+            rows.append(
+                dict(
+                    seed=seed,
+                    shock_name="policy_rate_100bp",
+                    horizon=0,
+                    variable=variable,
+                    baseline=baseline,
+                    delta=delta,
+                    pct_delta=12345.0,
+                )
+            )
     result = _prepare_irf_plot_panel(pd.DataFrame(rows))
     receipts = result.loc[result.variable == "household_deposit_interest"].set_index("seed").plot_value
     assert receipts.loc[2] == pytest.approx(-2.0)
@@ -841,9 +848,9 @@ def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percen
         renderer = fig.canvas.get_renderer()
         column_titles = [ax.title.get_window_extent(renderer) for ax in fig.axes if ax.get_title()]
         assert fig._suptitle.get_window_extent(renderer).y0 > max(title.y1 for title in column_titles) + 8
-    without_uncertainty = panel.loc[~panel.variable.isin(
-        ["income_uncertainty_delta", "consumption_uncertainty_contribution"]
-    )]
+    without_uncertainty = panel.loc[
+        ~panel.variable.isin(["income_uncertainty_delta", "consumption_uncertainty_contribution"])
+    ]
     macro_only = plot_irf_panels(without_uncertainty, ["common_uncertainty"], show=False)
     assert len(macro_only) == 1
     assert macro_only[0]._suptitle.get_text().startswith("Macro and investment:")

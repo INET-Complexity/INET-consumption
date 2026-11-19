@@ -36,16 +36,16 @@ def test_production_household_receipts_credit_relief_and_support_reconcile(dataw
         country = simulation.countries["FRA"]
         hh = country.households
         market = country.credit_market
-        monetary = (
-            np.maximum(hh.ts.current("expected_behavioural_income_non_property_raw"), 0.0)
-            + hh.ts.current("expected_behavioural_income_rental")
-            + hh.ts.current("expected_behavioural_income_financial")
-            + hh.ts.current("expected_behavioural_income_deposit_receipts")
-        )
+        # Permanent-income forecasts use wages and transfers only; property
+        # receipts stay in behavioural income and cash accounts, not the bridge.
         np.testing.assert_allclose(
             hh.ts.current("income_bridge_current"),
-            np.maximum(monetary, country.economy.ts.current("subsistence_consumption")),
+            np.maximum(
+                np.maximum(hh.ts.current("expected_behavioural_income_non_property_raw"), 0.0),
+                country.economy.ts.current("subsistence_consumption"),
+            ),
         )
+        np.testing.assert_array_equal(hh.ts.current("income_bridge_property"), 0.0)
         np.testing.assert_allclose(
             hh.ts.current("target_consumption_permanent_income_log_ratio"),
             hh.ts.current("target_consumption_permanent_income_log_ratio_individual")

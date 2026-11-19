@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from numba import njit
 
+from macromodel.agents.households.cashflow_rates import DebtServicePayments
 from macromodel.agents.households.consumption_inputs import ConsumptionInputs, OpeningStockValues
 from macromodel.util.housing_flows import normalise_housing_flows
 
@@ -708,6 +709,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         income_denominator: str = "current",
         income_denominator_window: int = 20,
         uses_aligned_behavioural_income: bool = False,
+        debt_service_cashflow_propensity: float = -0.75,
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -983,7 +985,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.mortgage_payment_propensity = mortgage_payment_propensity
         self.house_price_propensity = house_price_propensity
         self.income_growth_propensity = income_growth_propensity
+        # Retain the old option for loading saved parameter dictionaries only.
+        # Nominal-rate times debt is no longer an active consumption channel.
         self.interest_rate_cashflow_propensity = interest_rate_cashflow_propensity
+        if not np.isfinite(debt_service_cashflow_propensity) or debt_service_cashflow_propensity > 0:
+            raise ValueError("debt_service_cashflow_propensity must be finite and nonpositive.")
+        self.debt_service_cashflow_propensity = float(debt_service_cashflow_propensity)
         self.uncertainty_propensity = uncertainty_propensity
         self.partial_adjustment_speed = partial_adjustment_speed
         self.price_floor = price_floor
@@ -1349,6 +1356,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         epsilon=None,
         real_borrowing_rate=0.0,
         consumer_debt_rate_delta=0.0,
+        debt_service_payments: DebtServicePayments | None = None,
         uncertainty_delta=0.0,
         expected_inflation=0.0,
         _probe=None,
@@ -1390,6 +1398,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             real_borrowing_rate=real_borrowing_rate,
             permanent_income_log_ratio=prepared.pi_log_ratio_rebased,
             consumer_debt_rate_delta=consumer_debt_rate_delta,
+            debt_service_payments=debt_service_payments,
             uncertainty_delta=uncertainty_delta,
             current_cpi=prepared.histories.current_consumer_price,
             lagged_cpi=prepared.histories.current_consumer_price,
@@ -1416,6 +1425,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         real_consumer_rate=0.0,
         real_mortgage_rate=0.0,
         consumer_debt_rate_delta=0.0,
+        debt_service_payments: DebtServicePayments | None = None,
         uncertainty_delta=0.0,
     ):
         """Explicit fixed-Yp income, fixed-gamma asset, or historical formula probe.
@@ -1449,6 +1459,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             lagged_real_consumption_budget=budget,
             epsilon=epsilon,
             consumer_debt_rate_delta=consumer_debt_rate_delta,
+            debt_service_payments=debt_service_payments,
             uncertainty_delta=uncertainty_delta,
         )
         baseline, _ = self.evaluate_prepared_target(
@@ -1547,6 +1558,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         ratio_denominator: np.ndarray | None = None,
         epsilon: np.ndarray | None = None,
         consumption_inputs: ConsumptionInputs | None = None,
+        debt_service_payments: DebtServicePayments | None = None,
         _probe: _ConsumptionProbe | None = None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
@@ -1836,10 +1848,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         income_growth_term = self.income_growth_propensity * (
             np.log(real_spendable_income) - np.log(real_lagged_income)
         )
-        interest_rate_cashflow_index = consumer_debt_rate_delta_arr * (real_consumer_debt / annual_spendable_income)
-        interest_rate_cashflow_term = np.zeros_like(real_spendable_income)
-        if self.interest_rate_cashflow_propensity is not None:
-            interest_rate_cashflow_term = self.interest_rate_cashflow_propensity * interest_rate_cashflow_index
+        # Behavioural response only: schedules, income and cash resources are
+        # not reduced here. Financing/accounting reserve and pay service once.
+        # Flow/flow ratio: use the same behavioural-income base as the other
+        # ratios, at period frequency and valued at current CPI. No separate
+        # gross-cash-income denominator is constructed for debt service.
+        debt_service_income_nominal = (ratio_denominator_arr / annualization_factor) * current_deflator
+        interest_rate_cashflow_index = np.zeros_like(real_spendable_income)
+        if debt_service_payments is not None:
+            if not isinstance(debt_service_payments, DebtServicePayments):
+                raise ValueError("Debt-service cash flow requires a validated payment record.")
+            if debt_service_payments.current_nominal.shape != income.shape:
+                raise ValueError("Debt-service payments must match the household layout.")
+            interest_rate_cashflow_index = debt_service_payments.change_ratio(debt_service_income_nominal)
+        interest_rate_cashflow_term = self.debt_service_cashflow_propensity * interest_rate_cashflow_index
         uncertainty_term = np.zeros_like(real_spendable_income)
         if self.uncertainty_propensity is not None:
             uncertainty_term = self.uncertainty_propensity * uncertainty_delta_arr
@@ -1915,6 +1937,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             "target_consumption_gamma_4": gamma_4,
             "target_consumption_wealth_drag_clipped": wealth_drag_clipped_flag,
             "target_consumption_interest_rate_cashflow": interest_rate_cashflow_term,
+            "target_consumption_debt_service_cashflow": interest_rate_cashflow_term,
+            "target_consumption_debt_service_change_ratio": interest_rate_cashflow_index,
+            "target_consumption_debt_service_income_nominal": debt_service_income_nominal,
             "target_consumption_uncertainty": uncertainty_term,
             "target_consumption_partial_adjustment_gap": partial_adjustment_gap,
             "target_consumption_income_growth": income_growth_term,
@@ -2041,6 +2066,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         historic_deflator: np.ndarray = None,
         subsistence_income: np.ndarray | float | None = None,
         consumption_inputs: ConsumptionInputs | None = None,
+        debt_service_payments: DebtServicePayments | None = None,
     ) -> np.ndarray:
         if self.uses_aligned_behavioural_income and self.uses_income_belief_learning and consumption_inputs is None:
             raise ValueError("Aligned monetary learning consumption requires consumption_inputs.")
@@ -2142,6 +2168,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             real_borrowing_rate=real_borrowing_rate,
             permanent_income_log_ratio=permanent_income_log_ratio,
             consumer_debt_rate_delta=consumer_debt_rate_delta,
+            debt_service_payments=debt_service_payments,
             uncertainty_delta=uncertainty_delta,
             current_cpi=current_cpi,
             lagged_cpi=lagged_cpi,

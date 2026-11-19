@@ -2790,8 +2790,9 @@ class TestCountry:
 
         # Force the base-period (first) real_pc_income history value to zero so
         # rebase_real_pc_income_index raises ValueError ("must be finite and positive").
-        first_income = test_country.households.ts.dicts["income"][0]
-        test_country.households.ts.dicts["income"][0] = np.zeros_like(first_income)
+        for name in ("income_employee", "income_social_transfers"):
+            first_income = test_country.households.ts.dicts[name][0]
+            test_country.households.ts.dicts[name][0] = np.zeros_like(first_income)
 
         with caplog.at_level("WARNING"):
             result = test_country.forecast_common_permanent_income()

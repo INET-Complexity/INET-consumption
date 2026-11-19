@@ -60,6 +60,11 @@ country_configs:
     minimum_annual_rental_yield: 0.02
     eu_proxy_country: null
     carbon_price: 0.0
+    # Worker productivity rho (wage-competition specification, Step 0): fixed worker labour
+    # inputs from survey income. 13544 = net annual SMIC 2014 (1128.70 EUR/month x 12).
+    # On in the base config since 2026-11-19 (user). Preset `wage_competition_off` (config.py) removes it.
+    worker_productivity:
+      annual_wage_floor: 13544.0
 
 row_data_config:
   fit_imports: false

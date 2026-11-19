@@ -87,10 +87,10 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
     ) -> np.ndarray:
         """Calculate desired labor using the default adjustment strategy.
 
-        Converts the production target into pre-TFP capacity units before
-        applying intermediate/capital limits. This matches the Leontief
-        production function where TFP scales labour and non-labour constraints alike:
-        Y = min(target, A * labour, A * intermediate_limit, A * capital_limit).
+        Applies intermediate/capital limits in output units, then converts the
+        resulting output plan into pre-TFP labour units. This matches the
+        Leontief production function with labour-augmenting TFP:
+        Y = min(target, A * labour, intermediate_limit, capital_limit).
 
         Args:
             current_target_production (np.ndarray): Initial production targets
@@ -101,22 +101,21 @@ class DefaultDesiredLabourSetter(DesiredLabourSetter):
         Returns:
             np.ndarray: Adjusted labor demand accounting for input complementarities and TFP
         """
-        if current_tfp_multiplier is not None:
-            desired_labour = np.divide(
-                current_target_production,
-                current_tfp_multiplier,
-                out=current_target_production.copy(),
-                where=current_tfp_multiplier > 0,
-            )
-        else:
-            desired_labour = current_target_production.copy()
-        desired_labour = np.minimum(
-            desired_labour,
-            desired_labour
-            + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - desired_labour),
+        planned_output = np.asarray(current_target_production, dtype=float).copy()
+        planned_output = np.minimum(
+            planned_output,
+            planned_output
+            + self.consider_intermediate_inputs * (current_limiting_intermediate_inputs - planned_output),
         )
-        desired_labour = np.minimum(
-            desired_labour,
-            desired_labour + self.consider_capital_inputs * (current_limiting_capital_inputs - desired_labour),
+        planned_output = np.minimum(
+            planned_output,
+            planned_output + self.consider_capital_inputs * (current_limiting_capital_inputs - planned_output),
         )
-        return desired_labour
+        if current_tfp_multiplier is None:
+            return planned_output
+        return np.divide(
+            planned_output,
+            current_tfp_multiplier,
+            out=planned_output.copy(),
+            where=current_tfp_multiplier > 0,
+        )

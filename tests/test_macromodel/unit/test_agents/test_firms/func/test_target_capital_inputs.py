@@ -1,10 +1,7 @@
 import numpy as np
 import pytest
 
-from macromodel.agents.firms.func.target_capital_inputs import (
-    FinancialTargetCapitalInputsSetter,
-    TFPAdjustedTargetCapitalInputsSetter,
-)
+from macromodel.agents.firms.func.target_capital_inputs import FinancialTargetCapitalInputsSetter
 
 
 def _targets(setter, prev_stock, financed_share=None, **extra):
@@ -49,15 +46,3 @@ def test_memory_never_scales_replacement_and_keeps_the_floor():
     setter = FinancialTargetCapitalInputsSetter(0.25, 0.0, financed_share_memory=True)
     # s = 0: refused firm still plans replacement; large excess capital is floored at zero
     assert _targets(setter, [20.0, 80.0], financed_share=np.zeros(2)) == pytest.approx([1.0, 0.0])
-
-
-def test_tfp_adjusted_setter_forwards_the_financed_share():
-    setter = TFPAdjustedTargetCapitalInputsSetter(0.25, 0.0, financed_share_memory=True)
-    targets = _targets(
-        setter,
-        [20.0, 20.0],
-        financed_share=np.array([0.2, 1.0]),
-        current_tfp_multiplier=np.ones(2),
-        initial_tfp_multiplier=np.ones(2),
-    )
-    assert targets == pytest.approx([1.5, 3.5])

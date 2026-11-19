@@ -77,30 +77,21 @@ class TargetProductionSetter(ABC):
         self.intermediate_inputs_target_considers_labour_inputs = clip(
             intermediate_inputs_target_considers_labour_inputs
         )
-        self.intermediate_inputs_target_considers_labour_inputs = intermediate_inputs_target_considers_labour_inputs
         self.intermediate_inputs_target_considers_intermediate_inputs = clip(
-            intermediate_inputs_target_considers_intermediate_inputs
-        )
-        self.intermediate_inputs_target_considers_intermediate_inputs = (
             intermediate_inputs_target_considers_intermediate_inputs
         )
         self.intermediate_inputs_target_considers_capital_inputs = clip(
             intermediate_inputs_target_considers_capital_inputs
         )
-        self.intermediate_inputs_target_considers_capital_inputs = intermediate_inputs_target_considers_capital_inputs
-
         self.capital_inputs_target_considers_labour_inputs = clip(capital_inputs_target_considers_labour_inputs)
-        self.capital_inputs_target_considers_labour_inputs = capital_inputs_target_considers_labour_inputs
         self.capital_inputs_target_considers_intermediate_inputs = clip(
             capital_inputs_target_considers_intermediate_inputs
         )
-        self.capital_inputs_target_considers_intermediate_inputs = capital_inputs_target_considers_intermediate_inputs
         self.capital_inputs_target_considers_capital_inputs = clip(capital_inputs_target_considers_capital_inputs)
-        self.capital_inputs_target_considers_capital_inputs = capital_inputs_target_considers_capital_inputs
 
     def update_parameters_from_config(self, parameters: dict) -> None:
         for param, value in parameters.items():
-            if param == "inventory_adjustment_speed":
+            if param == "inventory_adjustment_speed" or "_inputs_target_considers_" in param:
                 value = clip(value)
             setattr(self, param, value)
 

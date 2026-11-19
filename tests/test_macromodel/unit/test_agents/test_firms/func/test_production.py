@@ -47,19 +47,19 @@ class TestProductionSetter:
             np.array([6.0, 8.0]),
         )
 
-    def test__compute_production_with_tfp_boost(self):
-        """Test that TFP>1.0 increases effective capacity."""
-        tfp_boost = np.array([1.5, 1.2])  # 50% and 20% productivity boost
+    def test__compute_production_tfp_augments_labour_only(self):
+        """TFP is labour-augmenting: it relaxes the labour limit, not the stock limits."""
+        tfp_boost = np.array([1.5, 1.2])
         result = PureLeontief().compute_production(
             desired_production=np.array([10.0, 10.0]),
-            current_labour_inputs=np.array([9.0, 11.0]),
+            current_labour_inputs=np.array([6.0, 7.0]),
             current_limiting_intermediate_inputs=np.array([9.0, 11.0]),
-            current_limiting_capital_inputs=np.array([6.0, 8.0]),
+            current_limiting_capital_inputs=np.array([20.0, 8.0]),
             tfp_multiplier=tfp_boost,
         )
-        # TFP scales inputs: min([10, 9*1.5, 9*1.5, 6*1.5]) = min([10, 13.5, 13.5, 9]) = 9
-        # TFP scales inputs: min([10, 11*1.2, 11*1.2, 8*1.2]) = min([10, 13.2, 13.2, 9.6]) = 9.6
-        assert np.allclose(result, np.array([9.0, 9.6]))
+        # firm 0: min(10, 6*1.5, 9, 20) = 9 (labour lifted by TFP, then binds)
+        # firm 1: min(10, 7*1.2, 11, 8) = 8 (capital binds and is not scaled by TFP)
+        assert np.allclose(result, np.array([9.0, 8.0]))
 
     def test__compute_production_tfp_respects_target(self):
         """Test that TFP doesn't allow production above target."""

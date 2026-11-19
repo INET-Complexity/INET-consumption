@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from macromodel.agents.firms.func.target_production import DefaultTargetProductionSetter
 
@@ -84,3 +85,11 @@ def test_target_production_financial_constraint_penalty_applies_after_inventory_
     )
 
     assert np.allclose(target_production, np.array([95.0]))
+
+
+@pytest.mark.parametrize("weight, expected", [(1.5, 1.0), (-0.2, 0.0), (0.53, 0.53)])
+def test_considers_weights_are_clipped_to_unit_interval(weight, expected):
+    setter = _setter(intermediate_inputs_target_considers_labour_inputs=weight)
+    assert setter.intermediate_inputs_target_considers_labour_inputs == pytest.approx(expected)
+    setter.update_parameters_from_config({"capital_inputs_target_considers_capital_inputs": weight})
+    assert setter.capital_inputs_target_considers_capital_inputs == pytest.approx(expected)

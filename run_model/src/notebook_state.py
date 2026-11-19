@@ -19,6 +19,7 @@ from src.notebook_workflow import (
     prepare_data,
     run_benchmark,
     run_single_simulation,
+    split_scenario_overrides,
 )
 
 from macromodel.configurations import CountryConfiguration
@@ -134,14 +135,16 @@ def run_notebook_workflow(
     """Prepare data, configure, run, benchmark, validate, and record one notebook run."""
 
     overrides = dict(scenario_overrides or {})
+    data_overrides, country_overrides = split_scenario_overrides(overrides)
 
     prepared = (
         previous_state.prepared
-        if previous_state is not None and previous_state.config == config
-        else prepare_data(config)
+        if previous_state is not None
+        and previous_state.config == config
+        and split_scenario_overrides(previous_state.scenario_overrides)[0] == data_overrides
+        else prepare_data(config, data_overrides)
     )
-    # prepared = prepare_data(config)
-    country_configurations = build_country_config(data=prepared.data, config=config, overrides=overrides)
+    country_configurations = build_country_config(data=prepared.data, config=config, overrides=country_overrides)
     simulation = run_single_simulation(data=prepared.data, country_configurations=country_configurations, config=config)
     benchmark = run_benchmark(config) if config.run_benchmark else None
     state = NotebookRunState(

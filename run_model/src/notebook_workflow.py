@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from copy import deepcopy
@@ -499,6 +500,54 @@ def _load_data_config(cfg: Config) -> DataConfiguration:
     return DataConfiguration(**data_config_dict)
 
 
+DATA_OVERRIDE_PREFIX = "data."
+
+
+def split_scenario_overrides(
+    overrides: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split scenario overrides into data-config and country-config overrides.
+
+    Keys starting with ``data.`` name a field of each country's data
+    configuration (for example ``data.worker_productivity``). They change the
+    synthetic population, so they are applied when the data are built.
+    """
+    data_overrides: dict[str, Any] = {}
+    country_overrides: dict[str, Any] = {}
+    for path, value in (overrides or {}).items():
+        if path.startswith(DATA_OVERRIDE_PREFIX):
+            data_overrides[path[len(DATA_OVERRIDE_PREFIX) :]] = value
+        else:
+            country_overrides[path] = value
+    return data_overrides, country_overrides
+
+
+def apply_data_config_overrides(
+    data_config: DataConfiguration, data_overrides: Mapping[str, Any] | None
+) -> DataConfiguration:
+    """Return a data configuration with top-level country fields replaced and re-validated."""
+    if not data_overrides:
+        return data_config
+    country_configs = {}
+    for country, country_config in data_config.country_configs.items():
+        fields = country_config.model_dump()
+        for field, value in data_overrides.items():
+            if field not in fields:
+                raise ValueError(f"Unknown data-config field in override: {DATA_OVERRIDE_PREFIX}{field}")
+            fields[field] = value
+        country_configs[country] = type(country_config).model_validate(fields)
+    return data_config.model_copy(update={"country_configs": country_configs})
+
+
+def data_cache_name_for(base_name: str, data_overrides: Mapping[str, Any] | None) -> str:
+    """Cache file name for a data configuration; overridden data never reuse the base cache."""
+    if not data_overrides:
+        return base_name
+    digest = hashlib.sha1(json.dumps(data_overrides, sort_keys=True, default=str).encode()).hexdigest()[:10]
+    path = Path(base_name)
+    return f"{path.stem}_data-{digest}{path.suffix}"
+
+
 def _load_country_config(cfg: Config) -> CountryConfiguration:
     config_path = Path(cfg.config_dir) / f"country_config_{cfg.country_iso3}.yaml"
     return load_country_configuration(config_path, country_iso3=cfg.country_iso3)
@@ -547,6 +596,12 @@ def _set_nested_value(target: Any, path: tuple[str, ...], value: Any) -> None:
 
 def apply_country_config_overrides(country_cfg: CountryConfiguration, overrides: Mapping[str, Any] | None) -> None:
     """Apply notebook scenario overrides to a copied country configuration."""
+    data_keys = [path for path in (overrides or {}) if path.startswith(DATA_OVERRIDE_PREFIX)]
+    if data_keys:
+        raise ValueError(
+            f"Data-config overrides {data_keys} must be applied when the data are built "
+            "(prepare_data via run_notebook_workflow), not to the country configuration."
+        )
     for path, value in (overrides or {}).items():
         _set_nested_value(country_cfg, _parse_override_path(path), value)
     if country_cfg.firms.functions.productivity_investment_planner.name == "TargetIntensityTFPInvestmentPlanner":
@@ -636,15 +691,34 @@ def _requires_cfc_rate_cache_rebuild(data: DataWrapper, data_config: DataConfigu
     return False
 
 
-def prepare_data(config: NotebookRunConfig) -> PreparedData:
-    """Build or load notebook data and return the objects needed for simulation."""
+def _requires_worker_productivity_cache_rebuild(data: DataWrapper, data_config: DataConfiguration) -> bool:
+    """Return true when the cached population was built with a different worker productivity (rho) setting.
+
+    The base cache file name does not change when the base data config switches rho on or off,
+    so a cache built under the other setting would otherwise be reused without notice.
+    """
+    synthetic_countries = getattr(data, "synthetic_countries", {})
+    for country, country_config in getattr(data_config, "country_configs", {}).items():
+        synthetic_country = synthetic_countries.get(str(country), synthetic_countries.get(country))
+        population = getattr(synthetic_country, "population", None)
+        if getattr(population, "worker_productivity", None) != getattr(country_config, "worker_productivity", None):
+            return True
+    return False
+
+
+def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | None = None) -> PreparedData:
+    """Build or load notebook data and return the objects needed for simulation.
+
+    ``data_overrides`` (from :func:`split_scenario_overrides`) change the data
+    configuration and select a cache file of their own.
+    """
     cfg, raw_data_path, output_dir, _ = _resolve_runtime_config(config)
     if not raw_data_path.exists():
         raise FileNotFoundError(f"Raw data path not found: {raw_data_path}")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    data_pkl_path = output_dir / config.data_cache_name
-    data_config = _load_data_config(cfg)
+    data_pkl_path = output_dir / data_cache_name_for(config.data_cache_name, data_overrides)
+    data_config = apply_data_config_overrides(_load_data_config(cfg), data_overrides)
 
     if data_pkl_path.exists() and not config.force_rebuild_data:
         data = DataWrapper.init_from_pickle(str(data_pkl_path))
@@ -663,9 +737,11 @@ def prepare_data(config: NotebookRunConfig) -> PreparedData:
             )
             creator.save(str(data_pkl_path))
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
-        elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+        elif _requires_population_schema_cache_rebuild(
+            data, cfg.country_iso3
+        ) or _requires_worker_productivity_cache_rebuild(data, data_config):
             preserve_consumption_cache(data_pkl_path)
-            print(f"Rebuilding stale population-schema data cache: {data_pkl_path}")
+            print(f"Rebuilding stale population-schema/worker-productivity data cache: {data_pkl_path}")
             creator = DataWrapper.from_config(
                 configuration=data_config,
                 raw_data_path=raw_data_path,

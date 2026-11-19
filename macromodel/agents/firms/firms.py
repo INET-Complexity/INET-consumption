@@ -983,6 +983,23 @@ class Firms(Agent):
             interest_paid_on_loans=self.ts.current("interest_paid_on_loans"),
         )
 
+    def effective_labour_inputs(self) -> np.ndarray:
+        """Labour inputs in output units: ``tfp * labour_inputs``.
+
+        TFP is labour-augmenting, y = min(tfp * L, b * II, K / a): ``labour_inputs``
+        is stored before TFP and must be scaled before it is compared with output.
+        Stock limits are already in output units and are not scaled.
+        """
+        return self.ts.current("labour_inputs") * self.states["tfp_multiplier"]
+
+    def _planning_limits(self) -> dict[str, np.ndarray]:
+        """Input limits for purchase planning, in the same units production uses."""
+        return {
+            "current_limiting_labour_inputs": self.effective_labour_inputs(),
+            "current_limiting_intermediate_inputs": self.ts.current("limiting_intermediate_inputs"),
+            "current_limiting_capital_inputs": self.ts.current("limiting_capital_inputs"),
+        }
+
     def compute_target_intermediate_inputs_production(self) -> np.ndarray:
         """Calculate target intermediate input production levels.
 
@@ -1001,9 +1018,7 @@ class Firms(Agent):
         ].compute_constrained_intermediate_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1032,9 +1047,7 @@ class Firms(Agent):
         ].compute_constrained_capital_inputs_target_production(
             previous_production=self.ts.current("production"),
             current_target_production=self.ts.current("target_production"),
-            current_limiting_labour_inputs=self.ts.current("labour_inputs"),
-            current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
-            current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
+            **self._planning_limits(),
             current_firm_equity=self.ts.current("equity"),
             current_firm_debt=self.ts.current("debt"),
             previous_loans_applied_for=self.ts.current("target_short_term_credit")
@@ -1126,9 +1139,9 @@ class Firms(Agent):
         Determines production based on:
         - Operative feasible activity, when post-credit/post-labour planning has run
         - Behavioural target production otherwise
-        - Labor input constraints (scaled by TFP)
-        - Intermediate input constraints (scaled by TFP)
-        - Capital input constraints (scaled by TFP)
+        - Labor input constraints (scaled by TFP: labour-augmenting)
+        - Intermediate input constraints (not scaled by TFP)
+        - Capital input constraints (not scaled by TFP)
 
         Returns:
             np.ndarray: Actual production quantity for each firm
@@ -1143,7 +1156,7 @@ class Firms(Agent):
             current_labour_inputs=self.ts.current("labour_inputs"),
             current_limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             current_limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            tfp_multiplier=self.states.get("tfp_multiplier"),
+            tfp_multiplier=self.states["tfp_multiplier"],
         )
 
     def compute_total_sales(self) -> np.ndarray:
@@ -1168,9 +1181,16 @@ class Firms(Agent):
         Returns:
             np.ndarray: Wage markup factor for each firm
         """
+        desired = self.ts.historic("desired_labour_inputs")
+        realised = self.ts.historic("labour_inputs")
+        # The current quarter's plan is appended before labour clearing, so it
+        # has no realised counterpart yet. Compare completed quarters only
+        # (D_{t-k} vs L_{t-k}), as latest_matched_labour_gap_inputs does.
+        if len(desired) > len(realised):
+            desired = desired[: len(realised)]
         return self.functions["wage_setter"].compute_wage_tightness_markup(
-            historic_desired_labour_inputs=self.ts.historic("desired_labour_inputs"),
-            historic_realised_labour_inputs=self.ts.historic("labour_inputs"),
+            historic_desired_labour_inputs=desired,
+            historic_realised_labour_inputs=realised,
         )
 
     def compute_offered_wage_function(
@@ -1183,6 +1203,8 @@ class Firms(Agent):
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
         carried_wage_rate: np.ndarray = None,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
+        reuse_offer_ceiling_ratio: bool = False,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Create function that computes offered wages.
 
@@ -1204,6 +1226,13 @@ class Firms(Agent):
             carried_wage_rate (np.ndarray): Per-individual contract wage rate,
                 ``individuals.states["Wage Rate"]``. Used by stateful setters
                 such as ``ContractWageSetter``; ignored by stateless ones.
+            bank_interest_rates_on_long_term_firm_loans (np.ndarray): Long-term
+                firm loan rates by bank, per period. Needed only by the
+                ``value_added_net_user_cost`` offer ceiling.
+            reuse_offer_ceiling_ratio (bool): Reuse the ceiling ratio computed
+                by the previous call. Offers are rebuilt after credit clearing,
+                when the banks have already set this quarter's loan rates; the
+                ceiling must keep last quarter's rate, like its other inputs.
 
         Returns:
             np.ndarray: Wage offers for each firm
@@ -1217,6 +1246,16 @@ class Firms(Agent):
             desired_labour, realised_labour = self.latest_matched_labour_gap_inputs()
             offer_kwargs["desired_labour_inputs"] = desired_labour
             offer_kwargs["realised_labour_inputs"] = realised_labour
+            offer_ceiling = self.functions["wage_setter"].offer_ceiling
+            if offer_ceiling != "none":
+                cached = getattr(self, "_offer_ceiling_ratio", None)
+                n_firms = self.ts.current("total_wage").shape
+                if not (reuse_offer_ceiling_ratio and cached is not None and cached.shape == n_firms):
+                    self._offer_ceiling_ratio = self.compute_offer_ceiling_ratio(
+                        variant=offer_ceiling,
+                        bank_interest_rates_on_long_term_firm_loans=bank_interest_rates_on_long_term_firm_loans,
+                    )
+                offer_kwargs["offer_ceiling_ratio"] = self._offer_ceiling_ratio
         return self.functions["wage_setter"].get_offered_wage_given_labour_inputs_function(
             corresponding_firm=corresponding_firm,
             current_individual_labour_inputs=current_individual_labour_inputs,
@@ -1240,6 +1279,46 @@ class Firms(Agent):
             prev_tfp_multiplier=self.ts.prev("tfp_multiplier"),
             **offer_kwargs,
         )
+
+    def compute_offer_ceiling_ratio(
+        self,
+        variant: str,
+        bank_interest_rates_on_long_term_firm_loans: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Ceiling numerator over the wage bill, by firm, from the latest completed quarter.
+
+        Offers are set before production, so every ``current`` value read here
+        belongs to last quarter. The numerator by variant:
+
+        - ``value_added``: revenue - intermediate input costs - production taxes
+        - ``value_added_net_capital``: value added - capital costs charged in firm accounting
+        - ``value_added_net_user_cost``: the above - max(long-term loan rate, 0) x capital stock value
+
+        A firm's mean wage rate times this ratio is the rate at which its wage
+        bill would absorb the whole numerator. NaN where the wage bill is zero.
+        """
+        numerator = (
+            self.ts.current("price") * self.ts.current("production")
+            - self.ts.current("used_intermediate_inputs_costs")
+            - self.ts.current("taxes_paid_on_production")
+        )
+        if variant in ("value_added_net_capital", "value_added_net_user_cost"):
+            numerator = (
+                numerator - self.capital_compensation_accounting_costs() - self.capital_depreciation_accounting_costs()
+            )
+        if variant == "value_added_net_user_cost":
+            if bank_interest_rates_on_long_term_firm_loans is None:
+                raise ValueError("The value_added_net_user_cost offer ceiling requires long-term firm loan rates.")
+            loan_rate = np.asarray(bank_interest_rates_on_long_term_firm_loans, dtype=float)[
+                self.states["Corresponding Bank ID"]
+            ]
+            # A negative loan rate must not raise the ceiling.
+            numerator = numerator - np.maximum(loan_rate, 0.0) * self.ts.current("capital_inputs_stock_value")
+        elif variant not in ("value_added", "value_added_net_capital"):
+            raise ValueError(f"Unknown offer ceiling variant {variant!r}.")
+        wage_bill = np.asarray(self.ts.current("total_wage"), dtype=float)
+        numerator = np.asarray(numerator, dtype=float)
+        return np.divide(numerator, wage_bill, out=np.full(wage_bill.shape, np.nan), where=wage_bill > 0.0)
 
     def compute_realised_productivity_ratio(self, window: int = 4) -> np.ndarray:
         """Growth in smoothed realised labour productivity, output per labour input.
@@ -1521,7 +1600,12 @@ class Firms(Agent):
             capital_floor_lambda=getattr(price_setter, "normal_output_capital_floor_lambda", 0.25)
         )
         pricing_depreciation_unit_cost = self.compute_pricing_depreciation_unit_cost(pricing_normal_output)
-        pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
+        # 'raw' divides the wage bill by L. 'tfp_effective' divides it by tfp * L, the wage
+        # bill per unit of output, which deflates unless wage rates rise with TFP (#189).
+        if getattr(self.configuration.parameters, "pricing_labour_units", "raw") == "tfp_effective":
+            pricing_effective_labour_inputs = np.asarray(self.effective_labour_inputs(), dtype=float)
+        else:
+            pricing_effective_labour_inputs = np.asarray(self.ts.current("labour_inputs"), dtype=float)
         prices = price_setter.compute_price(
             prev_prices=self.ts.current("price"),
             current_estimated_ppi_inflation=current_estimated_ppi_inflation,
@@ -1686,8 +1770,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=self.ts.current("production"),
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             substitution_bundle_matrix=self.substitution_bundles,
             previous_good_prices=good_prices,
             extra_taxes=extra_taxes,
@@ -2484,7 +2566,7 @@ class Firms(Agent):
             target_production=self.ts.current("target_production"),
             limiting_intermediate_inputs=self.ts.current("limiting_intermediate_inputs"),
             limiting_capital_inputs=self.ts.current("limiting_capital_inputs"),
-            limiting_labour_inputs=self.ts.current("labour_inputs"),
+            limiting_labour_inputs=self.effective_labour_inputs(),
         )
 
     def _append_activity_finance_diagnostics(
@@ -2544,7 +2626,7 @@ class Firms(Agent):
         return np.maximum(0.0, remaining_finance - affordable_costs), scale
 
     def _activity_finance_tfp_for_feasible_labour(self) -> np.ndarray:
-        tfp_multiplier = np.asarray(self.ts.current("tfp_multiplier"), dtype=float).copy()
+        tfp_multiplier = np.asarray(self.states["tfp_multiplier"], dtype=float).copy()
         valid_tfp = np.isfinite(tfp_multiplier) & (tfp_multiplier > 1e-12)
         economy_positive_tfp = tfp_multiplier[valid_tfp]
         economy_fallback = np.median(economy_positive_tfp) if economy_positive_tfp.size > 0 else 1.0
@@ -2561,19 +2643,14 @@ class Firms(Agent):
         target_production: np.ndarray,
         tfp_multiplier: np.ndarray,
     ) -> np.ndarray:
-        base_labour = np.divide(
-            target_production,
-            tfp_multiplier,
-            out=target_production.copy(),
-            where=tfp_multiplier > 0.0,
-        )
+        # Stock limits are in output units; a missing limit does not bind.
         limiting_intermediate_inputs = np.asarray(self.ts.current("limiting_intermediate_inputs"), dtype=float).copy()
         invalid_intermediate = ~np.isfinite(limiting_intermediate_inputs)
-        limiting_intermediate_inputs[invalid_intermediate] = base_labour[invalid_intermediate]
+        limiting_intermediate_inputs[invalid_intermediate] = target_production[invalid_intermediate]
         limiting_intermediate_inputs = np.maximum(0.0, limiting_intermediate_inputs)
         limiting_capital_inputs = np.asarray(self.ts.current("limiting_capital_inputs"), dtype=float).copy()
         invalid_capital = ~np.isfinite(limiting_capital_inputs)
-        limiting_capital_inputs[invalid_capital] = base_labour[invalid_capital]
+        limiting_capital_inputs[invalid_capital] = target_production[invalid_capital]
         limiting_capital_inputs = np.maximum(0.0, limiting_capital_inputs)
         return self.functions["desired_labour"].compute_desired_labour(
             current_target_production=target_production,
@@ -2623,8 +2700,6 @@ class Firms(Agent):
             initial_capital_inputs_stock=self.ts.initial("capital_inputs_stock"),
             prev_production=target_production,
             initial_production=self.ts.initial("production"),
-            current_tfp_multiplier=self.ts.current("tfp_multiplier"),
-            initial_tfp_multiplier=self.ts.initial("tfp_multiplier"),
             previous_good_prices=expected_lcu_prices,
             substitution_bundle_matrix=self.substitution_bundles,
             financed_share=getattr(self, "capital_financed_share", None),

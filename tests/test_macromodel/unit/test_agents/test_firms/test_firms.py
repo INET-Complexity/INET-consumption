@@ -3073,3 +3073,176 @@ class TestFirms:
         test_firms.ts.override_current("deposits", np.r_[-1.0, np.zeros(n_firms - 1)])
 
         assert np.isclose(test_firms.compute_total_credit_exposure()[0], 13.0)
+
+    @pytest.mark.parametrize("which", ["intermediate", "capital"])
+    def test__input_planning_uses_tfp_effective_labour(self, test_firms, which):
+        # Labour exactly sufficient in effective units (tfp * L == y*), stocks slack:
+        # the planning base must equal y*. With raw L it would be cut by w_L * (1 - 1/tfp).
+        n_firms = test_firms.ts.current("production").shape[0]
+        y_star, tfp, w_labour = np.full(n_firms, 10.0), np.full(n_firms, 1.25), 0.5
+        setter = test_firms.functions["target_production"]
+        setattr(setter, f"{which}_inputs_target_considers_labour_inputs", w_labour)
+        test_firms.states["tfp_multiplier"] = tfp
+        test_firms.ts.override_current("target_production", y_star)
+        test_firms.ts.override_current("labour_inputs", y_star / tfp)
+        test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_capital_inputs", 2 * y_star)
+        compute = getattr(test_firms, f"compute_target_{which}_inputs_production")
+        np.testing.assert_allclose(compute(), y_star)
+
+        # Without TFP growth the same raw labour binds: y* + w_L * (L - y*) = 10 - 0.5 * 2 = 9.
+        test_firms.states["tfp_multiplier"] = np.ones(n_firms)
+        np.testing.assert_allclose(compute(), y_star - w_labour * (y_star - y_star / tfp))
+
+    def test__input_planning_does_not_scale_stock_limits_by_tfp(self, test_firms):
+        n_firms = test_firms.ts.current("production").shape[0]
+        y_star = np.full(n_firms, 10.0)
+        setter = test_firms.functions["target_production"]
+        setter.intermediate_inputs_target_considers_labour_inputs = 0.0
+        setter.intermediate_inputs_target_considers_intermediate_inputs = 0.0
+        setter.intermediate_inputs_target_considers_capital_inputs = 1.0
+        test_firms.states["tfp_multiplier"] = np.full(n_firms, 1.25)
+        test_firms.ts.override_current("target_production", y_star)
+        test_firms.ts.override_current("labour_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_intermediate_inputs", 2 * y_star)
+        test_firms.ts.override_current("limiting_capital_inputs", np.full(n_firms, 8.0))
+        np.testing.assert_allclose(test_firms.compute_target_intermediate_inputs_production(), 8.0)
+
+    @pytest.mark.parametrize("units, expected", [("raw", 8.0), ("tfp_effective", 10.0)])
+    def test__pricing_labour_inputs_follow_pricing_labour_units(self, test_firms, units, expected):
+        # 'raw': wage bill / L. 'tfp_effective': wage bill / (tfp * L), per unit of output.
+        n_firms = test_firms.ts.current("production").shape[0]
+        test_firms.states["tfp_multiplier"] = np.full(n_firms, 1.25)
+        test_firms.ts.override_current("labour_inputs", np.full(n_firms, 8.0))
+        test_firms.configuration.parameters.pricing_labour_units = units
+        captured = {}
+        price_setter = test_firms.functions["prices"]
+        original = price_setter.compute_price
+
+        def capture(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        price_setter.compute_price = capture
+        test_firms.compute_price(
+            current_estimated_ppi_inflation=0.0,
+            previous_average_good_prices=np.ones(test_firms.n_industries),
+            ppi_during=np.ones(2),
+        )
+        np.testing.assert_allclose(captured["pricing_effective_labour_inputs"], expected)
+
+    def test__pricing_labour_units_defaults_to_raw_and_refuses_unknown_values(self, test_firms):
+        parameters = type(test_firms.configuration.parameters)
+        assert parameters().pricing_labour_units == "raw"
+        with pytest.raises(ValueError):
+            parameters(pricing_labour_units="per_output")
+
+    def test__offer_ceiling_ratio_by_variant(self, test_firms):
+        n_firms = test_firms.ts.current("production").shape[0]
+        for name, value in (
+            ("price", 2.0),
+            ("production", 100.0),
+            ("used_intermediate_inputs_costs", 60.0),
+            ("taxes_paid_on_production", 10.0),
+            ("used_capital_inputs_costs", 20.0),
+            ("capital_inputs_stock_value", 400.0),
+            ("total_wage", 50.0),
+        ):
+            test_firms.ts.override_current(name, np.full(n_firms, value))
+        test_firms.configuration.parameters.capital_compensation_accounting_mode = "production_cost"
+        test_firms.configuration.parameters.capital_depreciation_accounting_mode = "none"
+        n_banks = int(test_firms.states["Corresponding Bank ID"].max()) + 1
+
+        # Value added 200 - 60 - 10 = 130; net of capital 110; net of user cost 110 - 0.05 x 400 = 90.
+        np.testing.assert_allclose(test_firms.compute_offer_ceiling_ratio("value_added"), 130.0 / 50.0)
+        np.testing.assert_allclose(test_firms.compute_offer_ceiling_ratio("value_added_net_capital"), 110.0 / 50.0)
+        np.testing.assert_allclose(
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(n_banks, 0.05)), 90.0 / 50.0
+        )
+        # A negative loan rate does not raise the ceiling.
+        np.testing.assert_allclose(
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(n_banks, -0.05)), 110.0 / 50.0
+        )
+        with pytest.raises(ValueError, match="loan rates"):
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost")
+        with pytest.raises(ValueError, match="Unknown offer ceiling"):
+            test_firms.compute_offer_ceiling_ratio("profits")
+
+    def test__offer_ceiling_ratio_is_nan_without_a_wage_bill(self, test_firms):
+        wage_bill = np.asarray(test_firms.ts.current("total_wage"), dtype=float).copy()
+        wage_bill[0] = 0.0
+        test_firms.ts.override_current("total_wage", wage_bill)
+        ratio = test_firms.compute_offer_ceiling_ratio("value_added")
+        assert np.isnan(ratio[0]) and np.isfinite(ratio[1:]).all()
+
+    def test__wage_markup_compares_matched_quarters_not_this_quarters_plan(self, test_firms):
+        from macromodel.agents.firms.func.wage_setter import ContractWageSetter
+
+        n = len(test_firms.ts.current("labour_inputs"))
+        test_firms.ts.labour_inputs.append(np.full(n, 90.0))
+        test_firms.ts.desired_labour_inputs.append(np.full(n, 100.0))
+        # Plan for the coming quarter, appended before labour clearing: no realised counterpart yet.
+        test_firms.ts.desired_labour_inputs.append(np.full(n, 500.0))
+        n_realised = len(test_firms.ts.historic("labour_inputs"))
+        setter = ContractWageSetter(labour_market_tightness_markup_scale=1.0, markup_time_span=1, offer_ceiling="none")
+        test_firms.functions["wage_setter"] = setter
+        # Matched quarter: (100 - 90) / 100 = 0.1. Misaligned (500 vs 90) would give 0.82.
+        markup = test_firms.compute_wages_markup()
+        np.testing.assert_allclose(markup, 0.1)
+        assert len(test_firms.ts.historic("desired_labour_inputs")) == n_realised + 1  # history is not mutated
+
+    def _capture_offer_kwargs(self, test_firms, offer_ceiling):
+        from macromodel.agents.firms.func.wage_setter import ContractWageSetter
+
+        setter = ContractWageSetter(
+            labour_market_tightness_markup_scale=0.05, markup_time_span=4, offer_ceiling=offer_ceiling
+        )
+        captured = []
+        setter.get_offered_wage_given_labour_inputs_function = lambda **kwargs: captured.append(kwargs)
+        test_firms.functions["wage_setter"] = setter
+        n_banks = int(test_firms.states["Corresponding Bank ID"].max()) + 1
+
+        def build(rate, reuse):
+            test_firms.compute_offered_wage_function(
+                corresponding_firm=np.array([0]),
+                current_individual_labour_inputs=np.array([1.0]),
+                previous_employee_income=np.array([1.0]),
+                unemployment_benefits_by_individual=0.0,
+                income_taxes=0.0,
+                employee_social_insurance_tax=0.0,
+                employer_social_insurance_tax=0.0,
+                carried_wage_rate=np.array([1.0]),
+                bank_interest_rates_on_long_term_firm_loans=np.full(n_banks, rate),
+                reuse_offer_ceiling_ratio=reuse,
+            )
+            return captured[-1]
+
+        return build
+
+    def test__offer_function_receives_no_ceiling_ratio_when_the_ceiling_is_off(self, test_firms):
+        build = self._capture_offer_kwargs(test_firms, "none")
+        assert "offer_ceiling_ratio" not in build(0.01, reuse=False)
+
+    def test__offer_rebuild_after_credit_clearing_keeps_last_quarters_loan_rate(self, test_firms):
+        build = self._capture_offer_kwargs(test_firms, "value_added_net_user_cost")
+        first = build(0.01, reuse=False)["offer_ceiling_ratio"].copy()
+        np.testing.assert_allclose(
+            first,
+            test_firms.compute_offer_ceiling_ratio("value_added_net_user_cost", np.full(1000, 0.01)),
+            equal_nan=True,
+        )
+        # Banks have set a new rate: the rebuilt offers reuse the ratio from the first call.
+        np.testing.assert_array_equal(build(0.05, reuse=True)["offer_ceiling_ratio"], first)
+        # A new quarter recomputes it with the rate current at that time.
+        fresh = build(0.05, reuse=False)["offer_ceiling_ratio"]
+        assert np.nanmax(np.abs(fresh - first)) > 0.0
+
+    def test__offer_ceiling_ratio_subtracts_depreciation_costs_when_they_are_charged(self, test_firms):
+        base = test_firms.compute_offer_ceiling_ratio("value_added")
+        net = test_firms.compute_offer_ceiling_ratio("value_added_net_capital")
+        charged = (
+            test_firms.capital_compensation_accounting_costs() + test_firms.capital_depreciation_accounting_costs()
+        )
+        wage_bill = np.asarray(test_firms.ts.current("total_wage"), dtype=float)
+        valid = wage_bill > 0
+        np.testing.assert_allclose((base - net)[valid], (charged / wage_bill)[valid])

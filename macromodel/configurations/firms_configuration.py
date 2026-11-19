@@ -218,13 +218,12 @@ class Production(BaseModel):
 class TargetCapitalInputs(BaseModel):
     """
     The function used to setting firms desired capital inputs.
-    Options: FinancialTargetCapitalInputsSetter, TFPAdjustedTargetCapitalInputsSetter,
+    Options: FinancialTargetCapitalInputsSetter,
     BundleWeightedTargetCapitalInputsSetter
     """
 
     name: Literal[
         "FinancialTargetCapitalInputsSetter",
-        "TFPAdjustedTargetCapitalInputsSetter",
         "BundleWeightedTargetCapitalInputsSetter",
     ] = "FinancialTargetCapitalInputsSetter"
     path_name: str = "target_capital_inputs"
@@ -422,6 +421,16 @@ class FirmsParameters(BaseModel):
             "1.0 (default) is full indexation, the historical behaviour: nominal wages "
             "recover past inflation one-for-one. Values below 1.0 give partial "
             "indexation, so real wages absorb part of past inflation (hypothesis H4)."
+        ),
+    )
+    pricing_labour_units: Literal["raw", "tfp_effective"] = Field(
+        "raw",
+        description=(
+            "Labour quantity that divides the wage bill in the pricing marginal cost. "
+            "'raw' (default) uses labour inputs L, so TFP growth does not lower the labour cost "
+            "in prices. 'tfp_effective' uses tfp * L, the wage bill per unit of output: "
+            "prices then carry the full TFP growth, and deflate unless contract wage rates "
+            "rise with TFP (issue #189)."
         ),
     )
     capital_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)

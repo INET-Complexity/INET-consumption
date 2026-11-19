@@ -62,8 +62,6 @@ class TargetCapitalInputsSetter(ABC):
         previous_good_prices: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
         extra_taxes: Optional[np.ndarray] = None,
-        current_tfp_multiplier: Optional[np.ndarray] = None,
-        initial_tfp_multiplier: Optional[np.ndarray] = None,
         financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate unconstrained target capital inputs for each firm.
@@ -150,8 +148,6 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         previous_good_prices: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
         extra_taxes: Optional[np.ndarray] = None,
-        current_tfp_multiplier: Optional[np.ndarray] = None,
-        initial_tfp_multiplier: Optional[np.ndarray] = None,
         financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate unconstrained capital input targets with stock adjustment.
@@ -237,67 +233,6 @@ class FinancialTargetCapitalInputsSetter(TargetCapitalInputsSetter):
         )
 
 
-class TFPAdjustedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter):
-    """Financial capital targeting with a TFP-adjusted initial-stock benchmark.
-
-    The stock benchmark scales initial capital by target production relative to
-    initial production and by initial TFP relative to current TFP:
-
-        (y_target / y_0) * (A_0 / A_t) * K_0
-
-    The capital-use term remains ``y_target * a_ik``. Credit-gap adjustment,
-    when enabled by ``credit_gap_fraction``, is inherited from the financial
-    setter.
-    """
-
-    def compute_unconstrained_target_capital_inputs(
-        self,
-        current_target_production: np.ndarray,
-        capital_input_use_matrix: np.ndarray,
-        prev_capital_inputs_stock: np.ndarray,
-        initial_capital_inputs_stock: np.ndarray,
-        prev_production: np.ndarray,
-        initial_production: np.ndarray,
-        previous_good_prices: np.ndarray,
-        substitution_bundle_matrix: np.ndarray,
-        extra_taxes: Optional[np.ndarray] = None,
-        current_tfp_multiplier: Optional[np.ndarray] = None,
-        initial_tfp_multiplier: Optional[np.ndarray] = None,
-        financed_share: Optional[np.ndarray] = None,
-    ) -> np.ndarray:
-        if current_tfp_multiplier is None or initial_tfp_multiplier is None:
-            raise ValueError(
-                "current_tfp_multiplier and initial_tfp_multiplier are required "
-                "for TFPAdjustedTargetCapitalInputsSetter."
-            )
-
-        current_tfp = np.asarray(current_tfp_multiplier, dtype=float)
-        initial_tfp = np.asarray(initial_tfp_multiplier, dtype=float)
-        if current_tfp.shape != current_target_production.shape or initial_tfp.shape != current_target_production.shape:
-            raise ValueError("TFP multipliers must have one value per firm.")
-        if (
-            np.any(~np.isfinite(current_tfp))
-            or np.any(~np.isfinite(initial_tfp))
-            or np.any(current_tfp <= 0.0)
-            or np.any(initial_tfp <= 0.0)
-        ):
-            raise ValueError("TFP multipliers must be finite and strictly positive.")
-
-        tfp_adjusted_initial_production = initial_production * current_tfp / initial_tfp
-        return super().compute_unconstrained_target_capital_inputs(
-            current_target_production=current_target_production,
-            capital_input_use_matrix=capital_input_use_matrix,
-            prev_capital_inputs_stock=prev_capital_inputs_stock,
-            initial_capital_inputs_stock=initial_capital_inputs_stock,
-            prev_production=prev_production,
-            initial_production=tfp_adjusted_initial_production,
-            previous_good_prices=previous_good_prices,
-            substitution_bundle_matrix=substitution_bundle_matrix,
-            extra_taxes=extra_taxes,
-            financed_share=financed_share,
-        )
-
-
 class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter):
     """Implementation of capital input targeting with bundle-based weighting.
 
@@ -342,8 +277,6 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
         previous_good_prices: np.ndarray,
         substitution_bundle_matrix: np.ndarray,
         extra_taxes: Optional[np.ndarray] = None,
-        current_tfp_multiplier: Optional[np.ndarray] = None,
-        initial_tfp_multiplier: Optional[np.ndarray] = None,
         financed_share: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate bundle-weighted unconstrained capital input targets.
@@ -385,8 +318,6 @@ class BundleWeightedTargetCapitalInputsSetter(FinancialTargetCapitalInputsSetter
             previous_good_prices,
             substitution_bundle_matrix,
             extra_taxes,
-            current_tfp_multiplier,
-            initial_tfp_multiplier,
             financed_share,
         )
 

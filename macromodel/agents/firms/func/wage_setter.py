@@ -462,6 +462,9 @@ class WorkEffortFirmWageSetter(FirmWageSetter):
         return f
 
 
+OFFER_CEILING_VARIANTS = ("none", "value_added", "value_added_net_capital", "value_added_net_user_cost")
+
+
 class ContractWageSetter(WorkEffortFirmWageSetter):
     """Wage setter with a persistent per-worker contract wage rate.
 
@@ -472,19 +475,25 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
 
     Stored rate versus paid earnings are distinct objects::
 
-        w_rate[j,t] = w_rate[j,t-1] * TFP[i,t] / TFP[i,t-1]     (stored)
-        earnings[j,t] = w_rate[j,t] * u[i,t]                    (paid)
+        w_rate[j,t] = w_rate[j,t-1] * (B[i,t] / B[i,t-1])**alpha    (stored, incumbents)
+        w_rate[j,t] = w_ref[i] + lambda * (w_offer[i] - w_ref[i])     (stored, new hires)
+        earnings[j,t] = w_rate[j,t] * u[i,t]                          (paid)
 
-    The tightness markup ``(1+m)`` does not appear **in the stored rate**: it is
-    a hiring instrument and applies to offers only. It is emphatically NOT
-    inert in the model. This class never touches
-    ``self.labour_market_tightness_markup_scale`` in its own body -- the markup
-    is computed by the parent's :meth:`compute_wage_tightness_markup` and
-    arrives here as the ``current_wage_tightness_markup`` argument, entering
-    the offer as the ``(1+m)`` factor in
-    :meth:`get_offered_wage_given_labour_inputs_function`::
+    ``B`` is the indexation base (``indexation_base``: the TFP multiplier or
+    smoothed realised productivity), ``alpha`` is
+    ``incumbent_indexation_pass_through`` and ``lambda`` is
+    ``new_hire_offer_pass_through``; ``w_ref`` is the firm's incumbent mean rate.
 
-        w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1+m[i])
+    The tightness markup ``(1+m)`` does not appear **in the incumbent update**:
+    it is a hiring instrument and applies to offers only, so it reaches stored
+    rates only through new hires. It is emphatically NOT inert in the model.
+    This class never touches ``self.labour_market_tightness_markup_scale`` in
+    its own body -- the markup is computed by the parent's
+    :meth:`compute_wage_tightness_markup` and arrives here as the
+    ``current_wage_tightness_markup`` argument, entering the offer as the
+    ``(1+m)`` factor in :meth:`get_offered_wage_given_labour_inputs_function`::
+
+        w_offer[i] = min(w_ref[i] * (B ratio)**alpha * u_ratio[i] * (1+m[i]) * slack[i], ceiling[i])
 
     So ``labour_market_tightness_markup_scale`` (FRA: 0.05) and
     ``markup_time_span`` (FRA: 4, the averaging span inside that markup) are
@@ -506,6 +515,26 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             ``"firm_anchor"`` overwrites every worker at a firm with the firm's
             initial wage per capita on first use, reproducing the parent class's
             firm-level uniformity. Arm switch; see the plan's section 4c.
+        indexation_base: ``"tfp_multiplier"`` or ``"realised_productivity"``.
+        incumbent_indexation_pass_through: ``alpha``; 0 disables indexation.
+        new_hire_offer_pass_through: ``lambda``; 1 binds the accepted offer.
+        offer_base: ``"per_head"`` or ``"per_labour_input"`` (use the latter
+            when worker productivity rho is on).
+        slack_response_up, slack_response_down, max_offer_log_cut: signed
+            offer response to the firm's labour gap; see :meth:`_slack_factor`.
+        offer_ceiling: ``"none"``, ``"value_added"``,
+            ``"value_added_net_capital"`` or ``"value_added_net_user_cost"``;
+            solvency cap on offers (wage-competition plan, Step 3).
+        indexation_common_component: ``"none"`` indexes by ``(B ratio)**alpha``.
+            ``"lagged_full"`` (Step 1b) indexes by ``g * (B ratio / g)**alpha``,
+            where ``g`` is last quarter's employment-weighted geometric mean
+            of ``B ratio`` across firms: the common part passes through in
+            full and alpha applies to the firm-specific part. Offers use the
+            same factor, so they stay anchored to incumbent rates.
+        offer_effort_ratio: True multiplies offers by the firm's effort ratio
+            ``u / u_prev``. False drops it: effort is paid through earnings
+            (rate x u), and a temporary effort deviation then does not enter
+            the stored rate of new hires.
     """
 
     def __init__(
@@ -521,6 +550,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         slack_response_up: float = 0.0,
         slack_response_down: float = 0.0,
         max_offer_log_cut: float = 0.02,
+        offer_ceiling: str = "none",
+        indexation_common_component: str = "none",
+        offer_effort_ratio: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -555,10 +587,38 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         self.slack_response_up = float(slack_response_up)
         self.slack_response_down = float(slack_response_down)
         self.max_offer_log_cut = float(max_offer_log_cut)
+        if offer_ceiling not in OFFER_CEILING_VARIANTS:
+            raise ValueError(f"offer_ceiling must be one of {OFFER_CEILING_VARIANTS}, got {offer_ceiling!r}")
+        self.offer_ceiling = offer_ceiling
+        if indexation_common_component not in ("none", "lagged_full"):
+            raise ValueError(
+                f"indexation_common_component must be 'none' or 'lagged_full', got {indexation_common_component!r}"
+            )
+        self.indexation_common_component = indexation_common_component
+        self.offer_effort_ratio = bool(offer_effort_ratio)
+        # Employment-weighted geometric mean of last quarter's base growth across firms
+        # (the common component). 1.0 until the first quarter has been observed.
+        self._lagged_common_growth = 1.0
+        self.last_offer_ceiling_binding = None
         self.last_offer_slack_gap = None
         self.last_offer_slack_factor = None
         self._rates_seeded = False
         self.last_contract_rate_mean = None
+        self.last_offer_indexation_ratio = None
+
+    def search_comparison_rates(self) -> tuple[np.ndarray, np.ndarray]:
+        """Rates an on-the-job searcher compares, from this quarter's offers.
+
+        Returns:
+            tuple:
+            - np.ndarray: Offered rate by firm, before the benefit floor. The
+              offer to worker ``i`` is its labour input times this rate.
+            - np.ndarray: Factor by firm applied this quarter to the carried
+              rate of a worker who stays.
+        """
+        if self.last_wage_offer_level is None or self.last_offer_indexation_ratio is None:
+            raise ValueError("Offers must be built before on-the-job searchers compare rates.")
+        return self.last_wage_offer_level, self.last_offer_indexation_ratio
 
     def _slack_factor(
         self,
@@ -623,14 +683,33 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         (+4.13% against +2.04% over t=15-50), and that wedge is what pushes real
         unit labour cost up every period.
         """
+        valid_ratio = self._base_ratio(tfp_ratio, realised_productivity_ratio)
+        if self.indexation_common_component == "lagged_full":
+            # Step 1b: the common part of productivity growth (last quarter's employment-weighted
+            # mean) passes through in full; alpha applies to the firm-specific deviation only.
+            g = self._lagged_common_growth
+            return g * np.power(valid_ratio / g, self.incumbent_indexation_pass_through)
+        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
+
+    def _base_ratio(
+        self,
+        tfp_ratio: np.ndarray,
+        realised_productivity_ratio: np.ndarray | None,
+    ) -> np.ndarray:
+        """Growth factor of the indexation base by firm; non-finite or non-positive values become 1."""
         if self.indexation_base == "tfp_multiplier":
             ratio = np.asarray(tfp_ratio, dtype=float)
         else:
             if realised_productivity_ratio is None:
                 raise ValueError("indexation_base='realised_productivity' requires realised_productivity_ratio.")
             ratio = np.asarray(realised_productivity_ratio, dtype=float)
-        valid_ratio = np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
-        return np.power(valid_ratio, self.incumbent_indexation_pass_through)
+        return np.where(np.isfinite(ratio) & (ratio > 0), ratio, np.ones_like(ratio))
+
+    def _update_common_growth(self, base_ratio: np.ndarray, employment_by_firm: np.ndarray) -> None:
+        """Store this quarter's employment-weighted geometric mean base growth for next quarter."""
+        total = float(employment_by_firm.sum())
+        if total > 0:
+            self._lagged_common_growth = float(np.exp(np.sum(employment_by_firm * np.log(base_ratio)) / total))
 
     def _seed_rates(
         self,
@@ -751,6 +830,9 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         earnings[employed] = carried_wage_rate[employed] * effort_by_individual[employed]
 
         self.last_contract_rate_mean = float(np.mean(carried_wage_rate[employed])) if employed.any() else np.nan
+        if self.indexation_common_component == "lagged_full":
+            employment_by_firm = np.bincount(corresponding_firm[employed], minlength=n_firms).astype(float)
+            self._update_common_growth(self._base_ratio(tfp_ratio, realised_productivity_ratio), employment_by_firm)
         return earnings
 
     def get_offered_wage_given_labour_inputs_function(
@@ -777,13 +859,22 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         realised_productivity_ratio: np.ndarray = None,
         desired_labour_inputs: np.ndarray = None,
         realised_labour_inputs: np.ndarray = None,
+        offer_ceiling_ratio: np.ndarray = None,
     ) -> Callable[[int, float | np.ndarray], float | np.ndarray]:
         """Build the offer function from carried contract rates.
 
         The reference wage is the firm's average *rate* over its current
         workforce, read from ``carried_wage_rate``:
 
-            w_offer[i] = w_ref[i] * TFP_ratio[i] * u_ratio[i] * (1 + m[i])
+            w_offer[i] = w_ref[i] * (B ratio)**alpha * u_ratio[i] * (1 + m[i]) * slack[i]
+            w_offer[i] = min(w_offer[i], w_ref[i] * offer_ceiling_ratio[i])   (if offer_ceiling != "none")
+            offer to worker k = max(benefit, labour_input[k] * w_offer[i])
+
+        ``(B ratio)**alpha`` is the same indexation factor applied to
+        incumbents (1 when ``alpha = 0``); ``slack`` is :meth:`_slack_factor`
+        (1 when both slack responses are 0). With
+        ``offer_base = "per_labour_input"``, ``w_ref`` is the rate per unit of
+        labour input.
 
         This replaces the parent's ``previous_employee_income`` base. That base
         is unusable here because ``employee_income`` now holds earnings
@@ -792,12 +883,21 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
 
         ``u_ratio`` is deliberately retained: ``(1+m) >= 1`` by the ``max(0,.)``
         floor in :meth:`compute_wage_tightness_markup`, and TFP ratios are
-        normally ``>= 1``, so ``u_ratio`` is the only factor able to fall below
-        one. Dropping it would make offers monotonically non-decreasing.
+        normally ``>= 1``, so with the slack response off ``u_ratio`` is the
+        only factor able to fall below one. Dropping it would make offers
+        monotonically non-decreasing.
 
         Args:
             carried_wage_rate (np.ndarray): Per-individual contract wage rate,
                 ``individuals.states["Wage Rate"]``. Required.
+            offer_ceiling_ratio (np.ndarray): By firm, last quarter's ceiling
+                numerator (value added, by variant) over last quarter's wage
+                bill. Required unless ``offer_ceiling`` is ``"none"``. The
+                offered rate is capped at the firm's mean carried rate times
+                this ratio, which is the mean rate over the labour share. The
+                cap is a solvency bound: it never raises an offer. It is
+                skipped where the ratio is not positive and finite or the firm
+                has no workforce. The benefit floor applies after the cap.
             (remaining arguments as in the parent class)
 
         Returns:
@@ -853,6 +953,8 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             out=np.ones_like(current_labour_productivity_factor),
             where=prev_labour_productivity_factor > 0,
         )
+        if not self.offer_effort_ratio:
+            effort_ratio = np.ones_like(effort_ratio)
 
         indexation_ratio = self._indexation_ratio(tfp_ratio, realised_productivity_ratio)
         slack_factor = self._slack_factor(desired_labour_inputs, realised_labour_inputs, n_firms)
@@ -861,11 +963,23 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
         )
         offered_rate = np.where(np.isfinite(offered_rate), offered_rate, reference_rate)
 
+        ceiling_binding = np.zeros(n_firms, dtype=bool)
+        if self.offer_ceiling != "none":
+            if offer_ceiling_ratio is None:
+                raise ValueError(f"offer_ceiling={self.offer_ceiling!r} requires offer_ceiling_ratio.")
+            ratio = np.asarray(offer_ceiling_ratio, dtype=float)
+            usable = np.isfinite(ratio) & (ratio > 0.0) & has_workforce
+            ceiling = np.where(usable, reference_rate * np.where(usable, ratio, 1.0), np.inf)
+            ceiling_binding = offered_rate > ceiling
+            offered_rate = np.minimum(offered_rate, ceiling)
+        self.last_offer_ceiling_binding = ceiling_binding.astype(float)
+
         self.last_wage_offer_historic_base = reference_rate.copy()
         self.last_wage_offer_tfp_ratio = tfp_ratio.copy()
         self.last_wage_offer_productivity_ratio = effort_ratio.copy()
         self.last_wage_offer_tightness_factor = (1.0 + current_wage_tightness_markup).copy()
         self.last_wage_offer_level = offered_rate.copy()
+        self.last_offer_indexation_ratio = indexation_ratio.copy()
         self.last_wage_offer_historic_average_available = has_workforce.copy()
 
         def f(firm_id: int, labour_inputs: float | np.ndarray) -> float | np.ndarray:
@@ -876,3 +990,37 @@ class ContractWageSetter(WorkEffortFirmWageSetter):
             )
 
         return f
+
+
+def validate_worker_productivity_configuration(rho_built: bool, wage_setter: object) -> None:
+    """Refuse a run whose wage setter is inconsistent with worker productivity rho.
+
+    When the synthetic population was built with ``worker_productivity`` (rho),
+    each worker's stored rate already contains rho and offers are multiplied by
+    the worker's labour input. The wage setter must then seed rates from each
+    worker (``initial_rate_source: individual``) and average them per unit of
+    labour input (``offer_base: per_labour_input``); ``per_head`` counts the
+    firm's mean rho twice in every offer.
+
+    The converse is not enforced: without rho all labour inputs equal one, so
+    ``per_labour_input`` equals ``per_head``, and ``individual`` (HFCS starting
+    pay) is a valid configuration of its own.
+
+    Args:
+        rho_built (bool): Whether the population carries rho (``Benefit Weight`` present).
+        wage_setter (object): The firms' wage-setter instance.
+
+    Raises:
+        ValueError: If rho is built and the wage setter does not meet both conditions.
+    """
+    if not rho_built:
+        return
+    initial_rate_source = getattr(wage_setter, "initial_rate_source", None)
+    offer_base = getattr(wage_setter, "offer_base", None)
+    if initial_rate_source != "individual" or offer_base != "per_labour_input":
+        raise ValueError(
+            "The population was built with worker_productivity (rho), which requires "
+            "ContractWageSetter with initial_rate_source='individual' and "
+            f"offer_base='per_labour_input'; got {type(wage_setter).__name__} with "
+            f"initial_rate_source={initial_rate_source!r}, offer_base={offer_base!r}."
+        )

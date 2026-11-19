@@ -71,9 +71,6 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
-    "workers_productivity": {
-        "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
-    },
     "investment_adjustment": {
         "firms.functions.target_capital_inputs.parameters['target_capital_inputs_fraction']": 0.05,
     },
@@ -165,8 +162,27 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
+# Wage-competition specification (design doc: knowledge-vault plan 2026-11-13, r23).
+# Since 2026-11-19 the FRA base config IS this specification: worker productivity rho
+# (Step 0), firm TFP indexation alpha = 0.1 with common TFP growth in full (Steps 1, 1b),
+# on-the-job search 3.3% a quarter (Step 2a), offer ceiling at value added (Step 3a),
+# downward slack response kappa_down = 0.05 (Step 4) and TFP-effective pricing (Step 5).
+# `wage_competition` names the base; `wage_competition_off` switches off Steps 0 and
+# 2a-4 and reproduces arm B of the 10-seed merge validation of PR #188. The earlier
+# cumulative presets wage_plan_* and workers_productivity were removed because they
+# would now stack on top of the base (last defined at INET 951b41b7).
+WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
+    "data.worker_productivity": None,
+    "labour_market.functions.clearing.parameters['on_the_job_search']": False,
+    "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": 1.0,
+    "firms.functions.wage_setter.parameters['offer_ceiling']": "none",
+    "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
+    "wage_competition": {},
+    "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,
 }

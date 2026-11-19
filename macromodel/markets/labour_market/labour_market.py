@@ -244,6 +244,7 @@ class LabourMarket:
         self.ts.num_individuals_newly_randomly_fired.append([num_newly_randomly_fired])
         self.ts.num_individuals_newly_randomly_quit.append([num_newly_randomly_quit])
         self.ts.num_individuals_newly_fired.append([num_newly_fired])
+        self.ts.num_individuals_job_to_job.append([getattr(self.functions["clearing"], "last_num_job_to_job", 0)])
         self.ts.num_individuals_newly_leaving.append(
             [num_newly_randomly_fired + num_newly_randomly_quit + num_newly_fired]
         )

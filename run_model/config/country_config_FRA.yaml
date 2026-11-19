@@ -321,7 +321,7 @@ FRA:
         path_name: profit_estimator
         parameters: {}
       target_capital_inputs:
-        name: TFPAdjustedTargetCapitalInputsSetter
+        name: FinancialTargetCapitalInputsSetter
         path_name: target_capital_inputs
         parameters:
           credit_gap_fraction: 0  # inactive under post_credit_cash_budget
@@ -363,12 +363,20 @@ FRA:
         name: ContractWageSetter
         path_name: wage_setter
         parameters:
-          labour_market_tightness_markup_scale: 0.05
+          labour_market_tightness_markup_scale: 0.5  # s: offer markup per unit of 4-quarter mean hiring shortfall. Not identified by the literature (vault concepts/tightness-markup-scale-s-calibration); assumption. Was 0.05.
           markup_time_span: 4
           initial_rate_source: individual  # firm_anchor (homegenous across firms) or individual (income heterogeneity)
-          indexation_base: realised_productivity
+          offer_base: per_labour_input  # per_head double-counts firm mean rho in offers when rho is on
+          indexation_base: tfp_multiplier  # Step 1 requires the firm TFP multiplier as base (plan 3.2); was realised_productivity
           realised_productivity_window: 4
-          incumbent_indexation_pass_through: 0.0
+          incumbent_indexation_pass_through: 0.1  # alpha: rent-sharing elasticity, Card et al. (2018) range 0.05-0.15; literature value, not estimated for France. Was 0.0
+          slack_response_down: 0.05  # kappa_down: offers fall when the firm has more labour than it wants (Step 4; wage-competition base since 2026-11-19)
+          offer_effort_ratio: false  # default since 2026-11-18 (user).  true keeps u/u_prev in offers; false drops u/u_prev from offers (effort is paid via earnings; avoids storing a temporary deviation in hires' rates)
+          indexation_common_component: lagged_full  # default since 2026-11-18 (user).  none = alpha on total TFP; none | lagged_full (Step 1b: common TFP growth, lagged one quarter, in full; alpha on the firm-specific part)
+          # offer_ceiling: none | value_added | value_added_net_capital | value_added_net_user_cost (solvency bound on offers).
+          # value_added (3a, Step 3; base since 2026-11-19). Variant net of the user cost caps every L and O firm
+          # from t = 1 because of L's dwelling-like capital stock (#196); 3a until that is fixed.
+          offer_ceiling: value_added
           # max_labour_utilisation_factor: 1.5  # INACTIVE. Set it in labour_productivity parameters
     parameters:
       arbitrage_intensity: 2.0
@@ -409,7 +417,11 @@ FRA:
       # growth at t=50, against 0.400pp from incumbent productivity indexation.
       # It is the second indexation channel alongside the wage_setter's
       # `incumbent_indexation_pass_through` (alpha); keep both visible together.
-      wage_cpi_indexation_elasticity: 1.0
+      # Set to 0.9 (user decision 2026-11-18): with psi = 1 and the policy rate at its floor
+      # inflation has no steady state (it integrates real unit labour cost growth); psi < 1
+      # gives pi_ss = (p - theta) tau_hat / (1 - psi). Vault plan 2026-11-13, sections 2.6 and 2.11.
+      wage_cpi_indexation_elasticity: 0.9
+      pricing_labour_units: tfp_effective  # raw | tfp_effective: labour marginal cost W/(tau L), consistent with labour-augmenting TFP (Step 5). Base default since 2026-11-18 (user)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output
       firm_activity_finance_revision_mode: post_credit_cash_budget
@@ -643,11 +655,24 @@ FRA:
           hiring_cost_fraction: 0.0
           hiring_speed: 0.75
           individuals_quitting: false
-          individuals_quitting_temperature: 1.0
-          optimised_hiring: true
-          random_firing_probability: 0.0
+          individuals_quitting_temperature: 0.033556783528842754  # = -ln(1 - 0.033): on-the-job search probability 3.3% a quarter (see on_the_job_search below). Was 1.0
+          # optimised_hiring: true does not fit the model or the data. It hires the candidate whose
+          # labour input A*rho is closest to the firm's gap. Gaps are fractional (median 0.76 labour
+          # units), so low-rho workers fit best; low-rho unemployed are absorbed at once, leaving a
+          # mid-rho unemployed stock, so employed searchers win (45% of hires from ~10% of candidates).
+          # With true: searcher success 64-68% a quarter, U->E 7-11% (France: 12-15%, 26.8%).
+          # With false (random choice among qualified), 3 seeds, q51-98: success 30-33%, U->E 14-22%.
+          # Vault: concepts/france-labour-market-flows-data. Set to false (user decision 2026-11-18).
+          optimised_hiring: false
+          random_firing_probability: 0.017  # q, per worker per quarter: INSEE E->U 1.9% minus model endogenous E->U 0.18% (vault concepts/france-labour-market-flows-data). Provisional; recalibrate once other labour-market issues are fixed. Firms with one employee are exempt (clearing.random_firing).
           round_target_employment: true
-          sorted_firing: true
+          sorted_firing: false  # random firing (C34); true fires lowest labour input first, by array position when inputs are equal
+          # on_the_job_search reads individuals_quitting_temperature as the search intensity T:
+          # search probability = 1 - exp(-T). T = -ln(1 - 0.033): 3.3% a quarter, INSEE Enquete Emploi
+          # 2017, employed actively searching for a replacement job (8.7% wish to change x 38% search;
+          # 4-week window, so a lower bound for a quarter). Step 2a; base since 2026-11-19 (user).
+          on_the_job_search: true
+          searcher_priority: pooled  # pooled | unemployed_first
 
   housing_market:
     functions:

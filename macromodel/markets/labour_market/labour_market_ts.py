@@ -59,6 +59,7 @@ def create_labour_market_timeseries(
             - num_individuals_newly_randomly_quit: Voluntary quits
             - num_individuals_newly_fired: Involuntary separations
             - num_individuals_newly_leaving: Total separations
+            - num_individuals_job_to_job: Employed workers who moved firm
             - num_employed_individuals_by_sector: Industry-specific
               employment counts
 
@@ -81,6 +82,7 @@ def create_labour_market_timeseries(
         num_individuals_newly_randomly_quit=[np.nan],
         num_individuals_newly_fired=[np.nan],
         num_individuals_newly_leaving=[np.nan],
+        num_individuals_job_to_job=[np.nan],
         num_employed_individuals_by_sector=num_employed,
         #
     )

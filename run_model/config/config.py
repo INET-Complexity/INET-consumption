@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,16 +71,6 @@ CALIBRATED_CONSUMPTION_OVERRIDES: dict[str, Any] = {
 EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
     # Paired income-definition comparison: both inherit exactly the same
     # calibrated overrides. Only the behavioural-income input switch differs.
-    # Worker productivity rho (wage-competition spec Step 0). The `data.` key is
-    # applied to the data configuration and builds a separate data cache; the
-    # other three keys are country-config settings rho requires.
-    # 13544 = net annual SMIC 2014 (1128.70 EUR/month x 12), survey year 2014.
-    "workers_productivity": {
-        "data.worker_productivity": {"annual_wage_floor": 13544.0},
-        "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
-        "firms.functions.wage_setter.parameters['offer_base']": "per_labour_input",
-        "labour_market.functions.clearing.parameters['sorted_firing']": False,
-    },
     "investment_adjustment": {
         "firms.functions.target_capital_inputs.parameters['target_capital_inputs_fraction']": 0.05,
     },
@@ -173,76 +162,29 @@ EXPERIMENTAL_OVERRIDE_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
-# Wage-competition plan (knowledge-vault plan 2026-11-13). Each arm adds one step
-# to the previous one and all build on worker productivity rho (Step 0), so an
-# arm runs in run_model.ipynb by setting SCENARIO_NAME to its key.
-#   A5: Step 5, unit-consistent pricing (wage bill per unit of output).
-#   B:  Step 1, contract rates and offers indexed to firm TFP growth, alpha = 0.1.
-#   C:  Step 2a, on-the-job search; search probability 3.3% a quarter: INSEE Enquete
-#       Emploi 2017, employed actively searching for a replacement job (8.7% wish to
-#       change x 38% search; 4-week window, so a lower bound for a quarter). Success
-#       given search is endogenous; data 15% a quarter (vault france-labour-market-flows-data).
-#   D:  Step 3a, offer ceiling at value added. Variant 3d (net of the user cost of
-#       capital) caps every real-estate (L) and public-administration (O) firm from
-#       t = 1 because of L's dwelling-like capital stock; 3a until that is fixed.
-#   E:  Step 4, offers fall with excess labour, kappa_down = 0.05.
-_WAGE_PLAN_STEPS: dict[str, dict[str, Any]] = {
-    "A5": {"firms.parameters.pricing_labour_units": "tfp_effective"},
-    "B": {
-        "firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']": 0.1,
-        "firms.functions.wage_setter.parameters['indexation_base']": "tfp_multiplier",
-    },
-    "C": {
-        "labour_market.functions.clearing.parameters['on_the_job_search']": True,
-        "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": -math.log(1.0 - 0.033),
-    },
-    "D": {"firms.functions.wage_setter.parameters['offer_ceiling']": "value_added"},
-    "E": {"firms.functions.wage_setter.parameters['slack_response_down']": 0.05},
+# Wage-competition specification (design doc: knowledge-vault plan 2026-11-13, r23).
+# Since 2026-11-19 the FRA base config IS this specification: worker productivity rho
+# (Step 0), firm TFP indexation alpha = 0.1 with common TFP growth in full (Steps 1, 1b),
+# on-the-job search 3.3% a quarter (Step 2a), offer ceiling at value added (Step 3a),
+# downward slack response kappa_down = 0.05 (Step 4) and TFP-effective pricing (Step 5).
+# `wage_competition` names the base; `wage_competition_off` switches off Steps 0 and
+# 2a-4 and reproduces arm B of the 10-seed merge validation of PR #188. The earlier
+# cumulative presets wage_plan_* and workers_productivity were removed because they
+# would now stack on top of the base (last defined at INET 951b41b7).
+WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
+    "data.worker_productivity": None,
+    "labour_market.functions.clearing.parameters['on_the_job_search']": False,
+    "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": 1.0,
+    "firms.functions.wage_setter.parameters['offer_ceiling']": "none",
+    "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
 }
-
-
-def _wage_plan_presets() -> dict[str, dict[str, Any]]:
-    presets: dict[str, dict[str, Any]] = {}
-    overrides = dict(EXPERIMENTAL_OVERRIDE_PRESETS["workers_productivity"])
-    for arm, step in _WAGE_PLAN_STEPS.items():
-        overrides = {**overrides, **step}
-        presets[f"wage_plan_{arm}"] = overrides
-    # Exploratory variants of arms C, D and E with a search probability of 3% a quarter.
-    # Superseded: the base arms now use the INSEE value 3.3%; kept for old notebooks.
-    search_key = "labour_market.functions.clearing.parameters['individuals_quitting_temperature']"
-    for arm in ("C", "D", "E"):
-        presets[f"wage_plan_{arm}_search3"] = {**presets[f"wage_plan_{arm}"], search_key: -math.log(1.0 - 0.03)}
-    # Arm E with partial CPI indexation of wages (psi < 1): inflation has a finite steady state
-    # without a working policy rule (plan section 2.7).
-    for label, psi in (("psi08", 0.8), ("psi05", 0.5)):
-        presets[f"wage_plan_E_{label}"] = {
-            **presets["wage_plan_E"],
-            "firms.parameters.wage_cpi_indexation_elasticity": psi,
-        }
-    # Step 1b on arm E: common TFP growth passed to incumbents and offers in full (lagged one quarter).
-    presets["wage_plan_E1b"] = {
-        **presets["wage_plan_E"],
-        "firms.functions.wage_setter.parameters['indexation_common_component']": "lagged_full",
-    }
-    # Exploratory variants of arm E1b: no effort ratio in offers; full hiring adjustment.
-    presets["wage_plan_E1b_noeffort"] = {
-        **presets["wage_plan_E1b"],
-        "firms.functions.wage_setter.parameters['offer_effort_ratio']": False,
-    }
-    presets["wage_plan_E1b_hs1"] = {
-        **presets["wage_plan_E1b"],
-        "labour_market.functions.clearing.parameters['hiring_speed']": 1.0,
-    }
-    return presets
-
-
-WAGE_PLAN_PRESETS: dict[str, dict[str, Any]] = _wage_plan_presets()
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
+    "wage_competition": {},
+    "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,
-    **WAGE_PLAN_PRESETS,
 }
 
 FIGURE_SIZES = {

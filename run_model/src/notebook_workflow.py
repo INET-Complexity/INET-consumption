@@ -691,6 +691,21 @@ def _requires_cfc_rate_cache_rebuild(data: DataWrapper, data_config: DataConfigu
     return False
 
 
+def _requires_worker_productivity_cache_rebuild(data: DataWrapper, data_config: DataConfiguration) -> bool:
+    """Return true when the cached population was built with a different worker productivity (rho) setting.
+
+    The base cache file name does not change when the base data config switches rho on or off,
+    so a cache built under the other setting would otherwise be reused without notice.
+    """
+    synthetic_countries = getattr(data, "synthetic_countries", {})
+    for country, country_config in getattr(data_config, "country_configs", {}).items():
+        synthetic_country = synthetic_countries.get(str(country), synthetic_countries.get(country))
+        population = getattr(synthetic_country, "population", None)
+        if getattr(population, "worker_productivity", None) != getattr(country_config, "worker_productivity", None):
+            return True
+    return False
+
+
 def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | None = None) -> PreparedData:
     """Build or load notebook data and return the objects needed for simulation.
 
@@ -722,9 +737,11 @@ def prepare_data(config: NotebookRunConfig, data_overrides: Mapping[str, Any] | 
             )
             creator.save(str(data_pkl_path))
             data = DataWrapper.init_from_pickle(str(data_pkl_path))
-        elif _requires_population_schema_cache_rebuild(data, cfg.country_iso3):
+        elif _requires_population_schema_cache_rebuild(
+            data, cfg.country_iso3
+        ) or _requires_worker_productivity_cache_rebuild(data, data_config):
             preserve_consumption_cache(data_pkl_path)
-            print(f"Rebuilding stale population-schema data cache: {data_pkl_path}")
+            print(f"Rebuilding stale population-schema/worker-productivity data cache: {data_pkl_path}")
             creator = DataWrapper.from_config(
                 configuration=data_config,
                 raw_data_path=raw_data_path,

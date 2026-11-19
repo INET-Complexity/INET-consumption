@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 RUN_MODEL_PATH = Path(__file__).resolve().parents[2] / "run_model"
 if str(RUN_MODEL_PATH) not in sys.path:
@@ -23,28 +24,29 @@ def test_split_separates_data_keys():
     assert country == {"a.b": 2}
 
 
-def test_base_fra_config_has_rho_off():
-    assert nw._load_data_config(FRA_CFG).country_configs["FRA"].worker_productivity is None
+def test_base_fra_config_has_rho_on():
+    rho = nw._load_data_config(FRA_CFG).country_configs["FRA"].worker_productivity
+    assert type(rho).__name__ == "WorkerProductivityConfiguration"
+    assert rho.annual_wage_floor == 13544.0
 
 
-def test_workers_productivity_preset_carries_all_four_settings():
-    data, country = nw.split_scenario_overrides(SCENARIO_PRESETS["workers_productivity"])
-    assert data == {"worker_productivity": {"annual_wage_floor": 13544.0}}
+def test_wage_competition_off_preset_splits_into_data_and_country_keys():
+    data, country = nw.split_scenario_overrides(SCENARIO_PRESETS["wage_competition_off"])
+    assert data == {"worker_productivity": None}
     assert country == {
-        "firms.functions.wage_setter.parameters['initial_rate_source']": "individual",
-        "firms.functions.wage_setter.parameters['offer_base']": "per_labour_input",
-        "labour_market.functions.clearing.parameters['sorted_firing']": False,
+        "labour_market.functions.clearing.parameters['on_the_job_search']": False,
+        "labour_market.functions.clearing.parameters['individuals_quitting_temperature']": 1.0,
+        "firms.functions.wage_setter.parameters['offer_ceiling']": "none",
+        "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
     }
 
 
 def test_apply_data_overrides_validates_and_leaves_base_unchanged():
     base = nw._load_data_config(FRA_CFG)
-    data, _ = nw.split_scenario_overrides(SCENARIO_PRESETS["workers_productivity"])
+    data, _ = nw.split_scenario_overrides(SCENARIO_PRESETS["wage_competition_off"])
     updated = nw.apply_data_config_overrides(base, data)
-    rho = updated.country_configs["FRA"].worker_productivity
-    assert type(rho).__name__ == "WorkerProductivityConfiguration"
-    assert rho.annual_wage_floor == 13544.0
-    assert base.country_configs["FRA"].worker_productivity is None
+    assert updated.country_configs["FRA"].worker_productivity is None
+    assert base.country_configs["FRA"].worker_productivity.annual_wage_floor == 13544.0
 
 
 def test_apply_data_overrides_rejects_unknown_field():
@@ -64,21 +66,40 @@ def test_country_overrides_refuse_data_keys():
         nw.apply_country_config_overrides(SimpleNamespace(), {"data.worker_productivity": {}})
 
 
-def test_wage_plan_presets_are_cumulative_and_build_on_worker_productivity():
-    arms = ["A5", "B", "C", "D", "E"]
-    previous = SCENARIO_PRESETS["workers_productivity"]
-    for arm in arms:
-        preset = SCENARIO_PRESETS[f"wage_plan_{arm}"]
-        assert previous.items() < preset.items()  # strict superset: one step added, nothing changed
-        previous = preset
-    full = SCENARIO_PRESETS["wage_plan_E"]
-    assert full["firms.parameters.pricing_labour_units"] == "tfp_effective"
-    assert full["firms.functions.wage_setter.parameters['incumbent_indexation_pass_through']"] == 0.1
-    assert full["firms.functions.wage_setter.parameters['indexation_base']"] == "tfp_multiplier"
-    assert full["labour_market.functions.clearing.parameters['on_the_job_search']"] is True
-    search_intensity = full["labour_market.functions.clearing.parameters['individuals_quitting_temperature']"]
-    assert abs((1.0 - math.exp(-search_intensity)) - 0.033) < 1e-12
-    assert full["firms.functions.wage_setter.parameters['offer_ceiling']"] == "value_added"
-    assert full["firms.functions.wage_setter.parameters['slack_response_down']"] == 0.05
-    data, _ = nw.split_scenario_overrides(full)
-    assert data == {"worker_productivity": {"annual_wage_floor": 13544.0}}
+def test_base_fra_config_is_the_wage_competition_specification():
+    assert SCENARIO_PRESETS["wage_competition"] == {}
+    fra = yaml.safe_load((RUN_MODEL_PATH / "config" / "country_config_FRA.yaml").read_text())["FRA"]
+    firms = fra["firms"]
+    wage = firms["functions"]["wage_setter"]["parameters"]
+    clearing = fra["labour_market"]["functions"]["clearing"]["parameters"]
+    assert firms["parameters"]["pricing_labour_units"] == "tfp_effective"
+    assert wage["incumbent_indexation_pass_through"] == 0.1
+    assert wage["indexation_base"] == "tfp_multiplier"
+    assert wage["indexation_common_component"] == "lagged_full"
+    assert wage["offer_ceiling"] == "value_added"
+    assert wage["slack_response_down"] == 0.05
+    assert wage["initial_rate_source"] == "individual" and wage["offer_base"] == "per_labour_input"
+    assert clearing["on_the_job_search"] is True
+    assert abs((1.0 - math.exp(-clearing["individuals_quitting_temperature"])) - 0.033) < 1e-12
+    off = SCENARIO_PRESETS["wage_competition_off"]
+    for path in off:
+        if not path.startswith("data."):
+            assert path.startswith(("firms.functions.wage_setter.", "labour_market.functions.clearing."))
+
+
+def test_cache_with_other_rho_setting_requires_rebuild():
+    data_config = nw._load_data_config(FRA_CFG)
+    rho = data_config.country_configs["FRA"].worker_productivity
+
+    def cached(worker_productivity):
+        return SimpleNamespace(
+            synthetic_countries={
+                "FRA": SimpleNamespace(population=SimpleNamespace(worker_productivity=worker_productivity))
+            }
+        )
+
+    assert not nw._requires_worker_productivity_cache_rebuild(cached(rho.model_copy()), data_config)
+    assert nw._requires_worker_productivity_cache_rebuild(cached(None), data_config)
+    off = nw.apply_data_config_overrides(data_config, {"worker_productivity": None})
+    assert nw._requires_worker_productivity_cache_rebuild(cached(rho), off)
+    assert not nw._requires_worker_productivity_cache_rebuild(cached(None), off)

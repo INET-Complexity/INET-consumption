@@ -741,5 +741,7 @@ def _offer_with_effort(setter, effort, prev_effort):
 
 @pytest.mark.parametrize(("switch", "expected"), [(True, 15.0 * 1.2), (False, 15.0)])
 def test__offer_effort_ratio_switch(switch, expected):
-    f = _offer_with_effort(_setter(offer_effort_ratio=switch), effort=np.full(N_FIRMS, 1.2), prev_effort=np.ones(N_FIRMS))
+    f = _offer_with_effort(
+        _setter(offer_effort_ratio=switch), effort=np.full(N_FIRMS, 1.2), prev_effort=np.ones(N_FIRMS)
+    )
     assert f(0, 1.0) == pytest.approx(expected)

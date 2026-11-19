@@ -451,17 +451,13 @@ class HousingMarket:
         properties = self.states["properties"]
         inhabitant_ids = properties["Corresponding Inhabitant Household ID"]
         owner_ids = properties["Corresponding Owner Household ID"]
-        rented_properties = properties.loc[
-            (inhabitant_ids != -1) & (inhabitant_ids != owner_ids)
-        ]
+        rented_properties = properties.loc[(inhabitant_ids != -1) & (inhabitant_ids != owner_ids)]
         property_values = rented_properties["Value"].to_numpy(dtype=float, copy=False)
         rents = rented_properties["Rent"].to_numpy(dtype=float, copy=False)
         valid_properties = np.isfinite(property_values) & np.isfinite(rents) & (property_values > 0.0)
         total_property_value = float(property_values[valid_properties].sum())
         average_yield = (
-            float(rents[valid_properties].sum() / total_property_value)
-            if total_property_value > 0.0
-            else np.nan
+            float(rents[valid_properties].sum() / total_property_value) if total_property_value > 0.0 else np.nan
         )
         self.ts.average_rental_yield.append(average_yield)
 

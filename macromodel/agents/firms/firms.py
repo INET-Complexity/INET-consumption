@@ -1975,7 +1975,7 @@ class Firms(Agent):
             + intermediate_purchases
             + taxes_paid_on_production
             + np.maximum(0.0, corporate_tax_obligation_preview)
-            + np.maximum(0.0, non_loan_interest_paid)
+            + np.asarray(non_loan_interest_paid, dtype=float)
         )
         current_draw = np.maximum(0.0, operating_commitments - positive_deposits)
         self.ts.operating_revolving_current_draw.append(current_draw)
@@ -2675,10 +2675,8 @@ class Firms(Agent):
         if debt_installment_preview is None:
             debt_installment_preview = self.ts.current("debt_installments")
         loan_debt_service_preview = loan_interest_obligation_preview + debt_installment_preview
-        non_loan_interest_obligation_preview = np.maximum(
-            0.0,
-            interest_obligation_preview - loan_interest_obligation_preview,
-        )
+        # Keep deposit receipts as negative expenses in the resource budget.
+        non_loan_interest_obligation_preview = interest_obligation_preview - loan_interest_obligation_preview
         received_debt_rollover_credit = np.maximum(
             0.0,
             np.nan_to_num(self.ts.current("received_debt_rollover_credit"), nan=0.0),
@@ -3097,10 +3095,8 @@ class Firms(Agent):
             np.asarray(self.ts.current("activity_finance_opening_deposits"), dtype=float),
             nan=0.0,
         )
-        non_loan_interest = np.maximum(
-            0.0,
-            np.nan_to_num(np.asarray(non_loan_interest_obligation_preview, dtype=float), nan=0.0),
-        )
+        # Signed net interest must agree with the post-credit resource budget.
+        non_loan_interest = np.nan_to_num(np.asarray(non_loan_interest_obligation_preview, dtype=float), nan=0.0)
         finance_cash = np.maximum(0.0, opening_deposits - non_loan_interest)
         repair_cash_used = np.zeros(n_firms)
         residual_repair_credit_need = np.maximum(

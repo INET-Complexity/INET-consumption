@@ -3198,15 +3198,11 @@ class Country:
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
         )
-        firm_loan_interest_preview = self.firms.ts.current("firm_settlement_scheduled_interest_due")
-        firm_interest_obligation_preview = firm_loan_interest_preview + self.firms.compute_interest_paid_on_deposits(
+        # Use the same signed deposit/overdraft and operating-interest flows as planning.
+        non_loan_interest_obligation_preview = self.firms.compute_interest_paid_on_deposits(
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
-        )
-        non_loan_interest_obligation_preview = np.maximum(
-            0.0,
-            firm_interest_obligation_preview - firm_loan_interest_preview,
-        )
+        ) + self.firms.ts.current("operating_revolving_interest_paid")
         credit_clearer = self.credit_market.functions.get("clearing")
         borrower_credit_room = compute_firm_borrower_credit_room(
             banks=self.banks,

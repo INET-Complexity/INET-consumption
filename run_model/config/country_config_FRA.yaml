@@ -423,6 +423,11 @@ FRA:
       # inflation has no steady state (it integrates real unit labour cost growth); psi < 1
       # gives pi_ss = (p - theta) tau_hat / (1 - psi). Vault plan 2026-11-13, sections 2.6 and 2.11.
       wage_cpi_indexation_elasticity: 0.9
+      # Inflation-target anchor of wage indexation (user decision 2026-11-19, off by default):
+      # true replaces CPI**psi by CPI**psi * (1 + pi*)**((1 - psi) * n / periods_per_year), with pi* the
+      # annual `taylor_rule_overrides.targeted_inflation_rate`. Weight on the target is 1 - psi.
+      # pi_t = psi pi_{t-1} + (1 - psi) pi* + (p - theta) tau_hat + kappa x_t. Vault plan 2026-11-13.
+      wage_inflation_anchor: false
       pricing_labour_units: tfp_effective  # raw | tfp_effective: labour marginal cost W/(tau L), consistent with labour-augmenting TFP (Step 5). Base default since 2026-11-18 (user)
       capital_depreciation_accounting_mode: none  # was eurostat_cfc; see note above
       capital_replacement_matrix_source: eurostat_cfc_output  # a calibrated from CFC/output

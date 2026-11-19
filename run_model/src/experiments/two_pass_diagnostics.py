@@ -1,7 +1,7 @@
 """Read-only snapshots of live household target calls in cloned validation arms."""
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from functools import wraps
 from inspect import signature
 from types import MappingProxyType
@@ -60,6 +60,8 @@ def _freeze(value):
         return np.frombuffer(value.tobytes(), dtype=value.dtype).reshape(value.shape)
     if isinstance(value, Mapping):
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if is_dataclass(value) and not isinstance(value, type):
+        return MappingProxyType({f.name: _freeze(getattr(value, f.name)) for f in fields(value)})
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
     if value is None or isinstance(value, (str, int, float, bool, np.generic)):

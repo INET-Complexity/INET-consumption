@@ -68,6 +68,8 @@ from macromodel.agents.central_bank.central_bank import CentralBank
 from macromodel.agents.central_government.central_government import CentralGovernment
 from macromodel.agents.firms import Firms
 from macromodel.agents.government_entities.government_entities import GovernmentEntities
+from macromodel.agents.households.borrowing_rates import behavioural_borrowing_rate_inputs
+from macromodel.agents.households.cashflow_rates import DebtServicePayments
 from macromodel.agents.households.consumption_inputs import (
     ConsumptionInputAdapter,
     ConsumptionSources,
@@ -1900,17 +1902,24 @@ class Country:
                 hh.ts.dicts[key].append(values.copy())
 
         if initial and expected:
-            # Seed component diagnostics on the same t0 basis as future rows.
+            # PI forecasts wages/transfers only. Keep the legacy bridge field
+            # names, but seed them on the same non-property basis as planning.
+            # Property receipts remain in behavioural income and cash accounts.
             n = parts["non_property"]
-            p = parts["rental"] + parts["financial"] + parts["deposit_receipts"]
-            hh.ts.override_current(
-                "income_bridge_current", np.maximum(n + p, self.economy.ts.current("subsistence_consumption"))
-            )
-            hh.ts.override_current("income_bridge_property", p.copy())
-            hh.ts.override_current(
-                "income_bridge_floor_used", ((n + p) < self.economy.ts.current("subsistence_consumption")).astype(float)
-            )
+            floor = self.economy.ts.current("subsistence_consumption")
+            hh.ts.override_current("income_bridge_current", np.maximum(n, floor))
+            hh.ts.override_current("income_bridge_property", np.zeros_like(n))
+            hh.ts.override_current("income_bridge_floor_used", (n < floor).astype(float))
             hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
+            if isinstance(hh.functions.get("consumption"), CreditAugmentedConsumption):
+                service = self._contractual_debt_service_components()
+                service.update(
+                    previous_total_nominal=service["total_nominal"].copy(),
+                    change_nominal=np.zeros_like(parts["total_raw"]),
+                    income_nominal=parts["income"].copy(),
+                )
+                for name, values in service.items():
+                    hh.ts["consumption_debt_service_" + name] = values.copy()
 
     def _consumption_input_sources_and_layout(self) -> tuple[ConsumptionSources, str]:
         """Declare source units and ordered household membership for this run."""
@@ -1934,6 +1943,58 @@ class Country:
             country_units,
         )
         return sources, layout
+
+    def _contractual_debt_service_components(self) -> dict[str, np.ndarray]:
+        """Nominal opening-contract payments, including variable overdraft interest."""
+        hh = self.households
+        shape = (hh.ts.current("n_households"),)
+        components = self.credit_market.preview_opening_contractual_household_service()
+        for key, values in components.items():
+            if values.shape != shape:
+                # Lightweight no-debt fixtures may use a placeholder population.
+                if np.any(values != 0):
+                    raise ValueError("Contractual payments must match the household population.")
+                components[key] = np.zeros(shape)
+        deposit_paid = hh.compute_interest_paid_on_deposits(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )
+        components["overdraft_interest_nominal"] = np.maximum(deposit_paid, 0.0)
+        components["total_nominal"] = sum(components.values())
+        if any(not np.all(np.isfinite(v)) or np.any(v < 0) for v in components.values()):
+            raise ValueError("Contractual debt service must be finite and nonnegative.")
+        return components
+
+    def _consumption_debt_service_payments(self, *, replace_current: bool) -> DebtServicePayments:
+        """Observe due payments once; the consumption evaluator owns income."""
+        hh = self.households
+        prefix = "consumption_debt_service_"
+        if replace_current:
+            components = {
+                name: hh.ts.current(prefix + name).copy() for name in (
+                    "consumer_interest_nominal", "consumer_principal_nominal", "mortgage_interest_nominal",
+                    "mortgage_principal_nominal", "overdraft_interest_nominal", "total_nominal",
+                )
+            }
+            previous = hh.ts.current(prefix + "previous_total_nominal").copy()
+        else:
+            components = self._contractual_debt_service_components()
+            if prefix + "total_nominal" not in hh.ts.dicts:
+                # Non-aligned legacy configurations have no t0 income-record hook.
+                for name, values in components.items():
+                    hh.ts[prefix + name] = values.copy()
+            previous = hh.ts.current(prefix + "total_nominal").copy()
+        payments = DebtServicePayments(components["total_nominal"], previous)
+        fields = dict(components, previous_total_nominal=previous, change_nominal=payments.current_nominal - previous)
+        for name, values in fields.items():
+            key = prefix + name
+            if key not in hh.ts.dicts:
+                hh.ts[key] = (np.zeros_like(values) if name == "change_nominal" else values.copy())
+            if replace_current:
+                hh.ts.override_current(key, values.copy())
+            else:
+                hh.ts.dicts[key].append(values.copy())
+        return payments
 
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         consumption_function = self.households.functions["consumption"]
@@ -1982,15 +2043,14 @@ class Country:
             bridge_arguments = {}
             if aligned_income:
                 # Reuse the component snapshot recorded above: do not reapply
-                # shocks, add housing services or subtract borrower interest.
+                # shocks, add property receipts/housing services or subtract
+                # borrower interest. P=0 retains the existing floored Gaussian
+                # projection and uncertainty calculation for wages/transfers.
                 hh = self.households
+                non_property = hh.ts.current("expected_behavioural_income_non_property_raw")
                 bridge_arguments["monetary_income_components"] = {
-                    "non_property": hh.ts.current("expected_behavioural_income_non_property_raw"),
-                    "property_income": (
-                        hh.ts.current("expected_behavioural_income_rental")
-                        + hh.ts.current("expected_behavioural_income_financial")
-                        + hh.ts.current("expected_behavioural_income_deposit_receipts")
-                    ),
+                    "non_property": non_property,
+                    "property_income": np.zeros_like(non_property),
                     "income_floor": self.economy.ts.current("subsistence_consumption"),
                 }
             learning_inputs = self.households.current_income_belief_learning_inputs(
@@ -2123,13 +2183,23 @@ class Country:
             out=np.zeros(expected_household_shape),
             where=np.isfinite(annual_spendable_income) & (annual_spendable_income > 0.0),
         )
+        borrowing_inputs = None
         if consumption_inputs is not None:
-            # Rate levels retain the existing pass-specific selection. Only opening
-            # principal exposures and the common real annual-income base change.
-            opening = consumption_inputs.opening_real
-            real_borrowing_rate = (
-                real_consumer_rate * opening.consumer_principal + real_mortgage_rate * opening.mortgage_principal
-            ) / consumption_inputs.annual_income_base_real
+            # Chauvin--Muellbauer's behavioural rate is a current borrowing
+            # indicator applied to lagged debt/income exposure. Fixed-rate
+            # payment schedules remain contractual and are not repriced here.
+            borrowing_inputs = behavioural_borrowing_rate_inputs(
+                consumption_inputs,
+                self.households.states["Corresponding Bank ID"],
+                self.banks.ts.current("interest_rates_on_household_consumption_loans"),
+                self.banks.ts.current("overdraft_rate_on_household_deposits"),
+                self.banks.ts.current("interest_rates_on_mortgages"),
+                expected_consumer_inflation,
+            )
+            real_borrowing_rate = borrowing_inputs["real_borrowing_rate"]
+            borrowing_inputs["consumer_rate_contractual_nominal"] = consumer_contractual_rate
+            borrowing_inputs["mortgage_rate_contractual_nominal"] = mortgage_contractual_rate
+            borrowing_inputs["expected_period_inflation"] = np.full(expected_household_shape, expected_consumer_inflation)
         # Existing consumer debt is fixed-rate until new borrowing remodulates
         # the aggregate balance. The CACF cashflow input therefore uses only
         # the realized contractual repricing from that event, not an
@@ -2152,6 +2222,12 @@ class Country:
                 )
             consumer_debt_rate_delta = np.zeros(expected_household_shape)
         consumer_debt_rate_delta = n_periods_per_year * consumer_debt_rate_delta
+        if borrowing_inputs is not None:
+            borrowing_inputs["consumer_refinancing_change_annual"] = consumer_debt_rate_delta
+
+        debt_service_payments = None
+        if isinstance(consumption_function, CreditAugmentedConsumption) and not self.assume_zero_growth:
+            debt_service_payments = self._consumption_debt_service_payments(replace_current=replace_current)
 
         target_consumption = self.households.compute_target_consumption(
             expected_inflation=expected_consumer_inflation,
@@ -2195,7 +2271,32 @@ class Country:
             # history window (PR #138 review finding 1); ignored otherwise.
             subsistence_income=self.economy.ts.current("subsistence_consumption"),
             consumption_inputs=consumption_inputs,
+            **({"debt_service_payments": debt_service_payments} if debt_service_payments is not None else {}),
         )
+
+        if debt_service_payments is not None:
+            # The evaluator supplies the authoritative common income base.
+            key = "consumption_debt_service_income_nominal"
+            income = self.households.ts.current("target_consumption_debt_service_income_nominal").copy()
+            if key not in self.households.ts.dicts:
+                self.households.ts[key] = income.copy()
+            if replace_current:
+                self.households.ts.override_current(key, income)
+            else:
+                self.households.ts.dicts[key].append(income)
+
+        if borrowing_inputs is not None:
+            # Keep the rate, exposure and lagged denominator separately visible.
+            # Row zero is intentionally unset; each completed planning period
+            # appends once and the authoritative pass replaces that same row.
+            for name, values in borrowing_inputs.items():
+                key = "target_consumption_borrowing_" + name
+                if key not in self.households.ts.dicts:
+                    self.households.ts[key] = np.full_like(values, np.nan)
+                if replace_current:
+                    self.households.ts.override_current(key, values.copy())
+                else:
+                    self.households.ts.dicts[key].append(values.copy())
 
         if replace_current:
             self.households.ts.override_current("target_consumption", target_consumption)
@@ -4688,16 +4789,22 @@ class Country:
             dtype=float,
         )
 
-        # Real household disposable income per capita (Stage 0 `model_spendable_income`
-        # convention, i.e. households.ts["income"]), deflated by cpi_fixed_basket and
-        # divided by the population history, then rebased to the notebook's
-        # `real_pc_idx` convention (index = 100 at start_period).
+        # Match the household forecast and learning signal: wages/transfers
+        # only, not the broader cash-income series. Deflate and divide by
+        # population, then rebase to real_pc_idx=100 at start_period.
         n_individuals_history = np.asarray(
             [np.asarray(value).reshape(-1)[0] for value in self.individuals.ts.dicts["n_individuals"]],
             dtype=float,
         )
         total_income_history = np.asarray(
-            [float(np.sum(value)) for value in self.households.ts.dicts["income"]],
+            [
+                float(np.sum(employee + transfers))
+                for employee, transfers in zip(
+                    self.households.ts.dicts["income_employee"],
+                    self.households.ts.dicts["income_social_transfers"],
+                    strict=True,
+                )
+            ],
             dtype=float,
         )
         real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals_history

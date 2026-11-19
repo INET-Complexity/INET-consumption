@@ -9,6 +9,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
+from macromodel.agents.households.cashflow_rates import DebtServicePayments
 from macromodel.agents.households.consumption_inputs import (
     IncomeHistories,
     MonetaryUnits,
@@ -162,13 +163,14 @@ def test_hand_smoothed_base_rebase_target_and_dynamic_decomposition():
         real_borrowing_rate=rate,
         epsilon=np.full(2, 0.03),
         consumer_debt_rate_delta=0.02,
+        debt_service_payments=DebtServicePayments([150, 50], [100, 100]),
         uncertainty_delta=0.4,
         expected_inflation=0.025,
     )
     log_target, a, g = oracle(cfg, expected, data.pi_log_ratio_rebased, data.opening_real, rate=rate, epsilon=0.03)
     np.testing.assert_allclose(out["target_consumption_raw_log_target"], log_target, rtol=1e-10, atol=1e-12)
-    cash = 0.02 * data.opening_real.consumer_ledger_debt / (4 * expected)
-    delta = 0.56 * (log_target - np.log(budget)) - 0.003 * cash - 0.005 * 0.4
+    cash = np.array([50, -50]) / (expected * 2)
+    delta = 0.56 * (log_target - np.log(budget)) - 0.75 * cash - 0.005 * 0.4
     np.testing.assert_allclose(out["target_consumption_interest_rate_cashflow_index"], cash, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(out["target_consumption_unguarded_delta_log_consumption"], delta, rtol=1e-10, atol=1e-12)
     desired = budget * np.exp(np.clip(delta, -0.5, 0.5))

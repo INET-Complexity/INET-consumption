@@ -1446,6 +1446,27 @@ class CreditMarket:
         )
         return self.preview_opening_consumer_interest() + mortgage_interest.sum(axis=0)
 
+    def preview_opening_contractual_household_service(self) -> dict[str, np.ndarray]:
+        """Current contractual interest and scheduled principal, without cash writes.
+
+        Use the serviceable opening contracts: new borrowing/refinancing changes
+        future scheduled service when the loan-accounting lifecycle applies it.
+        Exclude old arrears collections and discretionary early repayment, which
+        are different cash uses from this period's contractual instalment.
+        """
+        result = {}
+        for product, key, arrears in (
+            ("consumer", "cons_loans", self._consumer_principal_arrears_by_cell),
+            ("mortgage", "mort_loans", self._mortgage_principal_arrears_by_cell),
+        ):
+            interest, principal = _scheduled_service_components(
+                self._serviceable_loans_this_period[key], arrears,
+                principal_arrears_accrue_interest=False,
+            )
+            result[product + "_interest_nominal"] = interest.sum(axis=0)
+            result[product + "_principal_nominal"] = principal.sum(axis=0)
+        return result
+
     def preview_opening_household_service(self) -> tuple[np.ndarray, np.ndarray]:
         """Return non-mutating opening consumer and mortgage service by household."""
         cons = self._serviceable_loans_this_period["cons_loans"]

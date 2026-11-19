@@ -22,9 +22,24 @@ def _categorical_colors(n_colors):
     return [f"hsl({int(h)}, 60%, 45%)" for h in np.linspace(0, 330, n_colors)]
 
 
+IRF_SHOCK_LABELS = {
+    "common_income_uncertainty_25pct": "Common income\nuncertainty (+25%)",
+    "individual_income_uncertainty_25pct": "Individual income\nuncertainty (+25%)",
+    "common_uncertainty": "Common income\nuncertainty",
+    "individual_uncertainty": "Individual income\nuncertainty",
+}
+
+
+def _format_irf_shock_label(shock_name: str) -> str:
+    """Return a readable row label for known and arbitrary shock names."""
+    if shock_name in IRF_SHOCK_LABELS:
+        return IRF_SHOCK_LABELS[shock_name]
+    return re.sub(r"_+", " ", str(shock_name)).strip().capitalize()
+
+
 IRF_PANEL_LABELS = {
     "real_gdp": "Real GDP, %",
-    "real_cons": "Real household consumption, %",
+    "real_cons": "Real hh consumption, %",
     "cpi": "CPI, %",
     "unemp": "Unemployment rate, pp",
     "policy_rate": "Policy rate, pp",
@@ -36,22 +51,22 @@ IRF_PANEL_LABELS = {
     "household_employment": "Employed individuals, %",
     "firm_real_wage_per_employee": "Real wage per employee, %",
     "household_real_employee_income": "Real employee income, %",
-    "income_uncertainty_delta": "Income uncertainty index change, ×100",
+    "income_uncertainty_delta": "Income uncertainty change (index units)",
     "consumption_uncertainty_contribution": "Consumption-rule uncertainty contribution, ×100",
-    "real_household_income": "Real household income, %",
+    "real_household_income": "Real hh income, %",
     "firm_loan_rate": "Short-term firm loan rate, pp",
     "firm_long_term_loan_rate": "Long-term firm loan rate, pp",
-    "household_consumption_loan_rate": "Household consumption loan rate, pp",
+    "household_consumption_loan_rate": "Hh consumption loan rate, pp",
     "household_mortgage_rate": "Mortgage rate, pp",
-    "household_deposit_rate": "Household deposit rate, pp",
+    "household_deposit_rate": "Hh deposit rate, pp",
     "firm_deposit_rate": "Firm deposit rate, pp",
     "firm_loan_interest_paid": "Firm interest paid, %",
     "firm_received_credit": "New firm credit, %",
     "firm_debt": "Firm debt, %",
     "firm_deposits": "Firm deposits, %",
-    "household_deposits": "Household deposits, %",
-    "household_consumption_loan_interest": "Household loan interest paid, %",
-    "household_deposit_interest": "Household deposit interest received, %",
+    "household_deposits": "Hh deposits, %",
+    "household_consumption_loan_interest": "Hh loan interest paid, %",
+    "household_deposit_interest": "Net hh interest receipts change\n(% of baseline hh income)",
 }
 
 IRF_PCT_VARIABLES = {
@@ -67,7 +82,6 @@ IRF_PCT_VARIABLES = {
     "household_deposits",
     "firm_loan_interest_paid",
     "household_consumption_loan_interest",
-    "household_deposit_interest",
 }
 IRF_RATE_VARIABLES = {
     "unemployment_rate",
@@ -78,7 +92,6 @@ IRF_RATE_VARIABLES = {
     "household_mortgage_rate",
     "household_deposit_rate",
     "firm_deposit_rate",
-    "income_uncertainty_delta",
     "consumption_uncertainty_contribution",
 }
 IRF_COUNT_VARIABLES = {
@@ -113,7 +126,7 @@ IRF_PANEL_GROUPS = {
     ),
     "Income uncertainty": (
         "income_uncertainty_delta",
-        "consumption_uncertainty_contribution",
+        "real_cons",
     ),
     "Households": (
         "household_consumption_loan_rate",
@@ -136,10 +149,32 @@ def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
     result.loc[result.variable.isin(IRF_RATE_VARIABLES), "plot_value"] = (
         100 * result.loc[result.variable.isin(IRF_RATE_VARIABLES), "delta"]
     )
+    uncertainty_mask = result.variable == "income_uncertainty_delta"
+    # This series is a change in an index, not a relative percentage change.
+    result.loc[uncertainty_mask, "plot_value"] = result.loc[uncertainty_mask, "delta"]
     pct_mask = result.variable.isin(IRF_PCT_VARIABLES)
     result.loc[pct_mask, "plot_value"] = 100 * result.loc[pct_mask, "pct_delta"]
     count_mask = result.variable.isin(IRF_COUNT_VARIABLES)
     result.loc[count_mask, "plot_value"] = 100 * result.loc[count_mask, "pct_delta"]
+
+    deposit_mask = result.variable == "household_deposit_interest"
+    if deposit_mask.any():
+        if "baseline" not in result.columns:
+            raise ValueError("Net interest receipts require baseline household income in the IRF panel.")
+        keys = ["seed", "shock_name", "horizon"]
+        income = result.loc[result.variable == "household_income", keys + ["baseline"]]
+        deposits = result.loc[deposit_mask, keys + ["delta"]].merge(
+            income, on=keys, how="left", validate="many_to_one", sort=False
+        )
+        # Stored interest is a signed expense: negative means receipts. Its
+        # baseline can cross zero, so normalize the receipt change by income.
+        denominator = deposits["baseline"].to_numpy(dtype=float)
+        result.loc[deposit_mask, "plot_value"] = np.divide(
+            -100 * deposits["delta"].to_numpy(dtype=float),
+            denominator,
+            out=np.full(len(deposits), np.nan),
+            where=np.isfinite(denominator) & (denominator > 0.0),
+        )
 
     for variable, real_name in (
         ("gdp_output", "real_gdp"),
@@ -213,6 +248,7 @@ def plot_irf_panels(
     groups = {
         name: [variable for variable in variables if variable in available]
         for name, variables in IRF_PANEL_GROUPS.items()
+        if name != "Income uncertainty" or "income_uncertainty_delta" in available
     }
     groups = {name: variables for name, variables in groups.items() if variables}
     if not groups:
@@ -223,7 +259,10 @@ def plot_irf_panels(
     for group_name, variables in groups.items():
         rows = max(len(shock_names), 1)
         cols = len(variables)
-        group_figsize = figsize or (max(3.6 * cols, 12.0), max(2.8 * rows, 7.0))
+        if figsize is None:
+            group_figsize = (max(4.6 * cols, 14.0), max(3.2 * rows, 8.0))
+        else:
+            group_figsize = figsize
         fig, axs = plt.subplots(rows, cols, figsize=group_figsize, sharex=True, squeeze=False)
         for row_idx, shock_name in enumerate(shock_names):
             for col_idx, variable in enumerate(variables):
@@ -241,13 +280,26 @@ def plot_irf_panels(
                 ax.plot(horizon, median.to_numpy(), lw=2.2)
                 ax.axhline(0.0, color="grey", lw=1)
                 if row_idx == 0:
-                    ax.set_title(IRF_PANEL_LABELS[variable])
+                    ax.set_title(IRF_PANEL_LABELS[variable], fontweight="bold", pad=8)
                 if col_idx == 0:
-                    ax.set_ylabel(shock_name, fontweight="bold")
+                    ax.set_ylabel(
+                        _format_irf_shock_label(shock_name),
+                        fontweight="bold",
+                        rotation=0,
+                        ha="right",
+                        va="center",
+                        labelpad=12,
+                    )
                 if row_idx == rows - 1:
                     ax.set_xlabel("Quarters after shock")
-        fig.suptitle(f"{group_name}: IRFs, seed median and {quantile_pct}% band ({country})")
-        fig.tight_layout()
+        # Reserve a fixed physical header before adding the figure title, so
+        # tight_layout does not count the title twice on tall shock grids.
+        fig.tight_layout(rect=(0.22, 0, 1, 1 - 0.45 / fig.get_figheight()))
+        fig.suptitle(
+            f"{group_name}: IRFs, seed median and {quantile_pct}% band ({country})",
+            fontweight="bold",
+            y=1 - 0.10 / fig.get_figheight(),
+        )
         figures.append(fig)
         if show:
             plt.show()

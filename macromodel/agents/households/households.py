@@ -2014,6 +2014,7 @@ class Households(Agent):
         time_unit: int = 12,
         subsistence_income: Optional[np.ndarray] = None,
         consumption_inputs: ConsumptionInputs | None = None,
+        debt_service_payments=None,
     ) -> np.ndarray:
         """Calculate target consumption levels.
 
@@ -2238,6 +2239,8 @@ class Households(Agent):
                 population_scale_factor=self.states.get("population_scale_factor"),
                 time_unit=time_unit,
                 **({"consumption_inputs": consumption_inputs} if integrated else {}),
+                **({"debt_service_payments": debt_service_payments}
+                   if debt_service_payments is not None else {}),
             )
             components = getattr(self.functions["consumption"], "last_target_consumption_components", None)
             if components is not None:
@@ -2933,6 +2936,9 @@ class Households(Agent):
             "target_consumption_mortgage_payment_diagnostic",
             "target_consumption_house_price",
             "target_consumption_interest_rate_cashflow",
+            "target_consumption_debt_service_cashflow",
+            "target_consumption_debt_service_change_ratio",
+            "target_consumption_debt_service_income_nominal",
             "target_consumption_uncertainty",
             "target_consumption_partial_adjustment_gap",
             "target_consumption_income_growth",

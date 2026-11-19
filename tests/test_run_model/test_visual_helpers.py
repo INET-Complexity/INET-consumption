@@ -782,7 +782,30 @@ def test_cpi_ppi_comparison_plots_use_fixed_colors_and_specific_legends():
     assert [trace.line.color for trace in ppi_fig.data[:3]] == ["#1f77b4", "#2ca02c", "#d62728"]
 
 
-def test_plot_irf_panels_includes_income_uncertainty_series_in_scaled_units():
+@pytest.mark.parametrize("baseline_income", [200.0, 0.0, -1.0, np.nan])
+def test_net_interest_receipts_use_paired_baseline_income(baseline_income):
+    from src.visual_helpers import _prepare_irf_plot_panel
+
+    rows = []
+    for seed, income, change in [(2, 400.0, 8.0), (1, baseline_income, -10.0)]:
+        for variable, baseline, delta in [
+            ("household_deposit_interest", 0.001, change),
+            ("household_income", income, 0.0),
+        ]:
+            rows.append(dict(
+                seed=seed, shock_name="policy_rate_100bp", horizon=0,
+                variable=variable, baseline=baseline, delta=delta, pct_delta=12345.0,
+            ))
+    result = _prepare_irf_plot_panel(pd.DataFrame(rows))
+    receipts = result.loc[result.variable == "household_deposit_interest"].set_index("seed").plot_value
+    assert receipts.loc[2] == pytest.approx(-2.0)
+    if baseline_income > 0.0:
+        assert receipts.loc[1] == pytest.approx(5.0)
+    else:
+        assert np.isnan(receipts.loc[1])
+
+
+def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percent():
     panel = pd.DataFrame(
         [
             {
@@ -790,24 +813,37 @@ def test_plot_irf_panels_includes_income_uncertainty_series_in_scaled_units():
                 "shock_name": "common_uncertainty",
                 "horizon": 0,
                 "variable": variable,
-                "pct_delta": np.nan,
+                "pct_delta": pct_delta,
                 "delta": delta,
             }
-            for variable, delta in (
-                ("income_uncertainty_delta", 0.02),
-                ("consumption_uncertainty_contribution", 0.004),
+            for variable, delta, pct_delta in (
+                ("income_uncertainty_delta", 0.02, np.nan),
+                ("consumption_uncertainty_contribution", 0.004, np.nan),
+                ("household_consumption", 100.0, 0.10),
+                ("cpi", 0.02, 0.02),
             )
         ]
     )
 
     figures = plot_irf_panels(panel, ["common_uncertainty"], show=False)
 
-    assert len(figures) == 1
-    figure = figures[0]
-    assert "Income uncertainty" in figure._suptitle.get_text()
+    figure = next(fig for fig in figures if fig._suptitle.get_text().startswith("Income uncertainty:"))
     axes = figure.axes
     assert len(axes) == 2
-    assert axes[0].get_title() == "Income uncertainty index change, ×100"
-    assert axes[1].get_title() == "Consumption-rule uncertainty contribution, ×100"
-    np.testing.assert_allclose(axes[0].lines[0].get_ydata(), [2.0])
-    np.testing.assert_allclose(axes[1].lines[0].get_ydata(), [0.4])
+    assert axes[0].get_title() == "Income uncertainty change (index units)"
+    assert axes[1].get_title() == "Real hh consumption, %"
+    assert axes[0].get_ylabel() == "Common income\nuncertainty"
+    np.testing.assert_allclose(axes[0].lines[0].get_ydata(), [0.02])
+    np.testing.assert_allclose(axes[1].lines[0].get_ydata(), [100 * (1.10 / 1.02 - 1)])
+    for fig in figures:
+        assert fig._suptitle.get_fontweight() == "bold"
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        column_titles = [ax.title.get_window_extent(renderer) for ax in fig.axes if ax.get_title()]
+        assert fig._suptitle.get_window_extent(renderer).y0 > max(title.y1 for title in column_titles) + 8
+    without_uncertainty = panel.loc[~panel.variable.isin(
+        ["income_uncertainty_delta", "consumption_uncertainty_contribution"]
+    )]
+    macro_only = plot_irf_panels(without_uncertainty, ["common_uncertainty"], show=False)
+    assert len(macro_only) == 1
+    assert macro_only[0]._suptitle.get_text().startswith("Macro and investment:")

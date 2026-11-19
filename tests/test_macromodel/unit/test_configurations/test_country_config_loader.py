@@ -372,7 +372,8 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     # Inert under the continuous mapping, but still resolved; see the yaml comment.
     assert params["permanent_income_propensity"] == 0.55
     assert params["income_growth_propensity"] == expected_income_growth_propensity
-    assert params["interest_rate_cashflow_propensity"] == -0.003
+    assert params["debt_service_cashflow_propensity"] == -0.75
+    assert "interest_rate_cashflow_propensity" not in params
     assert params["uncertainty_propensity"] == -0.005
     assert params["partial_adjustment_speed"] == 0.56
     assert params["long_run_mpc_lower_bound"] == 0.0

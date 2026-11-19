@@ -185,10 +185,18 @@ WAGE_COMPETITION_ANCHOR_OVERRIDES: dict[str, Any] = {
     "firms.parameters.wage_inflation_anchor": True,
 }
 
+# Diagnostic arm: wage anchor on, policy rate held at its floor (r_star far below any inflation gap),
+# to separate the wage anchor from rate normalisation. r_star enters only the SmoothTaylorRule.
+WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES: dict[str, Any] = {
+    **WAGE_COMPETITION_ANCHOR_OVERRIDES,
+    "central_bank.taylor_rule_overrides.r_star": -0.5,
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
     "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,
+    "wage_competition_anchor_rate_at_floor": WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,

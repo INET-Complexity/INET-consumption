@@ -179,9 +179,16 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
     "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
 }
 
+# wage_competition plus wage indexation anchored to the central bank's targeted_inflation_rate
+# (weight 1 - wage_cpi_indexation_elasticity); see firms.parameters.wage_inflation_anchor.
+WAGE_COMPETITION_ANCHOR_OVERRIDES: dict[str, Any] = {
+    "firms.parameters.wage_inflation_anchor": True,
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
+    "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,

@@ -2239,8 +2239,7 @@ class Households(Agent):
                 population_scale_factor=self.states.get("population_scale_factor"),
                 time_unit=time_unit,
                 **({"consumption_inputs": consumption_inputs} if integrated else {}),
-                **({"debt_service_payments": debt_service_payments}
-                   if debt_service_payments is not None else {}),
+                **({"debt_service_payments": debt_service_payments} if debt_service_payments is not None else {}),
             )
             components = getattr(self.functions["consumption"], "last_target_consumption_components", None)
             if components is not None:

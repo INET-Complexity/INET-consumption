@@ -1971,9 +1971,14 @@ class Country:
         prefix = "consumption_debt_service_"
         if replace_current:
             components = {
-                name: hh.ts.current(prefix + name).copy() for name in (
-                    "consumer_interest_nominal", "consumer_principal_nominal", "mortgage_interest_nominal",
-                    "mortgage_principal_nominal", "overdraft_interest_nominal", "total_nominal",
+                name: hh.ts.current(prefix + name).copy()
+                for name in (
+                    "consumer_interest_nominal",
+                    "consumer_principal_nominal",
+                    "mortgage_interest_nominal",
+                    "mortgage_principal_nominal",
+                    "overdraft_interest_nominal",
+                    "total_nominal",
                 )
             }
             previous = hh.ts.current(prefix + "previous_total_nominal").copy()
@@ -1989,7 +1994,7 @@ class Country:
         for name, values in fields.items():
             key = prefix + name
             if key not in hh.ts.dicts:
-                hh.ts[key] = (np.zeros_like(values) if name == "change_nominal" else values.copy())
+                hh.ts[key] = np.zeros_like(values) if name == "change_nominal" else values.copy()
             if replace_current:
                 hh.ts.override_current(key, values.copy())
             else:
@@ -2199,7 +2204,9 @@ class Country:
             real_borrowing_rate = borrowing_inputs["real_borrowing_rate"]
             borrowing_inputs["consumer_rate_contractual_nominal"] = consumer_contractual_rate
             borrowing_inputs["mortgage_rate_contractual_nominal"] = mortgage_contractual_rate
-            borrowing_inputs["expected_period_inflation"] = np.full(expected_household_shape, expected_consumer_inflation)
+            borrowing_inputs["expected_period_inflation"] = np.full(
+                expected_household_shape, expected_consumer_inflation
+            )
         # Existing consumer debt is fixed-rate until new borrowing remodulates
         # the aggregate balance. The CACF cashflow input therefore uses only
         # the realized contractual repricing from that event, not an

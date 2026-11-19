@@ -1460,7 +1460,8 @@ class CreditMarket:
             ("mortgage", "mort_loans", self._mortgage_principal_arrears_by_cell),
         ):
             interest, principal = _scheduled_service_components(
-                self._serviceable_loans_this_period[key], arrears,
+                self._serviceable_loans_this_period[key],
+                arrears,
                 principal_arrears_accrue_interest=False,
             )
             result[product + "_interest_nominal"] = interest.sum(axis=0)

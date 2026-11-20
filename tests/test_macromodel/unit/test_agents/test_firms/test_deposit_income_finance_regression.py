@@ -179,3 +179,59 @@ def test_unfunded_facility_principal_keeps_existing_residual_cash_priority(test_
     result = test_firms.settle_operating_revolving_facility(full(0))
     np.testing.assert_allclose(result["repayment"], 0)
     np.testing.assert_allclose(result["closing_balance"], 50)
+
+
+def test_profit_proposal_reserves_cash_and_can_fund_conditional_facility_draw(test_firms, monkeypatch):
+    _, full, _ = arrange(test_firms, monkeypatch, capital=0, tfp=0, technical=0)
+    test_firms.ts.override_current("dividend_fund_declared_distribution", full(10))
+    test_firms.ts.override_current("deposits", full(5))
+    test_firms.compute_target_credit(
+        estimated_growth=0,
+        estimated_inflation=0,
+        wage_obligation_preview=full(80),
+        interest_obligation_preview=full(0),
+        loan_interest_obligation_preview=full(0),
+        debt_installment_preview=full(0),
+    )
+    # Expected sales100 cover costs80 + dividend10 despite little opening cash.
+    np.testing.assert_allclose(test_firms.ts.current("dividend_fund_planned_distribution"), 10)
+    np.testing.assert_allclose(test_firms.ts.current("credit_budget_hard_obligations"), 90)
+    draw = test_firms.draw_operating_revolving_facility(full(0), full(0), full(0), full(0))
+    np.testing.assert_allclose(draw["current_draw"], 85)  # 80 wages+10 planned dividend-5 cash
+    # A proposal is not a separate cash expense; actual debit occurs at settlement.
+    np.testing.assert_allclose(test_firms.ts.current("deposits"), 5)
+
+
+def test_expected_facility_repayment_reduces_dividend_plan(test_firms, monkeypatch):
+    _, full, _ = arrange(test_firms, monkeypatch, capital=0, tfp=0, technical=0)
+    test_firms.ts.override_current("deposits", full(0))
+    test_firms.ts.override_current("dividend_fund_declared_distribution", full(10))
+    test_firms.ts.override_current("operating_revolving_closing_balance", full(30))
+    test_firms.compute_target_credit(
+        estimated_growth=0,
+        estimated_inflation=0,
+        wage_obligation_preview=full(80),
+        interest_obligation_preview=full(0),
+        loan_interest_obligation_preview=full(0),
+        debt_installment_preview=full(0),
+    )
+    np.testing.assert_allclose(test_firms.ts.current("dividend_fund_planned_distribution"), 0)
+
+
+def test_cleared_facility_refinance_updates_plan_once(test_firms, monkeypatch):
+    _, full, _ = arrange(test_firms, monkeypatch, capital=0, tfp=0, technical=0)
+    test_firms.ts.override_current("dividend_fund_declared_distribution", full(10))
+    test_firms.ts.override_current("dividend_fund_pre_credit_cash_capacity", full(-5))
+    test_firms.ts.override_current("received_operating_refinance_credit", full(8))
+    for _ in range(2):
+        test_firms.revise_activity_against_available_finance(
+            expected_lcu_prices=np.ones(test_firms.n_industries),
+            wage_obligation_preview=full(80),
+            production_tax_obligation_preview=full(0),
+            corporate_tax_obligation_preview=full(0),
+            interest_obligation_preview=full(0),
+            loan_interest_obligation_preview=full(0),
+            debt_installment_preview=full(0),
+        )
+        np.testing.assert_allclose(test_firms.ts.current("dividend_fund_planned_distribution"), 3)
+        np.testing.assert_allclose(test_firms.ts.current("activity_finance_hard_obligations"), 83)

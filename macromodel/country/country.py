@@ -3692,20 +3692,19 @@ class Country:
         )
 
     def record_diagnostic_dividend_fund(self) -> None:
-        """Declare next-period profit payouts from current eligible capacity."""
+        """Record a conditional next-period proposal; only settlement declares cash.
+
+        The legacy declared_distribution carriers retain their names for saved
+        output compatibility. They represent proposals which can expire.
+        """
         from macromodel.country.diagnostic_dividend_fund import compute_diagnostic_dividend_fund
 
+        # Preserve model revenue/capital conventions; accrue unpaid ordinary
+        # interest for payout earnings even though the cash ledger capitalises it.
         firm_cash_profit_after_settlement = (
-            self.firms.ts.current("nominal_amount_sold_in_lcu")
-            - self.firms.ts.current("total_wage")
-            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-            - self.firms.direct_tfp_investment_cash_expense()
-            - self.firms.ts.current("taxes_paid_on_production")
+            self.firms.ts.current("profits")
             - self.firms.ts.current("corporate_taxes_paid")
-            - self.firms.ts.current("capital_formation_taxes_paid")
-            - self.firms.ts.current("interest_paid")
-            - self.firms.ts.current("debt_installments")
-            - self.firms.ts.current("operating_revolving_repayment")
+            - self.firms.ts.current("firm_settlement_capitalized_interest")
         )
         result = compute_diagnostic_dividend_fund(
             beginning_ifa=self.households.ts.prev("illiquid_financial_assets"),
@@ -3717,6 +3716,7 @@ class Country:
             firm_default_flag=self.firms.ts.current("firm_settlement_default_flag"),
             bank_cash_distributable_profits=self.banks.ts.current("cash_distributable_profits"),
             ownership_quota=self.households.states["dividend_fund_ownership_quota"],
+            cap_firm_by_closing_cash=False,
         )
         wealth_function = self.households.functions["wealth"]
         firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", 0.0))
@@ -3732,6 +3732,42 @@ class Country:
             if has_owners
             else np.zeros_like(result.bank_distributable_profit_candidate)
         )
+        from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
+
+        profit_ceiling = firm_declared.copy()
+        next_service = self.credit_market.compute_scheduled_firm_installments_preview()
+        nominal_growth = max(
+            0.0,
+            (1 + float(self.economy.ts.current("estimated_growth")[0]))
+            * (1 + float(self.economy.ts.current("estimated_ppi_inflation")[0])),
+        )
+        # Project realised non-debt cash costs; ordinary principal and facility
+        # repayment are reserved separately. No future refinance is presumed.
+        projected_operating_cash = nominal_growth * (
+            self.firms.ts.current("nominal_amount_sold_in_lcu")
+            - self.firms.ts.current("total_wage")
+            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - self.firms.direct_tfp_investment_cash_expense()
+            - self.firms.ts.current("taxes_paid_on_production")
+            - self.firms.ts.current("corporate_taxes_paid")
+            - self.firms.ts.current("capital_formation_taxes_paid")
+            - self.firms.ts.current("interest_paid_on_deposits")
+        )
+        carried_facility = self.firms.ts.current("operating_revolving_closing_balance")
+        forecast_capacity = (
+            self.firms.ts.current("deposits")
+            + projected_operating_cash
+            - next_service["scheduled_interest_due"]
+            - next_service["scheduled_principal_due"]
+            - carried_facility * (1 + self.firms.ts.current("operating_revolving_rate"))
+        )
+        firm_declared = compute_planned_firm_distribution(
+            proposal=profit_ceiling,
+            cash_after_senior_uses=forecast_capacity,
+        )
+        self.firms.ts.dividend_fund_after_tax_earnings.append(firm_cash_profit_after_settlement.copy())
+        self.firms.ts.dividend_fund_profit_ceiling.append(profit_ceiling)
+        self.firms.ts.dividend_fund_forecast_cash_capacity.append(np.maximum(forecast_capacity, 0.0))
         firm_retained = result.firm_distributable_profit_candidate - firm_declared
         bank_retained = result.bank_distributable_profit_candidate - bank_declared
         ts = self.households.ts
@@ -4050,15 +4086,6 @@ class Country:
         self.firms.settle_operating_revolving_facility(
             cash_available_after_debt_service=cash_available_after_debt_service,
         )
-        from macromodel.country.diagnostic_dividend_fund import compute_cash_feasible_firm_distribution_settlement
-
-        firm_settlement_debit, firm_settlement_shortfall = compute_cash_feasible_firm_distribution_settlement(
-            declared_distribution=self.firms.ts.current("dividend_fund_declared_distribution"),
-            cash_available_after_debt_service=cash_available_after_debt_service,
-            operating_revolving_repayment=self.firms.ts.current("operating_revolving_repayment"),
-        )
-        self.firms.ts.dividend_fund_settlement_debit.append(firm_settlement_debit)
-        self.firms.ts.dividend_fund_settlement_shortfall.append(firm_settlement_shortfall)
         self.firms.ts.debt_installments.append(
             self.credit_market.settle_firm_installments(
                 payable_principal_by_firm=firm_debt_settlement["payable_principal"],
@@ -4112,6 +4139,35 @@ class Country:
                 tau_firm=self.central_government.states["Profit Tax"],
             )
         )
+
+        from macromodel.country.diagnostic_dividend_fund import settle_profit_based_firm_distribution
+
+        firm_proposal = self.firms.ts.current("dividend_fund_declared_distribution")
+        firm_settlement_debit, firm_settlement_shortfall, firm_cash_capacity = settle_profit_based_firm_distribution(
+            proposal=firm_proposal,
+            planned=self.firms.ts.current("dividend_fund_planned_distribution"),
+            # Replace the planning reserve with the corporate tax actually booked.
+            cash_after_debt_service=(
+                cash_available_after_debt_service
+                + firm_debt_settlement["corporate_tax_reserve"]
+                - self.firms.ts.current("corporate_taxes_paid")
+            ),
+            facility_repayment=self.firms.ts.current("operating_revolving_repayment"),
+            distressed=firm_debt_settlement["illiquid_flag"] | self.firms.states["is_insolvent"],
+        )
+        self.firms.ts.dividend_fund_settlement_cash_capacity.append(firm_cash_capacity)
+        self.firms.ts.dividend_fund_final_declared_distribution.append(firm_settlement_debit.copy())
+        self.firms.ts.dividend_fund_expired_distribution.append(firm_settlement_shortfall.copy())
+        self.firms.ts.dividend_fund_effective_payout_ratio.append(
+            np.divide(
+                firm_settlement_debit,
+                np.maximum(self.firms.ts.current("dividend_fund_after_tax_earnings"), 0.0),
+                out=np.zeros_like(firm_settlement_debit),
+                where=self.firms.ts.current("dividend_fund_after_tax_earnings") > 0.0,
+            )
+        )
+        self.firms.ts.dividend_fund_settlement_debit.append(firm_settlement_debit)
+        self.firms.ts.dividend_fund_settlement_shortfall.append(firm_settlement_shortfall)
 
         # D2. FIRM BALANCE SHEETS
         self.firms.ts.gross_operating_surplus_mixed_income.append(

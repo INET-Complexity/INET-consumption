@@ -1877,6 +1877,26 @@ class Firms(Agent):
         capital_costs = capital_costs + self.capital_formation_tax_on_purchases(capital_costs)
         working_capital_budget = intermediate_costs
         investment_budget = capital_costs + planned_technical_investment_costs + planned_tfp_investment_costs
+        # The prior profit-backed proposal is conditional, never a debt claim.
+        from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
+
+        forecast_cash = (
+            internal_cash
+            + expected_sales
+            - hard_obligations
+            - existing_overdraft
+            - working_capital_budget
+            - investment_budget
+            - np.maximum(0.0, self.ts.current("operating_revolving_closing_balance"))
+        )
+        planned_distribution = compute_planned_firm_distribution(
+            proposal=self.ts.current("dividend_fund_declared_distribution"),
+            cash_after_senior_uses=forecast_cash,
+        )
+        self.ts.dividend_fund_pre_credit_cash_capacity.append(forecast_cash)
+        self.ts.dividend_fund_planned_distribution.append(planned_distribution)
+        hard_obligations = hard_obligations + planned_distribution
+        non_debt_service_hard_obligations = non_debt_service_hard_obligations + planned_distribution
         cash_after_hard_obligations = internal_cash - hard_obligations
         cash_after_non_debt_service_hard_obligations = internal_cash - non_debt_service_hard_obligations
         available_after_hard_and_overdraft = cash_after_hard_obligations - existing_overdraft
@@ -2054,6 +2074,7 @@ class Firms(Agent):
         intermediate_purchases = np.maximum(0.0, np.asarray(intermediate_purchases, dtype=float))
         operating_commitments = (
             self.ts.current("total_wage")
+            + self.ts.current("dividend_fund_planned_distribution")
             + intermediate_purchases
             + taxes_paid_on_production
             + np.maximum(0.0, corporate_tax_obligation_preview)
@@ -2754,6 +2775,29 @@ class Firms(Agent):
             loan_interest_obligation_preview = np.zeros(n_firms)
         if debt_installment_preview is None:
             debt_installment_preview = self.ts.current("debt_installments")
+        from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
+
+        # Replace the conservative pre-credit no-refinance forecast with the
+        # actually cleared finance. Each grant enters this forecast once.
+        forecast_cash = self.ts.current("dividend_fund_pre_credit_cash_capacity").copy()
+        for field in (
+            "received_operating_refinance_credit",
+            "received_long_term_credit",
+            "received_debt_rollover_credit",
+        ):
+            forecast_cash += np.maximum(0.0, np.nan_to_num(self.ts.current(field), nan=0.0))
+        forecast_cash += self._current_received_ordinary_short_term_credit()
+        forecast_cash += np.minimum(
+            np.maximum(0.0, np.nan_to_num(self.ts.current("received_overdraft_refinance_credit"), nan=0.0)),
+            np.maximum(0.0, -self.ts.current("deposits")),
+        )
+        self.ts.override_current(
+            "dividend_fund_planned_distribution",
+            compute_planned_firm_distribution(
+                proposal=self.ts.current("dividend_fund_declared_distribution"),
+                cash_after_senior_uses=forecast_cash,
+            ),
+        )
         loan_debt_service_preview = loan_interest_obligation_preview + debt_installment_preview
         # Keep deposit receipts as negative expenses in the resource budget.
         non_loan_interest_obligation_preview = interest_obligation_preview - loan_interest_obligation_preview
@@ -2811,7 +2855,9 @@ class Firms(Agent):
             + corporate_tax_obligation_preview
             + non_loan_interest_obligation_preview
         )
-        hard_obligations = operating_commitments + unfunded_loan_debt_service
+        hard_obligations = (
+            operating_commitments + unfunded_loan_debt_service + self.ts.current("dividend_fund_planned_distribution")
+        )
         available_internal_finance = np.maximum(0.0, opening_deposits - hard_obligations)
         available_finance = available_internal_finance + np.maximum(
             0.0,
@@ -3177,7 +3223,9 @@ class Firms(Agent):
         )
         # Signed net interest must agree with the post-credit resource budget.
         non_loan_interest = np.nan_to_num(np.asarray(non_loan_interest_obligation_preview, dtype=float), nan=0.0)
-        finance_cash = np.maximum(0.0, opening_deposits - non_loan_interest)
+        finance_cash = np.maximum(
+            0.0, opening_deposits - non_loan_interest - self.ts.current("dividend_fund_planned_distribution")
+        )
         repair_cash_used = np.zeros(n_firms)
         residual_repair_credit_need = np.maximum(
             0.0, np.nan_to_num(self.ts.current("target_debt_rollover_credit"), nan=0.0)

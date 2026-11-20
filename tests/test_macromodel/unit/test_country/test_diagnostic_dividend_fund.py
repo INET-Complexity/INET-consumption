@@ -114,8 +114,8 @@ def test_settlement_receipts_reject_invalid_ownership_quota(quota: np.ndarray) -
         country.record_dividend_fund_settlement_receipts()
 
 
-def test_facility_repayment_changes_both_old_declaration_and_payment_caps(test_country):
-    """Characterise both existing payout channels without adopting a profit rule."""
+def test_profit_proposal_excludes_principal_but_payment_respects_repayment(test_country):
+    """Principal constrains cash settlement, not the after-tax earnings basis."""
     country = test_country
     firms = country.firms
     n = firms.ts.current("n_firms")
@@ -137,6 +137,9 @@ def test_facility_repayment_changes_both_old_declaration_and_payment_caps(test_c
         firms.ts.override_current(key, zeros.copy())
     firms.ts.override_current("nominal_amount_spent_in_lcu", np.zeros((n, firms.n_industries)))
     firms.ts.override_current("planned_technical_investment", np.zeros((n, firms.n_industries)))
+    firms.ts.override_current("profits", first * 20)
+    firms.ts.override_current("firm_settlement_capitalized_interest", zeros)
+    firms.ts.override_current("interest_paid_on_deposits", zeros)
     firms.ts.override_current("nominal_amount_sold_in_lcu", first * 20)
     firms.ts.override_current("deposits", first * 100)
     firms.ts.override_current("firm_settlement_default_flag", np.zeros(n, dtype=bool))
@@ -155,5 +158,59 @@ def test_facility_repayment_changes_both_old_declaration_and_payment_caps(test_c
             operating_revolving_repayment=first * repayment,
         )
         payments.append(payment[0])
-    np.testing.assert_allclose(values, [1.0, 2.0])
+    np.testing.assert_allclose(values, [2.0, 2.0])
     np.testing.assert_allclose(payments, [10.0, 15.0])
+
+
+@pytest.mark.parametrize("proposal, cash, expected", [(10, 100, 10), (10, 4, 4), (10, -5, 0), (0, 100, 0)])
+def test_planned_profit_distribution_is_conditional(proposal, cash, expected):
+    from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
+
+    result = compute_planned_firm_distribution(
+        proposal=np.array([float(proposal)]), cash_after_senior_uses=np.array([float(cash)])
+    )
+    np.testing.assert_array_equal(result, [expected])
+
+
+@pytest.mark.parametrize("cash", [np.array([np.nan]), np.array([np.inf]), np.array([1.0, 2.0])])
+def test_planned_distribution_rejects_invalid_capacity(cash):
+    from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
+
+    with pytest.raises(ValueError):
+        compute_planned_firm_distribution(proposal=np.array([10.0]), cash_after_senior_uses=cash)
+
+
+def test_accounting_profit_eligibility_is_separate_from_cash_and_borrowing():
+    inputs = _diagnostic_inputs()
+    inputs["firm_cash_profit_after_settlement"] = np.array([10.0, -10.0])
+    inputs["firm_closing_deposits"] = np.array([0.0, 1000.0])
+    result = compute_diagnostic_dividend_fund(**inputs, cap_firm_by_closing_cash=False)
+    np.testing.assert_array_equal(result.firm_distributable_profit_candidate, [10.0, 0.0])
+
+
+@pytest.mark.parametrize(
+    "proposal,planned,cash,repayment,distress,paid,expired",
+    [
+        (10, 10, 100, 20, False, 10, 0),
+        (10, 10, 12, 8, False, 4, 6),
+        (10, 3, 100, 0, False, 3, 7),
+        (10, 10, 0, 0, False, 0, 10),
+        (0, 10, 100, 0, False, 0, 0),
+        (10, 10, 100, 0, True, 0, 10),
+    ],
+)
+def test_final_declaration_is_actual_cash_and_unused_proposal_expires(
+    proposal, planned, cash, repayment, distress, paid, expired
+):
+    from macromodel.country.diagnostic_dividend_fund import settle_profit_based_firm_distribution
+
+    result = settle_profit_based_firm_distribution(
+        proposal=np.array([float(proposal)]),
+        planned=np.array([float(planned)]),
+        cash_after_debt_service=np.array([float(cash)]),
+        facility_repayment=np.array([float(repayment)]),
+        distressed=np.array([distress]),
+    )
+    np.testing.assert_allclose(result[0], [paid])
+    np.testing.assert_allclose(result[1], [expired])
+    np.testing.assert_allclose(result[2], [max(cash - repayment, 0)])

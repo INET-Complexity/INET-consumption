@@ -1448,6 +1448,28 @@ class Country:
             )
         )
 
+    def _real_average_wage_ratio(self) -> float:
+        """Real average wage per employee in the last completed quarter relative to t0.
+
+        Aggregates ``firms.ts.real_wage_per_capita`` (total wage / (CPI x employees) by firm)
+        with employment weights: sum(total wage / CPI) / sum(employees).
+        """
+
+        def average(real_wage_per_capita, employees) -> float:
+            employees = np.asarray(employees, dtype=float)
+            total = employees.sum()
+            return (
+                float((np.asarray(real_wage_per_capita, dtype=float) * employees).sum() / total)
+                if total > 0
+                else np.nan
+            )
+
+        initial = average(self.firms.ts.initial("real_wage_per_capita"), self.firms.ts.initial("number_of_employees"))
+        current = average(self.firms.ts.current("real_wage_per_capita"), self.firms.ts.current("number_of_employees"))
+        if not (np.isfinite(initial) and np.isfinite(current) and initial > 0):
+            raise RuntimeError("Average-wage transfer index needs a positive finite real average wage at t0 and now.")
+        return current / initial
+
     def _uses_replacement_rate_benefits(self) -> bool:
         return bool(getattr(self.central_government.functions["social_benefits"], "uses_replacement_rate", False))
 
@@ -1802,6 +1824,7 @@ class Country:
             current_estimated_benefit_indexation_inflation=(self.economy.current_expected_consumer_period_inflation()),
             current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
             current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            real_average_wage_ratio=self._real_average_wage_ratio(),
         )
 
         # Individuals update their income from unemployment benefits

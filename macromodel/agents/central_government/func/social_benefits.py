@@ -111,6 +111,22 @@ class ConstantSocialBenefitsSetter(SocialBenefitsSetter):
     - Isolating effects of benefit changes
     """
 
+    REGULAR_TRANSFER_INDEXATIONS = ("none", "average_wage")
+
+    def __init__(self, regular_transfer_indexation: str = "none"):
+        """Args:
+        regular_transfer_indexation: ``none`` keeps the real level of pensions and other
+            transfers fixed. ``average_wage`` scales their t0 real level by the real average
+            wage per employee of the previous quarter relative to t0 (``Country`` supplies the
+            ratio), so the nominal totals grow with the nominal average wage.
+        """
+        if regular_transfer_indexation not in self.REGULAR_TRANSFER_INDEXATIONS:
+            raise ValueError(
+                f"regular_transfer_indexation must be one of {self.REGULAR_TRANSFER_INDEXATIONS}, "
+                f"got {regular_transfer_indexation!r}."
+            )
+        self.regular_transfer_indexation = regular_transfer_indexation
+
     def compute_unemployment_benefits(
         self,
         prev_unemployment_benefits: float,

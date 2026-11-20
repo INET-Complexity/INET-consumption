@@ -197,6 +197,7 @@ class CentralGovernment(Agent):
         current_estimated_benefit_indexation_inflation: float,
         current_unemployment_rate: float,
         current_estimated_growth: float,
+        real_average_wage_ratio: float = 1.0,
     ) -> None:
         """Update social benefit levels based on economic conditions.
 
@@ -212,6 +213,9 @@ class CentralGovernment(Agent):
             current_estimated_benefit_indexation_inflation (float): Current CPI-based inflation estimate
             current_unemployment_rate (float): Current unemployment rate
             current_estimated_growth (float): Estimated economic growth
+            real_average_wage_ratio (float): Real average wage per employee, previous quarter
+                over t0. Used only when the setter's ``regular_transfer_indexation`` is
+                ``average_wage``: pensions and other transfers are then t0 real level x ratio.
         """
         benefit_indexation_inflation = np.concatenate(
             (
@@ -257,6 +261,10 @@ class CentralGovernment(Agent):
                 )
             ]
         )
+        if getattr(self.functions["social_benefits"], "regular_transfer_indexation", "none") == "average_wage":
+            # Level form against t0, so the ratio pensions (other transfers) / average wage stays at its t0 value.
+            for name in ("total_other_benefits", "public_pension_benefits"):
+                self.ts.override_current(name, [self.ts.initial(name)[0] * real_average_wage_ratio])
 
     def distribute_unemployment_benefits_to_individuals(
         self,

@@ -15,6 +15,8 @@ def build_country(datawrapper, monkeypatch):
     production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     config = CountryConfiguration()
     config.households = production.households
+    # Exercise the unset branch: the FRA yaml may pin a scenario floor.
+    config.households.functions.property.parameters["minimum_annual_rental_yield"] = None
     config.households.functions.wealth.parameters["frm_coefficients_path"] = str(
         root / "run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
     )

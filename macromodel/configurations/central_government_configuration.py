@@ -8,6 +8,7 @@ class SocialBenefits(BaseModel):
         "ConstantSocialBenefitsSetter",
         "DefaultSocialBenefitsSetter",
         "GrowthSocialBenefitsSetter",
+        "ReplacementRateSocialBenefitsSetter",
     ] = "GrowthSocialBenefitsSetter"
     path_name: str = "social_benefits"
     parameters: dict = Field(default_factory=dict)

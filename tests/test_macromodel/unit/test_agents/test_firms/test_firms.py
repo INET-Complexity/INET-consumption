@@ -2040,6 +2040,27 @@ class TestFirms:
         assert len(test_firms.ts.total_wage) == wage_len
         assert len(test_firms.ts.taxes_paid_on_production) == tax_len
 
+    def test__wage_obligation_scales_with_inflation_anchor_factor(self, test_firms):
+        n_firms = test_firms.ts.current("n_firms")
+        kwargs = dict(
+            corresponding_firm=np.arange(n_firms),
+            individual_wages=np.ones(n_firms),
+            income_taxes=0.2,
+            employee_social_insurance_tax=0.05,
+            employer_social_insurance_tax=0.03,
+            cpi=1.5,
+        )
+
+        unanchored = test_firms.compute_total_wage_obligation(**kwargs)
+
+        # An anchor factor of exactly 1.0 is the unanchored obligation, bit for bit.
+        np.testing.assert_array_equal(
+            test_firms.compute_total_wage_obligation(**kwargs, wage_anchor_factor=1.0), unanchored
+        )
+        np.testing.assert_allclose(
+            test_firms.compute_total_wage_obligation(**kwargs, wage_anchor_factor=1.05), 1.05 * unanchored
+        )
+
     def test__compute_target_credit_uses_pro_forma_cash_budget(self, test_firms):
         n_firms = test_firms.ts.current("n_firms")
         n_industries = test_firms.n_industries

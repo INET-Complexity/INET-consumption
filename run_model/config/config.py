@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import environs
-
 
 @dataclass
 class Config:
@@ -32,6 +30,8 @@ class Config:
     ) -> "Config":
         run_model_dir = Path(__file__).resolve().parents[1]
         model_env_path = Path(model_dotenv_path) if model_dotenv_path is not None else Path(__file__).with_name(".env")
+
+        import environs  # only needed to read .env files; keeps preset imports dependency-free
 
         model_env = environs.Env()
         model_env.read_env(str(model_env_path), recurse=False)
@@ -179,9 +179,49 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
     "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
 }
 
+# Government consumption from the estimated ARDL rule (French data 1985-2019): momentum plus a response
+# to real GDP growth one to three years earlier; data-estimated intercept; sectoral weights as in the YAML.
+GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES: dict[str, Any] = {
+    "government_entities.functions.consumption.name": "ARDLGovernmentConsumptionSetter",
+    "government_entities.functions.consumption.path_name": "consumption",
+    "government_entities.functions.consumption.parameters.['consistency']": 1.0,
+    "government_entities.functions.consumption.parameters.['sectoral_weights']": "initial_fixed",
+}
+
+# Unemployment benefit = replacement rate (derived from the opening data) x contract wage at job loss;
+# people unemployed at t0 keep their opening benefit. Pensions and other transfers as in the constant rule.
+UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES: dict[str, Any] = {
+    "central_government.functions.social_benefits.name": "ReplacementRateSocialBenefitsSetter",
+}
+
+# wage_competition plus wage indexation anchored to the central bank's targeted_inflation_rate
+# (weight 1 - wage_cpi_indexation_elasticity); see firms.parameters.wage_inflation_anchor.
+WAGE_COMPETITION_ANCHOR_OVERRIDES: dict[str, Any] = {
+    "firms.parameters.wage_inflation_anchor": True,
+}
+
+# Diagnostic arm: wage anchor on, policy rate held at its floor (r_star far below any inflation gap),
+# to separate the wage anchor from rate normalisation. r_star enters only the SmoothTaylorRule.
+WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES: dict[str, Any] = {
+    **WAGE_COMPETITION_ANCHOR_OVERRIDES,
+    "central_bank.taylor_rule_overrides.r_star": -0.5,
+}
+
+# Pensions and other transfers follow a contract-wage index: firm real contract rates per labour input,
+# fixed t0 employment weights, last quarter over t0 (Laspeyres, as INSEE's salaire mensuel de base index).
+# Unaffected by who is unemployed. Paid at the current CPI. Set from data (2014-2019 co-movement).
+WAGE_INDEXED_TRANSFERS_OVERRIDES: dict[str, Any] = {
+    "central_government.functions.social_benefits.parameters.['regular_transfer_indexation']": "average_wage",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
+    "government_consumption_ardl": GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES,
+    "wage_indexed_transfers": WAGE_INDEXED_TRANSFERS_OVERRIDES,
+    "unemployment_replacement_rate": UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES,
+    "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,
+    "wage_competition_anchor_rate_at_floor": WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,

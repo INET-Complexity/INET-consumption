@@ -135,6 +135,9 @@ class GovernmentConsumptionSetter(ABC):
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate target government consumption.
 
@@ -202,6 +205,9 @@ class AutoregressiveGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
         log_it: bool = True,
     ) -> np.ndarray:
         """Calculate consumption targets using autoregression.
@@ -307,6 +313,9 @@ class ConstantGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate consumption targets using constant growth.
 
@@ -396,6 +405,9 @@ class ExpectedGrowthGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate consumption targets using expected output growth.
 
@@ -445,6 +457,9 @@ class AutoregressiveGrowthGovernmentConsumptionSetter(GovernmentConsumptionSette
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
         log_it: bool = False,
     ) -> np.ndarray:
         """Calculate consumption targets using growth autoregression.
@@ -554,6 +569,9 @@ class ExogenousGovernmentConsumptionSetter(GovernmentConsumptionSetter):
         exogenous_total_consumption: Optional[np.ndarray],
         forecasting_window: int,
         assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """Calculate consumption targets using exogenous path.
 
@@ -609,3 +627,145 @@ class ExogenousGovernmentConsumptionSetter(GovernmentConsumptionSetter):
             current_good_prices=current_good_prices,
             expected_inflation=expected_inflation,
         )
+
+
+class ARDLGovernmentConsumptionSetter(GovernmentConsumptionSetter):
+    """Estimated autoregressive distributed-lag rule for real government consumption.
+
+    Planned real growth follows
+
+        g_t = a_t + rho_1 g_{t-1} + rho_2 g_{t-2} + beta * mean(dlnY_{t-5..t-12}),
+        a_t = (1 - rho_1 - rho_2 - beta) * z_t,
+
+    with Y real GDP and z_t trend productivity growth: the trailing ``trend_window``-quarter mean
+    (fewer quarters early in the run) of aggregate firm productivity growth. Equivalently,
+    (g_t - z_t) = rho_1 (g_{t-1} - z_t) + rho_2 (g_{t-2} - z_t) + beta (mean dlnY - z_t).
+    Coefficients are OLS estimates on French Eurostat chain-linked volumes (namq_10_gdp, P3_S13 and
+    B1GQ, seasonally and calendar adjusted), 1985Q1-2019Q4, n = 140, R^2 = 0.36 (HAC(4) standard
+    errors: a 0.0004, rho_1 0.10, rho_2 0.075, beta 0.077).
+
+    Intercept. The data intercept a = 0.000829 equals (1 - rho_1 - rho_2 - beta) * 1.55%/yr, French
+    trend GDP growth in sample, so it makes G grow with trend output at the data's trend. Restating
+    it on model productivity growth keeps that property with a supply-side trend: realised GDP is
+    demand-determined in this model, and a GDP-based trend would feed slumps back into G. No
+    estimated coefficient changes. ``trend_window=None``, or no productivity history yet, uses the
+    fixed data intercept.
+
+    Planned real path. real*_t = real*_{t-1} exp(g_t), with own lags on planned growth. Nominal
+    target = real*_t * P_t, with P_t the government basket price index at this quarter's posted firm
+    prices (``posted_price_index_by_industry``, t0 = 1, weighted by the sectoral weights). Firms post
+    prices before government plans, so the rule needs no inflation forecast and realised real G
+    equals the plan up to rationing. Units: real* is in initial-price local currency. Deterministic.
+    Vault: experiments/2026-11-20-fiscal-rules-multiseed.
+
+    The first call sets real* to the previous desired envelope (initial prices) and the own lags
+    from realised real government consumption (``historic_total_consumption``, PPI-deflated).
+    """
+
+    def __init__(
+        self,
+        consistency: float,
+        default_growth: Optional[float] = None,
+        sectoral_weights: str = "previous_desired",
+        intercept: float = 0.000828705,
+        own_lag_1: float = 0.397581,
+        own_lag_2: float = 0.214739,
+        output_coefficient: float = 0.173101,
+        output_lag_start: int = 5,
+        output_lag_end: int = 12,
+        trend_window: Optional[int] = 40,
+    ):
+        super().__init__(consistency=consistency, default_growth=default_growth, sectoral_weights=sectoral_weights)
+        if not 1 <= output_lag_start <= output_lag_end:
+            raise ValueError("ARDLGovernmentConsumptionSetter needs 1 <= output_lag_start <= output_lag_end.")
+        if trend_window is not None and trend_window < 1:
+            raise ValueError("ARDLGovernmentConsumptionSetter needs trend_window >= 1 (or None).")
+        self.intercept = intercept
+        self.own_lag_1 = own_lag_1
+        self.own_lag_2 = own_lag_2
+        self.output_coefficient = output_coefficient
+        self.output_lag_start = output_lag_start
+        self.output_lag_end = output_lag_end
+        self.trend_window = trend_window
+        self.planned_real_consumption: Optional[float] = None
+        self.planned_growth: Optional[list[float]] = None  # [growth t-2, growth t-1]
+
+    def current_intercept(self, historic_productivity_growth: Optional[np.ndarray]) -> float:
+        """(1 - rho_1 - rho_2 - beta) times trend productivity growth; data intercept if unavailable."""
+        z = np.array([]) if historic_productivity_growth is None else np.asarray(historic_productivity_growth, float)
+        if self.trend_window is None or z.size == 0:
+            return self.intercept
+        z = z[-self.trend_window :]
+        if not np.all(np.isfinite(z)):
+            raise ValueError("ARDLGovernmentConsumptionSetter needs finite productivity growth for the trend.")
+        loading = 1.0 - self.own_lag_1 - self.own_lag_2 - self.output_coefficient
+        return float(loading * z.mean())
+
+    def _growth(
+        self,
+        own_growth: np.ndarray,
+        historic_real_gdp_growth: np.ndarray,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+    ) -> float:
+        """Planned log growth given own growth lags [t-2, t-1] and real GDP growth (latest last)."""
+        y = np.asarray(historic_real_gdp_growth, dtype=float)
+        if len(y) < self.output_lag_end or not np.all(np.isfinite(y[-self.output_lag_end :])):
+            raise ValueError(
+                f"ARDLGovernmentConsumptionSetter needs {self.output_lag_end} finite real GDP growth values."
+            )
+        window = y[len(y) - self.output_lag_end : len(y) - self.output_lag_start + 1]
+        return float(
+            self.current_intercept(historic_productivity_growth)
+            + self.own_lag_1 * own_growth[-1]
+            + self.own_lag_2 * own_growth[-2]
+            + self.output_coefficient * window.mean()
+        )
+
+    def real_growth(
+        self,
+        historic_total_consumption: np.ndarray,
+        historic_real_gdp_growth: np.ndarray,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+    ) -> float:
+        """Planned growth with own lags taken from a real consumption history (used on the first call)."""
+        g = np.asarray(historic_total_consumption, dtype=float)
+        if len(g) < 3 or np.any(g[-3:] <= 0.0) or not np.all(np.isfinite(g[-3:])):
+            raise ValueError("ARDLGovernmentConsumptionSetter needs three positive finite real consumption values.")
+        return self._growth(np.diff(np.log(g[-3:])), historic_real_gdp_growth, historic_productivity_growth)
+
+    def compute_target_consumption(
+        self,
+        previous_desired_government_consumption: np.ndarray,
+        model: Optional[Any],
+        historic_total_consumption: Optional[np.ndarray],
+        initial_good_prices: np.ndarray,
+        current_good_prices: np.ndarray,
+        expected_growth: float,
+        expected_inflation: float,
+        current_time: int,
+        exogenous_total_consumption: Optional[np.ndarray],
+        forecasting_window: int,
+        assume_zero_noise: bool = False,
+        historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
+    ) -> np.ndarray:
+        """Nominal sectoral targets: planned real path at this quarter's posted prices."""
+        if historic_total_consumption is None or historic_real_gdp_growth is None:
+            raise ValueError("ARDLGovernmentConsumptionSetter needs real consumption and real GDP growth histories.")
+        if posted_price_index_by_industry is None:
+            raise ValueError("ARDLGovernmentConsumptionSetter needs the posted price index by industry.")
+        weights = self._consumption_weights(previous_desired_government_consumption)
+        price_index = float(np.sum(weights * np.asarray(posted_price_index_by_industry, dtype=float)))
+        if self.planned_real_consumption is None:
+            g = np.asarray(historic_total_consumption, dtype=float)
+            growth = self.real_growth(g, historic_real_gdp_growth, historic_productivity_growth)
+            self.planned_growth = list(np.diff(np.log(g[-3:])))
+            self.planned_real_consumption = float(np.sum(previous_desired_government_consumption))
+        else:
+            growth = self._growth(
+                np.asarray(self.planned_growth), historic_real_gdp_growth, historic_productivity_growth
+            )
+        self.planned_growth = [self.planned_growth[-1], growth]
+        self.planned_real_consumption *= np.exp(growth)
+        return np.maximum(0.0, self.planned_real_consumption * price_index * weights)

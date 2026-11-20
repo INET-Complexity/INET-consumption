@@ -1448,6 +1448,40 @@ class Country:
             )
         )
 
+    def _firm_contract_rates(self) -> np.ndarray:
+        """Real contract rate per labour input by firm: sum(Wage Rate) / sum(labour input) over employees.
+
+        ``Wage Rate`` is the stored real contract rate (labour input x rate per labour input), so the
+        ratio removes worker productivity. Firms without employees get NaN.
+        """
+        ind = self.individuals.states
+        employed = ind["Activity Status"] == ActivityStatus.EMPLOYED
+        labour = np.asarray(self.individuals.ts.current("labour_inputs"), dtype=float)
+        firm = np.asarray(ind["Corresponding Firm ID"])[employed].astype(int)
+        n_firms = len(np.asarray(self.firms.ts.initial("number_of_employees")))
+        rate_sum = np.bincount(firm, weights=np.asarray(ind["Wage Rate"], dtype=float)[employed], minlength=n_firms)
+        labour_sum = np.bincount(firm, weights=labour[employed], minlength=n_firms)
+        return np.divide(rate_sum, labour_sum, out=np.full(n_firms, np.nan), where=labour_sum > 0)
+
+    def _contract_wage_index_ratio(self) -> float:
+        """Contract-wage index, last completed quarter over t0 (fixed t0 employment weights).
+
+        index = sum_f n_f0 r_ft / sum_f n_f0 r_f0 over firms with employees now and at t0, where r is
+        the firm contract rate per labour input. Fixed weights and per-labour-input rates make it
+        independent of who is unemployed and of employment shifts across firms. The first call
+        (t = 1, before any rate update) stores the t0 rates, so its ratio is 1.
+        """
+        rates = self._firm_contract_rates()
+        if getattr(self, "_contract_wage_index_base", None) is None:
+            weights = np.asarray(self.firms.ts.initial("number_of_employees"), dtype=float)
+            self._contract_wage_index_base = (weights, rates.copy())
+        weights, base = self._contract_wage_index_base
+        matched = np.isfinite(rates) & np.isfinite(base) & (weights > 0)
+        denominator = (weights[matched] * base[matched]).sum()
+        if not matched.any() or denominator <= 0:
+            raise RuntimeError("Contract-wage transfer index needs firms with employees at t0 and now.")
+        return float((weights[matched] * rates[matched]).sum() / denominator)
+
     def _uses_replacement_rate_benefits(self) -> bool:
         return bool(getattr(self.central_government.functions["social_benefits"], "uses_replacement_rate", False))
 
@@ -1802,6 +1836,9 @@ class Country:
             current_estimated_benefit_indexation_inflation=(self.economy.current_expected_consumer_period_inflation()),
             current_unemployment_rate=self.economy.ts.current("unemployment_rate")[0],
             current_estimated_growth=self.economy.ts.current("estimated_growth")[0],
+            real_average_wage_ratio=(
+                self._contract_wage_index_ratio() if self.central_government.uses_wage_indexed_transfers() else 1.0
+            ),
         )
 
         # Individuals update their income from unemployment benefits

@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import environs
-
 
 @dataclass
 class Config:
@@ -32,6 +30,8 @@ class Config:
     ) -> "Config":
         run_model_dir = Path(__file__).resolve().parents[1]
         model_env_path = Path(model_dotenv_path) if model_dotenv_path is not None else Path(__file__).with_name(".env")
+
+        import environs  # only needed to read .env files; keeps preset imports dependency-free
 
         model_env = environs.Env()
         model_env.read_env(str(model_env_path), recurse=False)
@@ -207,10 +207,18 @@ WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES: dict[str, Any] = {
     "central_bank.taylor_rule_overrides.r_star": -0.5,
 }
 
+# Pensions and other transfers follow a contract-wage index: firm real contract rates per labour input,
+# fixed t0 employment weights, last quarter over t0 (Laspeyres, as INSEE's salaire mensuel de base index).
+# Unaffected by who is unemployed. Paid at the current CPI. Set from data (2014-2019 co-movement).
+WAGE_INDEXED_TRANSFERS_OVERRIDES: dict[str, Any] = {
+    "central_government.functions.social_benefits.parameters.['regular_transfer_indexation']": "average_wage",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
     "government_consumption_ardl": GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES,
+    "wage_indexed_transfers": WAGE_INDEXED_TRANSFERS_OVERRIDES,
     "unemployment_replacement_rate": UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES,
     "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,
     "wage_competition_anchor_rate_at_floor": WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES,

@@ -36,6 +36,23 @@ class SocialBenefitsSetter(ABC):
     - Statistical models for prediction
     """
 
+    REGULAR_TRANSFER_INDEXATIONS = ("none", "average_wage")
+
+    def __init__(self, regular_transfer_indexation: str = "none"):
+        """Args:
+        regular_transfer_indexation: ``none`` leaves pensions and other transfers to the
+            setter's own rule. ``average_wage`` sets them to their t0 real level times a
+            contract-wage index (last quarter over t0) supplied by ``Country``: firm contract
+            rates per labour input aggregated with fixed t0 employment weights. Transfers stay
+            real and are multiplied by the current CPI at payment. Accepted by every setter.
+        """
+        if regular_transfer_indexation not in self.REGULAR_TRANSFER_INDEXATIONS:
+            raise ValueError(
+                f"regular_transfer_indexation must be one of {self.REGULAR_TRANSFER_INDEXATIONS}, "
+                f"got {regular_transfer_indexation!r}."
+            )
+        self.regular_transfer_indexation = regular_transfer_indexation
+
     @abstractmethod
     def compute_unemployment_benefits(
         self,

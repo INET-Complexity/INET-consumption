@@ -145,18 +145,20 @@ def test_index_not_computed_when_indexation_off(monkeypatch):
 
 
 def test_preset_reaches_setter():
+    """The preset key names the setter parameter (no notebook imports: CI lacks plotly/environs)."""
     import sys
 
     root = Path(__file__).resolve().parents[5]
     sys.path.insert(0, str(root / "run_model"))
     from config import SCENARIO_PRESETS
-    from src.notebook_workflow import apply_country_config_overrides
 
     from macromodel.configurations import load_country_configuration
     from macromodel.util.function_mapping import functions_from_model
 
+    ((key, value),) = SCENARIO_PRESETS["wage_indexed_transfers"].items()
+    assert key == "central_government.functions.social_benefits.parameters.['regular_transfer_indexation']"
     config = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
-    apply_country_config_overrides(config, SCENARIO_PRESETS["wage_indexed_transfers"])
+    config.central_government.functions.social_benefits.parameters["regular_transfer_indexation"] = value
     setter = functions_from_model(config.central_government.functions, loc="macromodel.agents.central_government")[
         "social_benefits"
     ]

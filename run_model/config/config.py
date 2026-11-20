@@ -179,9 +179,16 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
     "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
 }
 
+# Unemployment benefit = replacement rate (derived from the opening data) x contract wage at job loss;
+# people unemployed at t0 keep their opening benefit. Pensions and other transfers as in the constant rule.
+UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES: dict[str, Any] = {
+    "central_government.functions.social_benefits.name": "ReplacementRateSocialBenefitsSetter",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
+    "unemployment_replacement_rate": UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,

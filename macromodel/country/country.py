@@ -505,6 +505,7 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
+        self._initialize_unemployment_benefit_base()
         self._wage_price_level = self.economy.current_consumer_price_level()
         self._initialize_nominal_employee_income()
         # Both direct construction and from_pickled_country pass here. Seed
@@ -1418,8 +1419,65 @@ class Country:
             )
         )
 
+    def _uses_replacement_rate_benefits(self) -> bool:
+        return bool(getattr(self.central_government.functions["social_benefits"], "uses_replacement_rate", False))
+
+    def _initialize_unemployment_benefit_base(self) -> None:
+        """Per-person real benefit if unemployed, under the replacement-rate rule.
+
+        The rate is derived from the opening data, not set as a parameter: opening
+        benefits are entitlement x Benefit Weight, i.e. a common rate times each
+        unemployed person's predicted pay (labour inputs x pay per labour input of
+        the employed). People unemployed at t0 keep their opening benefit; employed
+        people carry rate x contract wage, which they receive if they lose the job.
+        """
+        self._unemployment_benefit_rate: float | None = None
+        self._unemployment_benefit_base: np.ndarray | None = None
+        if not self._uses_replacement_rate_benefits():
+            return
+        if "Benefit Weight" not in self.individuals.states:
+            raise ValueError(
+                "ReplacementRateSocialBenefitsSetter derives its rate from worker-productivity data "
+                "(Benefit Weight); enable data.worker_productivity."
+            )
+        status = self.individuals.states["Activity Status"]
+        unemployed = status == ActivityStatus.UNEMPLOYED
+        employed = status == ActivityStatus.EMPLOYED
+        labour = np.asarray(self.individuals.ts.current("labour_inputs"), dtype=float)
+        pay = np.asarray(self.individuals.ts.current("employee_income"), dtype=float)
+        benefit = np.asarray(self.individuals.ts.current("income_from_unemployment_benefits"), dtype=float)
+        pay_per_labour = pay[employed].sum() / labour[employed].sum()
+        predicted_pay = labour[unemployed] * pay_per_labour
+        if not unemployed.any() or predicted_pay.sum() <= 0.0:
+            raise ValueError("Replacement-rate benefits need unemployed people with positive predicted pay at t0.")
+        self._unemployment_benefit_rate = float(benefit[unemployed].sum() / predicted_pay.sum())
+        base = np.zeros(len(status), dtype=float)
+        base[unemployed] = benefit[unemployed]
+        self._unemployment_benefit_base = base
+        self._update_unemployment_benefit_base()
+
+    def _update_unemployment_benefit_base(self) -> None:
+        """Employed people carry rate x current contract wage; the unemployed keep theirs."""
+        if getattr(self, "_unemployment_benefit_base", None) is None:
+            return
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        wage_rate = np.asarray(self.individuals.states["Wage Rate"], dtype=float)
+        self._unemployment_benefit_base[employed] = self._unemployment_benefit_rate * wage_rate[employed]
+
+    def _distribute_unemployment_benefits(self) -> np.ndarray:
+        """Real benefit paid to each individual this period (CPI is applied at payment)."""
+        status = self.individuals.states["Activity Status"]
+        if getattr(self, "_unemployment_benefit_base", None) is None:
+            return self.central_government.distribute_unemployment_benefits_to_individuals(
+                current_individual_activity_status=status,
+                benefit_weights=self.individuals.states.get("Benefit Weight"),
+            )
+        return np.where(status == ActivityStatus.UNEMPLOYED, self._unemployment_benefit_base, 0.0).astype(float)
+
     def _unemployment_benefit_by_individual(self) -> float | np.ndarray:
         """Benefit each person would receive if unemployed."""
+        if getattr(self, "_unemployment_benefit_base", None) is not None:
+            return self._unemployment_benefit_base.copy()
         level = self.central_government.ts.current("unemployment_benefits_by_individual")[0]
         weights = self.individuals.states.get("Benefit Weight")
         return level if weights is None else level * weights
@@ -1657,6 +1715,8 @@ class Country:
                 carried_wage_rate=self.individuals.states["Wage Rate"],
             )
         )
+        # Contract wages are now set for this quarter: refresh what the employed would receive if separated.
+        self._update_unemployment_benefit_base()
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
@@ -1715,12 +1775,7 @@ class Country:
         )
 
         # Individuals update their income from unemployment benefits
-        self.individuals.ts.income_from_unemployment_benefits.append(
-            self.central_government.distribute_unemployment_benefits_to_individuals(
-                current_individual_activity_status=self.individuals.states["Activity Status"],
-                benefit_weights=self.individuals.states.get("Benefit Weight"),
-            )
-        )
+        self.individuals.ts.income_from_unemployment_benefits.append(self._distribute_unemployment_benefits())
         self.individuals.ts.public_pension_benefits.append(
             self.central_government.distribute_public_pension_benefits_to_individuals(
                 retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
@@ -4188,11 +4243,7 @@ class Country:
         # but realised payments must follow the activity status after labour
         # market clearing. Replace the planning vector before computing income.
         self.individuals.ts.override_current(
-            "income_from_unemployment_benefits",
-            self.central_government.distribute_unemployment_benefits_to_individuals(
-                current_individual_activity_status=self.individuals.states["Activity Status"],
-                benefit_weights=self.individuals.states.get("Benefit Weight"),
-            ),
+            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
         )
         # Update individual income components
         self.individuals.ts.income.append(

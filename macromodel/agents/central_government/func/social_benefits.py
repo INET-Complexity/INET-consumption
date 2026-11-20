@@ -152,6 +152,21 @@ class ConstantSocialBenefitsSetter(SocialBenefitsSetter):
         return prev_regular_transfer_to_households
 
 
+class ReplacementRateSocialBenefitsSetter(ConstantSocialBenefitsSetter):
+    """Unemployment benefit as a replacement rate of the person's last contract wage.
+
+    Pensions and other transfers behave as in ``ConstantSocialBenefitsSetter``.
+    ``Country`` reads ``uses_replacement_rate`` and pays each unemployed person
+    ``rate x contract wage at job loss`` (``individuals.states["Wage Rate"]``),
+    while people unemployed at t0 keep their opening benefit. The rate is not a
+    parameter: it is derived from the opening data (see
+    ``Country._initialize_unemployment_benefit_base``). The scalar level kept by
+    the parent class remains in the time series for other users of it.
+    """
+
+    uses_replacement_rate = True
+
+
 class GrowthSocialBenefitsSetter(SocialBenefitsSetter):
     """Implementation of growth-adjusted social benefits.
 

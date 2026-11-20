@@ -183,6 +183,9 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
 # to real GDP growth one to three years earlier; data-estimated intercept; sectoral weights as in the YAML.
 GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES: dict[str, Any] = {
     "government_entities.functions.consumption.name": "ARDLGovernmentConsumptionSetter",
+    "government_entities.functions.consumption.path_name": "consumption",
+    "government_entities.functions.consumption.parameters.['consistency']": 1.0,
+    "government_entities.functions.consumption.parameters.['sectoral_weights']": "initial_fixed",
 }
 
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {

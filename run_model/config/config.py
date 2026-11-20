@@ -179,9 +179,16 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
     "firms.functions.wage_setter.parameters['slack_response_down']": 0.0,
 }
 
+# Government consumption from the estimated ARDL rule (French data 1985-2019): momentum plus a response
+# to real GDP growth one to three years earlier; data-estimated intercept; sectoral weights as in the YAML.
+GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES: dict[str, Any] = {
+    "government_entities.functions.consumption.name": "ARDLGovernmentConsumptionSetter",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
+    "government_consumption_ardl": GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,

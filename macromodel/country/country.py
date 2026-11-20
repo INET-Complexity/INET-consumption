@@ -3199,7 +3199,29 @@ class Country:
             forecasting_window=self.forecasting_window,
             assume_zero_growth=self.assume_zero_growth,
             assume_zero_noise=self.assume_zero_noise,
+            historic_real_gdp_growth=self._historic_real_gdp_growth(),
         )
+
+    def _historic_real_gdp_growth(self) -> np.ndarray | None:
+        """Quarterly log growth of real GDP, latest last: pre-sample data spliced with simulated GDP.
+
+        Growth rates, not levels, are spliced, so a level difference between the data series and
+        the simulated GDP at t0 cannot create a spurious growth rate. Simulated real GDP is
+        output-side nominal GDP deflated by the PPI, the deflator of real government consumption.
+        """
+        before = self.exogenous.national_accounts_before
+        pre = np.array([])
+        if "Real GDP (Value)" in before.columns:
+            level = before["Real GDP (Value)"].values.flatten()[-self.forecasting_window :].astype(float)
+            level = level[np.isfinite(level) & (level > 0.0)]
+            pre = np.diff(np.log(level))
+        nominal = np.array(self.economy.ts.historic("gdp_output"), dtype=float).flatten()
+        ppi = np.array(self.economy.ts.historic("ppi"), dtype=float).flatten()
+        n = min(len(nominal), len(ppi))
+        real = nominal[:n] / ppi[:n]
+        simulated = np.diff(np.log(real[real > 0.0])) if n > 1 else np.array([])
+        history = np.concatenate((pre, simulated))
+        return history if history.size else None
 
     def _excess_demand_finance_potential_inputs(self) -> dict[str, np.ndarray]:
         """Return country-level inputs for excess-demand finance-potential calculations."""

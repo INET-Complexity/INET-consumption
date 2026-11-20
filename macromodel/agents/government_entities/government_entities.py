@@ -182,6 +182,8 @@ class GovernmentEntities(Agent):
         assume_zero_growth: bool,
         assume_zero_noise: bool,
         historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> None:
         """Prepare government entities for goods market participation.
 
@@ -234,6 +236,8 @@ class GovernmentEntities(Agent):
                         forecasting_window=forecasting_window,
                         assume_zero_noise=assume_zero_noise,
                         historic_real_gdp_growth=historic_real_gdp_growth,
+                        historic_productivity_growth=historic_productivity_growth,
+                        posted_price_index_by_industry=posted_price_index_by_industry,
                     )
                 )
             )
@@ -275,6 +279,8 @@ class GovernmentEntities(Agent):
         assume_zero_growth: bool,
         assume_zero_noise: bool,
         historic_real_gdp_growth: Optional[np.ndarray] = None,
+        historic_productivity_growth: Optional[np.ndarray] = None,
+        posted_price_index_by_industry: Optional[np.ndarray] = None,
     ) -> None:
         """Prepare for goods market clearing.
 
@@ -301,6 +307,8 @@ class GovernmentEntities(Agent):
             assume_zero_growth=assume_zero_growth,
             assume_zero_noise=assume_zero_noise,
             historic_real_gdp_growth=historic_real_gdp_growth,
+            historic_productivity_growth=historic_productivity_growth,
+            posted_price_index_by_industry=posted_price_index_by_industry,
         )
         self.prepare_selling_goods(n_industries)
 

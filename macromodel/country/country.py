@@ -3288,7 +3288,39 @@ class Country:
             assume_zero_growth=self.assume_zero_growth,
             assume_zero_noise=self.assume_zero_noise,
             historic_real_gdp_growth=self._historic_real_gdp_growth(),
+            historic_productivity_growth=self._historic_productivity_growth(),
+            posted_price_index_by_industry=self._posted_price_index_by_industry(),
         )
+
+    def _historic_productivity_growth(self) -> np.ndarray:
+        """Quarterly log growth of aggregate firm productivity (TFP multiplier), latest last.
+
+        Labour-input weighted with fixed t0 weights (Laspeyres), so reallocation of workers across
+        firms does not move it. Labour demand is output / TFP, so this is also labour productivity
+        growth. Empty before the first simulated quarter.
+        """
+        tfp = np.array(self.firms.ts.historic("tfp_multiplier"), dtype=float)
+        if tfp.ndim != 2 or tfp.shape[0] < 2:
+            return np.array([])
+        weights = np.asarray(self.firms.ts.initial("labour_inputs"), dtype=float).flatten()
+        if weights.shape[0] != tfp.shape[1] or weights.sum() <= 0.0:
+            raise RuntimeError("Productivity index needs t0 labour inputs for the current firm set.")
+        return np.diff(np.log(tfp @ weights))
+
+    def _posted_price_index_by_industry(self) -> np.ndarray:
+        """Industry price index for the current quarter from firms' posted prices, t0 = 1.
+
+        Fixed t0 production weights within each industry (Laspeyres). Firms post this quarter's
+        prices before government plans its purchases, so no inflation forecast is needed.
+        """
+        industry = self.firms.states["Industry"]
+        q0 = np.asarray(self.firms.ts.initial("production"), dtype=float)
+        n = self.economy.n_industries
+        current = np.bincount(
+            industry, weights=np.asarray(self.firms.ts.current("price"), dtype=float) * q0, minlength=n
+        )
+        base = np.bincount(industry, weights=np.asarray(self.firms.ts.initial("price"), dtype=float) * q0, minlength=n)
+        return np.divide(current, base, out=np.ones(n), where=base > 0.0)
 
     def _historic_real_gdp_growth(self) -> np.ndarray | None:
         """Quarterly log growth of real GDP, latest last: pre-sample data spliced with simulated GDP.

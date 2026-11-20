@@ -102,6 +102,7 @@ def compute_diagnostic_dividend_fund(
     firm_default_flag: np.ndarray,
     bank_cash_distributable_profits: np.ndarray,
     ownership_quota: np.ndarray,
+    cap_firm_by_closing_cash: bool = True,
 ) -> DiagnosticDividendFundResult:
     """Calculate eligible capacity and allocate it by fixed ownership quota."""
     beginning_ifa = _finite_1d("beginning_ifa", beginning_ifa)
@@ -148,9 +149,10 @@ def compute_diagnostic_dividend_fund(
     )
     firm_candidate = np.where(
         firm_distress_gate_passed,
-        np.minimum(
-            np.maximum(firm_cash_profit_after_settlement, 0.0),
-            np.maximum(firm_closing_deposits, 0.0),
+        (
+            np.minimum(np.maximum(firm_cash_profit_after_settlement, 0.0), np.maximum(firm_closing_deposits, 0.0))
+            if cap_firm_by_closing_cash
+            else np.maximum(firm_cash_profit_after_settlement, 0.0)
         ),
         0.0,
     )
@@ -176,3 +178,36 @@ def compute_diagnostic_dividend_fund(
         bank_identity_error=float(bank_distribution.sum() - bank_inflow),
         fund_identity_error=float(total_distribution.sum() - fund_inflow),
     )
+
+
+def compute_planned_firm_distribution(*, proposal: np.ndarray, cash_after_senior_uses: np.ndarray) -> np.ndarray:
+    """Reserve a conditional proposal only to the extent forecast cash allows."""
+    proposal = _non_negative_state_1d("proposal", proposal)
+    capacity = _finite_1d("cash_after_senior_uses", cash_after_senior_uses)
+    if capacity.shape != proposal.shape:
+        raise ValueError("Distribution proposal and capacity must have the same firm shape.")
+    return np.minimum(proposal, np.maximum(capacity, 0.0))
+
+
+def settle_profit_based_firm_distribution(
+    *,
+    proposal: np.ndarray,
+    planned: np.ndarray,
+    cash_after_debt_service: np.ndarray,
+    facility_repayment: np.ndarray,
+    distressed: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Finalise only an affordable payment; the unused conditional proposal expires."""
+    proposal = _non_negative_state_1d("proposal", proposal)
+    planned = _non_negative_state_1d("planned", planned)
+    distressed = _boolean_1d("distressed", distressed)
+    if planned.shape != proposal.shape or distressed.shape != proposal.shape:
+        raise ValueError("Payout proposal, plan and distress flag must have the same firm shape.")
+    authorised = np.where(distressed, 0.0, np.minimum(proposal, planned))
+    paid, _ = compute_cash_feasible_firm_distribution_settlement(
+        declared_distribution=authorised,
+        cash_available_after_debt_service=cash_after_debt_service,
+        operating_revolving_repayment=facility_repayment,
+    )
+    capacity = np.maximum(np.asarray(cash_after_debt_service) - np.asarray(facility_repayment), 0.0)
+    return paid, proposal - paid, capacity

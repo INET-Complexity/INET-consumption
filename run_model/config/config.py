@@ -245,6 +245,18 @@ MACRO_COLUMNS = [
     "household_credit_received_mortgage",
 ]
 
+FIRM_PAYOUT_COLUMNS = (
+    "firm_payout_earnings",
+    "firm_payout_profit_ceiling",
+    "firm_payout_forecast_cash_capacity",
+    "firm_payout_proposal",
+    "firm_payout_planned",
+    "firm_payout_cash_capacity",
+    "firm_payout_final_declared",
+    "firm_payout_paid",
+    "firm_payout_expired",
+)
+
 OPERATING_FACILITY_COLUMNS = (
     "firm_operating_facility_interest_base",
     "firm_operating_facility_refinance",
@@ -398,6 +410,15 @@ _SERIES_LABEL_OVERRIDES = {
     "household_balance_sheet_identity_residual": "Household balance-sheet identity residual",
     "firm_balance_sheet_identity_residual": "Firm balance-sheet identity residual",
     "bank_balance_sheet_identity_residual_proxy": "Bank balance-sheet residual (proxy)",
+    "firm_payout_earnings": "After-tax payout earnings (nominal LCU)",
+    "firm_payout_profit_ceiling": "Maximum profit-based payout (nominal LCU)",
+    "firm_payout_forecast_cash_capacity": "Next-period forecast cash capacity (nominal LCU)",
+    "firm_payout_proposal": "Conditional payout proposal (nominal LCU)",
+    "firm_payout_planned": "Planned payout after credit (nominal LCU)",
+    "firm_payout_cash_capacity": "Realised payout cash capacity (nominal LCU)",
+    "firm_payout_final_declared": "Final declared payout (nominal LCU)",
+    "firm_payout_paid": "Payout cash paid (nominal LCU)",
+    "firm_payout_expired": "Expired payout proposal (nominal LCU)",
     "firm_operating_facility_interest_base": "Facility opening interest base (stock, nominal LCU)",
     "firm_operating_facility_refinance": "Facility refinance (flow, nominal LCU)",
     "firm_operating_facility_draw": "Facility draw (flow, nominal LCU)",

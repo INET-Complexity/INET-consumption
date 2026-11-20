@@ -1392,6 +1392,19 @@ def build_macro_output_df(model, country_code):
     }.items():
         add_aggregate_agent_ts_column(output_name, firms_ts, source_name)
 
+    for output_name, source_name in {
+        "firm_payout_earnings": "dividend_fund_after_tax_earnings",
+        "firm_payout_profit_ceiling": "dividend_fund_profit_ceiling",
+        "firm_payout_forecast_cash_capacity": "dividend_fund_forecast_cash_capacity",
+        "firm_payout_proposal": "dividend_fund_declared_distribution",
+        "firm_payout_planned": "dividend_fund_planned_distribution",
+        "firm_payout_cash_capacity": "dividend_fund_settlement_cash_capacity",
+        "firm_payout_final_declared": "dividend_fund_final_declared_distribution",
+        "firm_payout_paid": "dividend_fund_settlement_debit",
+        "firm_payout_expired": "dividend_fund_expired_distribution",
+    }.items():
+        add_aggregate_agent_ts_column(output_name, firms_ts, source_name)
+
     add_agent_ts_column("household_credit_demand_consumption", households_ts, "total_target_consumption_loans")
     add_agent_ts_column("household_credit_demand_mortgage", households_ts, "total_target_mortgage")
     add_agent_ts_column("household_credit_received_consumption", households_ts, "total_received_consumption_loans")

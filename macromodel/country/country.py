@@ -505,7 +505,8 @@ class Country:
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
-        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._initialize_unemployment_benefit_base()
+        self._lock_wage_price_basis()
         self._initialize_nominal_employee_income()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
@@ -538,14 +539,43 @@ class Country:
         cloned.__dict__.update(deepcopy(self.__dict__, memo))
         return cloned
 
+    def _wage_inflation_anchor_factor(self) -> float:
+        """Inflation-target anchor of the payroll price factor at the current period.
+
+        1.0 unless `wage_inflation_anchor` is on. Otherwise (1 + pi*)**((1 - psi) * n / ppy), with pi* the
+        annual `targeted_inflation_rate` of the central bank (the Taylor-rule target) and n the number of
+        completed periods, so wage indexation mixes lagged CPI (weight psi) with the target (weight 1 - psi).
+        """
+        from macro_data.util.frequency import periods_per_year
+        from macromodel.util.wage_receipts import wage_anchor_factor
+
+        parameters = self.firms.configuration.parameters
+        if not getattr(parameters, "wage_inflation_anchor", False):
+            return 1.0
+        elapsed_periods = len(self.economy.ts.historic(self.economy.consumer_price_level_series_name())) - 1
+        return wage_anchor_factor(
+            target_annual_inflation=self.central_bank.states["targeted_inflation_rate"],
+            elasticity=parameters.wage_cpi_indexation_elasticity,
+            elapsed_periods=elapsed_periods,
+            periods_per_year=periods_per_year(self.economy.time_unit),
+        )
+
+    def _lock_wage_price_basis(self) -> None:
+        """Lock the CPI and the anchor factor together, before goods clearing changes the price level."""
+        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._wage_anchor_factor = self._wage_inflation_anchor_factor()
+
     def nominal_employee_income(self) -> np.ndarray:
         """Current wage-only nominal receipts, on the payroll price basis."""
         from macromodel.util.wage_receipts import wage_price_factor
 
         cpi = getattr(self, "_wage_price_level", self.economy.current_consumer_price_level())
         psi = self.firms.configuration.parameters.wage_cpi_indexation_elasticity
+        anchor_factor = getattr(self, "_wage_anchor_factor", 1.0)
         employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
-        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(cpi, psi)
+        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(
+            cpi, psi, anchor_factor
+        )
 
     def _initialize_nominal_employee_income(self) -> None:
         """Seed t0 components without rescaling benefits or existing saved histories."""
@@ -1418,8 +1448,65 @@ class Country:
             )
         )
 
+    def _uses_replacement_rate_benefits(self) -> bool:
+        return bool(getattr(self.central_government.functions["social_benefits"], "uses_replacement_rate", False))
+
+    def _initialize_unemployment_benefit_base(self) -> None:
+        """Per-person real benefit if unemployed, under the replacement-rate rule.
+
+        The rate is derived from the opening data, not set as a parameter: opening
+        benefits are entitlement x Benefit Weight, i.e. a common rate times each
+        unemployed person's predicted pay (labour inputs x pay per labour input of
+        the employed). People unemployed at t0 keep their opening benefit; employed
+        people carry rate x contract wage, which they receive if they lose the job.
+        """
+        self._unemployment_benefit_rate: float | None = None
+        self._unemployment_benefit_base: np.ndarray | None = None
+        if not self._uses_replacement_rate_benefits():
+            return
+        if "Benefit Weight" not in self.individuals.states:
+            raise ValueError(
+                "ReplacementRateSocialBenefitsSetter derives its rate from worker-productivity data "
+                "(Benefit Weight); enable data.worker_productivity."
+            )
+        status = self.individuals.states["Activity Status"]
+        unemployed = status == ActivityStatus.UNEMPLOYED
+        employed = status == ActivityStatus.EMPLOYED
+        labour = np.asarray(self.individuals.ts.current("labour_inputs"), dtype=float)
+        pay = np.asarray(self.individuals.ts.current("employee_income"), dtype=float)
+        benefit = np.asarray(self.individuals.ts.current("income_from_unemployment_benefits"), dtype=float)
+        pay_per_labour = pay[employed].sum() / labour[employed].sum()
+        predicted_pay = labour[unemployed] * pay_per_labour
+        if not unemployed.any() or predicted_pay.sum() <= 0.0:
+            raise ValueError("Replacement-rate benefits need unemployed people with positive predicted pay at t0.")
+        self._unemployment_benefit_rate = float(benefit[unemployed].sum() / predicted_pay.sum())
+        base = np.zeros(len(status), dtype=float)
+        base[unemployed] = benefit[unemployed]
+        self._unemployment_benefit_base = base
+        self._update_unemployment_benefit_base()
+
+    def _update_unemployment_benefit_base(self) -> None:
+        """Employed people carry rate x current contract wage; the unemployed keep theirs."""
+        if getattr(self, "_unemployment_benefit_base", None) is None:
+            return
+        employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
+        wage_rate = np.asarray(self.individuals.states["Wage Rate"], dtype=float)
+        self._unemployment_benefit_base[employed] = self._unemployment_benefit_rate * wage_rate[employed]
+
+    def _distribute_unemployment_benefits(self) -> np.ndarray:
+        """Real benefit paid to each individual this period (CPI is applied at payment)."""
+        status = self.individuals.states["Activity Status"]
+        if getattr(self, "_unemployment_benefit_base", None) is None:
+            return self.central_government.distribute_unemployment_benefits_to_individuals(
+                current_individual_activity_status=status,
+                benefit_weights=self.individuals.states.get("Benefit Weight"),
+            )
+        return np.where(status == ActivityStatus.UNEMPLOYED, self._unemployment_benefit_base, 0.0).astype(float)
+
     def _unemployment_benefit_by_individual(self) -> float | np.ndarray:
         """Benefit each person would receive if unemployed."""
+        if getattr(self, "_unemployment_benefit_base", None) is not None:
+            return self._unemployment_benefit_base.copy()
         level = self.central_government.ts.current("unemployment_benefits_by_individual")[0]
         weights = self.individuals.states.get("Benefit Weight")
         return level if weights is None else level * weights
@@ -1640,7 +1727,7 @@ class Country:
         self.prepare_post_labour_realised_feasible_activity_plan()
 
         # Lock the wage price basis before goods clearing changes current CPI.
-        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._lock_wage_price_basis()
         # Firm wages
         self.individuals.ts.employee_income.append(
             self.firms.set_employee_income(
@@ -1657,6 +1744,8 @@ class Country:
                 carried_wage_rate=self.individuals.states["Wage Rate"],
             )
         )
+        # Contract wages are now set for this quarter: refresh what the employed would receive if separated.
+        self._update_unemployment_benefit_base()
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
@@ -1677,6 +1766,7 @@ class Country:
                 employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
                 employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
                 cpi=self.economy.current_consumer_price_level(),
+                wage_anchor_factor=self._wage_inflation_anchor_factor(),
             )
             self.firms.ts.price.append(
                 self.firms.compute_price(
@@ -1715,12 +1805,7 @@ class Country:
         )
 
         # Individuals update their income from unemployment benefits
-        self.individuals.ts.income_from_unemployment_benefits.append(
-            self.central_government.distribute_unemployment_benefits_to_individuals(
-                current_individual_activity_status=self.individuals.states["Activity Status"],
-                benefit_weights=self.individuals.states.get("Benefit Weight"),
-            )
-        )
+        self.individuals.ts.income_from_unemployment_benefits.append(self._distribute_unemployment_benefits())
         self.individuals.ts.public_pension_benefits.append(
             self.central_government.distribute_public_pension_benefits_to_individuals(
                 retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
@@ -1732,7 +1817,7 @@ class Country:
         from macromodel.util.wage_receipts import wage_price_factor
 
         if not replace_current:
-            self._wage_price_level = self.economy.current_consumer_price_level()
+            self._lock_wage_price_basis()
         # Individual income
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
@@ -1744,6 +1829,7 @@ class Country:
             wage_price_factor=wage_price_factor(
                 getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
                 self.firms.configuration.parameters.wage_cpi_indexation_elasticity,
+                getattr(self, "_wage_anchor_factor", 1.0),
             ),
         )
         if replace_current:
@@ -2524,6 +2610,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         firm_production_tax_obligation_preview = self.compute_pre_credit_production_tax_obligation_preview()
         scheduled_firm_installment_preview = self.credit_market.compute_scheduled_firm_installments_preview()
@@ -3075,6 +3162,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         firm_interest_obligation_preview = (
             self.firms.ts.current("firm_settlement_scheduled_interest_due")
@@ -3199,7 +3287,61 @@ class Country:
             forecasting_window=self.forecasting_window,
             assume_zero_growth=self.assume_zero_growth,
             assume_zero_noise=self.assume_zero_noise,
+            historic_real_gdp_growth=self._historic_real_gdp_growth(),
+            historic_productivity_growth=self._historic_productivity_growth(),
+            posted_price_index_by_industry=self._posted_price_index_by_industry(),
         )
+
+    def _historic_productivity_growth(self) -> np.ndarray:
+        """Quarterly log growth of aggregate firm productivity (TFP multiplier), latest last.
+
+        Labour-input weighted with fixed t0 weights (Laspeyres), so reallocation of workers across
+        firms does not move it. Labour demand is output / TFP, so this is also labour productivity
+        growth. Empty before the first simulated quarter.
+        """
+        tfp = np.array(self.firms.ts.historic("tfp_multiplier"), dtype=float)
+        if tfp.ndim != 2 or tfp.shape[0] < 2:
+            return np.array([])
+        weights = np.asarray(self.firms.ts.initial("labour_inputs"), dtype=float).flatten()
+        if weights.shape[0] != tfp.shape[1] or weights.sum() <= 0.0:
+            raise RuntimeError("Productivity index needs t0 labour inputs for the current firm set.")
+        return np.diff(np.log(tfp @ weights))
+
+    def _posted_price_index_by_industry(self) -> np.ndarray:
+        """Industry price index for the current quarter from firms' posted prices, t0 = 1.
+
+        Fixed t0 production weights within each industry (Laspeyres). Firms post this quarter's
+        prices before government plans its purchases, so no inflation forecast is needed.
+        """
+        industry = self.firms.states["Industry"]
+        q0 = np.asarray(self.firms.ts.initial("production"), dtype=float)
+        n = self.economy.n_industries
+        current = np.bincount(
+            industry, weights=np.asarray(self.firms.ts.current("price"), dtype=float) * q0, minlength=n
+        )
+        base = np.bincount(industry, weights=np.asarray(self.firms.ts.initial("price"), dtype=float) * q0, minlength=n)
+        return np.divide(current, base, out=np.ones(n), where=base > 0.0)
+
+    def _historic_real_gdp_growth(self) -> np.ndarray | None:
+        """Quarterly log growth of real GDP, latest last: pre-sample data spliced with simulated GDP.
+
+        Growth rates, not levels, are spliced, so a level difference between the data series and
+        the simulated GDP at t0 cannot create a spurious growth rate. Simulated real GDP is
+        output-side nominal GDP deflated by the PPI, the deflator of real government consumption.
+        """
+        before = self.exogenous.national_accounts_before
+        pre = np.array([])
+        if "Real GDP (Value)" in before.columns:
+            level = before["Real GDP (Value)"].values.flatten()[-self.forecasting_window :].astype(float)
+            level = level[np.isfinite(level) & (level > 0.0)]
+            pre = np.diff(np.log(level))
+        nominal = np.array(self.economy.ts.historic("gdp_output"), dtype=float).flatten()
+        ppi = np.array(self.economy.ts.historic("ppi"), dtype=float).flatten()
+        n = min(len(nominal), len(ppi))
+        real = nominal[:n] / ppi[:n]
+        simulated = np.diff(np.log(real[real > 0.0])) if n > 1 else np.array([])
+        history = np.concatenate((pre, simulated))
+        return history if history.size else None
 
     def _excess_demand_finance_potential_inputs(self) -> dict[str, np.ndarray]:
         """Return country-level inputs for excess-demand finance-potential calculations."""
@@ -3210,6 +3352,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         # Use the same signed deposit/overdraft and operating-interest flows as planning.
         non_loan_interest_obligation_preview = self.firms.compute_interest_paid_on_deposits(
@@ -3986,6 +4129,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
+            wage_anchor_factor=getattr(self, "_wage_anchor_factor", 1.0),
         )
 
         # C3. EMISSIONS AND INVENTORY
@@ -4246,11 +4390,7 @@ class Country:
         # but realised payments must follow the activity status after labour
         # market clearing. Replace the planning vector before computing income.
         self.individuals.ts.override_current(
-            "income_from_unemployment_benefits",
-            self.central_government.distribute_unemployment_benefits_to_individuals(
-                current_individual_activity_status=self.individuals.states["Activity Status"],
-                benefit_weights=self.individuals.states.get("Benefit Weight"),
-            ),
+            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
         )
         # Update individual income components
         self.individuals.ts.income.append(

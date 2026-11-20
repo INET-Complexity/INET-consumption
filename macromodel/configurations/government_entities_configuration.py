@@ -10,6 +10,7 @@ class Consumption(BaseModel):
         "ConstantGrowthGovernmentConsumptionSetter",
         "ExpectedGrowthGovernmentConsumptionSetter",
         "ExogenousGovernmentConsumptionSetter",
+        "ARDLGovernmentConsumptionSetter",
     ] = "AutoregressiveGovernmentConsumptionSetter"
     path_name: str = "consumption"
     parameters: dict = Field(

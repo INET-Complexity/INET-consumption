@@ -1489,6 +1489,7 @@ class Firms(Agent):
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
         cpi: float,
+        wage_anchor_factor: float = 1.0,
     ) -> None:
         """Update total wage payments including taxes and adjustments.
 
@@ -1505,6 +1506,7 @@ class Firms(Agent):
             employee_social_insurance_tax (float): Employee SI tax rate
             employer_social_insurance_tax (float): Employer SI tax rate
             cpi (float): Consumer price index
+            wage_anchor_factor (float): Inflation-target anchor in the payroll price factor (1.0 = off)
         """
         self.ts.total_wage.append(
             self.compute_total_wage_obligation(
@@ -1514,6 +1516,7 @@ class Firms(Agent):
                 employee_social_insurance_tax=employee_social_insurance_tax,
                 employer_social_insurance_tax=employer_social_insurance_tax,
                 cpi=cpi,
+                wage_anchor_factor=wage_anchor_factor,
             )
         )
         total_wage = np.asarray(self.ts.current("total_wage"), dtype=float)
@@ -1534,6 +1537,7 @@ class Firms(Agent):
         employee_social_insurance_tax: float,
         employer_social_insurance_tax: float,
         cpi: float,
+        wage_anchor_factor: float = 1.0,
     ) -> np.ndarray:
         """Preview current wage obligations without appending to time series."""
         real_wages = np.bincount(
@@ -1547,7 +1551,7 @@ class Firms(Agent):
         psi = float(getattr(self.configuration.parameters, "wage_cpi_indexation_elasticity", 1.0))
         from macromodel.util.wage_receipts import wage_price_factor
 
-        indexation = wage_price_factor(cpi, psi)
+        indexation = wage_price_factor(cpi, psi, wage_anchor_factor)
         return indexation * (
             (1.0 + employer_social_insurance_tax)
             / (1 - employee_social_insurance_tax - income_taxes * (1 - employee_social_insurance_tax))

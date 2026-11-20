@@ -506,7 +506,7 @@ class Country:
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
         self._initialize_household_unemployment_benefits()
         self._initialize_unemployment_benefit_base()
-        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._lock_wage_price_basis()
         self._initialize_nominal_employee_income()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
@@ -539,14 +539,43 @@ class Country:
         cloned.__dict__.update(deepcopy(self.__dict__, memo))
         return cloned
 
+    def _wage_inflation_anchor_factor(self) -> float:
+        """Inflation-target anchor of the payroll price factor at the current period.
+
+        1.0 unless `wage_inflation_anchor` is on. Otherwise (1 + pi*)**((1 - psi) * n / ppy), with pi* the
+        annual `targeted_inflation_rate` of the central bank (the Taylor-rule target) and n the number of
+        completed periods, so wage indexation mixes lagged CPI (weight psi) with the target (weight 1 - psi).
+        """
+        from macro_data.util.frequency import periods_per_year
+        from macromodel.util.wage_receipts import wage_anchor_factor
+
+        parameters = self.firms.configuration.parameters
+        if not getattr(parameters, "wage_inflation_anchor", False):
+            return 1.0
+        elapsed_periods = len(self.economy.ts.historic(self.economy.consumer_price_level_series_name())) - 1
+        return wage_anchor_factor(
+            target_annual_inflation=self.central_bank.states["targeted_inflation_rate"],
+            elasticity=parameters.wage_cpi_indexation_elasticity,
+            elapsed_periods=elapsed_periods,
+            periods_per_year=periods_per_year(self.economy.time_unit),
+        )
+
+    def _lock_wage_price_basis(self) -> None:
+        """Lock the CPI and the anchor factor together, before goods clearing changes the price level."""
+        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._wage_anchor_factor = self._wage_inflation_anchor_factor()
+
     def nominal_employee_income(self) -> np.ndarray:
         """Current wage-only nominal receipts, on the payroll price basis."""
         from macromodel.util.wage_receipts import wage_price_factor
 
         cpi = getattr(self, "_wage_price_level", self.economy.current_consumer_price_level())
         psi = self.firms.configuration.parameters.wage_cpi_indexation_elasticity
+        anchor_factor = getattr(self, "_wage_anchor_factor", 1.0)
         employed = self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED
-        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(cpi, psi)
+        return np.where(employed, self.individuals.ts.current("employee_income"), 0.0) * wage_price_factor(
+            cpi, psi, anchor_factor
+        )
 
     def _initialize_nominal_employee_income(self) -> None:
         """Seed t0 components without rescaling benefits or existing saved histories."""
@@ -1698,7 +1727,7 @@ class Country:
         self.prepare_post_labour_realised_feasible_activity_plan()
 
         # Lock the wage price basis before goods clearing changes current CPI.
-        self._wage_price_level = self.economy.current_consumer_price_level()
+        self._lock_wage_price_basis()
         # Firm wages
         self.individuals.ts.employee_income.append(
             self.firms.set_employee_income(
@@ -1737,6 +1766,7 @@ class Country:
                 employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
                 employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
                 cpi=self.economy.current_consumer_price_level(),
+                wage_anchor_factor=self._wage_inflation_anchor_factor(),
             )
             self.firms.ts.price.append(
                 self.firms.compute_price(
@@ -1787,7 +1817,7 @@ class Country:
         from macromodel.util.wage_receipts import wage_price_factor
 
         if not replace_current:
-            self._wage_price_level = self.economy.current_consumer_price_level()
+            self._lock_wage_price_basis()
         # Individual income
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
@@ -1799,6 +1829,7 @@ class Country:
             wage_price_factor=wage_price_factor(
                 getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
                 self.firms.configuration.parameters.wage_cpi_indexation_elasticity,
+                getattr(self, "_wage_anchor_factor", 1.0),
             ),
         )
         if replace_current:
@@ -2579,6 +2610,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         firm_production_tax_obligation_preview = self.compute_pre_credit_production_tax_obligation_preview()
         scheduled_firm_installment_preview = self.credit_market.compute_scheduled_firm_installments_preview()
@@ -3130,6 +3162,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         firm_interest_obligation_preview = (
             self.firms.ts.current("firm_settlement_scheduled_interest_due")
@@ -3287,6 +3320,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=self.economy.current_consumer_price_level(),
+            wage_anchor_factor=self._wage_inflation_anchor_factor(),
         )
         # Use the same signed deposit/overdraft and operating-interest flows as planning.
         non_loan_interest_obligation_preview = self.firms.compute_interest_paid_on_deposits(
@@ -4027,6 +4061,7 @@ class Country:
             employee_social_insurance_tax=self.central_government.states["Employee Social Insurance Tax"],
             employer_social_insurance_tax=self.central_government.states["Employer Social Insurance Tax"],
             cpi=getattr(self, "_wage_price_level", self.economy.current_consumer_price_level()),
+            wage_anchor_factor=getattr(self, "_wage_anchor_factor", 1.0),
         )
 
         # C3. EMISSIONS AND INVENTORY

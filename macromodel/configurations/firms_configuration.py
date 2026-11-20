@@ -423,6 +423,15 @@ class FirmsParameters(BaseModel):
             "indexation, so real wages absorb part of past inflation (hypothesis H4)."
         ),
     )
+    wage_inflation_anchor: bool = Field(
+        False,
+        description=(
+            "Anchor wage indexation to the inflation target. False (default) indexes wages to lagged CPI only, "
+            "CPI**psi. True indexes them to CPI**psi * (1 + pi*)**((1 - psi) * n / periods_per_year), so wage "
+            "growth mixes lagged inflation (weight psi) with the annual `targeted_inflation_rate` of the "
+            "central bank (weight 1 - psi). No effect at psi = 1."
+        ),
+    )
     pricing_labour_units: Literal["raw", "tfp_effective"] = Field(
         "raw",
         description=(

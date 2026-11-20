@@ -854,3 +854,48 @@ def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percen
     macro_only = plot_irf_panels(without_uncertainty, ["common_uncertainty"], show=False)
     assert len(macro_only) == 1
     assert macro_only[0]._suptitle.get_text().startswith("Macro and investment:")
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_macro_facility_diagnostics_sum_agents_preserve_t0_and_missing_history(historical):
+    from unittest.mock import patch
+
+    from config import OPERATING_FACILITY_COLUMNS
+    from src.visual_helpers import plot_output
+
+    index = pd.Index([0, 1, 2], name="t")
+    shallow = pd.DataFrame({"GDP_Expenditure": [100.0] * 3}, index=index)
+    fields = (
+        "operating_revolving_interest_base",
+        "received_operating_refinance_credit",
+        "operating_revolving_current_draw",
+        "operating_revolving_repayment",
+        "operating_revolving_closing_balance",
+        "operating_revolving_interest_paid",
+    )
+    history = {} if historical else {f: [[0.0, 0.0], [1.0, 2.0], [3.0, 4.0]] for f in fields}
+    country = SimpleNamespace(
+        central_government=SimpleNamespace(ts=_ts({})),
+        central_bank=SimpleNamespace(ts=_ts({})),
+        banks=SimpleNamespace(ts=_ts({})),
+        economy=SimpleNamespace(ts=_ts({})),
+        firms=SimpleNamespace(industries=[], ts=_ts(history)),
+    )
+    model = SimpleNamespace(
+        timestep=SimpleNamespace(increment=3),
+        countries={"FRA": country},
+        shallow_df_dict=lambda: {"FRA": shallow},
+        get_country_gdp_components_df=lambda country_code: pd.DataFrame(index=index),
+    )
+    output = build_macro_output_df(model, "FRA")
+    columns = [c for c in OPERATING_FACILITY_COLUMNS if c in output]
+    if historical:
+        assert columns == []
+    else:
+        assert columns == list(OPERATING_FACILITY_COLUMNS)
+        for c in columns:
+            np.testing.assert_array_equal(output[c], [0.0, 3.0, 7.0])
+        with patch("plotly.graph_objects.Figure.show") as show:
+            plot_output(output[columns], no_rows=2, no_cols=3, country_code="FRA")
+        assert len(show.call_args.args) == 0
+        show.assert_called_once()

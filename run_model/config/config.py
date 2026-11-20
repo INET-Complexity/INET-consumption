@@ -245,6 +245,15 @@ MACRO_COLUMNS = [
     "household_credit_received_mortgage",
 ]
 
+OPERATING_FACILITY_COLUMNS = (
+    "firm_operating_facility_interest_base",
+    "firm_operating_facility_refinance",
+    "firm_operating_facility_draw",
+    "firm_operating_facility_repayment",
+    "firm_operating_facility_closing_balance",
+    "firm_operating_facility_interest_paid",
+)
+
 FISCAL_COLUMNS = (
     "unemployment_benefits",
     "household_social_transfers",
@@ -389,6 +398,12 @@ _SERIES_LABEL_OVERRIDES = {
     "household_balance_sheet_identity_residual": "Household balance-sheet identity residual",
     "firm_balance_sheet_identity_residual": "Firm balance-sheet identity residual",
     "bank_balance_sheet_identity_residual_proxy": "Bank balance-sheet residual (proxy)",
+    "firm_operating_facility_interest_base": "Facility opening interest base (stock, nominal LCU)",
+    "firm_operating_facility_refinance": "Facility refinance (flow, nominal LCU)",
+    "firm_operating_facility_draw": "Facility draw (flow, nominal LCU)",
+    "firm_operating_facility_repayment": "Facility cash repayment (flow, nominal LCU)",
+    "firm_operating_facility_closing_balance": "Facility closing exposure (stock, nominal LCU)",
+    "firm_operating_facility_interest_paid": "Facility interest paid (flow, nominal LCU)",
     "firm_credit_demand_short_term": "Firm short-term credit demand",
     "firm_credit_received_short_term": "Firm short-term credit received",
     "firm_credit_demand_long_term": "Firm long-term credit demand",

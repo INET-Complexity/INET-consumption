@@ -1381,6 +1381,17 @@ def build_macro_output_df(model, country_code):
     add_agent_ts_column("firm_credit_received_short_term", firms_ts, "total_received_short_term_credit")
     add_agent_ts_column("firm_credit_received_long_term", firms_ts, "total_received_long_term_credit")
 
+    # Period flows and closing stocks are separate; old files omit unavailable series.
+    for output_name, source_name in {
+        "firm_operating_facility_interest_base": "operating_revolving_interest_base",
+        "firm_operating_facility_refinance": "received_operating_refinance_credit",
+        "firm_operating_facility_draw": "operating_revolving_current_draw",
+        "firm_operating_facility_repayment": "operating_revolving_repayment",
+        "firm_operating_facility_closing_balance": "operating_revolving_closing_balance",
+        "firm_operating_facility_interest_paid": "operating_revolving_interest_paid",
+    }.items():
+        add_aggregate_agent_ts_column(output_name, firms_ts, source_name)
+
     add_agent_ts_column("household_credit_demand_consumption", households_ts, "total_target_consumption_loans")
     add_agent_ts_column("household_credit_demand_mortgage", households_ts, "total_target_mortgage")
     add_agent_ts_column("household_credit_received_consumption", households_ts, "total_received_consumption_loans")

@@ -157,3 +157,25 @@ def test_corrected_planning_and_final_deposit_booking_use_receipt_once(test_firm
     # 100 opening +20 granted +10 receipt -80 operations -50 capital =0.
     np.testing.assert_allclose(test_firms.compute_deposits(), 0)
     np.testing.assert_array_equal(test_firms.ts.current("deposits"), full(100))
+
+
+def test_unfunded_facility_principal_keeps_existing_residual_cash_priority(test_firms, monkeypatch):
+    """Facility principal is not silently promoted ahead of planned investment."""
+    _, full, matrix = arrange(test_firms, monkeypatch, capital=20, tfp=0, technical=0)
+    test_firms.ts.override_current("operating_revolving_opening_balance", full(50))
+    test_firms.ts.override_current("operating_revolving_closing_balance", full(50))
+    test_firms.revise_activity_against_available_finance(
+        expected_lcu_prices=np.ones(test_firms.n_industries),
+        wage_obligation_preview=full(80),
+        production_tax_obligation_preview=full(0),
+        corporate_tax_obligation_preview=full(0),
+        interest_obligation_preview=full(0),
+        loan_interest_obligation_preview=full(0),
+        debt_installment_preview=full(0),
+    )
+    np.testing.assert_allclose(test_firms.ts.current("target_capital_inputs").sum(axis=1), 20)
+    test_firms.ts.override_current("operating_revolving_current_draw", full(0))
+    # Realising the full 80 operating +20 investment plan consumes opening cash100.
+    result = test_firms.settle_operating_revolving_facility(full(0))
+    np.testing.assert_allclose(result["repayment"], 0)
+    np.testing.assert_allclose(result["closing_balance"], 50)

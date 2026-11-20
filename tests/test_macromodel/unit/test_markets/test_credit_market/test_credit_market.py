@@ -1197,3 +1197,99 @@ def test_mortgage_of_a_purchase_that_does_not_complete_is_not_booked_or_counted(
     booked = market.states["mort_loans"][0].sum(axis=1)
     np.testing.assert_allclose(booked.sum(), 160.0)
     np.testing.assert_allclose(test_banks.ts.current("new_loans_fraction_mortgages")[0], 160.0 / 200.0)
+
+
+@pytest.mark.parametrize("refinance", [0.0, 8.0, 20.0])
+def test_deferred_facility_two_period_cash_refinance_and_bank_exposure(
+    test_banks, test_firms, test_households, refinance
+):
+    """Exercise actual firm cash, loan clearing/cohorts and lender exposure."""
+    from macromodel.country.diagnostic_dividend_fund import compute_cash_feasible_firm_distribution_settlement
+
+    _configure_single_firm_credit_case(test_banks, test_firms, test_households)
+    firms = test_firms
+    n = firms.ts.current("n_firms")
+    nb = test_banks.ts.current("n_banks")
+    zeros = np.zeros(n)
+    first = np.r_[1.0, zeros[1:]]
+    goods = np.zeros((n, firms.n_industries))
+    for key in (
+        "deposits",
+        "operating_revolving_closing_balance",
+        "received_operating_refinance_credit",
+        "received_credit",
+        "received_long_term_credit",
+        "received_ordinary_short_term_credit",
+        "received_debt_rollover_credit",
+        "received_overdraft_refinance_credit",
+        "debt_installments",
+        "taxes_paid_on_production",
+        "corporate_taxes_paid",
+        "capital_formation_taxes_paid",
+        "direct_tfp_investment_cash_expense",
+        "dividend_fund_settlement_debit",
+    ):
+        firms.ts.override_current(key, zeros.copy())
+    firms.ts.override_current("nominal_amount_spent_in_lcu", goods)
+    firms.ts.override_current("planned_technical_investment", goods)
+    firms.ts.override_current("planned_tfp_investment", zeros)
+    firms.ts.override_current("total_wage", first * 20)
+    firms.ts.override_current("nominal_amount_sold_in_lcu", first * 50)
+    firms.prepare_operating_revolving_facility_interest(np.full(nb, 0.05))
+    firms.begin_operating_revolving_facility_period()
+    firms.draw_operating_revolving_facility(zeros, zeros, zeros, zeros)
+    cash = first * 50  # zero opening cash + sales + draw - wages
+    firms.settle_operating_revolving_facility(cash)
+    assert firms.ts.current("operating_revolving_repayment")[0] == 0
+    assert firms.ts.current("operating_revolving_closing_balance")[0] == 20
+    paid, _ = compute_cash_feasible_firm_distribution_settlement(
+        declared_distribution=first * 5,
+        cash_available_after_debt_service=cash,
+        operating_revolving_repayment=firms.ts.current("operating_revolving_repayment"),
+    )
+    firms.ts.override_current("dividend_fund_settlement_debit", paid)
+    firms.ts.override_current("interest_paid", zeros)
+    closing_cash = firms.compute_deposits()
+    assert closing_cash[0] == 45
+    firms.ts.deposits.append(closing_cash)
+
+    class FixedRefinance:
+        def clear(self, **kwargs):
+            st = _empty_loan_state(nb, n)
+            st[:, 0, 0] = [refinance, 0.05, refinance / 4]
+            nh = test_households.ts.current("n_households")
+            return st, _empty_loan_state(nb, n), _empty_loan_state(nb, nh), _empty_loan_state(nb, nh)
+
+    firms.prepare_operating_revolving_facility_interest(np.full(nb, 0.05))
+    np.testing.assert_allclose(firms.ts.current("operating_revolving_interest_paid"), first)
+    firms.ts.override_current("target_operating_refinance_credit", first * 20)
+    firms.ts.override_current("ordinary_target_short_term_credit", first * 20)
+    firms.ts.override_current("target_short_term_credit", first * 20)
+    market = _credit_market_with_clearer(FixedRefinance(), test_banks, firms, test_households)
+    market.clear(test_banks, firms, test_households, 0.0, 0.0, 0.0)
+    firms.begin_firm_debt_settlement(**market.schedule_firm_installments())
+    firms.begin_operating_revolving_facility_period()
+    assert firms.ts.current("operating_revolving_opening_balance")[0] == 20 - refinance
+    assert firms.ts.current("received_ordinary_short_term_credit")[0] == 0
+    assert firms.ts.current("firm_settlement_scheduled_interest_due")[0] == 0
+    firms.ts.override_current("total_wage", first * 60)
+    firms.draw_operating_revolving_facility(zeros, zeros, first, zeros)
+    assert firms.ts.current("operating_revolving_current_draw")[0] == 16
+    debt = firms.plan_firm_debt_settlement(zeros, first, zeros)
+    cash = debt["cash_after_tax_reserve"] - debt["payable_interest"] - debt["payable_principal"]
+    firms.settle_operating_revolving_facility(cash)
+    assert firms.ts.current("operating_revolving_repayment")[0] == 20 - refinance
+    assert firms.ts.current("operating_revolving_closing_balance")[0] == 16
+    market.settle_firm_installments(zeros, zeros)
+    # Refinanced principal survives origination without servicing; interest is due next period.
+    assert market.states["st_loans"][0].sum() == pytest.approx(refinance)
+    assert market.compute_scheduled_firm_installments_preview()["scheduled_interest_due"][0] == pytest.approx(
+        refinance * 0.05
+    )
+    exposure = np.bincount(
+        firms.states["Corresponding Bank ID"],
+        weights=firms.ts.current("operating_revolving_closing_balance"),
+        minlength=nb,
+    )
+    test_banks.update_loans(market, exposure)
+    assert test_banks.ts.current("total_outstanding_loans").sum() == pytest.approx(refinance + 16)

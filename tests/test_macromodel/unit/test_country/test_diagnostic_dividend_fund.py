@@ -112,3 +112,48 @@ def test_settlement_receipts_reject_invalid_ownership_quota(quota: np.ndarray) -
 
     with pytest.raises(ValueError, match="ownership quotas"):
         country.record_dividend_fund_settlement_receipts()
+
+
+def test_facility_repayment_changes_both_old_declaration_and_payment_caps(test_country):
+    """Characterise both existing payout channels without adopting a profit rule."""
+    country = test_country
+    firms = country.firms
+    n = firms.ts.current("n_firms")
+    zeros = np.zeros(n)
+    first = np.r_[1.0, zeros[1:]]
+    for key in (
+        "total_wage",
+        "taxes_paid_on_production",
+        "corporate_taxes_paid",
+        "capital_formation_taxes_paid",
+        "interest_paid",
+        "debt_installments",
+        "direct_tfp_investment_cash_expense",
+        "firm_settlement_unpaid_interest",
+        "firm_settlement_closing_principal_arrears",
+        "firm_settlement_residual_overdraft_exposure",
+        "planned_tfp_investment",
+    ):
+        firms.ts.override_current(key, zeros.copy())
+    firms.ts.override_current("nominal_amount_spent_in_lcu", np.zeros((n, firms.n_industries)))
+    firms.ts.override_current("planned_technical_investment", np.zeros((n, firms.n_industries)))
+    firms.ts.override_current("nominal_amount_sold_in_lcu", first * 20)
+    firms.ts.override_current("deposits", first * 100)
+    firms.ts.override_current("firm_settlement_default_flag", np.zeros(n, dtype=bool))
+    nh = country.households.ts.current("n_households")
+    country.households.states["dividend_fund_ownership_quota"] = np.full(nh, 1 / nh)
+    country.households.functions["wealth"].dividend_fund_firm_payout_ratio = 0.1
+    values = []
+    payments = []
+    for repayment in (10.0, 0.0):
+        firms.ts.override_current("operating_revolving_repayment", first * repayment)
+        country.record_diagnostic_dividend_fund()
+        values.append(firms.ts.current("dividend_fund_declared_distribution")[0])
+        payment, _ = compute_cash_feasible_firm_distribution_settlement(
+            declared_distribution=first * 15,
+            cash_available_after_debt_service=first * 20,
+            operating_revolving_repayment=first * repayment,
+        )
+        payments.append(payment[0])
+    np.testing.assert_allclose(values, [1.0, 2.0])
+    np.testing.assert_allclose(payments, [10.0, 15.0])

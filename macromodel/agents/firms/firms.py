@@ -2070,12 +2070,17 @@ class Firms(Agent):
         self,
         cash_available_after_debt_service: np.ndarray,
     ) -> dict[str, np.ndarray]:
-        """Repay the facility only from cash left by authoritative debt settlement."""
+        """Repay carried principal from cash left after senior debt service.
+
+        The opening balance is already net of cleared short-term refinancing.
+        New operating draws mature no earlier than the following period, so
+        they remain in closing exposure even when current sales leave cash.
+        """
         opening_balance = np.maximum(0.0, self.ts.current("operating_revolving_opening_balance"))
         current_draw = np.maximum(0.0, self.ts.current("operating_revolving_current_draw"))
         cash_available_after_debt_service = np.asarray(cash_available_after_debt_service, dtype=float)
         repayment = np.minimum(
-            opening_balance + current_draw,
+            opening_balance,
             np.maximum(0.0, cash_available_after_debt_service),
         )
         closing_balance = np.maximum(0.0, opening_balance + current_draw - repayment)

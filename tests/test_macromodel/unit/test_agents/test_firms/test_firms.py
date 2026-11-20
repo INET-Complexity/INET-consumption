@@ -2977,8 +2977,8 @@ class TestFirms:
         )
 
         assert np.isclose(draw["current_draw"][0], 10.0)
-        assert np.isclose(settlement["repayment"][0], 16.0)
-        assert np.isclose(settlement["closing_balance"][0], 0.0)
+        assert np.isclose(settlement["repayment"][0], 6.0)
+        assert np.isclose(settlement["closing_balance"][0], 10.0)
         assert np.isclose(
             settlement["closing_balance"][0],
             settlement["opening_balance"][0] + settlement["current_draw"][0] - settlement["repayment"][0],
@@ -3246,3 +3246,23 @@ class TestFirms:
         wage_bill = np.asarray(test_firms.ts.current("total_wage"), dtype=float)
         valid = wage_bill > 0
         np.testing.assert_allclose((base - net)[valid], (charged / wage_bill)[valid])
+
+
+@pytest.mark.parametrize("cash, expected_repayment", [(0.0, 0.0), (-5.0, 0.0), (3.0, 3.0), (100.0, 10.0)])
+def test_deferred_facility_respects_carried_maturity_under_cash_shortfall(test_firms, cash, expected_repayment):
+    n = test_firms.ts.current("n_firms")
+    first = np.r_[1.0, np.zeros(n - 1)]
+    test_firms.ts.override_current("operating_revolving_opening_balance", first * 10)
+    test_firms.ts.override_current("operating_revolving_current_draw", first * 7)
+    result = test_firms.settle_operating_revolving_facility(first * cash)
+    assert result["repayment"][0] == pytest.approx(expected_repayment)
+    assert result["closing_balance"][0] == pytest.approx(17 - expected_repayment)
+
+
+@pytest.mark.parametrize("rate, expected", [(0.0, 0.0), (-0.1, 0.0), (0.05, 0.5)])
+def test_facility_carried_interest_preserves_rate_floor(test_firms, rate, expected):
+    n = test_firms.ts.current("n_firms")
+    test_firms.ts.override_current("operating_revolving_closing_balance", np.r_[10.0, np.zeros(n - 1)])
+    rates = np.full(test_firms.states["Corresponding Bank ID"].max() + 1, rate)
+    test_firms.prepare_operating_revolving_facility_interest(rates)
+    assert test_firms.ts.current("operating_revolving_interest_paid")[0] == pytest.approx(expected)

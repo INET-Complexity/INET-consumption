@@ -19,20 +19,21 @@ def setter(**kwargs):
     return ARDLGovernmentConsumptionSetter(consistency=1.0, sectoral_weights="initial_fixed", **kwargs)
 
 
-def target(s, prev, g, y, pi_e=0.0, prices=None):
-    prices = np.ones(len(prev)) if prices is None else prices
+def target(s, prev, g, y, pi_e=0.0, posted=None, z=None):
     return s.compute_target_consumption(
         previous_desired_government_consumption=prev,
         model=None,
         historic_total_consumption=g,
         initial_good_prices=np.ones(len(prev)),
-        current_good_prices=prices,
+        current_good_prices=np.ones(len(prev)),
         expected_growth=0.0,
         expected_inflation=pi_e,
         current_time=1,
         exogenous_total_consumption=None,
         forecasting_window=60,
         historic_real_gdp_growth=y,
+        historic_productivity_growth=z,
+        posted_price_index_by_industry=np.ones(len(prev)) if posted is None else posted,
     )
 
 
@@ -72,26 +73,11 @@ def test_long_run_growth_matches_the_closed_form():
     assert dg[-1] == pytest.approx(closed, rel=1e-6)
 
 
-def test_first_target_is_previous_envelope_times_real_growth_times_expected_inflation():
+def test_first_target_is_previous_envelope_times_real_growth_and_ignores_expected_inflation():
     s = setter()
-    prev = np.array([30.0, 50.0, 20.0])
-    g = np.array([100.0, 101.0, 102.0])
-    y = np.full(12, 0.003)
-    out = s.compute_target_consumption(
-        previous_desired_government_consumption=prev,
-        model=None,
-        historic_total_consumption=g,
-        initial_good_prices=np.ones(3),
-        current_good_prices=np.ones(3),
-        expected_growth=0.5,  # ignored by this rule
-        expected_inflation=0.01,
-        current_time=1,
-        exogenous_total_consumption=None,
-        forecasting_window=60,
-        historic_real_gdp_growth=y,
-    )
-    growth = s.real_growth(g, y)
-    assert out.sum() == pytest.approx(prev.sum() * np.exp(growth) * 1.01)
+    prev, g, y = np.array([30.0, 50.0, 20.0]), np.array([100.0, 101.0, 102.0]), np.full(12, 0.003)
+    out = target(s, prev, g, y, pi_e=0.05)
+    assert out.sum() == pytest.approx(prev.sum() * np.exp(s.real_growth(g, y)))
     np.testing.assert_allclose(out / out.sum(), prev / prev.sum())
 
 
@@ -160,50 +146,100 @@ def test_data_intercept_equals_the_trend_loading_at_the_data_trend():
     assert s.current_intercept(np.full(40, trend)) == pytest.approx(s.intercept)
 
 
-def test_trend_intercept_uses_the_trailing_window_only():
+def test_trend_intercept_uses_trailing_productivity_growth():
     s = setter(trend_window=40)
-    y = np.r_[np.full(20, 0.05), np.full(40, 0.002)]
     loading = 1 - s.own_lag_1 - s.own_lag_2 - s.output_coefficient
-    assert s.current_intercept(y) == pytest.approx(loading * 0.002)
+    z = np.r_[np.full(20, 0.05), np.full(40, 0.002)]
+    assert s.current_intercept(z) == pytest.approx(loading * 0.002)
+    assert s.current_intercept(np.full(5, 0.001)) == pytest.approx(loading * 0.001)  # expanding early
+    assert s.current_intercept(np.array([])) == pytest.approx(s.intercept)  # no history yet
+    assert s.current_intercept(None) == pytest.approx(s.intercept)
 
 
-def test_trend_window_needs_enough_history_and_must_exceed_output_window():
-    with pytest.raises(ValueError, match="for the trend"):
-        setter(trend_window=40).current_intercept(np.zeros(39))
+def test_trend_window_must_be_positive():
     with pytest.raises(ValueError, match="trend_window"):
-        setter(trend_window=12)
+        setter(trend_window=0)
 
 
-def test_steady_state_government_consumption_grows_with_trend_gdp():
-    """With the trend intercept, any constant GDP growth gives G growth equal to it (stable share)."""
-    for gy in (0.0015, 0.004):
+def test_steady_state_government_consumption_grows_with_trend_productivity():
+    """If GDP grows at productivity growth z, G grows at z: a stable share in steady state."""
+    for z in (0.0015, 0.004):
         s = setter(trend_window=40)
-        prev, g, y = np.array([60.0, 40.0]), np.array([100.0, 100.0, 100.0]), np.full(60, gy)
-        totals = [target(s, prev, g, y).sum()]
+        prev, g, y, zz = np.array([60.0, 40.0]), np.array([100.0, 100.0, 100.0]), np.full(60, z), np.full(60, z)
+        totals = [target(s, prev, g, y, z=zz).sum()]
         for _ in range(300):
-            totals.append(target(s, np.ones(2), g, y).sum())
-        assert np.log(totals[-1] / totals[-2]) == pytest.approx(gy, rel=1e-6)
+            totals.append(target(s, prev, g, y, z=zz).sum())
+        assert np.log(totals[-1] / totals[-2]) == pytest.approx(z, rel=1e-6)
 
 
-def test_inflation_surprise_does_not_enter_the_next_plan():
-    """Planned real growth ignores realised real consumption after the first call."""
-    y = np.full(60, 0.003)
+def test_planned_growth_ignores_realised_consumption_after_the_first_call():
+    y, z = np.full(60, 0.003), np.full(60, 0.002)
     a, b = setter(trend_window=40), setter(trend_window=40)
     prev, g = np.array([60.0, 40.0]), np.array([100.0, 100.0, 100.0])
-    target(a, prev, g, y), target(b, prev, g, y)
-    # Realised real G differs (a surprise eroded b's purchases): later plans must be identical.
-    ta = target(a, np.ones(2), np.array([100.0, 100.0, 100.0]), y)
-    tb = target(b, np.ones(2), np.array([100.0, 100.0, 80.0]), y)
+    target(a, prev, g, y, z=z), target(b, prev, g, y, z=z)
+    ta = target(a, prev, np.array([100.0, 100.0, 100.0]), y, z=z)
+    tb = target(b, prev, np.array([100.0, 100.0, 80.0]), y, z=z)  # rationing/surprise cut b's realised G
     np.testing.assert_allclose(ta, tb)
 
 
-def test_nominal_target_tracks_the_current_price_level():
-    """Real plan times the basket price index: a price rise raises nominal G one for one."""
+def test_nominal_target_scales_with_posted_prices_not_expected_inflation():
     y = np.full(60, 0.003)
-    a, b = setter(trend_window=40), setter(trend_window=40)
+    a, b, c = (setter(trend_window=40) for _ in range(3))
     prev, g = np.array([60.0, 40.0]), np.array([100.0, 100.0, 100.0])
-    target(a, prev, g, y), target(b, prev, g, y)
-    ta = target(a, prev, g, y, pi_e=0.01, prices=np.ones(2))
-    tb = target(b, prev, g, y, pi_e=0.01, prices=np.array([1.2, 1.2]))
+    ta = target(a, prev, g, y)
+    tb = target(b, prev, g, y, posted=np.array([1.2, 1.2]))
+    tc = target(c, prev, g, y, pi_e=0.10)
     np.testing.assert_allclose(tb, 1.2 * ta)
+    np.testing.assert_allclose(tc, ta)
     np.testing.assert_allclose(ta / ta.sum(), [0.6, 0.4])
+
+
+def test_basket_index_uses_the_sectoral_weights():
+    s = setter(trend_window=40)
+    prev, g, y = np.array([60.0, 40.0]), np.array([100.0, 100.0, 100.0]), np.full(60, 0.0)
+    base = target(setter(trend_window=40), prev, g, y).sum()
+    out = target(s, prev, g, y, posted=np.array([1.5, 1.0]))
+    assert out.sum() == pytest.approx(base * (0.6 * 1.5 + 0.4 * 1.0))
+
+
+def test_missing_posted_prices_raises():
+    with pytest.raises(ValueError, match="posted price"):
+        setter().compute_target_consumption(
+            previous_desired_government_consumption=np.ones(2),
+            model=None,
+            historic_total_consumption=np.ones(3),
+            initial_good_prices=np.ones(2),
+            current_good_prices=np.ones(2),
+            expected_growth=0.0,
+            expected_inflation=0.0,
+            current_time=1,
+            exogenous_total_consumption=None,
+            forecasting_window=60,
+            historic_real_gdp_growth=np.zeros(12),
+        )
+
+
+def test_country_productivity_growth_is_fixed_weight_laspeyres():
+    country = Country.__new__(Country)
+    tfp = TimeSeries(tfp_multiplier=np.array([1.0, 1.0]), labour_inputs=np.array([3.0, 1.0]))
+    tfp.tfp_multiplier.append(np.array([1.1, 1.0]))
+    tfp.labour_inputs.append(np.array([0.0, 10.0]))  # reallocation must not matter
+    country.firms = SimpleNamespace(ts=tfp)
+    out = country._historic_productivity_growth()
+    np.testing.assert_allclose(out, [np.log((3 * 1.1 + 1.0) / 4.0)])
+
+
+def test_country_productivity_growth_is_empty_at_t0():
+    country = Country.__new__(Country)
+    country.firms = SimpleNamespace(ts=TimeSeries(tfp_multiplier=np.array([1.0, 1.0]), labour_inputs=np.ones(2)))
+    assert country._historic_productivity_growth().size == 0
+
+
+def test_country_posted_price_index_by_industry():
+    country = Country.__new__(Country)
+    ts = TimeSeries(price=np.array([1.0, 2.0, 5.0]), production=np.array([1.0, 3.0, 2.0]))
+    ts.price.append(np.array([1.2, 2.0, 5.5]))
+    country.firms = SimpleNamespace(ts=ts, states={"Industry": np.array([0, 0, 1])})
+    country.economy = SimpleNamespace(n_industries=3)
+    out = country._posted_price_index_by_industry()
+    np.testing.assert_allclose(out, [(1.2 * 1 + 2.0 * 3) / (1.0 * 1 + 2.0 * 3), 1.1, 1.0])

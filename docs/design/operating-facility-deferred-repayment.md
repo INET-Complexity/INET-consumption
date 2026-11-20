@@ -53,3 +53,62 @@ Validate no draw, new draw, carried balance, partial/full refinance, constrained
 cash, multiple banks, zero/positive rates, default and firm/bank reconciliation.
 Then register and run matched multi-seed economic validation separately from
 unit/accounting checks. No economic acceptance is implied by this document.
+
+## Source verification — 2026-11-20
+
+Verified against runtime at 12b1976d (documentation branch d3a5432a).
+
+- Interest preparation precedes credit clearing: charge the prior closing
+  facility balance at the current quote (`firms.py:2022`, `country.py:2517`).
+- Credit requests include the full carried facility balance as ST refinance
+  (`firms.py:1892`). Cleared refinance is separated from spendable ordinary
+  ST credit (`credit_market.py:1080`); the converted amount reduces facility
+  principal before activity planning (`firms.py:2034`, `country.py:3070`).
+- Ordinary loan settlement services existing cohorts and merges new cohorts
+  afterwards (`credit_market.py:2464–2545`). Thus new refinancing loans are not
+  charged ordinary contractual interest in their origination period; the
+  carried facility charge covers that period without this double charge.
+- Realised ordering is draw, reserve corporate tax, allocate ordinary loan
+  debt service, repay facility, settle previous dividend, update cash/equity,
+  accounting controls, then insolvency (`country.py:4025–4165`).
+
+### Existing insufficient-cash protocol: preserve it
+
+Ordinary debt service pays opening interest arrears, contractual interest,
+opening principal arrears and contractual principal in that order. Unpaid
+interest is capitalised into loan principal; unpaid principal remains arrears.
+Either shortfall sets the liquidity-failure flag (`firms.py:2147–2242`).
+Unpaid facility principal instead stays in closing facility exposure and is
+requested for ST refinancing next period. It is not automatically put through
+ordinary-loan arrears accounting. Facility nonpayment alone does not set the
+ordinary debt-service liquidity-failure flag.
+
+Facility interest is included in operating commitments and hence can induce
+an additional facility draw. It is deducted before ordinary debt service and
+booked to the bank, rather than entering the ordinary-loan unpaid-interest
+capitalisation mechanism. Preserve and test this existing funding convention;
+do not invent a separate facility-interest arrears policy.
+
+Default requires negative equity AND the settlement liquidity-failure flag.
+On default, ordinary loans, residual overdraft and closing facility exposure
+are written off to the corresponding bank; facility balance is cleared
+(`firms.py:3940–3998`). Deferring new-draw repayment must retain this protocol.
+
+### Dividend planning dependency — user clarification
+
+A provisional payout based on t profits must account for expected t+1 debt
+repayment, including the carried facility, without treating principal as a
+profit expense. At t+1 the proposed payout must enter cash planning; actual
+payment remains subordinate to senior obligations and the unpaid proposal
+expires. Current operating draws include wages, intermediate purchases,
+production/corporate tax and signed non-loan interest, but no dividends
+(`firms.py:2044–2067`). Current final dividend settlement is cash-capped after
+ordinary debt and facility repayment (`country.py:4053–4061`).
+
+Do not simply add the whole provisional dividend to an unconditional facility
+entitlement: that could guarantee the proposal with new borrowing and defeat
+the affordability/expiry rule. Specify the affordable planned payout first,
+then whether/how it enters funding needs. Expected repayment must distinguish
+cash repayment from refinancing so converted principal is not reserved twice.
+This forecasting/funding dependency belongs in the stacked payout contract;
+record it explicitly before runtime implementation of that contract.

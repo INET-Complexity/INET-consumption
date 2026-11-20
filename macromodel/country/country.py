@@ -4083,9 +4083,6 @@ class Country:
             - firm_debt_settlement["payable_interest"]
             - firm_debt_settlement["payable_principal"]
         )
-        self.firms.settle_operating_revolving_facility(
-            cash_available_after_debt_service=cash_available_after_debt_service,
-        )
         self.firms.ts.debt_installments.append(
             self.credit_market.settle_firm_installments(
                 payable_principal_by_firm=firm_debt_settlement["payable_principal"],
@@ -4142,16 +4139,21 @@ class Country:
 
         from macromodel.country.diagnostic_dividend_fund import settle_profit_based_firm_distribution
 
+        # Finalise carried-principal repayment against booked tax before any
+        # released planning reserve can become available to shareholders.
+        cash_available_after_debt_service = (
+            cash_available_after_debt_service
+            + firm_debt_settlement["corporate_tax_reserve"]
+            - self.firms.ts.current("corporate_taxes_paid")
+        )
+        self.firms.settle_operating_revolving_facility(
+            cash_available_after_debt_service=cash_available_after_debt_service,
+        )
         firm_proposal = self.firms.ts.current("dividend_fund_declared_distribution")
         firm_settlement_debit, firm_settlement_shortfall, firm_cash_capacity = settle_profit_based_firm_distribution(
             proposal=firm_proposal,
             planned=self.firms.ts.current("dividend_fund_planned_distribution"),
-            # Replace the planning reserve with the corporate tax actually booked.
-            cash_after_debt_service=(
-                cash_available_after_debt_service
-                + firm_debt_settlement["corporate_tax_reserve"]
-                - self.firms.ts.current("corporate_taxes_paid")
-            ),
+            cash_after_debt_service=cash_available_after_debt_service,
             facility_repayment=self.firms.ts.current("operating_revolving_repayment"),
             distressed=firm_debt_settlement["illiquid_flag"] | self.firms.states["is_insolvent"],
         )

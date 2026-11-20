@@ -1,5 +1,6 @@
-"""Average-wage indexation of pensions and other transfers (regular_transfer_indexation)."""
+"""Contract-wage indexation of pensions and other transfers (regular_transfer_indexation)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -8,8 +9,11 @@ import pytest
 from macromodel.agents.central_government.central_government import CentralGovernment
 from macromodel.agents.central_government.func.social_benefits import (
     ConstantSocialBenefitsSetter,
+    DefaultSocialBenefitsSetter,
+    GrowthSocialBenefitsSetter,
     ReplacementRateSocialBenefitsSetter,
 )
+from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.country.country import Country
 from macromodel.timeseries import TimeSeries
 
@@ -70,29 +74,90 @@ def test_invalid_indexation_rejected():
         ConstantSocialBenefitsSetter(regular_transfer_indexation="gdp")
 
 
-def make_country(initial_wpc, initial_n, current_wpc, current_n):
+@pytest.mark.parametrize("setter_cls", [GrowthSocialBenefitsSetter, DefaultSocialBenefitsSetter])
+def test_every_setter_accepts_indexation(setter_cls):
+    assert setter_cls(regular_transfer_indexation="average_wage").regular_transfer_indexation == "average_wage"
+    assert setter_cls().regular_transfer_indexation == "none"
+
+
+E, U = ActivityStatus.EMPLOYED, ActivityStatus.UNEMPLOYED
+
+
+def make_country(status, firm, wage_rate, labour, n_employees_t0):
     country = Country.__new__(Country)
-    country.firms = SimpleNamespace(
-        ts=TimeSeries(
-            real_wage_per_capita=[np.array(initial_wpc, float)], number_of_employees=[np.array(initial_n, float)]
-        )
+    country.individuals = SimpleNamespace(
+        states={
+            "Activity Status": np.array(status),
+            "Corresponding Firm ID": np.array(firm),
+            "Wage Rate": np.array(wage_rate, float),
+        },
+        ts=TimeSeries(labour_inputs=np.array(labour, float)),
     )
-    country.firms.ts.real_wage_per_capita.append(np.array(current_wpc, float))
-    country.firms.ts.number_of_employees.append(np.array(current_n, float))
+    country.firms = SimpleNamespace(ts=TimeSeries(number_of_employees=np.array(n_employees_t0, float)))
     return country
 
 
-def test_ratio_is_employment_weighted_average_wage():
-    # t0 average (2*10 + 4*30)/40 = 3.5; now (3*10 + 5*10)/20 = 4.0.
-    country = make_country([2.0, 4.0], [10, 30], [3.0, 5.0], [10, 10])
-    assert country._real_average_wage_ratio() == pytest.approx(4.0 / 3.5)
+def test_contract_index_is_one_at_first_call_and_uses_rate_per_labour_input():
+    # Firm 0: rates per labour input 2 (worker 0: 4/2) and 2 (worker 1: 2/1) -> 2. Firm 1: 6/2 = 3.
+    country = make_country([E, E, E], [0, 0, 1], [4.0, 2.0, 6.0], [2.0, 1.0, 2.0], [2, 1])
+    assert country._contract_wage_index_ratio() == pytest.approx(1.0)
+    country.individuals.states["Wage Rate"] = np.array([4.4, 2.2, 6.0])  # firm 0 rates +10%
+    # Fixed t0 weights (2, 1): (2*2.2 + 1*3) / (2*2 + 1*3) = 7.4 / 7.
+    assert country._contract_wage_index_ratio() == pytest.approx(7.4 / 7.0)
 
 
-def test_ratio_ignores_firms_without_employees():
-    country = make_country([2.0, 99.0], [10, 0], [3.0, 99.0], [10, 0])
-    assert country._real_average_wage_ratio() == pytest.approx(1.5)
+def test_contract_index_ignores_who_is_unemployed():
+    country = make_country([E, E, E], [0, 0, 1], [4.0, 2.0, 6.0], [2.0, 1.0, 2.0], [2, 1])
+    country._contract_wage_index_ratio()
+    # A worker of firm 0 loses the job; no rate changes. Firm 0's rate per labour input stays 2.
+    country.individuals.states["Activity Status"] = np.array([E, U, E])
+    assert country._contract_wage_index_ratio() == pytest.approx(1.0)
 
 
-def test_ratio_requires_positive_employment():
-    with pytest.raises(RuntimeError, match="Average-wage transfer index"):
-        make_country([2.0], [10], [3.0], [0])._real_average_wage_ratio()
+def test_contract_index_drops_firms_without_employees():
+    country = make_country([E, E], [0, 1], [2.0, 3.0], [1.0, 1.0], [1, 1])
+    country._contract_wage_index_ratio()
+    country.individuals.states["Activity Status"] = np.array([U, E])
+    country.individuals.states["Wage Rate"] = np.array([2.0, 3.3])
+    assert country._contract_wage_index_ratio() == pytest.approx(1.1)
+
+
+def test_contract_index_requires_employment():
+    country = make_country([E], [0], [2.0], [1.0], [1])
+    country._contract_wage_index_ratio()
+    country.individuals.states["Activity Status"] = np.array([U])
+    with pytest.raises(RuntimeError, match="Contract-wage transfer index"):
+        country._contract_wage_index_ratio()
+
+
+def test_index_not_computed_when_indexation_off(monkeypatch):
+    # Fix for the review: the default path must not depend on the index (it may raise with no employment).
+    calls = []
+    monkeypatch.setattr(Country, "_contract_wage_index_ratio", lambda self: calls.append(1) or 1.0)
+    government = make_government("none")
+    assert not government.uses_wage_indexed_transfers()
+    assert make_government("average_wage").uses_wage_indexed_transfers()
+    import inspect
+
+    source = inspect.getsource(Country._update_benefit_planning_metrics)
+    assert "uses_wage_indexed_transfers()" in source and "else 1.0" in source
+    assert calls == []
+
+
+def test_preset_reaches_setter():
+    import sys
+
+    root = Path(__file__).resolve().parents[5]
+    sys.path.insert(0, str(root / "run_model"))
+    from config import SCENARIO_PRESETS
+    from src.notebook_workflow import apply_country_config_overrides
+
+    from macromodel.configurations import load_country_configuration
+    from macromodel.util.function_mapping import functions_from_model
+
+    config = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+    apply_country_config_overrides(config, SCENARIO_PRESETS["wage_indexed_transfers"])
+    setter = functions_from_model(config.central_government.functions, loc="macromodel.agents.central_government")[
+        "social_benefits"
+    ]
+    assert setter.regular_transfer_indexation == "average_wage"

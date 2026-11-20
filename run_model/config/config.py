@@ -207,8 +207,9 @@ WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES: dict[str, Any] = {
     "central_bank.taylor_rule_overrides.r_star": -0.5,
 }
 
-# Pensions and other transfers follow the real average wage per employee (lagged one quarter, relative
-# to t0), so their nominal totals grow with the nominal average wage. Set from data (2014-2019 co-movement).
+# Pensions and other transfers follow a contract-wage index: firm real contract rates per labour input,
+# fixed t0 employment weights, last quarter over t0 (Laspeyres, as INSEE's salaire mensuel de base index).
+# Unaffected by who is unemployed. Paid at the current CPI. Set from data (2014-2019 co-movement).
 WAGE_INDEXED_TRANSFERS_OVERRIDES: dict[str, Any] = {
     "central_government.functions.social_benefits.parameters.['regular_transfer_indexation']": "average_wage",
 }

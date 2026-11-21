@@ -393,6 +393,23 @@ Introduce a dedicated numerical-guard history in declared income units, not a ze
 
 A tiny epsilon alone is not evidence of safety. The old fallback explicitly guards against near-zero wealth-ratio explosions (issue #90). Keep raw values, flag all activations, verify annualised ratios and growth-guard/clipping incidence, and test zero/negative/no-positive-window cases, the asset-ineligible cash-poor case, common money rescaling and CPI scaling. No new numeric epsilon is selected by this audit. Its contract is a technical implementation prerequisite, not a policy calibration exercise.
 
+### 10.5a Numerical guard: proposal (agreed 2026-11-21) and review
+
+**Proposal.** G = 0.01 × M_household per period: the same CU scaling and setter indexation as M, and nominal income units. About €15/quarter for a single person at 2014 values. Stored as its own history (replacing `subsistence_nominal_history` in `IncomeHistories` and the `income_bridge_current` floor). It does not depend on the goods-spending toggle. Raw income is kept; a flag `income_guard_bound` is added; the share of household-periods where the guard binds is reported. Acceptance: binding share < 0.5% of household-periods across seeds. A higher share is a finding to diagnose, not a reason to change G.
+
+**Where it can bind once the policy is active.** Behavioural income includes the top-up, so recipients have cash income ≥ M − 0.0075 × financial assets. The guard binds only for: (a) households with zero or negative cash income and enough financial assets that the notional 3% removes the top-up; (b) negative property income; (c) history from before activation, which keeps the old S treatment.
+
+**Review findings.**
+
+| # | Finding | Severity | Resolution |
+|---|---|---|---|
+| R1 | The window is 4 quarters (`consumption_inputs.py:202`, enforced for quarterly runs), not 20. One guarded quarter for a household whose usual income is about M lowers the geometric mean by exp(ln 0.01 / 4) ≈ **0.32×**, not 0.79× as first stated. | important | Accept. Case (a) households then get a low B, and their wealth/income ratios hit the HFCS clipping bounds (issue #90 protection), so consumption follows the clipped rule. This is the intended behaviour for an asset-rich, cash-poor household, but it must be visible: report the guard flag together with the ratio-clipping incidence. |
+| R2 | 1% is a technical choice, not a value from data. The data value would be the lower income bound of the HFCS estimation sample; none was found in the code. | nit | Keep 1%. Replace it if the estimation trimming bound is documented. |
+| R3 | Case (a) is created by the design: assessed income contains notional asset income, but behavioural income (the HFCS disposable-income concept) does not. | design note | Do not add notional income to behavioural income: that would break consistency with the HFCS calibration. Record it as the source of case (a). |
+| R4 | Monthly runs: M per period scales with period_months, so G does too. The window length for monthly runs is not fixed by the quarterly check. | nit | Test both frequencies. G stays 1% of M per period. |
+| R5 | Rows from before activation keep the old floor S. A 4-quarter window that spans activation mixes S-floored and G-guarded values for up to 3 quarters. | important for comparisons | Use the D9 shared checkpoint. Compare policy arms only from activation + 4 quarters onward, or report the transition separately. |
+| R6 | Equality B = G exactly is ambiguous for the flag. | nit | Flag strictly below: `raw < G`. |
+
 ### 10.6 Spending toggle and housing shortfalls
 
 Keep `settle_authoritative_household_payments` as the owner of consumer/mortgage service, early repayment, relief, loan stocks and distress. Extract/select a pure allocation policy behind that owner. Existing goods-floor diagnostics should not decide minimum-income eligibility.

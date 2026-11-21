@@ -5,9 +5,12 @@ period-t desired goods, spending and credit), 7 (floor off: paid goods <= desire
 desired only through the funded floor, unmet floor visible).
 """
 
+from copy import deepcopy
+
 import numpy as np
 import pytest
 
+from tests.test_macromodel.unit.test_country import test_minimum_income_entitlement as entitlement_tests
 from tests.test_macromodel.unit.test_country.test_minimum_income_entitlement import _production_simulation
 
 PERIODS = 3
@@ -155,3 +158,33 @@ def test_top_up_is_independent_of_period_t_outcomes(datawrapper, perturb, moved_
     assert hh_base.ts.current("minimum_income_entitlement").sum() > 0.0
     for name in ("minimum_income_entitlement", "income_minimum_income"):
         np.testing.assert_array_equal(hh_shifted.ts.current(name), hh_base.ts.current(name), err_msg=name)
+
+
+def _without_resolver(monkeypatch):
+    """Make _production_simulation load a household configuration with the feasibility resolver switched off."""
+    load = entitlement_tests.load_country_configuration
+
+    def load_without_resolver(*args, **kwargs):
+        configuration = load(*args, **kwargs)
+        configuration.households.parameters.uses_feasibility_resolver = False
+        return configuration
+
+    monkeypatch.setattr(entitlement_tests, "load_country_configuration", load_without_resolver)
+
+
+def test_minimum_income_mode_requires_the_feasibility_resolver_at_construction(datawrapper, monkeypatch):
+    _without_resolver(monkeypatch)
+    with pytest.raises(ValueError, match="requires households uses_feasibility_resolver"):
+        _production_simulation(datawrapper, {"mode": "minimum_income"})
+
+
+def test_minimum_income_mode_requires_the_feasibility_resolver_on_reset(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    country = simulation.countries["FRA"]
+    configuration = deepcopy(simulation.configuration)
+    configuration.country_configurations["FRA"].household_support = {"mode": "minimum_income"}
+    configuration.country_configurations["FRA"].households.parameters.uses_feasibility_resolver = False
+    with pytest.raises(ValueError, match="requires households uses_feasibility_resolver"):
+        simulation.reset(configuration)
+    # Rejected before any component is reset.
+    assert country.household_support.mode == "legacy_stage5"

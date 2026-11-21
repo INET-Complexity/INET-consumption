@@ -262,6 +262,13 @@ def _validate_minimum_income_base_year(support: HouseholdSupportParameters, init
         )
 
 
+def _validate_minimum_income_resolver(support: HouseholdSupportParameters, uses_feasibility_resolver: bool) -> None:
+    """minimum_income mode needs the Stage 5 feasibility resolver: only its allocator applies the mode's payment
+    order and goods-floor switch (PLAN.md section 5.4). Without it the allocator never runs."""
+    if support.mode == "minimum_income" and not uses_feasibility_resolver:
+        raise ValueError("household_support.mode 'minimum_income' requires households uses_feasibility_resolver: true.")
+
+
 def _resolve_frm_coefficients_path(
     configured_path: str | Path | None,
     data_paths: Optional[DataPaths],
@@ -566,6 +573,9 @@ class Country:
         self._minimum_income_status: Optional[str] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
+        _validate_minimum_income_resolver(
+            self.household_support, configuration.households.parameters.uses_feasibility_resolver
+        )
         validate_portfolio_settlement_configuration(
             households.functions["wealth"],
             configuration.households.parameters.uses_feasibility_resolver,
@@ -1434,6 +1444,11 @@ class Country:
         Args:
             configuration (CountryConfiguration): New model parameters
         """
+        # Validate before any component is reset.
+        _validate_minimum_income_resolver(
+            _read_household_support_parameters(getattr(configuration, "household_support", {})),
+            configuration.households.parameters.uses_feasibility_resolver,
+        )
         self.forecasting_window = configuration.forecasting_window
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise

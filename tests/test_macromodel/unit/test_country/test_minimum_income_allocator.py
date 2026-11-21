@@ -120,23 +120,38 @@ def _scale_desired_goods(country, factor):
     country._set_household_target_demand = scaled
 
 
-def test_top_up_is_independent_of_period_t_desired_goods_and_spending(datawrapper):
-    """Invariant 3: T is fixed at period start from t-1 data; period-t demand, spending and credit cannot move it."""
+def _scale_period_wages(country, factor):
+    """Scale every period-t wage receipt (financing, realised income, taxes): T must not see it."""
+    wages = country.nominal_employee_income
+
+    def scaled():
+        return factor * wages()
+
+    country.nominal_employee_income = scaled
+
+
+@pytest.mark.parametrize(
+    "perturb,moved_series",
+    [
+        (_scale_desired_goods, ("consumption_before_floor", "nominal_amount_spent_in_lcu")),
+        (_scale_period_wages, ("income_employee", "financing_income", "income")),
+    ],
+    ids=["desired_goods", "wages"],
+)
+def test_top_up_is_independent_of_period_t_outcomes(datawrapper, perturb, moved_series):
+    """Invariant 3: T is fixed at period start from t-1 data; period-t demand, spending, wages and realised
+    income cannot move it."""
     support = {"mode": "minimum_income", "goods_floor": True}
     # Construction seeds the global RNG: build and run each simulation in turn so both see the same draws.
     base = _production_simulation(datawrapper, support)
     base.iterate(t=0)
     shifted = _production_simulation(datawrapper, support)
-    _scale_desired_goods(shifted.countries["FRA"], 1.5)
+    perturb(shifted.countries["FRA"], 1.5)
     shifted.iterate(t=0)
 
     hh_base, hh_shifted = base.countries["FRA"].households, shifted.countries["FRA"].households
-    assert not np.array_equal(
-        hh_base.ts.current("consumption_before_floor"), hh_shifted.ts.current("consumption_before_floor")
-    )
-    assert not np.array_equal(
-        hh_base.ts.current("nominal_amount_spent_in_lcu"), hh_shifted.ts.current("nominal_amount_spent_in_lcu")
-    )
+    for name in moved_series:
+        assert not np.array_equal(hh_base.ts.current(name), hh_shifted.ts.current(name)), name
     assert hh_base.ts.current("minimum_income_entitlement").sum() > 0.0
     for name in ("minimum_income_entitlement", "income_minimum_income"):
         np.testing.assert_array_equal(hh_shifted.ts.current(name), hh_base.ts.current(name), err_msg=name)

@@ -532,7 +532,7 @@ class CentralGovernment(Agent):
         Computes deficit as the difference between:
         Expenditures:
         - Unemployment benefits
-        - Social transfers
+        - Social transfers (including Stage 5 support and the minimum income top-up)
         - Government spending
         - Interest payments
         And:
@@ -555,6 +555,7 @@ class CentralGovernment(Agent):
             self.ts.current("total_public_pension_benefits")[0]
             + self.ts.current("total_other_social_transfers")[0]
             + self.ts.current("total_necessity_support")[0]
+            + self.ts.current("total_minimum_income")[0]
         )
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(

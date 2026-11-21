@@ -67,6 +67,7 @@ def create_central_government_timeseries(
         total_public_pension_benefits=[public_pension_benefits],
         total_other_social_transfers=[other_social_benefits],
         total_necessity_support=[0.0],
+        total_minimum_income=[0.0],
         total_household_social_transfers=[
             settled_initial_unemployment_benefits + public_pension_benefits + other_social_benefits
         ],

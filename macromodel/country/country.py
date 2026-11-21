@@ -79,6 +79,14 @@ from macromodel.agents.households.consumption_inputs import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
 from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+from macromodel.agents.households.func.minimum_income import (
+    assessed_income,
+    assessment_flow,
+    assessment_stock,
+    minimum_income_level,
+    minimum_income_top_up,
+    notional_rate_period,
+)
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -553,6 +561,8 @@ class Country:
         self.configuration = configuration
         self.household_support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
         _validate_minimum_income_base_year(self.household_support, initial_year)
+        # None (no entitlement computed yet), "assessed" (T fixed for the period) or "booked" (T settled).
+        self._minimum_income_status: Optional[str] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
         validate_portfolio_settlement_configuration(
@@ -710,13 +720,14 @@ class Country:
         wages = hh.aggregate_individual_amount(
             self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
         )
-        pension, unemployment, other, _ = self.compute_realised_household_social_income_components()
+        pension, unemployment, other, _, minimum_income = self.compute_realised_household_social_income_components()
         receipts = (
             hh.ts.current("expected_income")
             - hh.ts.current("expected_income_employee")
             - hh.ts.current("expected_income_social_transfers")
         )
-        receipts = receipts + wages + pension + unemployment + other
+        # The expected social income removed above contains the period's minimum income T once; carry it back.
+        receipts = receipts + wages + pension + unemployment + other + minimum_income
         hh.ts.override_current("financing_income", receipts)
         hh._known_receipts_ready = True
 
@@ -831,10 +842,17 @@ class Country:
         """Return the nominal fiscal expenditure increment implied by settled Stage 5 support."""
         return self.current_settled_stage5_subsistence_support_total()
 
+    def compute_realised_minimum_income(self) -> np.ndarray:
+        """Return the minimum income top-up T paid this period: the entitlement fixed at the start of the period."""
+        return np.asarray(self.households.ts.current("minimum_income_entitlement"), dtype=float).copy()
+
     def compute_realised_household_social_income_components(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Return realised pension, unemployment, other-transfer, and Stage 5 components."""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return realised pension, unemployment, other-transfer, Stage 5 and minimum income components.
+
+        The minimum income top-up T is the entitlement fixed at the start of the period (zero in legacy mode).
+        """
         public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
             retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
             public_pension_weights=self.individuals.states["Public Pension Weight"],
@@ -854,6 +872,7 @@ class Country:
             unemployment_benefits,
             other_transfers,
             self.compute_realised_stage5_subsistence_support(),
+            self.compute_realised_minimum_income(),
         )
 
     def compute_realised_household_social_transfers(self) -> np.ndarray:
@@ -862,10 +881,13 @@ class Country:
 
     def settle_household_social_transfers(self) -> None:
         """Persist each realised social-income component once on the late settlement path."""
-        public_pensions, unemployment_benefits, other_transfers, realised_support = (
+        if self._minimum_income_status == "booked":
+            raise RuntimeError("The minimum income top-up is booked once per period; it is already booked.")
+        public_pensions, unemployment_benefits, other_transfers, realised_support, minimum_income = (
             self.compute_realised_household_social_income_components()
         )
         realised_transfers = public_pensions + unemployment_benefits + other_transfers + realised_support
+        realised_transfers = realised_transfers + minimum_income
         self.individuals.ts.override_current(
             "public_pension_benefits",
             self.central_government.distribute_public_pension_benefits_to_individuals(
@@ -877,8 +899,10 @@ class Country:
         self.households.ts.income_unemployment_benefits.append(unemployment_benefits)
         self.households.ts.income_other_social_transfers.append(other_transfers)
         self.households.ts.stage5_subsistence_support.append(realised_support)
+        self.households.ts.income_minimum_income.append(minimum_income)
         self.households.ts.income_social_transfers.append(realised_transfers)
         self.households.ts.total_income_social_transfers.append([realised_transfers.sum()])
+        self._minimum_income_status = "booked"
 
     @classmethod
     def from_pickled_country(
@@ -1419,6 +1443,7 @@ class Country:
         self._consumption_input_adapter.reset()
         self._consumption_run_id += 1
         self._clear_household_income_shock()
+        self._minimum_income_status = None
 
     def _clear_household_income_shock(self) -> None:
         """Clear any staged household income shock used by MPC experiments."""
@@ -1808,8 +1833,71 @@ class Country:
     def update_pre_credit_household_finance_metrics(self) -> None:
         """Update household finance inputs needed before housing and credit clearing."""
         self._update_benefit_planning_metrics()
+        # After the benefit setter (I_t current) and before the expectations pass, which overwrites income_rental.
+        self._set_minimum_income_entitlement()
         self._set_household_income_expectations(replace_current=False)
         self._set_household_target_demand(replace_current=False)
+
+    def _set_minimum_income_entitlement(self) -> None:
+        """Fix the minimum income level M, assessed income Y and top-up T for period t (PLAN.md section 5.3 step 1).
+
+        Y is assessed from realised series that are still the t-1 rows here (monthly: the t-4..t-2 window), so T
+        is independent of every period-t outcome. Computed once per period; legacy mode stores zeros.
+        """
+        if self._minimum_income_status == "assessed":
+            raise RuntimeError("The minimum income entitlement is computed once per period; it is already set.")
+        hh = self.households
+        if self.household_support.mode == "minimum_income":
+            level, assessed, entitlement = self._compute_minimum_income_entitlement()
+        else:
+            level = assessed = entitlement = np.zeros(hh.ts.current("n_households"))
+        hh.ts.minimum_income_level.append(level)
+        hh.ts.minimum_income_assessed.append(assessed)
+        hh.ts.minimum_income_entitlement.append(entitlement)
+        self._minimum_income_status = "assessed"
+
+    def _compute_minimum_income_entitlement(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return (M, Y, T) per household from the current setter index, CPI and the realised t-1 series."""
+        hh = self.households
+        parameters = self.household_support.minimum_income
+        time_unit = self.economy.time_unit
+        government_ts = self.central_government.ts
+        level = minimum_income_level(
+            # Population expansion applied once, as for the SMIC in _select_net_smic_base.
+            rsa_base_monthly_model_units=parameters.rsa_base_monthly * self.scale,
+            time_unit=time_unit,
+            consumption_units=hh._current_consumption_units(),
+            transfer_index=government_ts.current("total_other_benefits")[0]
+            / government_ts.initial("total_other_benefits")[0],
+            # Last realised CPI, as for the subsistence floor. Transfers are paid at the period-t CPI, which is
+            # only known after goods clearing; T is fixed at the start of the period (PLAN.md D5).
+            cpi_ratio=self.economy.current_consumer_price_level() / self.economy.initial_consumer_price_level(),
+        )
+        flow = {
+            name: assessment_flow(hh.ts.historic(name), time_unit=time_unit)
+            for name in (
+                "income_employee",
+                "income_unemployment_benefits",
+                "income_public_pension",
+                "income_other_social_transfers",
+                "income_rental",
+            )
+        }
+        assessed = assessed_income(
+            employee=flow["income_employee"],
+            unemployment=flow["income_unemployment_benefits"],
+            pension=flow["income_public_pension"],
+            other_transfers=flow["income_other_social_transfers"],
+            rental=flow["income_rental"],
+            # Gross financial assets, debt not subtracted: an overdraft (negative liquid balance) is debt, not an
+            # asset, so it contributes zero assets rather than negative notional income.
+            liquid_assets=np.maximum(
+                assessment_stock(hh.ts.historic("liquid_financial_assets"), time_unit=time_unit), 0.0
+            ),
+            illiquid_assets=assessment_stock(hh.ts.historic("illiquid_financial_assets"), time_unit=time_unit),
+            notional_rate_period=notional_rate_period(parameters.notional_asset_return_annual, time_unit),
+        )
+        return level, assessed, minimum_income_top_up(level=level, assessed=assessed)
 
     def update_post_labour_planning_metrics(self) -> None:
         """Update planning metrics that depend on labour clearing."""
@@ -1989,6 +2077,10 @@ class Country:
         )
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
+        )
+        # The minimum income top-up is known for the period: added once; pass 2 replaces the whole row.
+        expected_income_social_transfers = expected_income_social_transfers + self.households.ts.current(
+            "minimum_income_entitlement"
         )
         diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
@@ -4793,6 +4885,9 @@ class Country:
         )
         self.central_government.ts.total_necessity_support.append(
             [self.households.ts.current("stage5_subsistence_support").sum()]
+        )
+        self.central_government.ts.total_minimum_income.append(
+            [self.households.ts.current("income_minimum_income").sum()]
         )
         self.central_government.ts.total_household_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]

@@ -56,6 +56,7 @@ def test_runtime_pays_source_recipient_without_retired_status():
     )
     country._household_unemployment_benefits_from_individuals = lambda: np.zeros(1)
     country.compute_realised_stage5_subsistence_support = lambda: np.zeros(1)
+    country.compute_realised_minimum_income = lambda: np.zeros(1)
     pensions, *_ = country.compute_realised_household_social_income_components()
     np.testing.assert_array_equal(distribute.call_args.kwargs["retirement_eligibility"], [True])
     np.testing.assert_allclose(pensions, [30.0])

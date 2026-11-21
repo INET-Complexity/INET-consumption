@@ -81,8 +81,13 @@ def test_minimum_income_mode_pays_no_stage5_support_and_applies_the_goods_floor_
         if goods_floor:
             floor_paid = floor - plan.unmet_floor
             assert np.all(plan.unmet_floor >= 0.0) and np.all(floor_paid >= 0.0)
-            # Goods above desired only through the funded floor.
-            assert np.all(np.maximum(paid - desired, 0.0) <= floor_paid * (1.0 + 1e-12))
+            # Goods above desired only through the funded floor: paid <= max(desired, Fp), and a household
+            # paid above its desired goods buys exactly the funded floor, not the floor on top of desired.
+            assert np.all(paid <= np.maximum(desired, floor_paid) * (1.0 + 1e-12))
+            # F + (G - F) can exceed G by one ulp: a top-up is paid above desired beyond round-off.
+            topped_up = paid > desired * (1.0 + 1e-12)
+            assert topped_up.any()
+            np.testing.assert_allclose(paid[topped_up], floor_paid[topped_up], rtol=1e-12)
             # An unmet floor leaves nothing for goods above it.
             unmet = plan.unmet_floor > 0.0
             np.testing.assert_allclose(paid[unmet], floor_paid[unmet], rtol=1e-12)

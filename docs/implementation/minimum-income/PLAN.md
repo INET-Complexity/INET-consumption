@@ -210,11 +210,11 @@ Sources: DREES, *Minima sociaux et prestations sociales* 2025, fiche 09 (resourc
 | UB, pensions, other transfers | expected components, then `compute_realised_household_social_income_components` | match (no neutralisation rule: model has none) |
 | Rental income | `income_rental` (after tax) | match |
 | Dividends, deposit interest | `income_dividend_distributions`; positive deposit-interest receipts | match. Livret A interest counts in RSA too |
-| Notional 3% on savings | not modelled | **departure**: the confirmed asset gate (assets < ¼ M) replaces it |
-| Forfait logement for owners with no mortgage / imputed rent | not modelled | **departure, open**: owners with no mortgage get no deduction |
+| Notional 3% on savings | not modelled | **departure, accepted 2026-11-21**: the asset gate (assets < 3 months of M) replaces it. Much stricter than RSA (see note) |
+| Forfait logement | not modelled | **departure, accepted 2026-11-21**: left out |
 | Family benefits | inside "other transfers" | match at aggregate level |
 | Debt service | not deducted | match |
-| Reference window | **user rule: 3 months including the current period** | **departure**: RSA uses a lagged window (m−4..m−2) |
+| Reference window | **Decided 2026-11-21: previous period's realised income (t−1), the quarterly analogue of m−4..m−2.** Monthly model: mean of t−4..t−2. Amount fixed for the period. | match (supersedes the same-day 'including current period' rule) |
 
 Guaranteed level: the design uses full SMIC × CU (1/0.5/0.3), about 1.75 × the RSA single-person amount (2014 SMIC €1,128.70 vs RSA €646.52 in 2025, so the true ratio is higher at a common date). The scale is close: RSA uses +50% for the second person and +30% per further person, with a higher increment from the third child. Keep the confirmed SMIC basis. Describe it in the paper as a minimum-income guarantee that is more generous than the RSA, not as the RSA.
 
@@ -279,7 +279,7 @@ Core outputs: assessed versus realised income shortfall to M; recipient and cove
 | D1 | Replace old transfer; independently toggle compulsory minimum goods spending | **Confirmed user update, 2026-11-17; supersedes permanent floor removal.** |
 | D2 | Threshold: SMIC times household family coefficient | **Reuse existing net-SMIC and family scale.** Recovered manuscript basis: 2014 EUR1,128.70/month, weights 1/.5/.3, CPI indexation; existing reader supplies the dated model input. Full SMIC is the new income threshold; half-SMIC remains only the historical spending norm. |
 | D3 | Financial-asset gate and assessment income | **Confirmed: liquid + illiquid financial assets, before debt subtraction, strictly below one quarter of household minimum income.** After-tax cash income confirmed. Opening asset date is proposed; exact cash-return components and negative-income handling must be mapped. Do not count financial-asset holdings as income. |
-| D4 | Current-income assessment and payment freeze | **Confirmed: freeze payment after post-labour assessment, before consumption.** Assessment window: 3 months including the current period, converted to model frequency (§4.5). No late actual-income true-up/clawback. **Next period (confirmed 2026-11-21): any saved part counts only through the financial-asset stock. The previous payment is not added to assessed income.** |
+| D4 | Current-income assessment and payment freeze | **Assessment on t−1 realised income (RSA lag, decided 2026-11-21, §4.5); payment fixed before consumption.** Freeze still applies. No late actual-income true-up/clawback. **Next period (confirmed 2026-11-21): any saved part counts only through the financial-asset stock. The previous payment is not added to assessed income.** |
 | D5 | Housing shortfalls | **Decided 2026-11-21 (§11.1a): renter with unpaid rent → social housing next period; landlord absorbs the arrears; exit by the existing market bid; social rent unchanged.** Earlier direction: missed rent → move to the existing social housing (house ID −1) → return to market rent once affordable. The subsidy is in kind: the social-rent place. No cash housing subsidy. Consumer-before-mortgage seniority stays. Still open: arrears booking, move timing, re-entry criterion, and whether owners in mortgage distress are included. |
 | D6 | Benefit withdrawal and MPC receipt | **Confirmed: euro-for-euro withdrawal; MPC receipt exempt and paid on top.** No taper selection needed. |
 | D7 | Behavioural-income bound and learning treatment | **Confirmed: replace the old economic input floor.** **Guard contract per §10.5 agreed 2026-11-21.** Define a separate positive-domain safeguard and test visibility of income changes; map top-up into learning once. |

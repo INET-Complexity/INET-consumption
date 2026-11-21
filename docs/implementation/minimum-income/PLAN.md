@@ -181,18 +181,42 @@ The old SMIC-based behavioural-income bound is retired under this decision. Do n
 
 No intercept change, wealth rescaling, residual redraw/re-anchoring after support, or consumption refit is part of this plan. The audit found that the initial-state residual is created lazily on the first target evaluation: identical input caches alone do not freeze it. Use a common initialised checkpoint with the native residual already created, then clone for policy arms; verify identical residual/layout/RNG state and do not call reset or set_run_seed after cloning. If a first-period or policy-consistent initialisation is required, specify and validate that bootstrap separately. See section 10.
 
-### 4.5 Assessed income: follow real-world practice (open research)
+### 4.5 Assessed income: RSA practice and model mapping
 
-User direction (2026-11-21): assessed income should follow what the real benefit does. The reference is the French RSA, the means-tested top-up that the SMIC/CU design most closely matches. **The statutory points below are unverified and must be checked against the primary source (CASF articles L262-2/3 and R262-6 onwards, or the CAF guidance) before increment 2:**
+Sources: DREES, *Minima sociaux et prestations sociales* 2025, fiche 09 (resource base and reference period) and fiche 23 (RSA), both dated 2025-12-01. The notional yield on capital comes from secondary sources only and is marked VERIFY. The CASF text (R262-6 referring to R132-1) has not been read.
 
-- RSA assesses average monthly resources over a three-month window. **User decision (2026-11-21):** the window is fixed in months and includes the current period: `Y_assessed = mean over the last ceil(3 / period_months) periods, current period included`. Quarterly model: the current quarter only. Monthly model: the current month plus the two before. This is consistent with D4: the current period enters through the post-labour assessment, then the payment is frozen. Earlier periods in the window use realised values. If history is shorter than the window (start of a run), average over the periods that exist.
-- Earnings, unemployment benefits, pensions and most other transfers count. Family benefits partly count.
-- Capital income counts. Savings that produce no income count at a notional yield (VERIFY the rate).
-- Housing: a fixed "forfait logement" is deducted when the household pays no rent or receives housing benefit (VERIFY).
-- Debt service is not deducted.
-- RSA has an earnings-disregard (prime d'activité, a separate benefit), so in practice withdrawal is less than euro for euro. D6 stays at euro for euro as confirmed; note this as a simplification.
+**RSA rules (sourced):**
 
-Model mapping (to be completed): for each item, give the model field, its timing, and whether it is net of tax. Then the user decides on each departure from practice.
+| Item | RSA practice | Source |
+|---|---|---|
+| Reference window | Monthly average over months m−4 to m−2, re-examined quarterly. Since 2025-03 (pre-filled declarations); before that m−3 to m−1. The amount is fixed for the quarter of entitlement. | fiche 09 table 3; fiche 23 p.1 |
+| Base | All resources of every household member, the spouse included. RSA itself is excluded. | fiche 09; fiche 23 |
+| Earnings | Included (taxable resources, so net of social contributions). A return to work counts only from the next quarterly declaration, so the RSA can be combined in full with earnings for up to 3 months. | fiche 09 box 1 and the return-to-work table, note 3 |
+| Unemployment benefits, pensions, sickness benefits | Included. They are neutralised (removed) when they stop with no replacement income. | fiche 09 neutralisation table |
+| Capital income | Taxable capital income and property income are included. **Tax-exempt savings interest (livret A etc.) is also included for RSA.** | fiche 09 box 1 and table |
+| Non-income-producing savings | Notional yield of 3%/yr (0.75%/quarter). **VERIFY** (secondary sources; R132-1 CASF). | justice.fr, AN written questions |
+| Asset ceiling | None stated. Assets enter only through the notional yield. | fiche 09/23 are silent; VERIFY |
+| Family benefits | Mostly included (non-means-tested family allowances, complément familial, Paje base). Some supplements excluded. | fiche 09 |
+| Housing | Housing benefit counts up to the forfait logement. If the household is housed free, is an owner with no mortgage, or receives housing benefit, the forfait is deducted: €77.58 (1 person), €155.16 (2), €192.02 (3+) per month, 2025. | fiche 23 p.2 and note 8 |
+| Debt service, rent | Not deducted. | fiche 09/23 (no deduction listed) |
+| Withdrawal | Differential: RSA = guaranteed amount − resources, euro for euro. | fiche 23 diagram 1 |
+| Guaranteed amount (2025-04) | Single person €646.52. Scale: +50% for a second adult or the first child (single), +30% per further person, +40% from the third child; per extra child €258.61. | fiche 23 table 1 |
+
+**Model mapping and departures:**
+
+| RSA item | Model field (§10.3) | Status |
+|---|---|---|
+| Net earnings | known `nominal_employee_income` after labour; `income_employee` realised | match |
+| UB, pensions, other transfers | expected components, then `compute_realised_household_social_income_components` | match (no neutralisation rule: model has none) |
+| Rental income | `income_rental` (after tax) | match |
+| Dividends, deposit interest | `income_dividend_distributions`; positive deposit-interest receipts | match. Livret A interest counts in RSA too |
+| Notional 3% on savings | not modelled | **departure**: the confirmed asset gate (assets < ¼ M) replaces it |
+| Forfait logement for owners with no mortgage / imputed rent | not modelled | **departure, open**: owners with no mortgage get no deduction |
+| Family benefits | inside "other transfers" | match at aggregate level |
+| Debt service | not deducted | match |
+| Reference window | **user rule: 3 months including the current period** | **departure**: RSA uses a lagged window (m−4..m−2) |
+
+Guaranteed level: the design uses full SMIC × CU (1/0.5/0.3), about 1.75 × the RSA single-person amount (2014 SMIC €1,128.70 vs RSA €646.52 in 2025, so the true ratio is higher at a common date). The scale is close: RSA uses +50% for the second person and +30% per further person, with a higher increment from the third child. Keep the confirmed SMIC basis. Describe it in the paper as a minimum-income guarantee that is more generous than the RSA, not as the RSA.
 
 ## 5. Accounting and lifecycle invariants
 

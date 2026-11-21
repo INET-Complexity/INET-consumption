@@ -393,6 +393,24 @@ Source discovery on the pinned branch:
 - `Households.process_housing_market_clearing` calculates the period's rent before goods/payment outcomes. A missed-rent transition discovered later therefore needs explicit scheduling; do not retroactively replace the rent due with cheaper social rent for the same elapsed quarter.
 - The existing representation is a fallback state, not proof of a finite social-housing stock, a waiting list or an entitlement allocation process. Reusing that fallback is a declared model simplification, not a claim that real-world social housing is unlimited.
 
+### 11.1a Source check of existing social housing (2026-11-21, `38e9be92`)
+
+| Question | Finding | Location |
+|---|---|---|
+| Representation | A household state, not a stock of dwellings: `Corresponding Inhabited House ID == -1` with social tenure status. Capacity is unlimited. | `Households`, `property.py` (`SOCIAL_HOUSING_TENURE_STATUS`) |
+| Rent | `0.25 × unemployment_benefits_by_individual × Number of Adults`, booked as `Rent paid to Government`. Takes the **scalar** UB series; under the replacement-rate setter that scalar is only a diagnostic mean. | `DefaultSocialHousing.compute_social_housing_rent`; `Households` rent computation; `Country` housing step |
+| Entry during a run | **One path only:** a seller still living in the home it sold is set to −1 (`sellers_vacate`, active when house-purchase completion is on). No path for a renter who cannot pay rent. No eviction. | `HousingMarket` clearing, `sellers_vacate` block |
+| Exit | Exists. Every social-housing household searches each period (`ind_dec`), bidding rent and price from the income power law. If a rental match succeeds: house ID set, tenure 3. | `property.py` demand; `HousingMarket` "Rental" branch |
+| Exit criterion | Market bid only. There is no affordability test, so a household can leave social housing for a rent it then cannot pay. | same |
+
+Implications for D5:
+
+1. **Add one entry path:** a private renter with unpaid rent (from the §10.6 allocator) vacates. Set the property's inhabitant to −1, remove the household from the landlord's `corr_renters`, and set social tenure from the next period. This reuses the `sellers_vacate` mechanics.
+2. **Arrears booking:** the unpaid rent of the exit period must be booked somewhere. Options: (a) landlord write-off, booked as a loss to the landlord; (b) government pays the landlord the arrears. **User decision needed.**
+3. **Exit test:** keep the existing market search, or add an affordability gate (rent bid ≤ a share of assessed income) to prevent cycling in and out. **User decision needed.**
+4. **Social rent base:** under replacement-rate UB, the scalar is not a benefit level. Index social rent to M (minimum income) instead? **User decision needed.**
+5. Owners in mortgage distress are out of scope. They already have the forced-sale route, which ends in social housing through `sellers_vacate`.
+
 ### 11.2 Proposed transition and accounting contract
 
 Recommended timing for the candidate route is to record the missed current rent and queue the move for the next period's housing stage, before its new rent accrues. This avoids undoing already-cleared housing transactions and current-quarter goods plans. It is a recommendation, not an agreed eviction lag.

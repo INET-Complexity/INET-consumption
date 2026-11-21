@@ -931,7 +931,7 @@ class TestHouseholds:
             residual_shortfall_after_granted_credit=np.zeros(n_households),
         )
         test_households.ts.override_current("target_consumption", target_consumption.copy())
-        resources = np.resize(np.asarray([0.0, 30.0, 500.0]), n_households)
+        resources = np.resize(np.asarray([-5.0, 0.0, 30.0, 500.0]), n_households)
         _settle_agent_level_floor_from(monkeypatch, test_households, resources)
         test_households.ts.override_current("rent", np.full(n_households, 10.0))  # cash rent R = 10
         test_households.exchange_rate_usd_to_lcu = 1.0
@@ -945,8 +945,11 @@ class TestHouseholds:
         plan = test_households.post_grant_feasible_plan
         factor = test_households.consumption_cash_factor()
         np.testing.assert_array_equal(plan.floor_support, 0.0)
-        np.testing.assert_allclose(plan.unpaid_rent, 10.0 - np.minimum(10.0, resources))
-        own_after_rent = resources - (10.0 - plan.unpaid_rent)
+        own = np.maximum(resources, 0.0)
+        np.testing.assert_allclose(plan.unpaid_rent, 10.0 - np.minimum(10.0, own))
+        np.testing.assert_array_equal(plan.resource_deficit, np.maximum(-resources, 0.0))
+        np.testing.assert_array_equal(test_households.ts.current("resource_deficit"), plan.resource_deficit)
+        own_after_rent = own - (10.0 - plan.unpaid_rent)
         np.testing.assert_allclose(plan.unmet_floor, floor_value - np.minimum(floor_value, own_after_rent))
         np.testing.assert_allclose(test_households.ts.current("unpaid_rent"), plan.unpaid_rent)
         np.testing.assert_allclose(test_households.ts.current("unmet_floor"), plan.unmet_floor)

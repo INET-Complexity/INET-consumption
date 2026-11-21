@@ -185,9 +185,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "consumption_cut_amount": 0.0,
     "remaining_subsistence_shortfall": 0.0,
     "floor_binding": False,
-    # Minimum-income allocation (support off): rent and goods floor left unpaid by own resources.
+    # Minimum-income allocation (support off): rent and goods floor left unpaid by own resources, and the
+    # negative part of those resources, max(-A, 0), that nobody covers.
     "unpaid_rent": 0.0,
     "unmet_floor": 0.0,
+    "resource_deficit": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -1525,6 +1527,7 @@ class Households(Agent):
             "floor_binding",
             "unpaid_rent",
             "unmet_floor",
+            "resource_deficit",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)

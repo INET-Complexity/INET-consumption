@@ -301,6 +301,8 @@ def test__support_enabled_true_is_the_legacy_allocation_bit_for_bit():
     # Support covers rent and the floor, so nothing is left unpaid in the legacy allocation.
     np.testing.assert_array_equal(default.unpaid_rent, 0.0)
     np.testing.assert_array_equal(default.unmet_floor, 0.0)
+    # Negative resources are covered by support in legacy: no uncovered deficit is recorded.
+    np.testing.assert_array_equal(default.resource_deficit, 0.0)
 
 
 # Minimum-income allocation (PLAN.md section 5.4): F=80, R=20, O=10+30, G=120, V=15, no support.
@@ -313,6 +315,7 @@ def test__without_support_rent_is_paid_first_then_floor_then_service_goods_and_i
     np.testing.assert_array_equal(settled.floor_support, 0.0)
     np.testing.assert_allclose(settled.unpaid_rent, [20, 20, 10, 0, 0, 0, 0, 0, 0, 0])
     np.testing.assert_allclose(settled.unmet_floor, [80, 80, 80, 80, 40, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(settled.resource_deficit, [10, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 10, 10, 10, 10, 0, 0, 0])
     np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 30, 30, 30, 30, 5, 0, 0, 0])
     np.testing.assert_allclose(settled.consumption_after_floor, [0, 0, 0, 0, 40, 80, 80, 100, 120, 120])
@@ -339,6 +342,8 @@ def test__negative_resources_are_covered_by_support_in_legacy_but_by_nobody_with
     np.testing.assert_allclose(without.unmet_floor, [80.0])
     np.testing.assert_allclose(without.consumption_after_floor, [0.0])
     np.testing.assert_allclose(without.remaining_subsistence_shortfall, [40.0])
+    # The uncovered negative part of the resources is visible: max(-A, 0).
+    np.testing.assert_array_equal(without.resource_deficit, [10.0])
 
 
 def test__without_support_the_funded_floor_tops_up_goods_and_the_unmet_part_is_visible():

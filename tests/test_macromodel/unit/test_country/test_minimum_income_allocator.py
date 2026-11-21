@@ -74,6 +74,10 @@ def test_minimum_income_mode_pays_no_stage5_support_and_applies_the_goods_floor_
         # New plan fields are persisted.
         np.testing.assert_array_equal(hh.ts.current("unpaid_rent"), plan.unpaid_rent)
         np.testing.assert_array_equal(hh.ts.current("unmet_floor"), plan.unmet_floor)
+        np.testing.assert_array_equal(hh.ts.current("resource_deficit"), plan.resource_deficit)
+        np.testing.assert_array_equal(
+            plan.resource_deficit, np.maximum(-np.asarray(calls[-1]["resources"], dtype=float), 0.0)
+        )
 
         # Invariant 7.
         desired = plan.consumption_before_floor

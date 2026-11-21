@@ -87,10 +87,12 @@ class PostGrantFeasiblePlan:
     liquidation_reservation_ifa: np.ndarray | None = None
     liquidation_sale_cost: np.ndarray | None = None
     purchase_liquidation_total: np.ndarray | None = None
-    # Minimum-income allocation (support off): rent and goods floor the household's own resources leave unpaid.
-    # The floor settlement sets both; they are zero whenever support is enabled.
+    # Minimum-income allocation (support off): rent and goods floor the household's own resources leave unpaid,
+    # and the negative part of those resources, max(-A, 0), that nobody covers. The floor settlement sets all
+    # three; they are zero whenever support is enabled.
     unpaid_rent: np.ndarray | None = None
     unmet_floor: np.ndarray | None = None
+    resource_deficit: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -313,8 +315,9 @@ class HouseholdFinancialFeasibility:
 
         ``support_enabled=False`` (minimum-income mode, PLAN.md section 5.4): no
         support, and rent is paid before the floor from the non-negative part of
-        the resources A+ = max(A, 0). A negative A is not covered by anyone here;
-        it stays in the household's realised cash ledger. E plays no role.
+        the resources A+ = max(A, 0). A negative A is not covered by anyone here:
+        it is recorded as ``resource_deficit`` = max(-A, 0) and stays in the
+        household's realised cash ledger. E plays no role.
 
             S   = 0
             Rp  = min(R, A+)                    unpaid_rent = R - Rp
@@ -353,9 +356,11 @@ class HouseholdFinancialFeasibility:
             floor_paid = floor
             unpaid_rent = np.zeros(shape)
             unmet_floor = np.zeros(shape)
+            resource_deficit = np.zeros(shape)
         else:
             support = np.zeros(shape)
             own_resources = np.maximum(available, 0.0)
+            resource_deficit = own_resources - available
             rent_paid = np.minimum(rent, own_resources)
             floor_paid = np.minimum(floor, own_resources - rent_paid)
             unpaid_rent = rent - rent_paid
@@ -386,4 +391,5 @@ class HouseholdFinancialFeasibility:
             floor_binding=(consumption_cut_amount + floor_top_up) > 0.0,
             unpaid_rent=unpaid_rent,
             unmet_floor=unmet_floor,
+            resource_deficit=resource_deficit,
         )

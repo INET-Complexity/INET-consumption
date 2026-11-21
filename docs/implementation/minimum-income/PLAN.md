@@ -218,21 +218,18 @@ Sources: DREES, *Minima sociaux et prestations sociales* 2025, fiche 09 (resourc
 
 Guaranteed level: the design uses full SMIC × CU (1/0.5/0.3), about 1.75 × the RSA single-person amount (2014 SMIC €1,128.70 vs RSA €646.52 in 2025, so the true ratio is higher at a common date). The scale is close: RSA uses +50% for the second person and +30% per further person, with a higher increment from the third child. Keep the confirmed SMIC basis. Describe it in the paper as a minimum-income guarantee that is more generous than the RSA, not as the RSA.
 
-### 4.6 Asset income under the RSA rule (decided 2026-11-21)
+### 4.6 Assessed income and financial assets (decided 2026-11-21, simplified)
 
-Legal basis. CASF R132-1, applied to RSA through L262-3/R262-6: "les biens non productifs de revenu, à l'exclusion de ceux constituant l'habitation principale du demandeur, sont considérés comme procurant un revenu annuel égal à 50 % de leur valeur locative s'il s'agit d'immeubles bâtis, à 80 % de cette valeur s'il s'agit de terrains non bâtis et à 3 % du montant des capitaux". Conseil d'État, 14 June 2017, n°401637: the notional rate applies only to assets that produce no income; capital placed productively counts at its actual return, **even when that return is below 3%**. Wording quoted from AN written answers and the CE decision. The current Légifrance text is still to be checked (VERIFY).
+Assessed income per period, all components at t−1:
 
-| Model holding | RSA treatment | Assessed quarterly income |
-|---|---|---|
-| Deposits (LFA) earning the model deposit rate r_d > 0 | productive: actual interest | positive deposit-interest receipt (t−1) |
-| Deposits with r_d = 0 | non-productive: notional 3% | 0.0075 × deposits |
-| Illiquid financial assets (IFA) paying cash dividends | productive: actual cash return | `income_dividend_distributions` (t−1) |
-| IFA whose return is reinvested, with no cash paid | non-productive for the RSA (life-insurance practice; secondary source) | 0.0075 × IFA |
-| Rented-out property | actual rents | `income_rental` after tax (t−1) |
-| Owned non-main property left vacant | notional 50% of rental value | 0.5 × market rent of that property |
-| Main residence | excluded | 0 (no imputed rent) |
+`Y = net wages + UB + pensions + other transfers + income_rental (after tax) + 0.0075 × (LFA + IFA)` (quarterly; rate = 3%/yr × period_months/12)
 
-The rate is nominal, as in RSA practice: a zero real rate does not trigger the 3%; only a zero cash yield does. The rule is applied per holding class, so income is never counted twice (actual return or notional return, never both). There is a small jump at r_d = 0; record it and do not smooth it.
+`T = max(M − Y, 0)`, paid at the start of the period and fixed for it.
+
+- The notional 3%/yr on **all** financial assets (gross, before debt) **replaces** actual financial returns: deposit interest and dividends are excluded from Y, so nothing is counted twice.
+- Housing wealth is not counted. Main residence: no imputed rent. Vacant property: no notional rent.
+- The top-up itself and the MPC receipt are excluded from Y.
+- Basis: CASF R132-1 notional rate (3% of capital), applied uniformly. A simplification of RSA practice, where the rate applies only to assets that pay nothing (CE 14 June 2017 n°401637). Record this as a stated departure.
 
 ## 5. Accounting and lifecycle invariants
 
@@ -294,7 +291,7 @@ Core outputs: assessed versus realised income shortfall to M; recipient and cove
 |---|---|---|
 | D1 | Replace old transfer; independently toggle compulsory minimum goods spending | **Confirmed user update, 2026-11-17; supersedes permanent floor removal.** |
 | D2 | Threshold M | **Revised 2026-11-21: M = 2014 RSA single-person amount × household CU (1/0.5/0.3, existing model weights), Indexed like other benefits: M_t = M_0 × the regular-transfer index of the active setter (contract-wage ratio when `regular_transfer_indexation: average_wage`; otherwise the setter's own rule for other transfers). Decided 2026-11-21.** Value: €499.31/month from 2014-01-01 (décret 2013-1263); it rose to €509.30 from September 2014 (décret 2014-1127). Use the January value, the same dating convention as the 2014 SMIC input. Supersedes full SMIC × CU. The existing SMIC input stays for the legacy spending floor only. |
-| D3 | Assets and assessed income | **Revised 2026-11-21: no asset cut-off. RSA rule (CASF R132-1, CE 14 June 2017 n°401637):** income from assets counts at its actual cash return; assets that produce no income count at a notional 3%/yr (0.75%/quarter); the main residence is excluded. Supersedes the ¼-M cut-off. See §4.6. |
+| D3 | Assets and assessed income | **Revised 2026-11-21: no asset cut-off. RSA rule (CASF R132-1, CE 14 June 2017 n°401637):** income from assets counts at its actual cash return; assets that produce no income count at a notional 3%/yr (0.75%/quarter); the main residence is excluded. Supersedes the ¼-M cut-off. Simplified 2026-11-21: 3%/yr notional on all financial assets replaces actual financial returns (§4.6). |
 | D4 | Current-income assessment and payment freeze | **Assessment on t−1 realised income (RSA lag, decided 2026-11-21, §4.5); payment fixed before consumption.** Freeze still applies. No late actual-income true-up/clawback. **Next period (confirmed 2026-11-21): any saved part counts only through the financial-asset stock. The previous payment is not added to assessed income.** |
 | D5 | Housing shortfalls | **Decided 2026-11-21 (§11.1a): renter with unpaid rent → social housing next period; landlord absorbs the arrears; exit by the existing market bid; social rent unchanged.** Earlier direction: missed rent → move to the existing social housing (house ID −1) → return to market rent once affordable. The subsidy is in kind: the social-rent place. No cash housing subsidy. Consumer-before-mortgage seniority stays. Still open: arrears booking, move timing, re-entry criterion, and whether owners in mortgage distress are included. |
 | D6 | Benefit withdrawal and MPC receipt | **Confirmed: euro-for-euro withdrawal; MPC receipt exempt and paid on top.** No taper selection needed. |

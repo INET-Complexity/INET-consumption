@@ -69,7 +69,9 @@ def minimum_income_level(
     transfer_index: float,
     cpi_ratio: float,
 ) -> np.ndarray:
-    """Guaranteed level ``M = rsa_base_monthly * time_unit * CU * I_t * (CPI_t / CPI_0)`` per household.
+    """Guaranteed level ``M = rsa_base_monthly * time_unit * CU * I_t * (CPI_{t-1} / CPI_0)`` per household.
+
+    ``cpi_ratio`` is the last realised CPI over the initial CPI (PLAN.md section 3.1).
 
     ``rsa_base_monthly_model_units`` is the RSA base amount already multiplied by the population scale factor.
     """

@@ -559,6 +559,7 @@ class Country:
         self.running_multiple_countries = running_multiple_countries
 
         self.configuration = configuration
+        self._initial_year = initial_year
         self.household_support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
         _validate_minimum_income_base_year(self.household_support, initial_year)
         # None (no entitlement computed yet), "assessed" (T fixed for the period) or "booked" (T settled).
@@ -710,7 +711,10 @@ class Country:
             bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
             bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
         )
-        gross = bridge["gross_wages"] + hh.ts.current("expected_income_social_transfers")
+        # The minimum income top-up is excluded from underwriting (consumer-credit DSTI, housing affordability),
+        # as legacy Stage 5 support never entered it: orchestrator decision on PR #215.
+        social = hh.ts.current("expected_income_social_transfers") - hh.ts.current("minimum_income_entitlement")
+        gross = bridge["gross_wages"] + social
         gross = gross + (hh.ts.current("income_rental") + financial) / (1.0 - tau) + np.maximum(-deposit, 0.0)
         return np.maximum(self._apply_household_income_shock(gross), 0.0)
 
@@ -883,6 +887,8 @@ class Country:
         """Persist each realised social-income component once on the late settlement path."""
         if self._minimum_income_status == "booked":
             raise RuntimeError("The minimum income top-up is booked once per period; it is already booked.")
+        if self.household_support.mode == "minimum_income" and self._minimum_income_status != "assessed":
+            raise RuntimeError("The minimum income top-up must be assessed for the period before it is booked.")
         public_pensions, unemployment_benefits, other_transfers, realised_support, minimum_income = (
             self.compute_realised_household_social_income_components()
         )
@@ -1440,6 +1446,10 @@ class Country:
         self.exogenous.reset()
 
         self.configuration = deepcopy(configuration)
+        self.household_support = _read_household_support_parameters(
+            getattr(self.configuration, "household_support", {})
+        )
+        _validate_minimum_income_base_year(self.household_support, self._initial_year)
         self._consumption_input_adapter.reset()
         self._consumption_run_id += 1
         self._clear_household_income_shock()
@@ -1850,7 +1860,8 @@ class Country:
         if self.household_support.mode == "minimum_income":
             level, assessed, entitlement = self._compute_minimum_income_entitlement()
         else:
-            level = assessed = entitlement = np.zeros(hh.ts.current("n_households"))
+            n_households = hh.ts.current("n_households")
+            level, assessed, entitlement = (np.zeros(n_households) for _ in range(3))
         hh.ts.minimum_income_level.append(level)
         hh.ts.minimum_income_assessed.append(assessed)
         hh.ts.minimum_income_entitlement.append(entitlement)

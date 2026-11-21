@@ -108,6 +108,9 @@ def test_entitlement_is_computed_once_and_booked_once_per_period(test_country, m
     _fix_benefit_setter(test_country, monkeypatch)
     _set_t_minus_1_rows(test_country)
 
+    # In minimum_income mode, booking requires the period's assessment.
+    with pytest.raises(RuntimeError, match="must be assessed"):
+        test_country.settle_household_social_transfers()
     _start_period(test_country)
     with pytest.raises(RuntimeError, match="computed once per period"):
         test_country._set_minimum_income_entitlement()
@@ -116,9 +119,19 @@ def test_entitlement_is_computed_once_and_booked_once_per_period(test_country, m
     with pytest.raises(RuntimeError, match="booked once per period"):
         test_country.settle_household_social_transfers()
 
-    # The next period assesses again.
+    # The next period assesses again; booking without that assessment raises.
+    with pytest.raises(RuntimeError, match="booked once per period"):
+        test_country.settle_household_social_transfers()
     test_country._set_minimum_income_entitlement()
     assert len(test_country.households.ts.historic("minimum_income_entitlement")) == 3
+
+
+def test_legacy_zero_series_are_separate_arrays(test_country, monkeypatch):
+    _fix_benefit_setter(test_country, monkeypatch)
+    _start_period(test_country)
+    hh = test_country.households
+    rows = [hh.ts.current(name) for name in ENTITLEMENT_SERIES]
+    assert all(not np.shares_memory(a, b) for i, a in enumerate(rows) for b in rows[i + 1 :])
 
 
 def test_booked_top_up_is_a_named_fifth_social_income_component(test_country, monkeypatch):
@@ -182,6 +195,10 @@ def test_planning_passes_add_the_stored_top_up_once(test_country, monkeypatch):
 
     for difference in (*pass_1.values(), *pass_2.values()):
         np.testing.assert_allclose(difference, entitlement, rtol=1e-9, atol=1e-6)
+    # T is excluded from underwriting income (consumer-credit DSTI, housing affordability), as Stage 5 was.
+    np.testing.assert_allclose(
+        test_country.household_gross_cash_income(), legacy.household_gross_cash_income(), rtol=1e-12, atol=1e-6
+    )
     # Pass 2 replaces: one planning row per period, and T itself is unchanged by the passes.
     assert len(test_country.households.ts.historic("expected_income_social_transfers")) == 2
     assert len(test_country.households.ts.historic("minimum_income_entitlement")) == 2
@@ -194,22 +211,41 @@ def test_top_up_ignores_period_t_planned_rent_and_the_mpc_receipt(test_country, 
     rows = _set_t_minus_1_rows(test_country)
     twin = deepcopy(test_country)
     n = test_country.households.ts.current("n_households")
-    test_country.stage_household_income_shock(np.full(n, 5000.0), exempt_from_support_test=True)
+    shock = np.full(n, 5000.0)
+    test_country.stage_household_income_shock(shock, exempt_from_support_test=True)
     planned_rent = np.full(n, 1e6)
-    monkeypatch.setattr(test_country.households, "compute_rental_income", lambda **_kwargs: planned_rent)
 
     for country in (twin, test_country):
+        monkeypatch.setattr(country.households, "compute_rental_income", lambda **_kwargs: planned_rent)
         _fix_benefit_setter(country, monkeypatch)
         _start_period(country)
-    test_country._set_household_income_expectations(replace_current=False)
-    test_country._set_household_income_expectations(replace_current=True)
+        country._set_household_income_expectations(replace_current=False)
+    pass_1 = {
+        name: test_country.households.ts.current(name) - twin.households.ts.current(name)
+        for name in ("expected_income", "financing_income")
+    }
+    for country in (twin, test_country):
+        country._set_household_income_expectations(replace_current=True)
+        country.refresh_known_household_receipts()
+        country.settle_household_social_transfers()
 
     hh = test_country.households
     np.testing.assert_array_equal(hh.ts.current("income_rental"), planned_rent)
+    # Invariant 9: the MPC receipt is absent from Y (and so from T) ...
     for name in ENTITLEMENT_SERIES:
         np.testing.assert_array_equal(hh.ts.current(name), twin.households.ts.current(name))
     _, assessed, _ = _expected_entitlement(test_country, rows, index=1.5, cpi_ratio=1.0)
     np.testing.assert_allclose(hh.ts.current("minimum_income_assessed"), assessed, rtol=1e-12, atol=1e-9)
+    # ... and present exactly once in planning, financing and final income, outside social income.
+    for difference in pass_1.values():
+        np.testing.assert_allclose(difference, shock, rtol=1e-12)
+    for name in ("expected_income", "financing_income"):
+        np.testing.assert_allclose(hh.ts.current(name) - twin.households.ts.current(name), shock, rtol=1e-12)
+    np.testing.assert_array_equal(
+        hh.ts.current("income_social_transfers"), twin.households.ts.current("income_social_transfers")
+    )
+    realised = test_country._apply_household_income_shock(hh.compute_income())
+    np.testing.assert_allclose(realised - twin.households.compute_income(), shock, rtol=1e-12)
 
 
 def test_monthly_assessment_reads_the_t_minus_4_to_t_minus_2_history(test_country, monkeypatch):
@@ -261,10 +297,41 @@ def test_simulation_books_top_up_in_social_income_and_deficit_once(datawrapper):
     country = simulation.countries["FRA"]
     hh, government = country.households, country.central_government
     assert country.configuration.households.parameters.uses_feasibility_resolver
+    cpi_series = country.economy.consumer_price_level_series_name()
     paid = 0.0
     for period in range(3):
         simulation.iterate(t=period)
         entitlement = hh.ts.current("minimum_income_entitlement")
+        # M is read at the start of the period: CPI is the last realised value (row -2 once period t is appended).
+        cpi = country.economy.ts.historic(cpi_series)
+        assert cpi[-1][0] != cpi[-2][0]
+        np.testing.assert_allclose(
+            hh.ts.current("minimum_income_level"),
+            RSA
+            * country.scale
+            * country.economy.time_unit
+            * hh._current_consumption_units()
+            * government.ts.current("total_other_benefits")[0]
+            / government.ts.initial("total_other_benefits")[0]
+            * cpi[-2][0]
+            / cpi[0][0],
+            rtol=1e-12,
+        )
+        # Final income carries T once, through income_social_transfers.
+        financial = (
+            hh.ts.current("income_dividend_distributions")
+            if getattr(hh.functions["wealth"], "illiquid_returns_are_capital_gains", False)
+            else hh.ts.current("income_financial_assets")
+        )
+        np.testing.assert_allclose(
+            hh.ts.current("income"),
+            hh.ts.current("income_employee")
+            + hh.ts.current("income_social_transfers")
+            + hh.ts.current("income_rental")
+            + financial,
+            rtol=1e-12,
+            atol=1e-6,
+        )
         paid += entitlement.sum()
         # Invariant 4 and T fixed for the period: booked T is the entitlement assessed at the start.
         np.testing.assert_array_equal(hh.ts.current("income_minimum_income"), entitlement)
@@ -312,3 +379,78 @@ def test_simulation_books_top_up_in_social_income_and_deficit_once(datawrapper):
     simulation.reset()
     assert country._minimum_income_status is None
     assert len(hh.ts.historic("minimum_income_entitlement")) == 1
+
+
+def test_social_receipt_reaches_deposits_exactly_once(datawrapper):
+    """Invariant 8, directly: two identical deterministic runs; in one, a known extra social receipt D is added to
+    income_social_transfers and income just before update_wealth. Cash saving (the deposit flow before financing
+    allocations) and closing financial wealth differ by exactly D."""
+    # Build and step each run in turn: construction seeds the global RNG.
+    reference = _production_simulation(datawrapper, {"mode": "minimum_income"})
+    reference.iterate(t=0)
+    shocked = _production_simulation(datawrapper, {"mode": "minimum_income"})
+    hh = shocked.countries["FRA"].households
+    extra = np.full(hh.ts.current("n_households"), 1000.0)
+    real_update_wealth = hh.update_wealth
+
+    def update_wealth_with_extra_receipt(**kwargs):
+        for name in ("income_social_transfers", "income"):
+            hh.ts.override_current(name, hh.ts.current(name) + extra)
+        return real_update_wealth(**kwargs)
+
+    hh.update_wealth = update_wealth_with_extra_receipt
+    shocked.iterate(t=0)
+
+    base = reference.countries["FRA"].households
+    # Differences of stocks of order 1e10 LCU: allow accumulation round-off only.
+    stock_scale = np.max(
+        np.abs(base.ts.current("liquid_financial_assets") + base.ts.current("illiquid_financial_assets"))
+    )
+    tolerance = 64 * np.finfo(float).eps * stock_scale
+    np.testing.assert_array_equal(
+        hh.ts.current("minimum_income_entitlement"), base.ts.current("minimum_income_entitlement")
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("cash_saving_before_financing") - base.ts.current("cash_saving_before_financing"),
+        extra,
+        rtol=0,
+        atol=tolerance,
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("liquid_financial_assets")
+        + hh.ts.current("illiquid_financial_assets")
+        - base.ts.current("liquid_financial_assets")
+        - base.ts.current("illiquid_financial_assets"),
+        extra,
+        rtol=0,
+        atol=tolerance,
+    )
+
+
+def test_reset_reparses_household_support(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    country = simulation.countries["FRA"]
+    assert country.household_support.mode == "legacy_stage5"
+
+    configuration = deepcopy(simulation.configuration)
+    configuration.country_configurations["FRA"].household_support = {"mode": "minimum_income"}
+    simulation.reset(configuration)
+    assert country.household_support.mode == "minimum_income"
+    simulation.iterate(t=0)
+    assert country.households.ts.current("minimum_income_entitlement").any()
+    assert country.households.ts.current("income_minimum_income").any()
+
+    # Back to legacy: the period-start step now stores zeros (a stepped simulation is not re-iterated from t=0
+    # after reset because the illiquid-return draw is keyed by period index).
+    configuration.country_configurations["FRA"].household_support = {}
+    simulation.reset(configuration)
+    assert country.household_support.mode == "legacy_stage5"
+    country._set_minimum_income_entitlement()
+    assert not country.households.ts.current("minimum_income_entitlement").any()
+
+    configuration.country_configurations["FRA"].household_support = {
+        "mode": "minimum_income",
+        "minimum_income": {"base_year": 2015},
+    }
+    with pytest.raises(ValueError, match="base_year"):
+        simulation.reset(configuration)

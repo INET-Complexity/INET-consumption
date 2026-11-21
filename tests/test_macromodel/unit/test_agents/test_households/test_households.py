@@ -914,6 +914,46 @@ class TestHouseholds:
             test_households.post_grant_feasible_plan.consumption_cut_amount,
         )
 
+    @pytest.mark.parametrize("floor_value", [80.0, 0.0])
+    def test__prepare_goods_market_clearing_without_support_pays_no_stage5_support(
+        self, test_households, monkeypatch, floor_value
+    ):
+        """Agent-level compatibility path in minimum_income mode: no support; F = 0 when the goods floor is off."""
+        n_households = test_households.ts.current("n_households")
+        n_industries = test_households.n_industries
+        target_consumption = np.full((n_households, n_industries), 5.0)
+        desired = target_consumption.sum(axis=1)
+        test_households.configure_feasibility_resolver(True)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+        )
+        test_households.ts.override_current("target_consumption", target_consumption.copy())
+        resources = np.resize(np.asarray([0.0, 30.0, 500.0]), n_households)
+        _settle_agent_level_floor_from(monkeypatch, test_households, resources)
+        test_households.ts.override_current("rent", np.full(n_households, 10.0))  # cash rent R = 10
+        test_households.exchange_rate_usd_to_lcu = 1.0
+
+        test_households.prepare_goods_market_clearing(
+            exchange_rate_usd_to_lcu=1.0,
+            subsistence_consumption=np.full(n_households, floor_value),
+            support_enabled=False,
+        )
+
+        plan = test_households.post_grant_feasible_plan
+        factor = test_households.consumption_cash_factor()
+        np.testing.assert_array_equal(plan.floor_support, 0.0)
+        np.testing.assert_allclose(plan.unpaid_rent, 10.0 - np.minimum(10.0, resources))
+        own_after_rent = resources - (10.0 - plan.unpaid_rent)
+        np.testing.assert_allclose(plan.unmet_floor, floor_value - np.minimum(floor_value, own_after_rent))
+        np.testing.assert_allclose(test_households.ts.current("unpaid_rent"), plan.unpaid_rent)
+        np.testing.assert_allclose(test_households.ts.current("unmet_floor"), plan.unmet_floor)
+        if floor_value == 0.0:
+            assert np.all(plan.consumption_after_floor <= factor * desired)
+            assert np.all(test_households.ts.current("target_consumption").sum(axis=1) <= desired * (1 + 1e-12))
+
     def test__prepare_goods_market_clearing_floor_does_not_mutate_credit_liquidation_or_balance_sheet(
         self,
         test_households,

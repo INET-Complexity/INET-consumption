@@ -547,9 +547,8 @@ class CentralGovernment(Agent):
         Returns:
             np.ndarray: Government deficit (positive = deficit)
         """
-        # Use the settled benefit vector that was assigned to individuals during
-        # planning. Recounting the current activity status here can disagree with
-        # household income after labour-market clearing changes eligibility.
+        # Use the settled totals, which equal household receipts (the post-clearing
+        # benefit vector). Recounting activity status here would break that identity.
         total_unemployment_benefits = self.ts.current("total_unemployment_benefits")[0]
         total_household_social_transfers = (
             self.ts.current("total_public_pension_benefits")[0]

@@ -2073,6 +2073,12 @@ class Country:
         )
         # Contract wages are now set for this quarter: refresh what the employed would receive if separated.
         self._update_unemployment_benefit_base()
+        # Activity status is final for the period. Replace the pre-clearing planning vector (appended in
+        # _update_benefit_planning_metrics) with the benefit actually paid this period, so known receipts,
+        # the realised household booking and the fiscal total all read this one vector.
+        self.individuals.ts.override_current(
+            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
+        )
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
@@ -4743,12 +4749,8 @@ class Country:
         self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
-        # Benefits were needed during planning for reservation-wage decisions,
-        # but realised payments must follow the activity status after labour
-        # market clearing. Replace the planning vector before computing income.
-        self.individuals.ts.override_current(
-            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
-        )
+        # income_from_unemployment_benefits already holds the post-clearing vector
+        # (set in update_post_labour_planning_metrics); it is the vector paid here.
         # Update individual income components
         self.individuals.ts.income.append(
             self.individuals.compute_income(
@@ -5064,11 +5066,9 @@ class Country:
                 )
             ]
         )
+        # Government outlay is the settled household receipt (one booking).
         self.central_government.ts.total_unemployment_benefits.append(
-            [
-                self.economy.current_consumer_price_level()
-                * self.individuals.ts.current("income_from_unemployment_benefits").sum()
-            ]
+            [self.households.ts.current("income_unemployment_benefits").sum()]
         )
         self.central_government.ts.total_public_pension_benefits.append(
             [self.households.ts.current("income_public_pension").sum()]

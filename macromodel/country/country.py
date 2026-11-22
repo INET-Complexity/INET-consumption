@@ -1510,6 +1510,7 @@ class Country:
         self.central_bank.reset(configuration=configuration.central_bank)
 
         self.economy.reset(configuration=configuration.economy)
+        self._benefit_price_level = self.economy.current_consumer_price_level()
 
         self.labour_market.reset(configuration=configuration.labour_market)
         self.credit_market.reset(configuration=configuration.credit_market)

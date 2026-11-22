@@ -1960,9 +1960,9 @@ class Country:
         level = self._compute_minimum_income_level(
             transfer_index=government_ts.current("total_other_benefits")[0]
             / government_ts.initial("total_other_benefits")[0],
-            # Last realised CPI, as for the subsistence floor. Transfers are paid at the period-t CPI, which is
-            # only known after goods clearing; T is fixed at the start of the period (PLAN.md D5).
-            cpi_ratio=self.economy.current_consumer_price_level() / self.economy.initial_consumer_price_level(),
+            # Last realised CPI, the price basis of every benefit (benefit_price_level), as for the subsistence
+            # floor: period-t CPI is only known after goods clearing; T is fixed at the start of the period (D5).
+            cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
         )
         flow = {
             name: assessment_flow(hh.ts.historic(name), time_unit=time_unit)

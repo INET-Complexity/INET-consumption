@@ -12,22 +12,13 @@ import pytest
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation
+from tests.test_macromodel.unit.test_country.test_minimum_income_entitlement import _production_simulation
 
 UB_NAME = "income_from_unemployment_benefits"
 
 
-@pytest.fixture(scope="module")
-def instrumented_period(datawrapper):
-    """Run four periods and record the last period's benefit vectors used for planning and for payment.
-
-    In this fixture the first period with both job finders and job losers is the fourth.
-    """
-    simulation = Simulation.from_datawrapper(
-        datawrapper=datawrapper,
-        simulation_configuration=SimulationConfiguration(
-            country_configurations={"FRA": CountryConfiguration()}, seed=15
-        ),
-    )
+def _run_instrumented(simulation, periods):
+    """Run the periods and record the last period's benefit vectors used for planning and for payment."""
     country = simulation.countries["FRA"]
     record = {}
     clear, refresh, components = (
@@ -57,9 +48,27 @@ def instrumented_period(datawrapper):
     country.clear_labour_market = clear_labour_market
     country.refresh_known_household_receipts = refresh_known_household_receipts
     country.compute_realised_household_social_income_components = compute_components
-    for period in range(4):
+    for period in range(periods):
         simulation.iterate(t=period)
     return country, record
+
+
+@pytest.fixture(scope="module")
+def instrumented_period(datawrapper):
+    """Legacy mode. In this fixture the first period with both job finders and job losers is the fourth."""
+    simulation = Simulation.from_datawrapper(
+        datawrapper=datawrapper,
+        simulation_configuration=SimulationConfiguration(
+            country_configurations={"FRA": CountryConfiguration()}, seed=15
+        ),
+    )
+    return _run_instrumented(simulation, periods=4)
+
+
+@pytest.fixture(scope="module")
+def instrumented_minimum_income_period(datawrapper):
+    """Minimum income mode (production household rules, resolver on): T is fixed at the start of each period."""
+    return _run_instrumented(_production_simulation(datawrapper, {"mode": "minimum_income"}), periods=4)
 
 
 def _status_groups(record):
@@ -87,13 +96,45 @@ def test_known_receipts_use_the_unemployment_benefit_paid_this_period(instrument
         np.testing.assert_array_equal(planned[group], paid[group])
 
 
-def test_planned_household_benefits_equal_paid_household_benefits(instrumented_period):
-    country, record = instrumented_period
+def _assert_planned_benefits_equal_paid(country, record):
     hh = country.households
-    pension, unemployment, other, _ = record["planned_components"]
+    pension, unemployment, other = record["planned_components"][:3]
     np.testing.assert_allclose(pension, hh.ts.current("income_public_pension"), rtol=1e-12, atol=0.0)
     np.testing.assert_allclose(unemployment, hh.ts.current("income_unemployment_benefits"), rtol=1e-12, atol=0.0)
     np.testing.assert_allclose(other, hh.ts.current("income_other_social_transfers"), rtol=1e-12, atol=0.0)
+    np.testing.assert_array_equal(record["planned_ub_individual"], country.individuals.ts.current(UB_NAME))
+
+
+def test_planned_household_benefits_equal_paid_household_benefits(instrumented_period):
+    _assert_planned_benefits_equal_paid(*instrumented_period)
+
+
+def test_planned_benefits_equal_paid_benefits_with_minimum_income(instrumented_minimum_income_period):
+    country, record = instrumented_minimum_income_period
+    hh = country.households
+    assert country.household_support.mode == "minimum_income"
+    _assert_planned_benefits_equal_paid(country, record)
+    # T is planned and paid as the entitlement fixed at the start of the period.
+    entitlement = hh.ts.current("minimum_income_entitlement")
+    assert np.any(entitlement > 0.0)
+    np.testing.assert_array_equal(record["planned_components"][4], entitlement)
+    np.testing.assert_array_equal(hh.ts.current("income_minimum_income"), entitlement)
+
+
+def test_minimum_income_level_uses_the_benefit_price_level(instrumented_minimum_income_period):
+    country, _ = instrumented_minimum_income_period
+    hh, economy, government = country.households, country.economy, country.central_government.ts
+    cpi_series = economy.consumer_price_level_series_name()
+    assert country.benefit_price_level() == economy.ts.prev(cpi_series)[0] != economy.current_consumer_price_level()
+    unit_level = country._compute_minimum_income_level(
+        transfer_index=government.current("total_other_benefits")[0] / government.initial("total_other_benefits")[0],
+        cpi_ratio=1.0,
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("minimum_income_level"),
+        unit_level * country.benefit_price_level() / economy.initial_consumer_price_level(),
+        rtol=1e-12,
+    )
 
 
 def test_benefits_are_priced_at_last_realised_cpi(instrumented_period):

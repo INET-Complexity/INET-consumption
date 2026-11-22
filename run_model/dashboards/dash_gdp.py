@@ -135,6 +135,8 @@ with tab3:
         "+Rent_Received",
         "+Total_Imputed_Rent_Paid",
         "+Central_Government_Rent_Received",
+        "+Rent_Unpaid_Absorbed",
+        "+Social_Rent_Written_Off",
         "+Central_Government_Rental_Taxes",
         "+Central_Government_Product_Taxes",
     ]

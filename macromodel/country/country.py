@@ -5307,6 +5307,9 @@ class Country:
             "+Wages": self.firms.ts.get_aggregate("total_wage"),
             "+Rent_Received": self.economy.ts.get_aggregate("total_real_rent_rec"),
             "+Central_Government_Rent_Received": self.central_government.ts.get_aggregate("total_rent_received"),
+            # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
+            "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
+            "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components
@@ -5365,6 +5368,9 @@ class Country:
             "+Wages": self.firms.ts.get_aggregate("total_wage"),
             "+Rent_Received": self.economy.ts.get_aggregate("total_real_rent_rec"),
             "+Central_Government_Rent_Received": self.central_government.ts.get_aggregate("total_rent_received"),
+            # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
+            "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
+            "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components

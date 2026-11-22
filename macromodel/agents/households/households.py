@@ -40,6 +40,7 @@ from macromodel.agents.households.func.consumer_distress import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption, validate_consumption_weights
 from macromodel.agents.households.func.financial_feasibility import (
+    PLAN_ROUND_DOWN,
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
     PreGrantFeasiblePlan,
@@ -1250,8 +1251,10 @@ class Households(Agent):
             - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
         # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
-        # planned uses, is negative.
-        surplus = surplus + np.minimum(np.asarray(self.ts.current("liquid_financial_assets"), dtype=float), 0.0)
+        # planned uses, is negative. Rounded down like the allocator so it cannot leave a negative residue.
+        opening_lfa = np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
+        overdraft = np.minimum(opening_lfa, 0.0)
+        surplus = surplus + overdraft - PLAN_ROUND_DOWN * (np.abs(income) - overdraft)
         capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,

@@ -3163,7 +3163,8 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(plan.consumption_before_floor, np.full(n_households, 100.0))
         np.testing.assert_allclose(plan.residual_shortfall_before_floor, np.zeros(n_households))
         np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 100.0))
-        np.testing.assert_allclose(plan.consumption_cut_amount, np.zeros(n_households))
+        # Resources equal desired goods: only the plan round-down (about 1e-10) is cut.
+        np.testing.assert_allclose(plan.consumption_cut_amount, np.zeros(n_households), atol=1e-9)
         np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.zeros(n_households))
         np.testing.assert_array_equal(plan.floor_binding, np.zeros(n_households, dtype=bool))
         np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
@@ -3209,7 +3210,7 @@ class TestPopulatePostGrantFeasiblePlan:
         plan = test_households.post_grant_feasible_plan
         expected_cut = np.resize(np.asarray([5.0, 15.0, 0.0, 0.0]), n_households)
         expected_consumption_after = consumption_before - expected_cut
-        np.testing.assert_allclose(plan.consumption_cut_amount, expected_cut)
+        np.testing.assert_allclose(plan.consumption_cut_amount, expected_cut, atol=1e-9)
         np.testing.assert_allclose(plan.consumption_after_floor, expected_consumption_after)
         np.testing.assert_allclose(
             plan.remaining_subsistence_shortfall,

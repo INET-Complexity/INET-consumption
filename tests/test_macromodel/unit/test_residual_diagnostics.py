@@ -163,7 +163,8 @@ def test_floor_captures_native_cut_and_derived_topup(observed_model):
             investment=np.zeros(3),
         )
     record = capture.records[-1]
-    np.testing.assert_array_equal(record["output"]["consumption_cut_amount"], [0, 3, 15])
+    # Exact up to the plan round-down (PLAN_ROUND_DOWN x resources) on goods above the floor.
+    np.testing.assert_allclose(record["output"]["consumption_cut_amount"], [0, 3, 15], rtol=0.0, atol=1e-9)
     np.testing.assert_array_equal(record["floor_top_up_derived"], [3, 0, 0])
     np.testing.assert_array_equal(record["output"]["consumption_after_floor"], result.consumption_after_floor)
 

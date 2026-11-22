@@ -4,6 +4,10 @@ from dataclasses import dataclass, fields, replace
 
 import numpy as np
 
+# Relative margin by which the plan rounds discretionary spending down. A plan that spends all its resources
+# would otherwise close at about -1e-9 after the realised ledger re-adds the same flows in another order.
+PLAN_ROUND_DOWN = 1e-12
+
 
 def gross_liquidation_sale(net_sale: np.ndarray, sale_cost: np.ndarray, available_ifa: np.ndarray) -> np.ndarray:
     """Gross illiquid sale that delivers ``net_sale`` in cash after the sale cost.
@@ -338,6 +342,11 @@ class HouseholdFinancialFeasibility:
 
         An unmet floor leaves A1 = 0, so nothing is bought above it. With the
         goods floor switched off the caller passes F = 0 and C^f <= G.
+
+        Goods above the floor and investment are planned on what is left after
+        service less ``PLAN_ROUND_DOWN`` x (|A| + S), so that a plan spending all
+        resources closes at LFA >= 0 rather than at a floating-point residue
+        below zero. Support, unpaid rent, floor and service are not rounded.
         """
         desired = self._non_negative(consumption_before_floor)
         floor = self._non_negative(subsistence_floor)
@@ -399,11 +408,16 @@ class HouseholdFinancialFeasibility:
         overdraft_interest_paid = np.minimum(overdraft_interest, after_floor_and_rent - service_paid)
         unpaid_overdraft_interest = overdraft_interest - overdraft_interest_paid
         after_service = after_floor_and_rent - service_paid - overdraft_interest_paid
-        consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
+        spendable = np.maximum(after_service - PLAN_ROUND_DOWN * (np.abs(available) + support), 0.0)
+        consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), spendable)
         consumption_after_floor = floor_paid + consumption_above_floor
-        investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
+        investment_after_floor = np.minimum(desired_investment, spendable - consumption_above_floor)
         consumption_cut_amount = np.maximum(desired - consumption_after_floor, 0.0)
         floor_top_up = np.maximum(consumption_after_floor - desired, 0.0)
+        # The binding flag ignores the round-down: a plan that affords desired goods exactly is not binding.
+        unrounded_cut = np.maximum(
+            desired - floor_paid - np.minimum(np.maximum(desired - floor, 0.0), after_service), 0.0
+        )
         return replace(
             plan,
             consumption_before_floor=desired,
@@ -415,7 +429,7 @@ class HouseholdFinancialFeasibility:
             unpaid_consumer_service=unpaid_consumer,
             unpaid_mortgage_service=unpaid_mortgage,
             investment_after_floor=investment_after_floor,
-            floor_binding=(consumption_cut_amount + floor_top_up) > 0.0,
+            floor_binding=(unrounded_cut + floor_top_up) > 0.0,
             unpaid_rent=unpaid_rent,
             unmet_floor=unmet_floor,
             resource_deficit=resource_deficit,

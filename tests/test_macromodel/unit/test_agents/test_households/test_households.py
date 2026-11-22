@@ -1734,6 +1734,38 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             test_households.ts.current("portfolio_settlement_status"), np.full(n_households, 2.0)
         )
 
+    def test__saving_reduces_an_overdraft_before_buying_illiquid_assets(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(
+            test_households, monkeypatch, resolver=True, settles=False, use_real_liquidation=True
+        )
+        # Income 100 and no spending: saving 100, of which the wealth rule wants half in illiquid assets.
+        monkeypatch.setattr(
+            test_households.functions["wealth"],
+            "distribute_new_wealth",
+            lambda *, new_wealth, **_kwargs: (0.5 * new_wealth, 0.5 * new_wealth),
+        )
+        purchases = []
+
+        def record_purchase(
+            *, new_wealth_in_other_financial_assets, current_wealth_in_other_financial_assets=None, **_
+        ):
+            purchases.append(np.asarray(new_wealth_in_other_financial_assets, dtype=float).copy())
+            return current_wealth_in_other_financial_assets + new_wealth_in_other_financial_assets
+
+        monkeypatch.setattr(test_households, "compute_wealth_of_other_financial_assets", record_purchase)
+        opening = np.resize(np.array([-200.0, -60.0, 0.0, 30.0]), n_households)
+        test_households.ts.override_current("liquid_financial_assets", opening)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        expected_purchase = np.resize(np.array([0.0, 40.0, 50.0, 50.0]), n_households)
+        np.testing.assert_allclose(purchases[0], expected_purchase)
+        np.testing.assert_allclose(
+            test_households.ts.current("liquid_financial_assets"), opening + 100.0 - expected_purchase
+        )
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0 + expected_purchase)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), 0.0, atol=1e-9)
+
     def test__resolver_bypasses_legacy_use_up_wealth(self, test_households, monkeypatch):
         self._configure_update_wealth(test_households, monkeypatch, resolver=True, settles=True)
 
@@ -3533,6 +3565,35 @@ class TestPopulatePostGrantFeasiblePlan:
         np.testing.assert_allclose(
             test_households.current_remaining_subsistence_shortfall(),
             np.full(n_households, 7.0),
+        )
+
+    def test__early_repayment_capacity_reduces_an_overdraft_and_planned_overdraft_interest_first(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
+        test_households.ts.override_current("rent", np.zeros(n_households))
+        test_households.ts.override_current("target_investment", np.zeros(n_households))
+        opening = np.resize(np.array([0.0, -15.0, -50.0, 20.0]), n_households)
+        test_households.ts.override_current("liquid_financial_assets", opening)
+        overdraft_interest = np.resize(np.array([0.0, 1.0, 2.0, 0.0]), n_households)
+        test_households.post_grant_feasible_plan = households_module.PostGrantFeasiblePlan(
+            credit_granted=np.zeros(n_households),
+            credit_rationing_gap=np.zeros(n_households),
+            planned_liquidation_total=np.zeros(n_households),
+            residual_shortfall_after_granted_credit=np.zeros(n_households),
+            consumption_after_floor=np.full(n_households, 20.0),
+            scheduled_overdraft_interest=overdraft_interest,
+        )
+
+        test_households.populate_post_grant_early_repayment_capacity(
+            mortgage_service=np.full(n_households, 30.0),
+            scheduled_consumer_service=np.full(n_households, 10.0),
+            eligible_ficp=np.ones(n_households, dtype=bool),
+        )
+
+        # Surplus 40 less the overdraft interest, then less the overdraft; a positive balance is not drawn.
+        np.testing.assert_allclose(
+            test_households.current_early_consumer_repayment_capacity(),
+            np.resize(np.array([40.0, 24.0, 0.0, 40.0]), n_households),
         )
 
     @pytest.mark.parametrize(

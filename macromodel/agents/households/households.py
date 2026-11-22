@@ -1240,20 +1240,19 @@ class Households(Agent):
             raise ValueError("Consumption and debt service must be non-negative.")
 
         overdraft_interest = self.post_grant_feasible_plan.scheduled_overdraft_interest
-        capacity = np.where(
-            eligible,
-            np.maximum(
-                income
-                - consumption
-                - mortgage
-                - scheduled
-                - self.current_consumption_cash_rent()
-                - self.target_investment_cash()
-                - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float)),
-                0.0,
-            ),
-            0.0,
+        surplus = (
+            income
+            - consumption
+            - mortgage
+            - scheduled
+            - self.current_consumption_cash_rent()
+            - self.target_investment_cash()
+            - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
+        # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
+        # planned uses, is negative.
+        surplus = surplus + np.minimum(np.asarray(self.ts.current("liquid_financial_assets"), dtype=float), 0.0)
+        capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,
             early_consumer_repayment_capacity=capacity.copy(),
@@ -4170,14 +4169,19 @@ class Households(Agent):
             new_loans = granted_credit + optional_cash_flow("received_mortgages")
             # Sale proceeds swap housing for cash: financing, not saving, so
             # they bypass the new-wealth split between LFA and IFA.
-            base_lfa = (
+            lfa_before_illiquid_purchase = (
                 self.ts.current("liquid_financial_assets")
                 + cash_saving_before_financing
                 + new_loans
                 + optional_cash_flow("property_sale_proceeds")
                 - optional_cash_flow("mortgage_sale_repayment")
-                - new_wealth_in_other_financial_assets
             )
+            # Saving reduces an overdraft before it buys illiquid assets: no purchase while LFA, net of this
+            # period's flows, is negative, and none beyond the positive part.
+            new_wealth_in_other_financial_assets = np.minimum(
+                new_wealth_in_other_financial_assets, np.maximum(lfa_before_illiquid_purchase, 0.0)
+            )
+            base_lfa = lfa_before_illiquid_purchase - new_wealth_in_other_financial_assets
         else:
             base_lfa = self.compute_wealth_in_deposits(
                 new_wealth_in_deposits=new_wealth_in_deposits,

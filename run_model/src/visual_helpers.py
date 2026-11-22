@@ -1219,11 +1219,15 @@ def build_macro_output_df(model, country_code):
         if source_name in df_gov_ts.columns:
             add_column(output_name, df_gov_ts[source_name])
     # Unpaid private rent absorbed by landlords (minimum_income mode; zero otherwise).
-    landlord_loss = _safe_ts_values(
-        getattr(getattr(country, "households", None), "ts", None), "total_rent_unpaid_absorbed"
-    )
+    household_ts = getattr(getattr(country, "households", None), "ts", None)
+    landlord_loss = _safe_ts_values(household_ts, "total_rent_unpaid_absorbed")
     if landlord_loss is not None:
         add_column("landlord_rent_loss", as_output_series(landlord_loss))
+    # Unpaid rent of a tenant living in a dwelling it owns: no counterparty. With landlord_rent_loss and
+    # social_rent_written_off it accounts for all unpaid rent.
+    no_counterparty = _safe_ts_values(household_ts, "rent_unpaid_no_counterparty")
+    if no_counterparty is not None:
+        add_column("rent_unpaid_no_counterparty", as_output_series([np.asarray(row).sum() for row in no_counterparty]))
 
     if "total_household_social_transfers" in df_gov_ts.columns:
         add_column("household_social_transfers", df_gov_ts["total_household_social_transfers"])

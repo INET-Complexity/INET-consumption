@@ -35,6 +35,9 @@ def test_listing_has_unpaid_rent_rows_from_the_series_gdp_income_adds(listing):
     np.testing.assert_array_equal(
         frame["+Social_Rent_Written_Off"], stub.central_government.ts.get_aggregate("social_rent_written_off")
     )
+    np.testing.assert_array_equal(
+        frame["+Rent_Unpaid_No_Counterparty"], stub.households.ts.get_aggregate("rent_unpaid_no_counterparty")
+    )
     # They sit with the other income-side rent components, next to rent received.
     columns = list(frame.columns)
     assert columns.index("+Central_Government_Rent_Received") < columns.index("+Rent_Unpaid_Absorbed")

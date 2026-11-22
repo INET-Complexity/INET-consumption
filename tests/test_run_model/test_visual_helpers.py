@@ -112,7 +112,14 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
             )
         ),
         central_bank=SimpleNamespace(ts=_ts({"policy_rate": [0.01, 0.011, 0.012]})),
-        households=SimpleNamespace(ts=_ts({"total_rent_unpaid_absorbed": [[0.0], [0.4], [0.6]]})),
+        households=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_rent_unpaid_absorbed": [[0.0], [0.4], [0.6]],
+                    "rent_unpaid_no_counterparty": [np.zeros(2), np.array([0.1, 0.2]), np.array([0.0, 0.5])],
+                }
+            )
+        ),
         banks=SimpleNamespace(
             ts=_ts(
                 {
@@ -253,6 +260,7 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["minimum_income"].tolist() == [0.0, 1.5, 2.5]
     assert output["social_rent_written_off"].tolist() == [0.0, 0.2, 0.3]
     assert output["landlord_rent_loss"].tolist() == [0.0, 0.4, 0.6]
+    assert output["rent_unpaid_no_counterparty"].tolist() == pytest.approx([0.0, 0.3, 0.5])
     assert output["minimum_income_to_gdp"].tolist() == pytest.approx([0.0, 1.5 / 110, 2.5 / 121])
     assert output["landlord_rent_loss_to_gdp"].tolist() == pytest.approx([0.0, 0.4 / 110, 0.6 / 121])
     assert output["public_pension_benefits_to_gdp"].tolist() == pytest.approx([0.03, 3.1 / 110, 3.2 / 121])

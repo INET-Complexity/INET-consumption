@@ -789,15 +789,13 @@ class Country:
         Runs before the listing step of this period's housing market, so the dwelling is offered for rent and
         the household searches from social housing in this period. ``unpaid_rent`` still holds the last
         settled period: this period's allocator has not run yet. Social tenants who left social rent unpaid
-        stay where they are (PLAN.md section 10, R13).
+        stay where they are (PLAN.md section 10, R13), and so does a tenure-3 household in a dwelling it owns.
         """
         hh = self.households
         vacating = np.zeros(hh.ts.current("n_households"), dtype=bool)
         if not self._stage5_support_enabled():
-            vacating = (
-                (np.asarray(hh.ts.current("unpaid_rent"), dtype=float) > 0.0)
-                & (hh.states["Tenure Status of the Main Residence"] == 3)
-                & (hh.states["Corresponding Inhabited House ID"] != -1)
+            vacating = (np.asarray(hh.ts.current("unpaid_rent"), dtype=float) > 0.0) & hh.renting_from_landlord(
+                self.housing_market.states["properties"]
             )
             self.housing_market.vacate_tenancies(household_states=hh.states, household_ids=np.flatnonzero(vacating))
         hh.ts.unpaid_rent_vacated.append(vacating)
@@ -2211,7 +2209,9 @@ class Country:
             "minimum_income_entitlement"
         )
         # Planned rent is the rent due: unpaid rent (minimum_income mode) is only known once the allocator has
-        # run; the final recompute in update_realised_metrics books the rent actually received.
+        # run; the final recompute in update_realised_metrics books the rent actually received. A landlord thus
+        # plans on rent due and realises rent received: the shortfall (1 - tax) x unpaid rent lands in its
+        # realised cash, with no true-up (PLAN.md section 3.3).
         diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
@@ -4772,22 +4772,33 @@ class Country:
         # E2. HOUSEHOLD INCOME COMPONENTS
         # Recalculate rental income with final housing market data and overwrite the planned value.
         # Rent left unpaid (minimum_income mode, D8): the private landlord absorbs it and government writes
-        # off unpaid social rent.
+        # off unpaid social rent. A tenure-3 household in a dwelling it owns owes nobody: booked separately.
         unpaid_rent = self._current_unpaid_rent()
+        n_households = self.households.ts.current("n_households")
         if unpaid_rent is None:
-            rent_unpaid_absorbed = np.zeros(self.households.ts.current("n_households"))
+            rent_unpaid_absorbed = np.zeros(n_households)
+            rent_unpaid_no_counterparty = np.zeros(n_households)
             social_rent_written_off = 0.0
+            renting_from_landlord = None
         else:
-            rent_unpaid_absorbed = self.households.unpaid_rent_by_landlord(
-                self.housing_market.states["properties"], unpaid_rent
-            )
-            social_rent_written_off = unpaid_rent[
-                self.households.states["Corresponding Inhabited House ID"] == -1
-            ].sum()
+            properties = self.housing_market.states["properties"]
+            renting_from_landlord = self.households.renting_from_landlord(properties)
+            in_social_housing = self.households.states["Corresponding Inhabited House ID"] == -1
+            rent_unpaid_absorbed = self.households.unpaid_rent_by_landlord(properties, unpaid_rent)
+            social_rent_written_off = unpaid_rent[in_social_housing].sum()
+            rent_unpaid_no_counterparty = np.where(renting_from_landlord | in_social_housing, 0.0, unpaid_rent)
+            # Rent due = rent paid + unpaid rent, and every unpaid unit has exactly one destination.
             if not np.isclose(
-                unpaid_rent.sum(), rent_unpaid_absorbed.sum() + social_rent_written_off, rtol=1e-12, atol=1e-6
+                unpaid_rent.sum(),
+                rent_unpaid_absorbed.sum() + social_rent_written_off + rent_unpaid_no_counterparty.sum(),
+                rtol=1e-12,
+                atol=1e-6,
             ):
-                raise RuntimeError("Unpaid rent must be absorbed by a private landlord or written off by government.")
+                raise RuntimeError(
+                    "Unpaid rent must be absorbed by a private landlord, written off by government, or booked "
+                    "without counterparty."
+                )
+        self.households.ts.rent_unpaid_no_counterparty.append(rent_unpaid_no_counterparty)
         self.households.ts.rent_unpaid_absorbed.append(rent_unpaid_absorbed)
         self.households.ts.total_rent_unpaid_absorbed.append([rent_unpaid_absorbed.sum()])
         final_income_rental = self.households.compute_rental_income(
@@ -5017,11 +5028,10 @@ class Country:
             else self.households.ts.current("income_financial_assets")
         )
         # The rental-income tax base is the rent private landlords actually received.
-        private_renters = self.households.states["Tenure Status of the Main Residence"] == 3
         rental_income_tax_base = (
-            self.households.ts.current("rent")[private_renters].sum()
+            self.households.ts.current("rent")[self.households.states["Tenure Status of the Main Residence"] == 3].sum()
             if unpaid_rent is None
-            else (self.households.ts.current("rent") - unpaid_rent)[private_renters].sum()
+            else (self.households.ts.current("rent") - unpaid_rent)[renting_from_landlord].sum()
         )
         self.central_government.ts.social_rent_written_off.append([social_rent_written_off])
         self.central_government.compute_taxes(
@@ -5132,8 +5142,10 @@ class Country:
             imports=self.economy.ts.current("imports").sum(),
             operating_surplus=self.firms.ts.current("gross_operating_surplus_mixed_income").sum(),
             wages=self.firms.ts.current("total_wage").sum(),
-            # Rental housing services are output at the rent due on both GDP sides (total_real_rent_paid is
-            # rent due): rent left unpaid is a transfer from landlord or government to the tenant, not lost output.
+            # Output and consumption of rental housing services are on an accrual basis, at the rent due
+            # (total_real_rent_paid). Unpaid rent is a write-off of the landlord's or government's claim (SNA:
+            # other change in volume), not lower output, so it is added back here. Household income_rental is
+            # on a cash basis (rent received).
             rent_received=self.economy.ts.current("total_real_rent_rec")[0]
             + self.central_government.ts.current("taxes_rental_income")[0]
             + (0.0 if unpaid_rent is None else rent_unpaid_absorbed.sum()),

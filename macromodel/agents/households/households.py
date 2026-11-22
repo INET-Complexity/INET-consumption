@@ -1738,17 +1738,30 @@ class Households(Agent):
         rental_income[housing_data_rented_out_grouped.index.values] = housing_data_rented_out_grouped.values
         return (1 - income_taxes) * (rental_income - self.unpaid_rent_by_landlord(housing_data, unpaid_rent))
 
+    def renting_from_landlord(self, housing_data: pd.DataFrame) -> np.ndarray:
+        """Private renters with a landlord: tenure 3, in a dwelling owned by another household.
+
+        Clearing can leave a tenure-3 household in a dwelling it owns itself; its rent has no counterparty.
+        """
+        house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
+        renting = (self.states["Tenure Status of the Main Residence"] == 3) & (house_id != -1)
+        owner = np.full(house_id.shape, -1)
+        owner[renting] = housing_data.loc[house_id[renting], "Corresponding Owner Household ID"].to_numpy(dtype=int)
+        return renting & (owner != np.arange(house_id.size))
+
     def unpaid_rent_by_landlord(self, housing_data: pd.DataFrame, unpaid_rent: np.ndarray) -> np.ndarray:
         """Charge each private tenant's unpaid rent to the owner of the dwelling it rents (D8: the landlord absorbs it).
 
-        Social tenants (no dwelling, house ID -1) owe their rent to government and are not included.
+        Only households renting from a landlord (``renting_from_landlord``) are charged: social tenants (no
+        dwelling, house ID -1) owe their rent to government, and a tenure-3 household in its own dwelling has
+        no counterparty.
         """
         n_households = self.ts.current("n_households")
         unpaid = np.asarray(unpaid_rent, dtype=float)
         if unpaid.shape != (n_households,) or not np.all(np.isfinite(unpaid)) or np.any(unpaid < 0.0):
             raise ValueError("unpaid_rent must be a finite non-negative household vector.")
         house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
-        tenants = np.flatnonzero((unpaid > 0.0) & (house_id != -1))
+        tenants = np.flatnonzero((unpaid > 0.0) & self.renting_from_landlord(housing_data))
         dwellings = housing_data.loc[house_id[tenants]]
         if not (
             np.array_equal(dwellings["Corresponding Inhabitant Household ID"].to_numpy(dtype=int), tenants)

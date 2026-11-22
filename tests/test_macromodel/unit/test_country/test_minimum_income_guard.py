@@ -127,7 +127,10 @@ def test_minimum_income_mode_floors_every_site_at_the_guard(datawrapper, monkeyp
     np.testing.assert_allclose(economy.ts.current("income_guard"), g0, rtol=1e-12)
     g0 = economy.ts.current("income_guard")
     assert np.all(g0 < economy.ts.current("subsistence_consumption"))
-    np.testing.assert_array_equal(hh.ts.current("minimum_income_level"), 0.0)  # no assessment at t0
+    # M_0 is stored at t0 so that G = share x M at every row; no assessment and no T at t0.
+    np.testing.assert_allclose(hh.ts.current("minimum_income_level"), g0 / SHARE, rtol=1e-12)
+    np.testing.assert_array_equal(hh.ts.current("minimum_income_assessed"), 0.0)
+    np.testing.assert_array_equal(hh.ts.current("minimum_income_entitlement"), 0.0)
     raw0 = hh.ts.current("expected_behavioural_income_raw")
     np.testing.assert_array_equal(hh.ts.current("expected_behavioural_income"), np.maximum(raw0, g0))
     np.testing.assert_array_equal(hh.ts.current("income_guard_bound"), (raw0 < g0).astype(float))
@@ -144,6 +147,8 @@ def test_minimum_income_mode_floors_every_site_at_the_guard(datawrapper, monkeyp
         history = np.asarray(economy.ts.historic("income_guard"))
         assert history.shape[0] == period + 2
         np.testing.assert_array_equal(history[0], g0)  # no pre-activation rows: the mode is fixed from t0
+        levels = np.asarray(hh.ts.historic("minimum_income_level"))
+        np.testing.assert_allclose(history, SHARE * levels, rtol=1e-15)
         _assert_every_site_used(calls, g, history)
         raw = hh.ts.current("expected_behavioural_income_raw")
         np.testing.assert_array_equal(hh.ts.current("income_guard_bound"), (raw < g).astype(float))
@@ -255,3 +260,26 @@ def test_consumption_fallback_without_positive_window_returns_the_guard():
     guard = np.array([0.7, 0.7])
     got = rule._geometric_average_income(history, 1.0, np.ones(3), subsistence_income=guard)
     np.testing.assert_allclose(got, [0.7, 5.0], rtol=1e-12)
+
+
+def test_minimum_income_built_country_cannot_be_reset_to_another_guard_basis(datawrapper):
+    simulation = _production_simulation(datawrapper, {"mode": "minimum_income"})
+    country = simulation.countries["FRA"]
+    g0 = country.economy.ts.current("income_guard").copy()
+
+    # Same basis (goods-floor switch only): allowed, and the t0 rows keep G_0.
+    configuration = deepcopy(simulation.configuration)
+    configuration.country_configurations["FRA"].household_support = {"mode": "minimum_income", "goods_floor": False}
+    simulation.reset(configuration)
+    np.testing.assert_array_equal(country.economy.ts.current("income_guard"), g0)
+    simulation.iterate(t=0)
+
+    for support in (
+        {},  # legacy_stage5: its t0 rows would be floored at G_0, not S
+        {"mode": "minimum_income", "minimum_income": {"guard_share_of_m": 0.02}},
+        {"mode": "minimum_income", "minimum_income": {"rsa_base_monthly": 509.30}},
+    ):
+        configuration.country_configurations["FRA"].household_support = support
+        with pytest.raises(ValueError, match="build comparison checkpoints in legacy_stage5 mode"):
+            simulation.reset(configuration)
+    assert country.household_support.goods_floor is False  # the refused resets changed nothing

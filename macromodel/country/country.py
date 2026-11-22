@@ -610,7 +610,7 @@ class Country:
         self._lock_wage_price_basis()
         self._initialize_nominal_employee_income()
         # The t0 behavioural-income lower bound, before the t0 income records that it floors.
-        self.economy.ts["income_guard"] = self._opening_income_guard()
+        self._set_opening_income_guard()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
@@ -1448,10 +1448,17 @@ class Country:
             configuration (CountryConfiguration): New model parameters
         """
         # Validate before any component is reset.
-        _validate_minimum_income_resolver(
-            _read_household_support_parameters(getattr(configuration, "household_support", {})),
-            configuration.households.parameters.uses_feasibility_resolver,
-        )
+        support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
+        _validate_minimum_income_resolver(support, configuration.households.parameters.uses_feasibility_resolver)
+        # Reset keeps the t0 rows. Rows floored at a minimum_income opening guard G_0 cannot serve another basis
+        # (D10: build the shared checkpoint in legacy_stage5 mode; policy arms switch mode by reset).
+        if self._construction_guard_basis is not None and self._opening_guard_basis(support) != (
+            self._construction_guard_basis
+        ):
+            raise ValueError(
+                "t0 behavioural-income rows were floored at the opening guard; "
+                "build comparison checkpoints in legacy_stage5 mode"
+            )
         self.forecasting_window = configuration.forecasting_window
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise
@@ -1948,16 +1955,30 @@ class Country:
         )
         return level, assessed, minimum_income_top_up(level=level, assessed=assessed)
 
-    def _opening_income_guard(self) -> np.ndarray:
-        """t0 behavioural-income lower bound: S (legacy_stage5) or G from an opening M (minimum_income).
+    @staticmethod
+    def _opening_guard_basis(support: HouseholdSupportParameters) -> Optional[tuple]:
+        """Parameters that fix the t0 guard G_0 in minimum_income mode; None in legacy_stage5 (G_0 = S)."""
+        if support.mode != "minimum_income":
+            return None
+        return support.mode, support.minimum_income.guard_share_of_m, support.minimum_income.rsa_base_monthly
 
-        No assessment has run at t0, so the opening M uses the opening consumption units with I = 1 and a CPI
-        ratio of 1 (the period-start formula evaluated at t0). The stored t0 ``minimum_income_level`` stays zero.
+    def _set_opening_income_guard(self) -> None:
+        """Store the t0 behavioural-income lower bound: S (legacy_stage5) or G_0 = share x M_0 (minimum_income).
+
+        No assessment has run at t0, so the opening M_0 uses the opening consumption units with I = 1 and a CPI
+        ratio of 1 (the period-start formula evaluated at t0). M_0 is stored as the t0 ``minimum_income_level``
+        row, so G = share x M holds at every row; the t0 assessed income and entitlement stay zero (no T at t0).
+        The t0 rows floored at G_0 cannot be reset to another guard basis (see ``reset``).
         """
+        self._construction_guard_basis = self._opening_guard_basis(self.household_support)
         if self.household_support.mode != "minimum_income":
-            return np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+            self.economy.ts["income_guard"] = np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+            return
         level = self._compute_minimum_income_level(transfer_index=1.0, cpi_ratio=1.0)
-        return income_guard(level=level, share=self.household_support.minimum_income.guard_share_of_m)
+        self.households.ts.override_current("minimum_income_level", level)
+        self.economy.ts["income_guard"] = income_guard(
+            level=level, share=self.household_support.minimum_income.guard_share_of_m
+        )
 
     def _update_income_guard(self, *, replace_current: bool) -> None:
         """Store this period's lower bound on behavioural income, the economy series ``income_guard``.

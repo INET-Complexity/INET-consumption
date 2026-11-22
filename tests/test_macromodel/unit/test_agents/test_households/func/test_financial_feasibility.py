@@ -136,6 +136,7 @@ def _settle_floor(**inputs):
         **inputs,
     }
     resources = np.atleast_1d(np.asarray(values.pop("resources"), dtype=float))
+    support_enabled = values.pop("support_enabled", True)
     plan = PostGrantFeasiblePlan(
         credit_granted=np.zeros_like(resources),
         credit_rationing_gap=np.zeros_like(resources),
@@ -143,7 +144,10 @@ def _settle_floor(**inputs):
         residual_shortfall_after_granted_credit=np.zeros_like(resources),
     )
     return HouseholdFinancialFeasibility().settle_consumption_floor(
-        plan, resources=resources, **{name: np.full_like(resources, value) for name, value in values.items()}
+        plan,
+        resources=resources,
+        support_enabled=support_enabled,
+        **{name: np.full_like(resources, value) for name, value in values.items()},
     )
 
 
@@ -242,3 +246,151 @@ def test__floor_settlement_exempt_resources_keep_support_and_are_spent():
 def test__floor_settlement_rejects_invalid_exempt_resources(bad):
     with pytest.raises(ValueError, match="Support-exempt"):
         _settle_floor(resources=np.array([90.0]), support_exempt_resources=bad)
+
+
+_LEGACY_GRID_RESOURCES = np.array([-10.0, 0.0, 50.0, 100.0, 125.0, 160.0, 195.0, 500.0])
+_LEGACY_GRID_EXEMPT = np.array([0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+# Characterisation of the legacy Stage 5 allocator (F=80, R=20, O=10+30, G=120, V=15), recorded before
+# the minimum-income ``support_enabled`` switch was added. A < 0 is covered by support: S = F + R - (A - E).
+_LEGACY_GRID_EXPECTED = {
+    "consumption_after_floor": [80.0, 80.0, 80.0, 80.0, 80.0, 100.0, 120.0, 120.0],
+    "consumption_cut_amount": [40.0, 40.0, 40.0, 40.0, 40.0, 20.0, 0.0, 0.0],
+    "remaining_subsistence_shortfall": [150.0, 140.0, 90.0, 40.0, 15.0, 0.0, 0.0, 0.0],
+    "floor_support": [110.0, 100.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    "unpaid_consumer_service": [10.0, 10.0, 10.0, 10.0, 10.0, 0.0, 0.0, 0.0],
+    "unpaid_mortgage_service": [30.0, 30.0, 20.0, 30.0, 5.0, 0.0, 0.0, 0.0],
+    "investment_after_floor": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 15.0, 15.0],
+    "floor_binding": [True, True, True, True, True, True, False, False],
+    "residual_shortfall_before_floor": [0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 5.0],
+}
+
+
+def _settle_legacy_grid(**switch):
+    n = _LEGACY_GRID_RESOURCES.size
+    plan = PostGrantFeasiblePlan(
+        credit_granted=np.zeros(n),
+        credit_rationing_gap=np.zeros(n),
+        planned_liquidation_total=np.zeros(n),
+        residual_shortfall_after_granted_credit=np.array([0.0, 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 5.0]),
+    )
+    return HouseholdFinancialFeasibility().settle_consumption_floor(
+        plan,
+        consumption_before_floor=np.full(n, 120.0),
+        subsistence_floor=np.full(n, 80.0),
+        cash_rent=np.full(n, 20.0),
+        resources=_LEGACY_GRID_RESOURCES,
+        scheduled_consumer_service=np.full(n, 10.0),
+        scheduled_mortgage_service=np.full(n, 30.0),
+        investment=np.full(n, 15.0),
+        support_exempt_resources=_LEGACY_GRID_EXEMPT,
+        **switch,
+    )
+
+
+def test__legacy_floor_settlement_characterisation():
+    settled = _settle_legacy_grid()
+    for name, expected in _LEGACY_GRID_EXPECTED.items():
+        np.testing.assert_array_equal(getattr(settled, name), expected, err_msg=name)
+
+
+def test__support_enabled_true_is_the_legacy_allocation_bit_for_bit():
+    default = _settle_legacy_grid()
+    explicit = _settle_legacy_grid(support_enabled=True)
+    for name in _LEGACY_GRID_EXPECTED:
+        np.testing.assert_array_equal(getattr(explicit, name), getattr(default, name), err_msg=name)
+    # Support covers rent and the floor, so nothing is left unpaid in the legacy allocation.
+    np.testing.assert_array_equal(default.unpaid_rent, 0.0)
+    np.testing.assert_array_equal(default.unmet_floor, 0.0)
+    # Negative resources are covered by support in legacy: no uncovered deficit is recorded.
+    np.testing.assert_array_equal(default.resource_deficit, 0.0)
+
+
+# Minimum-income allocation (PLAN.md section 5.4): F=80, R=20, O=10+30, G=120, V=15, no support.
+_NO_SUPPORT_RESOURCES = np.array([-10.0, 0.0, 10.0, 20.0, 60.0, 100.0, 125.0, 160.0, 195.0, 500.0])
+
+
+def test__without_support_rent_is_paid_first_then_floor_then_service_goods_and_investment():
+    settled = _settle_floor(resources=_NO_SUPPORT_RESOURCES, support_enabled=False)
+
+    np.testing.assert_array_equal(settled.floor_support, 0.0)
+    np.testing.assert_allclose(settled.unpaid_rent, [20, 20, 10, 0, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.unmet_floor, [80, 80, 80, 80, 40, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(settled.resource_deficit, [10, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 10, 10, 10, 10, 0, 0, 0])
+    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 30, 30, 30, 30, 5, 0, 0, 0])
+    np.testing.assert_allclose(settled.consumption_after_floor, [0, 0, 0, 0, 40, 80, 80, 100, 120, 120])
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 0, 0, 15, 15])
+    np.testing.assert_allclose(settled.consumption_cut_amount, 120.0 - settled.consumption_after_floor)
+    # The shortfall handed on is unpaid debt service only: there is no support in it.
+    np.testing.assert_allclose(
+        settled.remaining_subsistence_shortfall, settled.unpaid_consumer_service + settled.unpaid_mortgage_service
+    )
+    # Every euro of the non-negative resources is spent in the order above, or left over; nothing more.
+    rent_paid = 20.0 - settled.unpaid_rent
+    service_paid = 40.0 - settled.unpaid_consumer_service - settled.unpaid_mortgage_service
+    spent = rent_paid + settled.consumption_after_floor + service_paid + settled.investment_after_floor
+    np.testing.assert_allclose(spent, np.minimum(np.maximum(_NO_SUPPORT_RESOURCES, 0.0), 195.0))
+
+
+def test__negative_resources_are_covered_by_support_in_legacy_but_by_nobody_without_support():
+    legacy = _settle_floor(resources=np.array([-10.0]))
+    np.testing.assert_allclose(legacy.floor_support, [110.0])  # S = F + R - A
+    without = _settle_floor(resources=np.array([-10.0]), support_enabled=False)
+    # A+ = 0: nothing is paid; the overdraft stays in the household's own cash ledger.
+    np.testing.assert_allclose(without.floor_support, [0.0])
+    np.testing.assert_allclose(without.unpaid_rent, [20.0])
+    np.testing.assert_allclose(without.unmet_floor, [80.0])
+    np.testing.assert_allclose(without.consumption_after_floor, [0.0])
+    np.testing.assert_allclose(without.remaining_subsistence_shortfall, [40.0])
+    # The uncovered negative part of the resources is visible: max(-A, 0).
+    np.testing.assert_array_equal(without.resource_deficit, [10.0])
+
+
+def test__without_support_the_funded_floor_tops_up_goods_and_the_unmet_part_is_visible():
+    # Desired goods G = 50 < F = 80. Enough resources: the floor is bought in full from own resources.
+    settled = _settle_floor(resources=np.array([500.0, 70.0]), consumption_before_floor=50.0, support_enabled=False)
+    np.testing.assert_allclose(settled.consumption_after_floor, [80.0, 50.0])
+    np.testing.assert_allclose(settled.unmet_floor, [0.0, 30.0])
+    np.testing.assert_allclose(settled.unpaid_rent, [0.0, 0.0])
+    # Goods above desired come only from the funded floor.
+    top_up = np.maximum(settled.consumption_after_floor - 50.0, 0.0)
+    assert np.all(top_up <= 80.0 - settled.unmet_floor)
+
+
+def test__goods_floor_off_never_raises_goods_above_desired():
+    rng = np.random.default_rng(3)
+    resources = rng.uniform(-50.0, 400.0, 200)
+    desired = rng.uniform(0.0, 200.0, 200)
+    plan = PostGrantFeasiblePlan(
+        credit_granted=np.zeros(200),
+        credit_rationing_gap=np.zeros(200),
+        planned_liquidation_total=np.zeros(200),
+        residual_shortfall_after_granted_credit=np.zeros(200),
+    )
+    settled = HouseholdFinancialFeasibility().settle_consumption_floor(
+        plan,
+        consumption_before_floor=desired,
+        subsistence_floor=np.zeros(200),
+        cash_rent=np.full(200, 20.0),
+        resources=resources,
+        scheduled_consumer_service=np.full(200, 10.0),
+        scheduled_mortgage_service=np.full(200, 30.0),
+        investment=np.full(200, 15.0),
+        support_enabled=False,
+    )
+    assert np.all(settled.consumption_after_floor <= desired)
+    np.testing.assert_array_equal(settled.unmet_floor, 0.0)
+    np.testing.assert_array_equal(settled.floor_support, 0.0)
+    np.testing.assert_allclose(settled.unpaid_rent, 20.0 - np.minimum(20.0, np.maximum(resources, 0.0)))
+
+
+def test__support_exempt_resources_play_no_role_without_support():
+    plain = _settle_floor(resources=np.array([90.0]), support_enabled=False)
+    exempt = _settle_floor(resources=np.array([90.0]), support_exempt_resources=30.0, support_enabled=False)
+    for name in ("consumption_after_floor", "unpaid_rent", "unmet_floor", "unpaid_mortgage_service", "floor_support"):
+        np.testing.assert_array_equal(getattr(exempt, name), getattr(plain, name), err_msg=name)
+
+
+def test__support_switch_must_be_a_boolean():
+    with pytest.raises(TypeError, match="support_enabled"):
+        _settle_legacy_grid(support_enabled=np.array([True, False]))

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from macromodel.agents.households.households import Households
-from macromodel.country.country import Country
+from macromodel.country.country import Country, _read_household_support_parameters
 from macromodel.timeseries import TimeSeries
 
 _NO_HOUSE = dict(price=0.0, mortgage=0.0, lfa=0.0, purchase_sale=0.0)
@@ -87,6 +87,21 @@ def test_final_support_counts_or_ignores_the_staged_transfer(exempt, expected_su
     assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
 
 
+def test_final_support_is_a_no_op_in_minimum_income_mode():
+    """minimum_income mode has no Stage 5 support: a household below the floor is not topped up ex post."""
+    country, hh = _country(50.0)  # legacy would pay 100 - 50 = 50
+    country.household_support = _read_household_support_parameters({"mode": "minimum_income"})
+    hh.ts.override_current("stage5_subsistence_support", np.zeros(1))
+    country._stage5_subsistence_support_by_household = np.zeros(1)
+    country.reconcile_realised_household_support()
+    assert hh.ts.current("stage5_subsistence_support")[0] == 0.0
+    assert hh.ts.current("income_social_transfers")[0] == 40.0
+    assert country.current_stage5_subsistence_support_total() == 0.0
+    # The financing diagnostic is still recorded once.
+    assert len(hh.ts.dicts["financing_income_error"]) == 2
+    assert hh.ts.current("financing_income_error")[0] == hh.compute_income()[0] - 80.0
+
+
 def test_stage_household_income_shock_records_the_exemption_and_clears_it():
     country, hh = _country(50.0)
     country.stage_household_income_shock(np.array([30.0]), exempt_from_support_test=True)
@@ -147,6 +162,7 @@ def _country(
     country.households = hh
     country._stage5_subsistence_support_by_household = np.array([40.0])
     country._staged_household_income_shock = None
+    country.household_support = _read_household_support_parameters({})  # legacy_stage5 defaults
     country.central_government = SimpleNamespace(
         states={"Value-added Tax": vat, "Household Capital Formation Tax": 0.0, "Household Investment VAT Rate": 0.0}
     )

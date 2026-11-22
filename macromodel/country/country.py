@@ -262,6 +262,13 @@ def _validate_minimum_income_base_year(support: HouseholdSupportParameters, init
         )
 
 
+def _validate_minimum_income_resolver(support: HouseholdSupportParameters, uses_feasibility_resolver: bool) -> None:
+    """minimum_income mode needs the Stage 5 feasibility resolver: only its allocator applies the mode's payment
+    order and goods-floor switch (PLAN.md section 5.4). Without it the allocator never runs."""
+    if support.mode == "minimum_income" and not uses_feasibility_resolver:
+        raise ValueError("household_support.mode 'minimum_income' requires households uses_feasibility_resolver: true.")
+
+
 def _resolve_frm_coefficients_path(
     configured_path: str | Path | None,
     data_paths: Optional[DataPaths],
@@ -566,6 +573,9 @@ class Country:
         self._minimum_income_status: Optional[str] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
+        _validate_minimum_income_resolver(
+            self.household_support, configuration.households.parameters.uses_feasibility_resolver
+        )
         validate_portfolio_settlement_configuration(
             households.functions["wealth"],
             configuration.households.parameters.uses_feasibility_resolver,
@@ -760,6 +770,15 @@ class Country:
             self.households.ts.current("expected_income_social_transfers") + unemployment_benefits,
         )
 
+    def _stage5_support_enabled(self) -> bool:
+        """Stage 5 support exists only in legacy_stage5 mode (D1); minimum_income mode replaces it with T."""
+        return self.household_support.mode == "legacy_stage5"
+
+    def _effective_goods_floor(self) -> np.ndarray:
+        """The compulsory goods floor F, or zero when ``household_support.goods_floor`` is switched off."""
+        floor = np.asarray(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        return floor if self.household_support.goods_floor else np.zeros_like(floor)
+
     def clear_stage5_subsistence_support(self) -> None:
         """Clear current-period Stage 5 emergency subsistence support."""
         self._stage5_subsistence_support_by_household = None
@@ -803,6 +822,10 @@ class Country:
             return
         planned_support = hh.ts.current("stage5_subsistence_support")
         income_without_support = self._apply_household_income_shock(hh.compute_income()) - planned_support
+        if not self._stage5_support_enabled():
+            # No Stage 5 support in minimum_income mode: nothing to reconcile; keep the financing diagnostic.
+            hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
+            return
         spent = hh.ts.current("nominal_amount_spent_in_lcu")
         goods_consumption = np.minimum(spent, hh.ts.current("target_consumption"))
         if getattr(hh.functions["investment"], "disables_household_investment", False):
@@ -1421,6 +1444,11 @@ class Country:
         Args:
             configuration (CountryConfiguration): New model parameters
         """
+        # Validate before any component is reset.
+        _validate_minimum_income_resolver(
+            _read_household_support_parameters(getattr(configuration, "household_support", {})),
+            configuration.households.parameters.uses_feasibility_resolver,
+        )
         self.forecasting_window = configuration.forecasting_window
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise
@@ -3113,17 +3141,19 @@ class Country:
         if self.economy.time_unit not in (1, 3):
             raise ValueError("Stage 6 FICP supports monthly (1) and quarterly (3) periods only.")
         target_consumption = self.households.ts.current("target_consumption")
-        subsistence_consumption = self.economy.ts.current("subsistence_consumption")
         investment_cash = self.households.target_investment_cash()
+        # Resources already contain the minimum income T once, through financing_income
+        # (refresh_known_household_receipts). In minimum_income mode no support is paid (PLAN.md 5.4).
         self.households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=self.households.consumption_cash_factor() * target_consumption.sum(axis=1),
-            subsistence_floor=subsistence_consumption,
+            subsistence_floor=self._effective_goods_floor(),
             cash_rent=self.households.current_consumption_cash_rent(),
             resources=self.households.current_floor_settlement_resources(),
             scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             scheduled_mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
             investment=investment_cash,
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
+            support_enabled=self._stage5_support_enabled(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -3460,7 +3490,8 @@ class Country:
             self.households.current_post_grant_residual_shortfall()
         subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
-            subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
+            subsistence_consumption=self._effective_goods_floor(),
+            support_enabled=self._stage5_support_enabled(),
         )
         if self.configuration.households.parameters.uses_feasibility_resolver:
             scheduled_consumer_payments = (
@@ -3478,11 +3509,14 @@ class Country:
                 scheduled_consumer_payments=scheduled_consumer_payments,
                 scheduled_mortgage_payments=scheduled_mortgage_payments,
             )
-            support_by_household = compute_stage5_subsistence_support(
-                self.households.ts.current("post_relief_funding_gap")
-                if self.credit_market.consumer_payments_settled()
-                else self.households.current_floor_support()
-            )
+            if self._stage5_support_enabled():
+                support_by_household = compute_stage5_subsistence_support(
+                    self.households.ts.current("post_relief_funding_gap")
+                    if self.credit_market.consumer_payments_settled()
+                    else self.households.current_floor_support()
+                )
+            else:
+                support_by_household = np.zeros(expected_shape)
             self.set_stage5_subsistence_support_by_household(support_by_household)
         self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
         self.government_entities.prepare_goods_market_clearing(

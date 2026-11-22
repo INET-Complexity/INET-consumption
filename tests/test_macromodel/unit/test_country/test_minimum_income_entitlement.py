@@ -416,11 +416,15 @@ def test_social_receipt_reaches_deposits_exactly_once(datawrapper):
         rtol=0,
         atol=tolerance,
     )
+    # The portfolio rule has a fixed trade cost: D can move a household across its rebalancing band, so closing
+    # financial wealth is compared gross of the illiquid-trade cost paid in each run.
     np.testing.assert_allclose(
         hh.ts.current("liquid_financial_assets")
         + hh.ts.current("illiquid_financial_assets")
+        + hh.ts.current("illiquid_trade_cost_paid")
         - base.ts.current("liquid_financial_assets")
-        - base.ts.current("illiquid_financial_assets"),
+        - base.ts.current("illiquid_financial_assets")
+        - base.ts.current("illiquid_trade_cost_paid"),
         extra,
         rtol=0,
         atol=tolerance,

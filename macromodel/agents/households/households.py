@@ -185,6 +185,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "consumption_cut_amount": 0.0,
     "remaining_subsistence_shortfall": 0.0,
     "floor_binding": False,
+    # Minimum-income allocation (support off): rent and goods floor left unpaid by own resources, and the
+    # negative part of those resources, max(-A, 0), that nobody covers.
+    "unpaid_rent": 0.0,
+    "unmet_floor": 0.0,
+    "resource_deficit": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -1520,6 +1525,9 @@ class Households(Agent):
             "consumption_cut_amount",
             "remaining_subsistence_shortfall",
             "floor_binding",
+            "unpaid_rent",
+            "unmet_floor",
+            "resource_deficit",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1540,8 +1548,9 @@ class Households(Agent):
         scheduled_mortgage_service: np.ndarray,
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
+        support_enabled: bool = True,
     ) -> None:
-        """Apply the Stage 5 payment order to the settled carrier."""
+        """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
             raise RuntimeError(
                 "Stage 5 consumption-floor enforcement requires post_grant_feasible_plan "
@@ -1578,6 +1587,7 @@ class Households(Agent):
             scheduled_mortgage_service=scheduled_mortgage_service,
             investment=investment,
             support_exempt_resources=support_exempt_resources,
+            support_enabled=support_enabled,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -3684,6 +3694,7 @@ class Households(Agent):
         self,
         exchange_rate_usd_to_lcu: float,
         subsistence_consumption: np.ndarray | None = None,
+        support_enabled: bool = True,
     ) -> np.ndarray:
         """Prepare for goods market clearing.
 
@@ -3696,7 +3707,10 @@ class Households(Agent):
             exchange_rate_usd_to_lcu (float): USD to local currency rate
             subsistence_consumption (np.ndarray | None): CU-adjusted subsistence
                 floor used to settle the final household consumption target
-                when the feasibility resolver is active.
+                when the feasibility resolver is active (zero when the goods
+                floor is switched off).
+            support_enabled (bool): False in minimum-income mode: the
+                compatibility settlement then pays no Stage 5 support.
 
         Returns:
             np.ndarray: Per-household remaining subsistence shortfall after
@@ -3734,6 +3748,7 @@ class Households(Agent):
                     scheduled_consumer_service=nothing,
                     scheduled_mortgage_service=nothing,
                     investment=nothing,
+                    support_enabled=support_enabled,
                 )
                 goods_consumption = self._scale_consumption_matrix_to_household_totals(
                     target_consumption=target_consumption,

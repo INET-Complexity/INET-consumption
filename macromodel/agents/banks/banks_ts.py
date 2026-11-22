@@ -137,6 +137,7 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
         # Interest on depositors' accounts, booked when the depositors pay or receive it.
         household_overdraft_interest_received=np.zeros(len(bank_data)),
+        household_overdraft_interest_capitalised=np.zeros(len(bank_data)),
         household_deposit_interest_paid=np.zeros(len(bank_data)),
         firm_overdraft_interest_received=np.zeros(len(bank_data)),
         firm_deposit_interest_paid=np.zeros(len(bank_data)),

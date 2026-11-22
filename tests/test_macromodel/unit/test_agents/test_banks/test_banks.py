@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 
 class TestBanks:
@@ -227,3 +228,135 @@ class TestBanks:
     #
     # def test__compute_deposits(self, test_banks):
     #     assert test_banks.compute_deposits()[0] == -60.0
+
+
+def _two_bank_toy():
+    """Two banks, each with overdrawn and positive depositors, booked by the native Banks methods."""
+    from types import SimpleNamespace
+
+    from macromodel.agents.banks.banks import Banks
+    from macromodel.timeseries import TimeSeries
+
+    zeros = np.zeros(2)
+    fields = {
+        name: zeros.copy()
+        for name in (
+            "deposits_from_firms",
+            "deposits_from_households",
+            "overdrafts_to_firms",
+            "overdrafts_to_households",
+            "household_overdraft_interest_received",
+            "household_deposit_interest_paid",
+            "household_overdraft_interest_capitalised",
+            "firm_overdraft_interest_received",
+            "firm_deposit_interest_paid",
+            "interest_received_on_loans",
+            "consumer_opening_interest_arrears_collected",
+            "mortgage_opening_interest_arrears_collected",
+            "consumer_interest_accrued",
+            "mortgage_interest_accrued",
+            "interest_received_on_deposits",
+            "firm_default_credit_loss",
+            "consumer_default_credit_loss",
+            "mortgage_default_credit_loss",
+            "consumer_default_interest_income_loss",
+            "household_sale_fee_income",
+        )
+    }
+    totals = {
+        "total_" + name: [0.0]
+        for name in (
+            "deposits_from_firms",
+            "deposits_from_households",
+            "overdrafts_to_firms",
+            "overdrafts_to_households",
+        )
+    }
+    banks = SimpleNamespace(
+        ts=TimeSeries(
+            n_banks=2,
+            equity=np.array([50.0, 60.0]),
+            total_outstanding_loans=np.array([100.0, 30.0]),
+            deposits=np.array([10.0, -5.0]),
+            **fields,
+            **totals,
+        )
+    )
+    for method in (
+        "update_deposits",
+        "record_household_deposit_interest",
+        "record_firm_deposit_interest",
+        "compute_interest_received_on_deposits",
+        "compute_deposits",
+        "compute_profits",
+        "compute_cash_distributable_profits",
+    ):
+        setattr(banks, method, getattr(Banks, method).__get__(banks))
+    return banks
+
+
+def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_interest():
+    banks = _two_bank_toy()
+    household_bank = np.array([0, 0, 0, 1, 1, 1])
+    lfa = np.array([120.0, -30.0, -5.0, 40.0, -70.0, 10.0])
+    firm_bank = np.array([0, 1, 1])
+    firm_deposits = np.array([25.0, -8.0, 12.0])
+    deposit_rate, overdraft_rate = np.array([0.01, 0.02]), np.array([0.05, 0.08])
+    banks.update_deposits(
+        current_firm_deposits=firm_deposits,
+        current_household_deposits=lfa,
+        firm_corresponding_bank=firm_bank,
+        households_corresponding_bank=household_bank,
+    )
+    np.testing.assert_array_equal(banks.ts.current("deposits_from_households"), [120.0, 50.0])
+    np.testing.assert_array_equal(banks.ts.current("overdrafts_to_households"), [35.0, 70.0])
+    np.testing.assert_array_equal(banks.ts.current("deposits_from_firms"), [25.0, 12.0])
+    np.testing.assert_array_equal(banks.ts.current("overdrafts_to_firms"), [0.0, 8.0])
+    # Netting would have shown bank 1 households at -20 and hidden both deposits and overdrafts.
+    household_deposit_interest = deposit_rate[household_bank] * np.maximum(lfa, 0.0)
+    household_overdraft_interest = overdraft_rate[household_bank] * np.maximum(-lfa, 0.0)
+    firm_deposit_interest = deposit_rate[firm_bank] * np.maximum(firm_deposits, 0.0)
+    firm_overdraft_interest = overdraft_rate[firm_bank] * np.maximum(-firm_deposits, 0.0)
+    capitalised = np.array([0.0, 0.5, 0.0, 0.0, 2.0, 0.0])
+    banks.record_household_deposit_interest(
+        deposit_interest_received=household_deposit_interest,
+        overdraft_interest_paid=household_overdraft_interest,
+        households_corresponding_bank=household_bank,
+        overdraft_interest_capitalised=capitalised,
+    )
+    banks.record_firm_deposit_interest(
+        deposit_interest_received=firm_deposit_interest,
+        overdraft_interest_paid=firm_overdraft_interest,
+        firm_corresponding_bank=firm_bank,
+    )
+    for bank in range(2):
+        own, own_firms = household_bank == bank, firm_bank == bank
+        assert banks.ts.current("household_overdraft_interest_received")[bank] == pytest.approx(
+            household_overdraft_interest[own].sum(), rel=1e-15
+        )
+        assert banks.ts.current("household_deposit_interest_paid")[bank] == pytest.approx(
+            household_deposit_interest[own].sum(), rel=1e-15
+        )
+        assert banks.ts.current("firm_overdraft_interest_received")[bank] == pytest.approx(
+            firm_overdraft_interest[own_firms].sum(), rel=1e-15
+        )
+    policy_rate = 0.03
+    received = banks.compute_interest_received_on_deposits(central_bank_policy_rate=policy_rate)
+    expected = (
+        policy_rate * np.array([10.0, 0.0])
+        - policy_rate * np.array([0.0, 5.0])
+        + np.bincount(household_bank, household_overdraft_interest - household_deposit_interest, minlength=2)
+        + np.bincount(firm_bank, firm_overdraft_interest - firm_deposit_interest, minlength=2)
+    )
+    np.testing.assert_allclose(received, expected, rtol=1e-14)
+    # Capitalised overdraft interest is accounting profit but not distributable (or taxable) cash profit.
+    banks.ts.override_current("interest_received_on_deposits", received)
+    np.testing.assert_allclose(
+        banks.compute_profits() - banks.compute_cash_distributable_profits(), [0.5, 2.0], rtol=1e-14
+    )
+    # The central-bank balance is liabilities less loans and overdrafts.
+    np.testing.assert_allclose(
+        banks.compute_deposits(),
+        np.array([120.0 + 25.0 + 50.0 - 100.0 - 35.0, 50.0 + 12.0 + 60.0 - 30.0 - 70.0 - 8.0]),
+        rtol=1e-14,
+    )

@@ -541,6 +541,7 @@ class Country:
         self.firms.states["Capital Formation Tax"] = central_government.states["Firm Capital Formation Tax"]
         self.government_entities = government_entities
         self.banks = banks
+        self._book_opening_balances_gross()
         self.central_bank = central_bank
 
         # The economy
@@ -2789,7 +2790,9 @@ class Country:
         )
         scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
         if uses_feasibility_resolver:
-            # Overdraft interest on the opening negative balance is scheduled debt service in the plan.
+            # Overdraft interest on the opening negative balance is scheduled debt service in the plan. In the
+            # pre-credit pass this uses last period's rate r_{t-1}: bank rates are set later, in
+            # prepare_credit_market_clearing. The post-labour refresh and the settlement use r_t, the rate charged.
             scheduled_debt_service = scheduled_debt_service + self.household_overdraft_interest_due()
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
@@ -3198,6 +3201,29 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
+    def _book_opening_balances_gross(self) -> None:
+        """Make the t0 bank deposits gross: deposits = sum max(balance, 0), overdrafts = sum max(-balance, 0).
+
+        The data sums each bank's depositor balances, which is already gross when no depositor is overdrawn
+        (the usual case, left bit-for-bit unchanged). Otherwise the t0 rows are rebooked from the balances.
+        """
+        balances = {
+            "households": (self.households.ts.current("liquid_financial_assets"), self.households.states),
+            "firms": (self.firms.ts.current("deposits"), self.firms.states),
+        }
+        if all(np.all(np.asarray(values) >= 0.0) for values, _ in balances.values()):
+            return
+        n_banks = self.banks.ts.current("n_banks")
+        for name, (values, states) in balances.items():
+            values = np.asarray(values, dtype=float)
+            ids = states["Corresponding Bank ID"]
+            deposits = np.bincount(ids, weights=np.maximum(values, 0.0), minlength=n_banks)
+            overdrafts = np.bincount(ids, weights=np.maximum(-values, 0.0), minlength=n_banks)
+            self.banks.ts.override_current("deposits_from_" + name, deposits)
+            self.banks.ts.override_current("total_deposits_from_" + name, [deposits.sum()])
+            self.banks.ts.override_current("overdrafts_to_" + name, overdrafts)
+            self.banks.ts.override_current("total_overdrafts_to_" + name, [overdrafts.sum()])
+
     def household_overdraft_interest_due(self) -> np.ndarray:
         """Overdraft interest due this period on each household's opening negative LFA, at its bank's current rate."""
         return self.households.compute_deposit_interest_components(
@@ -3219,10 +3245,13 @@ class Country:
         self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
         self.households.ts.overdraft_interest_paid.append(overdraft_interest)
         self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
+        plan = self.households.post_grant_feasible_plan
+        unpaid = None if plan is None else plan.unpaid_overdraft_interest
         self.banks.record_household_deposit_interest(
             deposit_interest_received=deposit_interest,
             overdraft_interest_paid=overdraft_interest,
             households_corresponding_bank=self.households.states["Corresponding Bank ID"],
+            overdraft_interest_capitalised=np.zeros_like(overdraft_interest) if unpaid is None else unpaid,
         )
 
     def reconcile_post_grant_feasible_plan(self) -> None:

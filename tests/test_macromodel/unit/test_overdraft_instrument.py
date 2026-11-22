@@ -28,7 +28,29 @@ def _run(simulation):
             lfa = hh.ts.current("liquid_financial_assets")
             lfa[overdrawn] = -0.2 * np.abs(hh.ts.current("income")[overdrawn]) - 1.0
         opening = hh.ts.current("liquid_financial_assets").copy()
+        opening_equity = banks.ts.current("equity").copy()
         simulation.iterate(t=period)
+        bank = {
+            name: np.asarray(banks.ts.current(name), dtype=float).copy()
+            for name in (
+                "equity",
+                "profits",
+                "cash_distributable_profits",
+                "dividend_fund_settlement_debit",
+                "deposits",
+                "deposits_from_firms",
+                "deposits_from_households",
+                "overdrafts_to_firms",
+                "overdrafts_to_households",
+                "total_outstanding_loans",
+                "consumer_interest_accrued",
+                "mortgage_interest_accrued",
+                "household_overdraft_interest_capitalised",
+            )
+        }
+        bank["opening_equity"] = opening_equity
+        bank["profit_tax"] = country.central_government.states["Profit Tax"]
+        bank["insolvency_rate"] = country.economy.ts.current("bank_insolvency_rate")[0]
         records.append(
             {
                 "opening": opening,
@@ -44,6 +66,7 @@ def _run(simulation):
                 "ledger_residual": hh.ts.current("stage5_cash_ledger_residual").copy(),
                 "early_repayment": hh.ts.current("early_consumer_repayment").copy(),
                 "support": hh.ts.current("stage5_subsistence_support").copy(),
+                "bank": bank,
             }
         )
     return country, overdrawn, records
@@ -121,3 +144,46 @@ def test_cash_ledger_closes_and_plans_leave_no_negative_residue(run):
         # and unmet-floor households) closes at a small positive balance, not at a residue below zero.
         residue = (record["closing"] > -1e-6) & (record["closing"] < 0.0)
         assert residue.sum() == 0, f"{residue.sum()} households closed in (-1e-6, 0)"
+
+
+def test_bank_equity_flow_and_balance_sheet_identities_hold_every_period(run):
+    country, _, records = run
+    banks = country.households.states["Corresponding Bank ID"]
+    n_banks = country.banks.ts.current("n_banks")
+    for record in records:
+        bank = record["bank"]
+        assert bank["insolvency_rate"] == 0.0
+        # Equity moves by profit less tax on distributable profit less the dividend-fund debit.
+        np.testing.assert_allclose(
+            bank["equity"],
+            bank["opening_equity"]
+            + bank["profits"]
+            - bank["profit_tax"] * np.maximum(0.0, bank["cash_distributable_profits"])
+            - bank["dividend_fund_settlement_debit"],
+            rtol=1e-12,
+        )
+        # Accrued interest, including capitalised overdraft interest, is profit but not distributable cash.
+        np.testing.assert_allclose(
+            bank["profits"] - bank["cash_distributable_profits"],
+            bank["consumer_interest_accrued"]
+            + bank["mortgage_interest_accrued"]
+            + bank["household_overdraft_interest_capitalised"],
+            rtol=1e-9,
+            atol=1e-3,
+        )
+        np.testing.assert_allclose(
+            bank["household_overdraft_interest_capitalised"],
+            np.bincount(banks, weights=record["unpaid_overdraft_interest"], minlength=n_banks),
+            rtol=1e-12,
+        )
+        # Balance sheet: central-bank balance = deposits + equity - loans - overdrafts.
+        np.testing.assert_allclose(
+            bank["deposits"],
+            bank["deposits_from_firms"]
+            + bank["deposits_from_households"]
+            + bank["equity"]
+            - bank["total_outstanding_loans"]
+            - bank["overdrafts_to_firms"]
+            - bank["overdrafts_to_households"],
+            rtol=1e-12,
+        )

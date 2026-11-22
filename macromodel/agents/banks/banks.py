@@ -364,8 +364,14 @@ class Banks(Agent):
         deposit_interest_received: np.ndarray,
         overdraft_interest_paid: np.ndarray,
         households_corresponding_bank: np.ndarray,
+        overdraft_interest_capitalised: np.ndarray | None = None,
     ) -> None:
-        """Book, at each household's own bank, the deposit and overdraft interest it settled this period."""
+        """Book, at each household's own bank, the deposit and overdraft interest it settled this period.
+
+        ``overdraft_interest_capitalised`` is the part of the overdraft interest the household's plan left
+        unpaid: it is income accrued on the overdraft asset, not cash, so it is excluded from distributable
+        and taxable profit.
+        """
         self.ts.household_deposit_interest_paid.append(
             np.bincount(
                 households_corresponding_bank, weights=deposit_interest_received, minlength=self.ts.current("n_banks")
@@ -374,6 +380,15 @@ class Banks(Agent):
         self.ts.household_overdraft_interest_received.append(
             np.bincount(
                 households_corresponding_bank, weights=overdraft_interest_paid, minlength=self.ts.current("n_banks")
+            )
+        )
+        if overdraft_interest_capitalised is None:
+            overdraft_interest_capitalised = np.zeros_like(np.asarray(overdraft_interest_paid, dtype=float))
+        self.ts.household_overdraft_interest_capitalised.append(
+            np.bincount(
+                households_corresponding_bank,
+                weights=overdraft_interest_capitalised,
+                minlength=self.ts.current("n_banks"),
             )
         )
 
@@ -420,12 +435,17 @@ class Banks(Agent):
         )
 
     def compute_cash_distributable_profits(self) -> np.ndarray:
-        """Return current cash-backed profit excluding prior income collection."""
+        """Return current cash-backed profit excluding prior income collection.
+
+        Overdraft interest capitalised into the overdraft is accrued, not cash, and is excluded, like accrued
+        consumer and mortgage interest.
+        """
         return (
             self.ts.current("interest_received_on_loans")
             - self.ts.current("consumer_opening_interest_arrears_collected")
             - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
+            - self.ts.current("household_overdraft_interest_capitalised")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
             - self.ts.current("mortgage_default_credit_loss")

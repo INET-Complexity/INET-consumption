@@ -718,6 +718,31 @@ class HousingMarket:
         self.ts.total_number_of_self_sales.append([total_number_of_self_sales])
         self.ts.total_number_of_newly_rented_houses.append([total_number_of_newly_rented_houses])
 
+    def vacate_tenancies(self, household_states: dict[str, Any], household_ids: np.ndarray) -> None:
+        """Move private tenants out of the dwellings they rent and into social housing (PLAN.md section 3.3).
+
+        The household side is the ``sellers_vacate`` transition (no dwelling, social tenure). The dwelling
+        becomes vacant, so the next listing step offers it for rent, and the tenant leaves its landlord's
+        ``corr_renters``.
+        """
+        properties = self.states["properties"]
+        for household_id in np.asarray(household_ids, dtype=int):
+            property_id = int(household_states["Corresponding Inhabited House ID"][household_id])
+            if (
+                property_id == VACANT_HOUSEHOLD_ID
+                or int(properties.loc[property_id, "Corresponding Inhabitant Household ID"]) != household_id
+            ):
+                raise ValueError(f"Household {household_id} does not live in the dwelling it is to vacate.")
+            landlord_id = int(properties.loc[property_id, "Corresponding Owner Household ID"])
+            if landlord_id == household_id:
+                raise ValueError(f"Household {household_id} owns the dwelling: only a tenant vacates.")
+            properties.loc[property_id, "Corresponding Inhabitant Household ID"] = VACANT_HOUSEHOLD_ID
+            if landlord_id >= 0 and household_id in household_states["corr_renters"][landlord_id]:
+                household_states["corr_renters"][landlord_id].remove(household_id)
+            household_states["Corresponding Inhabited House ID"][household_id] = VACANT_HOUSEHOLD_ID
+            household_states["Tenure Status of the Main Residence"][household_id] = SOCIAL_HOUSING_TENURE_STATUS
+        self._refresh_owner_occupied_flags(properties)
+
     def compute_total_property_value(self) -> float:
         """Calculate the total value of all properties in the market.
 

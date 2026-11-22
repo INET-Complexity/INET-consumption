@@ -104,7 +104,7 @@ def test_minimum_income_mode_pays_no_stage5_support_and_applies_the_goods_floor_
             ordered = hh.ts.current("target_consumption").sum(axis=1) * hh.consumption_cash_factor()
             assert np.all(ordered <= desired * (1.0 + 1e-12))
 
-        # The closing cash ledger still reconciles (unpaid rent is not yet settled differently: increment 5).
+        # The closing cash ledger still reconciles (the tenant pays rent due less unpaid rent).
         assert np.max(np.abs(hh.ts.current("stage5_cash_ledger_residual"))) <= 1e-7
     assert np.all(np.isfinite(hh.ts.current("liquid_financial_assets")))
 

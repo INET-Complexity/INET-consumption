@@ -36,9 +36,10 @@ def test_final_support_uses_actual_receipts_and_posts_once(
     """Realised support counts the forced sale net of its cost and never finances a property purchase."""
     country, hh = _country(receipt, sale_proceeds, liquidation, sale_cost, housing)
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
-    assert hh.ts.current("income_social_transfers")[0] == expected_support
-    assert country.current_stage5_subsistence_support_fiscal_increment() == expected_support
+    # Support also covers the plan round-down, 1e-12 x (|resources| + floor + rent).
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
+    assert hh.ts.current("income_social_transfers")[0] == hh.ts.current("stage5_subsistence_support")[0]
+    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support, abs=1e-9)
     assert hh.ts.current("financing_income_error")[0] == receipt - 80
     # Proceeds are financing, not income: income is receipts plus support only,
     # and income together with proceeds covers spending.
@@ -72,8 +73,8 @@ def test_final_support_uses_actual_receipts_and_posts_once(
 def test_final_support_covers_the_goods_floor_and_cash_rent_only(case, expected_support):
     country, hh = _country(**case)
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support)
-    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support)
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
+    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support, abs=1e-9)
 
 
 @pytest.mark.parametrize("exempt,expected_support", [(False, 20.0), (True, 50.0)])
@@ -84,7 +85,7 @@ def test_final_support_counts_or_ignores_the_staged_transfer(exempt, expected_su
     country._staged_household_income_shock = np.array([30.0])
     country._household_income_shock_exempt_from_support = exempt
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
 
 
 def test_final_support_is_a_no_op_in_minimum_income_mode():

@@ -117,7 +117,7 @@ def test_cash_ledger_closes_and_plans_leave_no_negative_residue(run):
     _, overdrawn, records = run
     for record in records:
         np.testing.assert_allclose(record["ledger_residual"], 0.0, atol=1e-7)
-        # Legacy support pins a household's spending to the floor and rent it exactly covers; nothing
-        # discretionary is left to round down, so those households are excluded (see the PR notes).
-        residue = (record["closing"] > -1e-6) & (record["closing"] < 0.0) & (record["support"] == 0.0)
+        # The plan rounds its resources down, so a plan that spends everything (including support-pinned
+        # and unmet-floor households) closes at a small positive balance, not at a residue below zero.
+        residue = (record["closing"] > -1e-6) & (record["closing"] < 0.0)
         assert residue.sum() == 0, f"{residue.sum()} households closed in (-1e-6, 0)"

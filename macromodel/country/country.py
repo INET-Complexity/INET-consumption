@@ -78,7 +78,7 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
-from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+from macromodel.agents.households.func.financial_feasibility import PLAN_ROUND_DOWN, forced_liquidation_cash
 from macromodel.agents.households.func.minimum_income import (
     assessed_income,
     assessment_flow,
@@ -886,6 +886,8 @@ class Country:
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
+        # Round resources down as the settlement does, so support leaves the household at LFA >= 0.
+        resources = resources - PLAN_ROUND_DOWN * (np.abs(resources) + floor + hh.current_consumption_cash_rent())
         support = np.maximum(uses - (resources - self._household_resources_exempt_from_support_test()), 0.0)
         hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
         self.set_stage5_subsistence_support_by_household(support)

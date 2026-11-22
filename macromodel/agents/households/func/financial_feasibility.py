@@ -343,10 +343,12 @@ class HouseholdFinancialFeasibility:
         An unmet floor leaves A1 = 0, so nothing is bought above it. With the
         goods floor switched off the caller passes F = 0 and C^f <= G.
 
-        Goods above the floor and investment are planned on what is left after
-        service less ``PLAN_ROUND_DOWN`` x (|A| + S), so that a plan spending all
-        resources closes at LFA >= 0 rather than at a floating-point residue
-        below zero. Support, unpaid rent, floor and service are not rounded.
+        The whole allocation is made from the rounded-down resources
+        A - m, m = ``PLAN_ROUND_DOWN`` x (|A| + F + R), so that a plan spending
+        all resources closes at LFA >= m rather than at a floating-point residue
+        below zero. Support absorbs m (S + A - m still covers F + R exactly);
+        unpaid amounts change by at most m. ``resource_deficit`` is max(-A, 0) of
+        the unrounded A, and a cut no larger than m does not make the floor binding.
         """
         desired = self._non_negative(consumption_before_floor)
         floor = self._non_negative(subsistence_floor)
@@ -384,17 +386,19 @@ class HouseholdFinancialFeasibility:
         if not isinstance(support_enabled, (bool, np.bool_)):
             raise TypeError("support_enabled must be a boolean switch, not a household vector.")
 
+        margin = PLAN_ROUND_DOWN * (np.abs(available) + floor + rent)
+        rounded = available - margin
         if support_enabled:
-            support = np.maximum(floor + rent - (available - exempt), 0.0)
-            after_floor_and_rent = np.maximum(available + support - floor - rent, 0.0)
+            support = np.maximum(floor + rent - (rounded - exempt), 0.0)
+            after_floor_and_rent = np.maximum(rounded + support - floor - rent, 0.0)
             floor_paid = floor
             unpaid_rent = np.zeros(shape)
             unmet_floor = np.zeros(shape)
             resource_deficit = np.zeros(shape)
         else:
             support = np.zeros(shape)
-            own_resources = np.maximum(available, 0.0)
-            resource_deficit = own_resources - available
+            own_resources = np.maximum(rounded, 0.0)
+            resource_deficit = np.maximum(-available, 0.0)
             rent_paid = np.minimum(rent, own_resources)
             floor_paid = np.minimum(floor, own_resources - rent_paid)
             unpaid_rent = rent - rent_paid
@@ -408,16 +412,11 @@ class HouseholdFinancialFeasibility:
         overdraft_interest_paid = np.minimum(overdraft_interest, after_floor_and_rent - service_paid)
         unpaid_overdraft_interest = overdraft_interest - overdraft_interest_paid
         after_service = after_floor_and_rent - service_paid - overdraft_interest_paid
-        spendable = np.maximum(after_service - PLAN_ROUND_DOWN * (np.abs(available) + support), 0.0)
-        consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), spendable)
+        consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
         consumption_after_floor = floor_paid + consumption_above_floor
-        investment_after_floor = np.minimum(desired_investment, spendable - consumption_above_floor)
+        investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
         consumption_cut_amount = np.maximum(desired - consumption_after_floor, 0.0)
         floor_top_up = np.maximum(consumption_after_floor - desired, 0.0)
-        # The binding flag ignores the round-down: a plan that affords desired goods exactly is not binding.
-        unrounded_cut = np.maximum(
-            desired - floor_paid - np.minimum(np.maximum(desired - floor, 0.0), after_service), 0.0
-        )
         return replace(
             plan,
             consumption_before_floor=desired,
@@ -429,7 +428,8 @@ class HouseholdFinancialFeasibility:
             unpaid_consumer_service=unpaid_consumer,
             unpaid_mortgage_service=unpaid_mortgage,
             investment_after_floor=investment_after_floor,
-            floor_binding=(unrounded_cut + floor_top_up) > 0.0,
+            # A cut of the order of the round-down margin (2m allows for rounding) is not a binding floor.
+            floor_binding=(consumption_cut_amount + floor_top_up) > 2.0 * margin,
             unpaid_rent=unpaid_rent,
             unmet_floor=unmet_floor,
             resource_deficit=resource_deficit,

@@ -661,3 +661,91 @@ def test_mpc_window_file_rejects_mismatched_shock_row(tmp_path):
         load_mpc_window(saved, country_code="FRA", shock_row=3, horizon_periods=4)
     with pytest.raises(ValueError, match="extends beyond available HDF5 rows"):
         extract_mpc_window(paths["baseline"], "FRA", shock_row=5, horizon_periods=4)
+
+
+def _add_regime_inputs(path, *, row, floor, support=0.0, top_up=None, unpaid_rent=None, unmet_floor=None):
+    """Settlement outcomes of three households at ``row``: 0 desires 100 and consumes it, 1 desires 20, 2 desires 80."""
+    columns = {
+        "stage5_subsistence_support": np.array([support, 0.0, 0.0]),
+        "consumption_before_floor": np.array([100.0, 20.0, 80.0]),
+        "consumption_after_floor": np.array([100.0, max(20.0, floor), 80.0 - (unmet_floor or [0, 0, 0])[2]]),
+        "consumption_cut_amount": np.zeros(3),
+        "unpaid_consumer_payment": np.zeros(3),
+        "unpaid_mortgage_payment": np.zeros(3),
+    }
+    extras = {"income_minimum_income": top_up, "unpaid_rent": unpaid_rent, "unmet_floor": unmet_floor}
+    columns.update({name: np.asarray(values, dtype=float) for name, values in extras.items() if values is not None})
+    with h5py.File(path, "a") as handle:
+        for name, values in columns.items():
+            data = np.zeros((7, 3))
+            data[row] = values
+            handle.create_dataset(f"FRA/households/{name}", data=data)
+        handle.create_dataset("FRA/economy/subsistence_consumption", data=np.full((7, 3), floor))
+
+
+def _regimes(tmp_path, *, configuration, **inputs):
+    tmp_path.mkdir(exist_ok=True)
+    paths, metadata = _window_inputs(tmp_path)
+    _add_regime_inputs(paths["baseline"], row=2, **inputs)
+    if configuration is not None:
+        with h5py.File(paths["baseline"], "a") as handle:
+            handle.attrs["configuration"] = configuration
+    panel = build_household_mpc_panel(
+        baseline_h5=paths["baseline"],
+        shock_h5=paths["shock"],
+        metadata=metadata,
+        country_code="FRA",
+        shock_row=2,
+        horizon_periods=4,
+        shock_fraction=0.05,
+    )
+    return panel
+
+
+def _support_configuration(block):
+    return "{'country_configurations': {'FRA': {'household_support': " + block + "}}}"
+
+
+def test_mpc_panel_classifies_minimum_income_recipients_against_the_effective_goods_floor(tmp_path):
+    inputs = {"top_up": [10.0, 0.0, 0.0], "unpaid_rent": [0.0, 0.0, 0.0], "unmet_floor": [0.0, 0.0, 5.0]}
+    on = _regimes(
+        tmp_path / "on",
+        configuration=_support_configuration("{'mode': 'minimum_income'}"),
+        floor=30.0,
+        **inputs,
+    )
+    # Floor on: the recipient is classified by T, household 1 is lifted to the floor, household 2 has an unmet floor.
+    assert on["mpc_regime"].tolist() == ["minimum_income_recipient", "floor_bound_self_funded", "liquidity_constrained"]
+    assert on["baseline_subsistence_floor"].tolist() == [30.0, 30.0, 30.0]
+    assert on["baseline_minimum_income"].tolist() == [10.0, 0.0, 0.0]
+
+    off = _regimes(
+        tmp_path / "off",
+        configuration=_support_configuration("{'mode': 'minimum_income', 'goods_floor': False}"),
+        floor=30.0,
+        **inputs,
+    )
+    # Floor off: nobody is floor-bound and the classification uses a zero floor, not the saved series.
+    assert off["mpc_regime"].tolist() == ["minimum_income_recipient", "unconstrained", "liquidity_constrained"]
+    assert off["baseline_subsistence_floor"].tolist() == [0.0, 0.0, 0.0]
+
+
+def test_mpc_panel_keeps_legacy_stage5_regimes_without_minimum_income_inputs(tmp_path):
+    panel = _regimes(tmp_path, configuration=None, floor=30.0, support=12.0)
+    assert panel["mpc_regime"].tolist() == ["floor_bound_supported", "floor_bound_self_funded", "unconstrained"]
+    assert "baseline_minimum_income" not in panel.columns
+
+
+def test_mpc_window_stores_the_support_mode_and_the_goods_floor_switch(tmp_path):
+    from src.mpc_analysis import extract_mpc_window
+
+    paths, _ = _window_inputs(tmp_path)
+    _add_regime_inputs(paths["baseline"], row=2, floor=30.0, top_up=[1.0, 0.0, 0.0])
+    window = extract_mpc_window(
+        paths["baseline"], "FRA", shock_row=2, horizon_periods=4, household_support={"mode": "minimum_income"}
+    )
+    assert str(window["regime_support_mode"]) == "minimum_income" and bool(window["regime_goods_floor"])
+    assert window["regime_income_minimum_income"].tolist() == [1.0, 0.0, 0.0]
+    # A run without settlement outputs carries no regime entries at all.
+    bare = extract_mpc_window(paths["shock"], "FRA", shock_row=2, horizon_periods=4)
+    assert not [name for name in bare if name.startswith("regime_")]

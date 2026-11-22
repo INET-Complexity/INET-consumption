@@ -27,6 +27,7 @@ for path in (str(REPO_ROOT), str(RUN_MODEL_DIR)):
 from src.experiments.selected_output import select_names, write_selected  # noqa: E402
 from src.mpc_analysis import (  # noqa: E402
     HOUSEHOLD_LABOR_STATE_COLUMNS,
+    MPC_MINIMUM_INCOME_INPUTS,
     MPC_PLOT_MEASURES,
     MPC_REGIME_INPUTS,
     MPC_WINDOW_OUTCOMES,
@@ -237,14 +238,20 @@ def _run_one(
 
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
-    window_kwargs = {"shock_row": pre_shock_row + 1, "horizon_periods": horizon_periods, "cpi_source": cpi_source}
+    country_configuration = country_configurations.get(country_code)
+    window_kwargs = {
+        "shock_row": pre_shock_row + 1,
+        "horizon_periods": horizon_periods,
+        "cpi_source": cpi_source,
+        "household_support": None if country_configuration is None else country_configuration.household_support,
+    }
     if keep_full_h5:
         model.save(save_dir=seed_dir, file_name=FULL_H5_NAME)
         window = extract_mpc_window(seed_dir / FULL_H5_NAME, country_code, **window_kwargs)
     else:
         # Scratch HDF5 lives in its own temp dir so an existing full file at the fixed path is never touched.
         with tempfile.TemporaryDirectory(dir=seed_dir, prefix=".scratch-") as scratch:
-            fields = {"consumption", "target_consumption", "income", *MPC_REGIME_INPUTS}
+            fields = {"consumption", "target_consumption", "income", *MPC_REGIME_INPUTS, *MPC_MINIMUM_INCOME_INPUTS}
             outcome_fields = {
                 "cash": {"consumption_cash_expenditure", "rent", "total_consumption", "total_consumption_before_vat"},
                 "total": {

@@ -82,6 +82,9 @@ T_h = max(M_h,t − Y_h, 0)
 - Social tenants who cannot pay the social rent: the government writes off the shortfall (recorded separately). No further move.
 - Exit: unchanged. Social-housing households search every period (`property.py`, `ind_dec`).
 - Owners in mortgage distress: no change (forced-sale route already ends in social housing through `sellers_vacate`).
+- Consequence of D8 and of the vacate running before listing and bidding: about 10% of vacated households re-let or buy in the same housing step (seed-1 smokes, increment 5), so they never pay social rent.
+- Landlords plan on rent due and realise rent received: the shortfall (1 − τ) × `unpaid_rent` lands in their realised cash, with no true-up (as for T, D5).
+- A tenure-3 household living in a dwelling it owns (possible after rental clearing; a pre-existing issue) has no counterparty: its unpaid rent is booked in `rent_unpaid_no_counterparty`, and it is not vacated.
 
 ### 3.4 Numerical guard (D11)
 

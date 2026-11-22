@@ -2069,9 +2069,9 @@ class Households(Agent):
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
             time_unit (int): Model period length in months, used by credit-augmented consumption
                 to annualize income in its calibrated wealth/income and price/income ratios
-            subsistence_income (Optional[np.ndarray]): CU-adjusted subsistence consumption
-                (Stage 5's ``subsistence_consumption``, half net SMIC per consumption unit).
-                Used only as the geometric-average income denominator's floor when a household
+            subsistence_income (Optional[np.ndarray]): The behavioural-income lower bound, the economy
+                series ``income_guard`` (the subsistence series S in legacy_stage5 mode, the numerical
+                guard G = guard share x M in minimum_income mode). Used only as the geometric-average income denominator's floor when a household
                 has no positive income anywhere in its history window; ignored otherwise
 
         Returns:

@@ -78,7 +78,7 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
-from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+from macromodel.agents.households.func.financial_feasibility import PLAN_ROUND_DOWN, forced_liquidation_cash
 from macromodel.agents.households.func.minimum_income import (
     assessed_income,
     assessment_flow,
@@ -541,6 +541,7 @@ class Country:
         self.firms.states["Capital Formation Tax"] = central_government.states["Firm Capital Formation Tax"]
         self.government_entities = government_entities
         self.banks = banks
+        self._book_opening_balances_gross()
         self.central_bank = central_bank
 
         # The economy
@@ -886,6 +887,8 @@ class Country:
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
+        # Round resources down as the settlement does, so support leaves the household at LFA >= 0.
+        resources = resources - PLAN_ROUND_DOWN * (np.abs(resources) + floor + hh.current_consumption_cash_rent())
         support = np.maximum(uses - (resources - self._household_resources_exempt_from_support_test()), 0.0)
         hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
         self.set_stage5_subsistence_support_by_household(support)
@@ -2134,6 +2137,7 @@ class Country:
             self.households.refresh_post_labour_feasibility(
                 self.credit_market.compute_opening_scheduled_consumption_payments_by_household()
                 + self.credit_market.compute_opening_scheduled_mortgage_payments_by_household()
+                + self.household_overdraft_interest_due()
             )
             self.settle_authoritative_household_payments()
         else:
@@ -2785,6 +2789,11 @@ class Country:
             clear_post_grant=not replace_current,
         )
         scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
+        if uses_feasibility_resolver:
+            # Overdraft interest on the opening negative balance is scheduled debt service in the plan. In the
+            # pre-credit pass this uses last period's rate r_{t-1}: bank rates are set later, in
+            # prepare_credit_market_clearing. The post-labour refresh and the settlement use r_t, the rate charged.
+            scheduled_debt_service = scheduled_debt_service + self.household_overdraft_interest_due()
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
             scheduled_debt_service=scheduled_debt_service,
@@ -3187,15 +3196,63 @@ class Country:
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
 
         # Calculate the interest on deposits received/paid by households
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
 
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
+    def _book_opening_balances_gross(self) -> None:
+        """Make the t0 bank deposits gross: deposits = sum max(balance, 0), overdrafts = sum max(-balance, 0).
+
+        The data sums each bank's depositor balances, which is already gross when no depositor is overdrawn
+        (the usual case, left bit-for-bit unchanged). Otherwise the t0 rows are rebooked from the balances.
+        """
+        balances = {
+            "households": (self.households.ts.current("liquid_financial_assets"), self.households.states),
+            "firms": (self.firms.ts.current("deposits"), self.firms.states),
+        }
+        if all(np.all(np.asarray(values) >= 0.0) for values, _ in balances.values()):
+            return
+        n_banks = self.banks.ts.current("n_banks")
+        for name, (values, states) in balances.items():
+            values = np.asarray(values, dtype=float)
+            ids = states["Corresponding Bank ID"]
+            deposits = np.bincount(ids, weights=np.maximum(values, 0.0), minlength=n_banks)
+            overdrafts = np.bincount(ids, weights=np.maximum(-values, 0.0), minlength=n_banks)
+            self.banks.ts.override_current("deposits_from_" + name, deposits)
+            self.banks.ts.override_current("total_deposits_from_" + name, [deposits.sum()])
+            self.banks.ts.override_current("overdrafts_to_" + name, overdrafts)
+            self.banks.ts.override_current("total_overdrafts_to_" + name, [overdrafts.sum()])
+
+    def household_overdraft_interest_due(self) -> np.ndarray:
+        """Overdraft interest due this period on each household's opening negative LFA, at its bank's current rate."""
+        return self.households.compute_deposit_interest_components(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )[1]
+
+    def record_household_deposit_interest(self) -> None:
+        """Settle interest on household accounts and book it at each household's own bank.
+
+        The bank receives exactly the overdraft interest the households pay and
+        pays exactly the deposit interest they receive.
+        """
+        rates = {
+            "bank_interest_rate_on_household_deposits": self.banks.ts.current("interest_rate_on_household_deposits"),
+            "bank_overdraft_rate_on_household_deposits": self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        }
+        deposit_interest, overdraft_interest = self.households.compute_deposit_interest_components(**rates)
+        self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
+        self.households.ts.overdraft_interest_paid.append(overdraft_interest)
+        self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
+        plan = self.households.post_grant_feasible_plan
+        unpaid = None if plan is None else plan.unpaid_overdraft_interest
+        self.banks.record_household_deposit_interest(
+            deposit_interest_received=deposit_interest,
+            overdraft_interest_paid=overdraft_interest,
+            households_corresponding_bank=self.households.states["Corresponding Bank ID"],
+            overdraft_interest_capitalised=np.zeros_like(overdraft_interest) if unpaid is None else unpaid,
+        )
 
     def reconcile_post_grant_feasible_plan(self) -> None:
         """Build settled household feasibility after consumer-credit clearing."""
@@ -3257,6 +3314,7 @@ class Country:
             investment=investment_cash,
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
             support_enabled=self._stage5_support_enabled(),
+            scheduled_overdraft_interest=self.household_overdraft_interest_due(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -3358,12 +3416,7 @@ class Country:
         self.households.ts.debt.append(self.households.compute_debt())
         self.households.ts.debt_histogram.append(get_histogram(self.households.ts.current("debt"), self.scale))
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
     def validate_stage5_closing_balance_sheets(self) -> None:
@@ -4556,6 +4609,15 @@ class Country:
         firm_interest_paid_on_deposits = self.firms.compute_interest_paid_on_deposits(
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        firm_deposit_interest, firm_overdraft_interest = self.firms.compute_deposit_interest_components(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        self.banks.record_firm_deposit_interest(
+            deposit_interest_received=firm_deposit_interest,
+            overdraft_interest_paid=firm_overdraft_interest,
+            firm_corresponding_bank=self.firms.states["Corresponding Bank ID"],
         )
         firm_corporate_tax_obligation_preview = self.current_firm_corporate_tax_obligation_preview()
         self.firms.draw_operating_revolving_facility(

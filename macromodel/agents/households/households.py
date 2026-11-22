@@ -40,6 +40,7 @@ from macromodel.agents.households.func.consumer_distress import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption, validate_consumption_weights
 from macromodel.agents.households.func.financial_feasibility import (
+    PLAN_ROUND_DOWN,
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
     PreGrantFeasiblePlan,
@@ -190,6 +191,10 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "unpaid_rent": 0.0,
     "unmet_floor": 0.0,
     "resource_deficit": 0.0,
+    # Overdraft interest due on the opening negative LFA (planned as debt service) and the part left unpaid,
+    # which capitalises into the overdraft.
+    "scheduled_overdraft_interest": 0.0,
+    "unpaid_overdraft_interest": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -1235,19 +1240,22 @@ class Households(Agent):
         if np.any(consumption < 0.0) or np.any(mortgage < 0.0) or np.any(scheduled < 0.0):
             raise ValueError("Consumption and debt service must be non-negative.")
 
-        capacity = np.where(
-            eligible,
-            np.maximum(
-                income
-                - consumption
-                - mortgage
-                - scheduled
-                - self.current_consumption_cash_rent()
-                - self.target_investment_cash(),
-                0.0,
-            ),
-            0.0,
+        overdraft_interest = self.post_grant_feasible_plan.scheduled_overdraft_interest
+        surplus = (
+            income
+            - consumption
+            - mortgage
+            - scheduled
+            - self.current_consumption_cash_rent()
+            - self.target_investment_cash()
+            - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
+        # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
+        # planned uses, is negative. Rounded down like the allocator so it cannot leave a negative residue.
+        opening_lfa = np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
+        overdraft = np.minimum(opening_lfa, 0.0)
+        surplus = surplus + overdraft - PLAN_ROUND_DOWN * (np.abs(income) - overdraft)
+        capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,
             early_consumer_repayment_capacity=capacity.copy(),
@@ -1531,6 +1539,8 @@ class Households(Agent):
             "unpaid_rent",
             "unmet_floor",
             "resource_deficit",
+            "scheduled_overdraft_interest",
+            "unpaid_overdraft_interest",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1552,6 +1562,7 @@ class Households(Agent):
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
+        scheduled_overdraft_interest: np.ndarray | None = None,
     ) -> None:
         """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
@@ -1591,6 +1602,7 @@ class Households(Agent):
             investment=investment,
             support_exempt_resources=support_exempt_resources,
             support_enabled=support_enabled,
+            scheduled_overdraft_interest=scheduled_overdraft_interest,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -3619,6 +3631,22 @@ class Households(Agent):
             0.0, self.ts.current("liquid_financial_assets")
         )
 
+    def compute_deposit_interest_components(
+        self,
+        bank_interest_rate_on_household_deposits: np.ndarray,
+        bank_overdraft_rate_on_household_deposits: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Deposit interest received on a positive opening balance and overdraft interest due on a negative one.
+
+        Both are charged at the household's own bank on the opening liquid
+        balance. ``compute_interest_paid_on_deposits`` is their difference.
+        """
+        bank = self.states["Corresponding Bank ID"]
+        lfa = self.ts.current("liquid_financial_assets")
+        deposit_interest = bank_interest_rate_on_household_deposits[bank] * np.maximum(0.0, lfa)
+        overdraft_interest = bank_overdraft_rate_on_household_deposits[bank] * np.maximum(0.0, -lfa)
+        return deposit_interest, overdraft_interest
+
     def compute_interest_paid(self) -> np.ndarray:
         """Calculate total interest paid.
 
@@ -4144,14 +4172,19 @@ class Households(Agent):
             new_loans = granted_credit + optional_cash_flow("received_mortgages")
             # Sale proceeds swap housing for cash: financing, not saving, so
             # they bypass the new-wealth split between LFA and IFA.
-            base_lfa = (
+            lfa_before_illiquid_purchase = (
                 self.ts.current("liquid_financial_assets")
                 + cash_saving_before_financing
                 + new_loans
                 + optional_cash_flow("property_sale_proceeds")
                 - optional_cash_flow("mortgage_sale_repayment")
-                - new_wealth_in_other_financial_assets
             )
+            # Saving reduces an overdraft before it buys illiquid assets: no purchase while LFA, net of this
+            # period's flows, is negative, and none beyond the positive part.
+            new_wealth_in_other_financial_assets = np.minimum(
+                new_wealth_in_other_financial_assets, np.maximum(lfa_before_illiquid_purchase, 0.0)
+            )
+            base_lfa = lfa_before_illiquid_purchase - new_wealth_in_other_financial_assets
         else:
             base_lfa = self.compute_wealth_in_deposits(
                 new_wealth_in_deposits=new_wealth_in_deposits,

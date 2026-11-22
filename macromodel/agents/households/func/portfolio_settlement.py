@@ -114,7 +114,10 @@ def settle_portfolio_reallocation(
         no_surplus = ~invalid & ~forced & (investable_surplus <= 0.0)
         status[no_surplus] = SETTLEMENT_NO_SURPLUS
 
-        negative_lfa = ~invalid & ~forced & ~no_surplus & (base_lfa < 0.0)
+        # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
+        negative_lfa = (
+            ~invalid & ~forced & ~no_surplus & ((base_lfa < 0.0) | (base_lfa + counterfactual_lfa_flow < 0.0))
+        )
         status[negative_lfa] = SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
         eligible = ~invalid & ~forced & ~no_surplus & ~negative_lfa

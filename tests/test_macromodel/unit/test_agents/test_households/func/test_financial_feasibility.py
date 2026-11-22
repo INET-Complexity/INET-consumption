@@ -152,17 +152,19 @@ def _settle_floor(**inputs):
 
 
 def test__floor_settlement_pays_in_order_floor_and_rent_then_service_then_goods_then_investment():
+    # Exact up to the plan round-down, 1e-12 x (|A| + F + R), hence atol=1e-9.
     # F + R = 100, O = 40, goods above the floor = 40, V = 15: full plan costs 195.
     resources = np.array([60.0, 100.0, 125.0, 140.0, 160.0, 180.0, 190.0, 195.0, 500.0])
     settled = _settle_floor(resources=resources)
 
-    np.testing.assert_allclose(settled.floor_support, [40, 0, 0, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.floor_support, [40, 0, 0, 0, 0, 0, 0, 0, 0], atol=1e-9)
     # Unpaid service is suspended on consumer credit first, then on the mortgage.
-    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 5, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 100, 120, 120, 120, 120])
-    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 10, 15, 15])
-    np.testing.assert_allclose(settled.consumption_cut_amount, [40, 40, 40, 40, 20, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 0, 0, 0, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 5, 0, 0, 0, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 100, 120, 120, 120, 120], atol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 10, 15, 15], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_cut_amount, [40, 40, 40, 40, 20, 0, 0, 0, 0], atol=1e-9)
+    # At 180 the plan affords desired goods exactly: the round-down trims them by about 1e-10 but is not binding.
     np.testing.assert_array_equal(settled.floor_binding, [True, True, True, True, True, False, False, False, False])
     np.testing.assert_allclose(
         settled.remaining_subsistence_shortfall,
@@ -183,7 +185,7 @@ def test__floor_support_covers_the_goods_floor_and_rent_only():
         {"consumption_before_floor": 500.0},
     ):
         settled = _settle_floor(resources=100.0, **shortfall_only_in)
-        np.testing.assert_allclose(settled.floor_support, [0.0])
+        np.testing.assert_allclose(settled.floor_support, [0.0], atol=1e-9)
         np.testing.assert_allclose(settled.consumption_after_floor, [80.0])
         np.testing.assert_allclose(settled.investment_after_floor, [0.0])
     # A household on support pays no debt service, buys nothing above the floor and does not invest.
@@ -290,7 +292,8 @@ def _settle_legacy_grid(**switch):
 def test__legacy_floor_settlement_characterisation():
     settled = _settle_legacy_grid()
     for name, expected in _LEGACY_GRID_EXPECTED.items():
-        np.testing.assert_array_equal(getattr(settled, name), expected, err_msg=name)
+        # Exact up to the plan round-down (PLAN_ROUND_DOWN x resources) on goods above the floor and investment.
+        np.testing.assert_allclose(getattr(settled, name), expected, rtol=0.0, atol=1e-9, err_msg=name)
 
 
 def test__support_enabled_true_is_the_legacy_allocation_bit_for_bit():
@@ -313,14 +316,14 @@ def test__without_support_rent_is_paid_first_then_floor_then_service_goods_and_i
     settled = _settle_floor(resources=_NO_SUPPORT_RESOURCES, support_enabled=False)
 
     np.testing.assert_array_equal(settled.floor_support, 0.0)
-    np.testing.assert_allclose(settled.unpaid_rent, [20, 20, 10, 0, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_allclose(settled.unmet_floor, [80, 80, 80, 80, 40, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.unpaid_rent, [20, 20, 10, 0, 0, 0, 0, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.unmet_floor, [80, 80, 80, 80, 40, 0, 0, 0, 0, 0], atol=1e-9)
     np.testing.assert_array_equal(settled.resource_deficit, [10, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 10, 10, 10, 10, 0, 0, 0])
-    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 30, 30, 30, 30, 5, 0, 0, 0])
-    np.testing.assert_allclose(settled.consumption_after_floor, [0, 0, 0, 0, 40, 80, 80, 100, 120, 120])
-    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 0, 0, 15, 15])
-    np.testing.assert_allclose(settled.consumption_cut_amount, 120.0 - settled.consumption_after_floor)
+    np.testing.assert_allclose(settled.unpaid_consumer_service, [10, 10, 10, 10, 10, 10, 10, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.unpaid_mortgage_service, [30, 30, 30, 30, 30, 30, 5, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, [0, 0, 0, 0, 40, 80, 80, 100, 120, 120], atol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 0, 0, 15, 15], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_cut_amount, 120.0 - settled.consumption_after_floor, atol=1e-9)
     # The shortfall handed on is unpaid debt service only: there is no support in it.
     np.testing.assert_allclose(
         settled.remaining_subsistence_shortfall, settled.unpaid_consumer_service + settled.unpaid_mortgage_service
@@ -394,3 +397,68 @@ def test__support_exempt_resources_play_no_role_without_support():
 def test__support_switch_must_be_a_boolean():
     with pytest.raises(TypeError, match="support_enabled"):
         _settle_legacy_grid(support_enabled=np.array([True, False]))
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__overdraft_interest_is_debt_service_paid_before_goods_above_the_floor(support_enabled):
+    # F + R = 100, consumer + mortgage service = 40, overdraft interest = 5, goods above the floor = 40, V = 15.
+    resources = np.array([100.0, 130.0, 142.0, 145.0, 165.0, 185.0, 200.0, 500.0])
+    settled = _settle_floor(resources=resources, scheduled_overdraft_interest=5.0, support_enabled=support_enabled)
+    without = _settle_floor(resources=resources, support_enabled=support_enabled)
+
+    np.testing.assert_array_equal(settled.scheduled_overdraft_interest, 5.0)
+    # Consumer and mortgage suspension are unchanged; the overdraft interest goes unpaid first.
+    np.testing.assert_array_equal(settled.unpaid_consumer_service, without.unpaid_consumer_service)
+    np.testing.assert_array_equal(settled.unpaid_mortgage_service, without.unpaid_mortgage_service)
+    np.testing.assert_allclose(settled.unpaid_overdraft_interest, [5, 5, 3, 0, 0, 0, 0, 0], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 100, 120, 120, 120], rtol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 15, 15], atol=1e-9)
+    # The unpaid interest is recorded, not handed to support or to the subsistence shortfall.
+    np.testing.assert_array_equal(settled.floor_support, without.floor_support)
+    np.testing.assert_array_equal(settled.remaining_subsistence_shortfall, without.remaining_subsistence_shortfall)
+    service_paid = 45.0 - settled.unpaid_consumer_service - settled.unpaid_mortgage_service
+    spent = settled.consumption_after_floor + 20.0 + service_paid - settled.unpaid_overdraft_interest
+    np.testing.assert_allclose(spent + settled.investment_after_floor, np.minimum(resources, 200.0), rtol=1e-9)
+
+
+def test__no_overdraft_interest_leaves_the_allocation_unchanged():
+    resources = np.array([60.0, 100.0, 125.0, 140.0, 195.0, 500.0])
+    default = _settle_floor(resources=resources)
+    explicit = _settle_floor(resources=resources, scheduled_overdraft_interest=0.0)
+    for name in ("consumption_after_floor", "investment_after_floor", "unpaid_consumer_service", "floor_support"):
+        np.testing.assert_array_equal(getattr(explicit, name), getattr(default, name), err_msg=name)
+    np.testing.assert_array_equal(default.unpaid_overdraft_interest, 0.0)
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__a_plan_that_spends_everything_is_rounded_down_and_never_overspends(support_enabled):
+    # Resources that buy exactly the floor and rent (support case), floor, rent, service and part of the goods,
+    # or the whole plan; and resources of zero.
+    resources = np.array([0.0, 100.0, 150.0, 180.0, 195.0, 1e7 + 0.1, 3.3e9 / 7.0])
+    settled = _settle_floor(
+        resources=resources,
+        consumption_before_floor=np.array([120.0, 120.0, 120.0, 120.0, 120.0, 1e7, 3.3e9 / 7.0]),
+        investment=np.array([15.0, 15.0, 15.0, 15.0, 15.0, 0.3, 0.0]),
+        support_enabled=support_enabled,
+    )
+    service_paid = 40.0 - settled.unpaid_consumer_service - settled.unpaid_mortgage_service
+    rent_paid = 20.0 - settled.unpaid_rent
+    left = (
+        resources
+        + settled.floor_support
+        - (rent_paid + service_paid + settled.consumption_after_floor + settled.investment_after_floor)
+    )
+    # Everything is allocated from A - m, m = 1e-12 (|A| + F + R): m is left over, never overspent.
+    margin = 1e-12 * (np.abs(resources) + 100.0)
+    spends_everything = resources > 0.0 if not support_enabled else np.ones(resources.shape, dtype=bool)
+    assert np.all(left[spends_everything] > 0.0)
+    np.testing.assert_allclose(left[spends_everything], margin[spends_everything], rtol=1e-3)
+    # The round-down moves support and unpaid amounts by at most m.
+    plain = _settle_floor(
+        resources=resources + margin,
+        consumption_before_floor=np.array([120.0, 120.0, 120.0, 120.0, 120.0, 1e7, 3.3e9 / 7.0]),
+        investment=np.array([15.0, 15.0, 15.0, 15.0, 15.0, 0.3, 0.0]),
+        support_enabled=support_enabled,
+    )
+    for name in ("floor_support", "unpaid_rent", "unmet_floor", "unpaid_consumer_service", "unpaid_mortgage_service"):
+        np.testing.assert_allclose(getattr(settled, name), getattr(plain, name), rtol=0.0, atol=2 * margin.max())

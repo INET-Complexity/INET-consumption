@@ -55,6 +55,10 @@ _PLAN = (
 _BANK = (
     "deposits_from_households",
     "deposits_from_firms",
+    "overdrafts_to_households",
+    "total_overdrafts_to_households",
+    "overdrafts_to_firms",
+    "total_overdrafts_to_firms",
     "deposits",
     "equity",
     "liability",

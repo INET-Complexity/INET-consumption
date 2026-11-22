@@ -169,3 +169,16 @@ def test_shape_validation_covers_inaction_flag():
             settlement_enabled=True,
             forced_liquidation_active=np.array([False]),
         )
+
+
+def test_purchase_that_would_overdraw_the_account_is_blocked_and_a_sale_is_not():
+    blocked = _settle(base_lfa=5.0, lfa_flow=-8.0, ifa_flow=8.0)
+    assert blocked.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+    np.testing.assert_array_equal(blocked.closing_lfa, [5.0])
+    np.testing.assert_array_equal(blocked.closing_ifa, [50.0])
+    exact = _settle(base_lfa=8.0, lfa_flow=-8.0, ifa_flow=8.0)
+    assert exact.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_array_equal(exact.closing_lfa, [0.0])
+    sale = _settle(base_lfa=1.0, lfa_flow=8.0, ifa_flow=-8.0)
+    assert sale.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_array_equal(sale.closing_lfa, [9.0])

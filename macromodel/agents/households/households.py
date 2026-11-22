@@ -698,6 +698,9 @@ class Households(Agent):
         for _field_name, _zero_value in _STAGE6_DISTRESS_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
 
+        # Households living in social housing (no dwelling), recorded after each housing clearing.
+        ts["social_housing_tenant"] = np.asarray(states["Corresponding Inhabited House ID"]) == -1
+
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
 
@@ -1697,6 +1700,7 @@ class Households(Agent):
         self,
         housing_data: pd.DataFrame,
         income_taxes: float,
+        unpaid_rent: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate rental income from property ownership.
 
@@ -1708,6 +1712,10 @@ class Households(Agent):
         Args:
             housing_data (pd.DataFrame): Property market data
             income_taxes (float): Income tax rate
+            unpaid_rent (np.ndarray | None): Rent each tenant left unpaid this period (minimum_income mode,
+                PLAN.md section 3.3). The landlord absorbs it: rental income and its tax base are the rent
+                actually received. ``None`` (legacy mode, and the period-t planning pass, before unpaid rent
+                is known) counts the full rent of every rented-out dwelling.
 
         Returns:
             np.ndarray: Rental income by household
@@ -1722,10 +1730,48 @@ class Households(Agent):
             "Rent"
         ].sum()
         rental_income = np.zeros(self.ts.current("n_households"))
-        rental_income[housing_data_rented_out_grouped.index.values] = (
-            1 - income_taxes
-        ) * housing_data_rented_out_grouped.values
-        return rental_income
+        if unpaid_rent is None:
+            rental_income[housing_data_rented_out_grouped.index.values] = (
+                1 - income_taxes
+            ) * housing_data_rented_out_grouped.values
+            return rental_income
+        rental_income[housing_data_rented_out_grouped.index.values] = housing_data_rented_out_grouped.values
+        return (1 - income_taxes) * (rental_income - self.unpaid_rent_by_landlord(housing_data, unpaid_rent))
+
+    def renting_from_landlord(self, housing_data: pd.DataFrame) -> np.ndarray:
+        """Private renters with a landlord: tenure 3, in a dwelling owned by another household.
+
+        Clearing can leave a tenure-3 household in a dwelling it owns itself; its rent has no counterparty.
+        """
+        house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
+        renting = (self.states["Tenure Status of the Main Residence"] == 3) & (house_id != -1)
+        owner = np.full(house_id.shape, -1)
+        owner[renting] = housing_data.loc[house_id[renting], "Corresponding Owner Household ID"].to_numpy(dtype=int)
+        return renting & (owner != np.arange(house_id.size))
+
+    def unpaid_rent_by_landlord(self, housing_data: pd.DataFrame, unpaid_rent: np.ndarray) -> np.ndarray:
+        """Charge each private tenant's unpaid rent to the owner of the dwelling it rents (D8: the landlord absorbs it).
+
+        Only households renting from a landlord (``renting_from_landlord``) are charged: social tenants (no
+        dwelling, house ID -1) owe their rent to government, and a tenure-3 household in its own dwelling has
+        no counterparty.
+        """
+        n_households = self.ts.current("n_households")
+        unpaid = np.asarray(unpaid_rent, dtype=float)
+        if unpaid.shape != (n_households,) or not np.all(np.isfinite(unpaid)) or np.any(unpaid < 0.0):
+            raise ValueError("unpaid_rent must be a finite non-negative household vector.")
+        house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
+        tenants = np.flatnonzero((unpaid > 0.0) & self.renting_from_landlord(housing_data))
+        dwellings = housing_data.loc[house_id[tenants]]
+        if not (
+            np.array_equal(dwellings["Corresponding Inhabitant Household ID"].to_numpy(dtype=int), tenants)
+            and np.all(dwellings["Is Owner-Occupied"].to_numpy() == 0)
+        ):
+            raise ValueError("Unpaid rent must belong to the tenant of a rented-out dwelling.")
+        landlords = dwellings["Corresponding Owner Household ID"].to_numpy(dtype=int)
+        if np.any(landlords < 0) or np.any(landlords >= n_households):
+            raise ValueError("Every dwelling with unpaid rent needs a household landlord.")
+        return np.bincount(landlords, weights=unpaid[tenants], minlength=n_households)
 
     def compute_expected_income_from_financial_assets(self) -> np.ndarray:
         """Calculate expected income from financial assets.
@@ -3399,6 +3445,7 @@ class Households(Agent):
         )
         self.ts.rent.append(rent_by_household)
         self.ts.rent_imputed.append(imputed_rent_by_household)
+        self.ts.social_housing_tenant.append(self.states["Corresponding Inhabited House ID"] == -1)
 
         # Price paid by buyers and proceeds received by sellers. ``current_sales``
         # holds only completed sales. A self-sale is a move, not a purchase:
@@ -3991,6 +4038,7 @@ class Households(Agent):
         period_index: int | None = None,
         tau_vat_on_investment: float = 0.0,
         tau_vat: float = 0.0,
+        unpaid_rent: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -4003,6 +4051,8 @@ class Households(Agent):
         Args:
             housing_data (pd.DataFrame): Property market data
             tau_cf (float): Capital formation tax rate
+            unpaid_rent (np.ndarray | None): Rent each tenant left unpaid this period (minimum_income mode,
+                PLAN.md section 3.3); the tenant's cash outflow is the rent actually paid. ``None`` pays it in full.
         """
         # Stage the real-wealth values until the final feasibility authority has
         # been validated. A failed settled run must not leave a partial period
@@ -4028,6 +4078,16 @@ class Households(Agent):
         # Cash rent is paid separately to landlords rather than through firm
         # purchases, so it is a distinct household cash use.
         cash_rent = self.current_consumption_cash_rent()
+        if unpaid_rent is not None:
+            unpaid_rent = np.asarray(unpaid_rent, dtype=float)
+            if (
+                unpaid_rent.shape != cash_rent.shape
+                or not np.all(np.isfinite(unpaid_rent))
+                or np.any(unpaid_rent < 0.0)
+                or np.any(unpaid_rent > cash_rent)
+            ):
+                raise ValueError("unpaid_rent must be a finite household vector between zero and the cash rent.")
+            cash_rent = cash_rent - unpaid_rent
         realised_cash_balance = income_for_residual_saving - realised_expenditure - cash_rent
         if self.uses_feasibility_resolver:
 
@@ -4300,6 +4360,7 @@ class Households(Agent):
         self.ts.total_illiquid_financial_asset_capital_gains.append([illiquid_financial_asset_capital_gains.sum()])
         self.ts.income_for_residual_saving.append(income_for_residual_saving)
         self.ts.realised_household_expenditure.append(realised_expenditure)
+        self.ts.rent_paid.append(cash_rent)
         self.ts.cash_saving_before_financing.append(cash_saving_before_financing)
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
         self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)

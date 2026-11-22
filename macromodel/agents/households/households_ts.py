@@ -390,6 +390,14 @@ def create_households_timeseries(
         illiquid_trade_cost_paid=np.zeros(len(data)),
         rent=data["Rent Paid"].values,
         rent_imputed=data["Rent Imputed"].values,
+        # Rent unpaid by tenants (minimum_income mode, PLAN.md section 3.3): cash rent actually paid by each tenant,
+        # the private landlord's loss on its dwellings, and the private renters moved to social housing for it.
+        rent_paid=np.maximum(data["Rent Paid"].values, 0.0),
+        rent_unpaid_absorbed=np.zeros(len(data)),
+        # Unpaid rent of a tenure-3 household living in a dwelling it owns: nobody is owed it.
+        rent_unpaid_no_counterparty=np.zeros(len(data)),
+        total_rent_unpaid_absorbed=[0.0],
+        unpaid_rent_vacated=np.zeros(len(data), dtype=bool),
         max_price_willing_to_pay=np.full(len(data), np.nan),
         max_rent_willing_to_pay=np.full(len(data), np.nan),
         rent_div_income_histogram=get_histogram(

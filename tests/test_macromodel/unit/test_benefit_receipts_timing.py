@@ -15,16 +15,23 @@ from macromodel.simulation import Simulation
 from tests.test_macromodel.unit.test_country.test_minimum_income_entitlement import _production_simulation
 
 UB_NAME = "income_from_unemployment_benefits"
+# Expected benefit term -> paid benefit term.
+EXPECTED_BENEFITS = {
+    "expected_income_public_pension": "income_public_pension",
+    "expected_income_unemployment_benefits": "income_unemployment_benefits",
+    "expected_income_other_social_transfers": "income_other_social_transfers",
+}
 
 
 def _run_instrumented(simulation, periods):
     """Run the periods and record the last period's benefit vectors used for planning and for payment."""
     country = simulation.countries["FRA"]
     record = {}
-    clear, refresh, components = (
+    clear, refresh, components, expectations = (
         country.clear_labour_market,
         country.refresh_known_household_receipts,
         country.compute_realised_household_social_income_components,
+        country._set_household_income_expectations,
     )
 
     def clear_labour_market():
@@ -45,7 +52,14 @@ def _run_instrumented(simulation, periods):
             record["planned_components"] = tuple(np.copy(x) for x in result)
         return result
 
+    def set_household_income_expectations(*, replace_current):
+        expectations(replace_current=replace_current)
+        ts = country.households.ts
+        record[2 if replace_current else 1] = {name: ts.current(name).copy() for name in EXPECTED_BENEFITS}
+        record["expected_inflation"] = country.economy.current_expected_consumer_period_inflation()
+
     country.clear_labour_market = clear_labour_market
+    country._set_household_income_expectations = set_household_income_expectations
     country.refresh_known_household_receipts = refresh_known_household_receipts
     country.compute_realised_household_social_income_components = compute_components
     for period in range(periods):
@@ -177,3 +191,20 @@ def test_deficit_benefit_outlay_equals_household_social_receipts(fixture_name, r
     receipts = country.households.ts.current("income_social_transfers").sum()
     assert benefit_outlay == pytest.approx(receipts, rel=1e-9)
     assert cg.current("debt")[0] - cg.prev("debt")[0] == pytest.approx(cg.current("deficit")[0], rel=1e-9)
+
+
+@pytest.mark.parametrize("fixture_name", ["instrumented_period", "instrumented_minimum_income_period"])
+def test_expected_benefit_terms_equal_paid_benefit_terms(fixture_name, request):
+    country, record = request.getfixturevalue(fixture_name)
+    hh = country.households
+    assert record["expected_inflation"] != 0.0
+    # Pass 2 runs after labour clearing: every expected benefit term equals the amount paid.
+    for expected, paid in EXPECTED_BENEFITS.items():
+        np.testing.assert_allclose(record[2][expected], hh.ts.current(paid), rtol=1e-12, atol=0.0)
+    # Pass 1 runs before labour clearing: UB differs only for households with a member whose status changed.
+    changed = np.zeros(hh.ts.current("n_households"), dtype=bool)
+    moved = record["status_before"] != record["status_after"]
+    changed[country.individuals.states["Corresponding Household ID"][moved]] = True
+    for expected, paid in EXPECTED_BENEFITS.items():
+        keep = ~changed if paid == "income_unemployment_benefits" else slice(None)
+        np.testing.assert_allclose(record[1][expected][keep], hh.ts.current(paid)[keep], rtol=1e-12, atol=0.0)

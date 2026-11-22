@@ -2502,7 +2502,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **kwargs: np.full(n_households, 3.0),
         )
         monkeypatch.setattr(
@@ -2615,7 +2615,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **_kwargs: np.zeros(n_households),
         )
         monkeypatch.setattr(test_country.households, "compute_rental_income", lambda **_kwargs: np.zeros(n_households))

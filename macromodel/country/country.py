@@ -2173,7 +2173,7 @@ class Country:
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
             expected_bank_profits=self.banks.ts.current("expected_profits"),
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=self.benefit_price_level(),
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
@@ -2189,38 +2189,16 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        expected_unemployment_benefits = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.benefit_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
         expected_income_employee = (
             1 + self.economy.current_expected_consumer_period_inflation()
         ) * self.households.compute_employee_income(
             individual_income=self.nominal_employee_income(),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
-        expected_public_pension_by_individual = (
-            self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
-                public_pension_weights=self.individuals.states["Public Pension Weight"],
-            )
-        )
-        expected_income_public_pension = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.benefit_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=expected_public_pension_by_individual,
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
-        expected_income_other_social_transfers = self.households.compute_expected_social_transfer_income(
-            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=self.benefit_price_level(),
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+        # Benefits are known at planning: the amounts paid this period, priced at benefit_price_level() with no
+        # expected-inflation uplift (the wage term keeps its uplift). Pass 1 uses the pre-clearing UB vector.
+        expected_income_public_pension, expected_unemployment_benefits, expected_income_other_social_transfers = (
+            self.compute_realised_household_social_income_components()[:3]
         )
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers

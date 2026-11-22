@@ -27,7 +27,7 @@ def lagged_annual_income_nominal(prepared: ConsumptionInputs) -> np.ndarray:
     deflators = prices / history.initial_consumer_price
     observations = np.maximum(
         history.behavioural_income_nominal_history[start:stop],
-        history.subsistence_nominal_history[start:stop],
+        history.guard_nominal_history[start:stop],
     )
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         prior_real = np.exp(np.mean(np.log(observations) - np.log(deflators[start:stop])[:, None], axis=0))

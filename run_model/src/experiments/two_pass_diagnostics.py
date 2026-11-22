@@ -96,7 +96,8 @@ def _prepared_record(prepared):
     n = prepared.window_row_count
     record["history_window"] = {
         "behavioural_income_nominal": history.behavioural_income_nominal_history[-n:],
-        "subsistence_nominal": history.subsistence_nominal_history[-n:],
+        # Key kept for existing diagnostic readers; holds the income guard (S in legacy_stage5 mode).
+        "subsistence_nominal": history.guard_nominal_history[-n:],
         "declared_consumer_price_history": history.consumer_price_history,
         "current_consumer_price": history.current_consumer_price,
         "initial_consumer_price": history.initial_consumer_price,

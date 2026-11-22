@@ -44,7 +44,9 @@ def test_initial_pi_excludes_property_receipts_and_preserves_behavioural_income(
         )
     )
     country.credit_market = SimpleNamespace(preview_opening_household_interest=lambda: np.full(3, 2.0 * scale))
-    country.economy = SimpleNamespace(ts=TimeSeries(subsistence_consumption=np.full(3, scale)))
+    country.economy = SimpleNamespace(
+        ts=TimeSeries(subsistence_consumption=np.full(3, scale), income_guard=np.full(3, scale))
+    )
 
     country._record_behavioural_income(expected=True, initial=True)
 

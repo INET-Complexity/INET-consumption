@@ -16,8 +16,10 @@ def reconcile_behavioural_income(
     """Combine existing net nominal period flows, without HFCS tax replication.
 
     Retain raw operands and flag negative operands truncated to zero. Apply
-    the same positive nominal subsistence lower bound to every final income:
-    max(raw_income, subsistence). This is continuous at zero and at the bound;
+    the same positive nominal lower bound to every final income:
+    max(raw_income, subsistence). The caller passes the economy series
+    ``income_guard``: the subsistence series S in legacy_stage5 mode, the
+    numerical guard G = guard share x M in minimum_income mode. This is continuous at zero and at the bound;
     it cannot make evaluation income fall when raw income increases with a
     fixed bound. Keep raw income and flag every bound application. This floor
     affects consumption-rule inputs only and never books a cash receipt.

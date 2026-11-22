@@ -62,13 +62,13 @@ def histories(**kwargs):
         **(
             dict(
                 behavioural_income_nominal_history=[[10, 20], [40, 80], [40, 80], [160, 320]],
-                subsistence_nominal_history=np.ones((4, 2)),
+                guard_nominal_history=np.ones((4, 2)),
                 consumer_price_history=[100, 200, 100, 200],
                 current_consumer_price=200,
                 initial_consumer_price=100,
                 price_history_layout="aligned",
                 income_units=UNITS,
-                subsistence_units=UNITS,
+                guard_units=UNITS,
             )
             | kwargs
         )
@@ -90,13 +90,13 @@ def prepare(history=None, opening=None, pi=None, **tags):
 )
 def test_hand_computed_window_and_startup(rows, expected):
     h = histories()
-    b, s, c = h.behavioural_income_nominal_history, h.subsistence_nominal_history, h.consumer_price_history
+    b, s, c = h.behavioural_income_nominal_history, h.guard_nominal_history, h.consumer_price_history
     if rows == 5:
         b, s, c = np.vstack(([1e8, 1e8], b)), np.vstack(([1, 1], s)), np.r_[100, c]
     else:
         b, s, c = b[-rows:], s[-rows:], c[-rows:]
     result = prepare(
-        replace(h, behavioural_income_nominal_history=b, subsistence_nominal_history=s, consumer_price_history=c)
+        replace(h, behavioural_income_nominal_history=b, guard_nominal_history=s, consumer_price_history=c)
     )
     np.testing.assert_allclose(result.income_base_real, expected, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(result.annual_income_base_real, np.array(expected) * 4, rtol=1e-10, atol=1e-12)
@@ -107,7 +107,7 @@ def test_hand_computed_window_and_startup(rows, expected):
 def test_nonpositive_income_uses_each_dates_floor_and_retains_upstream_flags():
     raw = np.array([[0, 50], [-2, 0], [80, 30], [0, -5]])
     floor = np.array([[10, 20], [40, 40], [30, 30], [160, 100]])
-    h = histories(behavioural_income_nominal_history=raw, subsistence_nominal_history=floor)
+    h = histories(behavioural_income_nominal_history=raw, guard_nominal_history=floor)
     result = prepare(h)
     expected = [(10 * 20 * 80 * 80) ** 0.25, (50 * 20 * 30 * 50) ** 0.25]
     np.testing.assert_allclose(result.income_base_real, expected, rtol=1e-10, atol=1e-12)
@@ -133,7 +133,7 @@ def test_declared_missing_current_appends_once(rows):
     aligned = replace(
         h,
         behavioural_income_nominal_history=h.behavioural_income_nominal_history[-rows:],
-        subsistence_nominal_history=h.subsistence_nominal_history[-rows:],
+        guard_nominal_history=h.guard_nominal_history[-rows:],
         consumer_price_history=h.consumer_price_history[-rows:],
     )
     missing = replace(
@@ -149,20 +149,20 @@ def test_declared_missing_current_appends_once(rows):
         ({"consumer_price_history": [100, 100, 100]}, "count"),
         ({"price_history_layout": "missing_current"}, "count"),
         ({"price_history_layout": "guess"}, "layout"),
-        ({"subsistence_nominal_history": [[1, 1]]}, "dimensions"),
+        ({"guard_nominal_history": [[1, 1]]}, "dimensions"),
         (
             {
                 "behavioural_income_nominal_history": np.empty((0, 2)),
-                "subsistence_nominal_history": np.empty((0, 2)),
+                "guard_nominal_history": np.empty((0, 2)),
                 "consumer_price_history": [],
             },
             "nonempty",
         ),
         (
-            {"behavioural_income_nominal_history": np.empty((4, 0)), "subsistence_nominal_history": np.empty((4, 0))},
+            {"behavioural_income_nominal_history": np.empty((4, 0)), "guard_nominal_history": np.empty((4, 0))},
             "nonempty",
         ),
-        ({"subsistence_nominal_history": np.ones((4, 1))}, "dimensions"),
+        ({"guard_nominal_history": np.ones((4, 1))}, "dimensions"),
         ({"initial_consumer_price": 0}, "initial_consumer_price"),
         ({"current_consumer_price": -1}, "current_consumer_price"),
         ({"months_per_period": np.inf}, "months_per_period"),
@@ -179,7 +179,7 @@ def test_history_errors(updates, match):
 
 
 @pytest.mark.parametrize(
-    "name", ["behavioural_income_nominal_history", "subsistence_nominal_history", "consumer_price_history"]
+    "name", ["behavioural_income_nominal_history", "guard_nominal_history", "consumer_price_history"]
 )
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
 def test_nonfinite_history_operands_rejected(name, bad):
@@ -189,7 +189,7 @@ def test_nonfinite_history_operands_rejected(name, bad):
         histories(**{name: value})
 
 
-@pytest.mark.parametrize("name", ["subsistence_nominal_history", "consumer_price_history"])
+@pytest.mark.parametrize("name", ["guard_nominal_history", "consumer_price_history"])
 @pytest.mark.parametrize("bad", [0, -1])
 def test_positive_history_quantities(name, bad):
     value = np.array(getattr(histories(), name), copy=True)
@@ -202,7 +202,7 @@ def test_price_match_tolerance_and_period_labels():
     h = histories(
         current_consumer_price=200 * (1 + 5e-13),
         income_period_labels=(0, 1, 2, 3),
-        subsistence_period_labels=(0, 1, 2, 3),
+        guard_period_labels=(0, 1, 2, 3),
         price_period_labels=(0, 1, 2, 3),
     )
     prepare(h)
@@ -216,7 +216,7 @@ def test_price_match_tolerance_and_period_labels():
     )
     for updates in (
         {"price_period_labels": (0, 1, 2, 4)},
-        {"subsistence_period_labels": (0, 1, 1, 3)},
+        {"guard_period_labels": (0, 1, 1, 3)},
         {"price_period_labels": None},
     ):
         with pytest.raises(ValueError, match="labels"):
@@ -281,11 +281,11 @@ def test_common_scale_and_frequency_invariance(months, scale):
     units = MonetaryUnits("EUR", scale)
     h = histories(
         behavioural_income_nominal_history=np.full((4, 2), 1200 * months / 12 * scale),
-        subsistence_nominal_history=np.full((4, 2), 10 * months / 12 * scale),
+        guard_nominal_history=np.full((4, 2), 10 * months / 12 * scale),
         consumer_price_history=[100] * 4,
         current_consumer_price=100,
         income_units=units,
-        subsistence_units=units,
+        guard_units=units,
         months_per_period=months,
     )
     result = prepare(
@@ -308,7 +308,7 @@ def test_common_scale_and_frequency_invariance(months, scale):
 def test_explicit_unit_mismatches_rejected():
     other = MonetaryUnits("EUR", 5000)
     with pytest.raises(ValueError, match="unit metadata"):
-        histories(subsistence_units=other)
+        histories(guard_units=other)
     with pytest.raises(ValueError, match="unit metadata"):
         prepare(pi=payload(units=other))
     with pytest.raises(ValueError, match="unit metadata"):
@@ -350,7 +350,7 @@ def synthetic_sources():
         states={"Tenure Status of the Main Residence": np.array([1, 3])},
         last_target_consumption_components={"permanent_income_log_ratio": np.array([999, 999])},
     )
-    econ_ts = TimeSeries(selected_cpi=np.array([100.0]), subsistence_consumption=np.array([10.0, 10.0]))
+    econ_ts = TimeSeries(selected_cpi=np.array([100.0]), income_guard=np.array([10.0, 10.0]))
     economy = SimpleNamespace(
         ts=econ_ts,
         time_unit=3,

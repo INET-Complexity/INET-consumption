@@ -83,6 +83,7 @@ from macromodel.agents.households.func.minimum_income import (
     assessed_income,
     assessment_flow,
     assessment_stock,
+    income_guard,
     minimum_income_level,
     minimum_income_top_up,
     notional_rate_period,
@@ -608,6 +609,8 @@ class Country:
         self._initialize_unemployment_benefit_base()
         self._lock_wage_price_basis()
         self._initialize_nominal_employee_income()
+        # The t0 behavioural-income lower bound, before the t0 income records that it floors.
+        self.economy.ts["income_guard"] = self._opening_income_guard()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
@@ -1895,17 +1898,24 @@ class Country:
         hh.ts.minimum_income_entitlement.append(entitlement)
         self._minimum_income_status = "assessed"
 
+    def _compute_minimum_income_level(self, *, transfer_index: float, cpi_ratio: float) -> np.ndarray:
+        """Guaranteed level M per household from the current consumption units (PLAN.md section 3.1)."""
+        return minimum_income_level(
+            # Population expansion applied once, as for the SMIC in _select_net_smic_base.
+            rsa_base_monthly_model_units=self.household_support.minimum_income.rsa_base_monthly * self.scale,
+            time_unit=self.economy.time_unit,
+            consumption_units=self.households._current_consumption_units(),
+            transfer_index=transfer_index,
+            cpi_ratio=cpi_ratio,
+        )
+
     def _compute_minimum_income_entitlement(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return (M, Y, T) per household from the current setter index, CPI and the realised t-1 series."""
         hh = self.households
         parameters = self.household_support.minimum_income
         time_unit = self.economy.time_unit
         government_ts = self.central_government.ts
-        level = minimum_income_level(
-            # Population expansion applied once, as for the SMIC in _select_net_smic_base.
-            rsa_base_monthly_model_units=parameters.rsa_base_monthly * self.scale,
-            time_unit=time_unit,
-            consumption_units=hh._current_consumption_units(),
+        level = self._compute_minimum_income_level(
             transfer_index=government_ts.current("total_other_benefits")[0]
             / government_ts.initial("total_other_benefits")[0],
             # Last realised CPI, as for the subsistence floor. Transfers are paid at the period-t CPI, which is
@@ -1937,6 +1947,39 @@ class Country:
             notional_rate_period=notional_rate_period(parameters.notional_asset_return_annual, time_unit),
         )
         return level, assessed, minimum_income_top_up(level=level, assessed=assessed)
+
+    def _opening_income_guard(self) -> np.ndarray:
+        """t0 behavioural-income lower bound: S (legacy_stage5) or G from an opening M (minimum_income).
+
+        No assessment has run at t0, so the opening M uses the opening consumption units with I = 1 and a CPI
+        ratio of 1 (the period-start formula evaluated at t0). The stored t0 ``minimum_income_level`` stays zero.
+        """
+        if self.household_support.mode != "minimum_income":
+            return np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        level = self._compute_minimum_income_level(transfer_index=1.0, cpi_ratio=1.0)
+        return income_guard(level=level, share=self.household_support.minimum_income.guard_share_of_m)
+
+    def _update_income_guard(self, *, replace_current: bool) -> None:
+        """Store this period's lower bound on behavioural income, the economy series ``income_guard``.
+
+        The bound in force at the five behavioural-income floors (PLAN.md sections 3.4, 4.5, 5.5): the subsistence
+        series S in legacy_stage5 mode (bit-identical to reading S), G = guard share x M in minimum_income mode,
+        with M fixed at the start of the period by _set_minimum_income_entitlement. Rows of earlier periods are
+        never rewritten. The goods floor (S, switched by ``goods_floor``) is a separate series.
+        """
+        if self.household_support.mode != "minimum_income":
+            guard = np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        elif self._minimum_income_status != "assessed":
+            raise RuntimeError("The income guard needs this period's minimum income level; assess it first.")
+        else:
+            guard = income_guard(
+                level=self.households.ts.current("minimum_income_level"),
+                share=self.household_support.minimum_income.guard_share_of_m,
+            )
+        if replace_current:
+            self.economy.ts.override_current("income_guard", guard)
+        else:
+            self.economy.ts.income_guard.append(guard)
 
     def update_post_labour_planning_metrics(self) -> None:
         """Update planning metrics that depend on labour clearing."""
@@ -2226,6 +2269,7 @@ class Country:
         else:
             deposit_paid = hh.ts.current("interest_paid_on_deposits")
             loan_interest = hh.ts.current("interest_paid_on_loans")
+        guard = self.economy.ts.current("income_guard")
         parts = reconcile_behavioural_income(
             non_property=non_property,
             rental=hh.ts.current("income_rental"),
@@ -2233,7 +2277,7 @@ class Country:
             deposit_receipts=np.maximum(-deposit_paid, 0.0),
             borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
             imputed_rent=hh.current_consumption_imputed_rent(),
-            subsistence=self.economy.ts.current("subsistence_consumption"),
+            subsistence=guard,
         )
         # Keep loan interest separate from deposit/overdraft interest so only
         # the contractual opening-loan amount is frozen across planning passes.
@@ -2246,16 +2290,25 @@ class Country:
                 hh.ts.override_current(key, values.copy())
             else:
                 hh.ts.dicts[key].append(values.copy())
+        if expected:
+            # Planning income is the floored series entering the consumption rule: flag where the guard binds,
+            # strictly below it. Raw income is kept in the _raw series.
+            bound = (parts["raw"] < guard).astype(float)
+            if initial:
+                hh.ts["income_guard_bound"] = bound
+            elif replace_current:
+                hh.ts.override_current("income_guard_bound", bound)
+            else:
+                hh.ts.income_guard_bound.append(bound)
 
         if initial and expected:
             # PI forecasts wages/transfers only. Keep the legacy bridge field
             # names, but seed them on the same non-property basis as planning.
             # Property receipts remain in behavioural income and cash accounts.
             n = parts["non_property"]
-            floor = self.economy.ts.current("subsistence_consumption")
-            hh.ts.override_current("income_bridge_current", np.maximum(n, floor))
+            hh.ts.override_current("income_bridge_current", np.maximum(n, guard))
             hh.ts.override_current("income_bridge_property", np.zeros_like(n))
-            hh.ts.override_current("income_bridge_floor_used", (n < floor).astype(float))
+            hh.ts.override_current("income_bridge_floor_used", (n < guard).astype(float))
             hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
             if isinstance(hh.functions.get("consumption"), CreditAugmentedConsumption):
                 service = self._contractual_debt_service_components()
@@ -2368,6 +2421,8 @@ class Country:
                     household_layout_key=input_layout,
                 )
         self._update_subsistence_consumption(replace_current=replace_current)
+        # Before the behavioural-income record and every floor site below.
+        self._update_income_guard(replace_current=replace_current)
         aligned_income = getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False)
         if aligned_income:
             self._record_behavioural_income(expected=True, replace_current=replace_current)
@@ -2402,7 +2457,7 @@ class Country:
                 bridge_arguments["monetary_income_components"] = {
                     "non_property": non_property,
                     "property_income": np.zeros_like(non_property),
-                    "income_floor": self.economy.ts.current("subsistence_consumption"),
+                    "income_floor": self.economy.ts.current("income_guard"),
                 }
             learning_inputs = self.households.current_income_belief_learning_inputs(
                 common_permanent_income_log_ratio=common_log_ratio,
@@ -2617,12 +2672,11 @@ class Country:
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
             time_unit=self.economy.time_unit,
-            # CU-adjusted subsistence consumption (half net SMIC per consumption
-            # unit), already refreshed above by _update_subsistence_consumption
-            # (line 1189). Used only as the geometric-average income denominator's
-            # floor for a household with no positive income anywhere in its
-            # history window (PR #138 review finding 1); ignored otherwise.
-            subsistence_income=self.economy.ts.current("subsistence_consumption"),
+            # The behavioural-income lower bound (S in legacy_stage5, G in minimum_income), already
+            # refreshed above by _update_income_guard. Used only as the geometric-average income
+            # denominator's floor for a household with no positive income anywhere in its history
+            # window (PR #138 review finding 1); ignored otherwise.
+            subsistence_income=self.economy.ts.current("income_guard"),
             consumption_inputs=consumption_inputs,
             **({"debt_service_payments": debt_service_payments} if debt_service_payments is not None else {}),
         )

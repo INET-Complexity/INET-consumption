@@ -24,13 +24,13 @@ def prepared_inputs(scale=1.0, current_income=99999.0, current_price=2.0, layout
     tags = dict(period_id=2, pass_kind="first", household_layout_key="rate-test")
     history = IncomeHistories(
         behavioural_income_nominal_history=np.array([[100, 200, 80], [200, 400, 160], [current_income] * 3]) * scale,
-        subsistence_nominal_history=np.ones((3, 3)) * scale,
+        guard_nominal_history=np.ones((3, 3)) * scale,
         consumer_price_history=[1, 2, current_price] if layout == "aligned" else [1, 2],
         current_consumer_price=current_price,
         initial_consumer_price=1.0,
         price_history_layout=layout,
         income_units=units,
-        subsistence_units=units,
+        guard_units=units,
     )
     stocks = OpeningStockValues(
         *[
@@ -112,7 +112,7 @@ def test_startup_floors_and_currency_units():
     h = replace(
         p.histories,
         behavioural_income_nominal_history=[[-1, 0, 1]],
-        subsistence_nominal_history=[[10, 20, 30]],
+        guard_nominal_history=[[10, 20, 30]],
         consumer_price_history=[1],
         current_consumer_price=1,
     )

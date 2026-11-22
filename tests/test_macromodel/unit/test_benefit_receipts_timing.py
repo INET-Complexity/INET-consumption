@@ -164,10 +164,16 @@ def test_fiscal_benefit_totals_equal_household_receipts(instrumented_period):
     assert cg.current("total_unemployment_benefits")[0] == hh.current("income_unemployment_benefits").sum()
     assert cg.current("total_public_pension_benefits")[0] == hh.current("income_public_pension").sum()
     assert cg.current("total_other_social_transfers")[0] == hh.current("income_other_social_transfers").sum()
-    assert cg.current("total_household_social_transfers")[0] == pytest.approx(
-        cg.current("total_unemployment_benefits")[0]
-        + cg.current("total_public_pension_benefits")[0]
-        + cg.current("total_other_social_transfers")[0]
-        + cg.current("total_necessity_support")[0],
-        rel=1e-12,
+
+
+@pytest.mark.parametrize("fixture_name", ["instrumented_period", "instrumented_minimum_income_period"])
+def test_deficit_benefit_outlay_equals_household_social_receipts(fixture_name, request):
+    country, _ = request.getfixturevalue(fixture_name)
+    cg = country.central_government.ts
+    spending = country.government_entities.ts.current("nominal_amount_spent_in_lcu").sum()
+    benefit_outlay = (
+        cg.current("deficit")[0] - spending - cg.current("interest_payments_on_debt")[0] + cg.current("revenue")[0]
     )
+    receipts = country.households.ts.current("income_social_transfers").sum()
+    assert benefit_outlay == pytest.approx(receipts, rel=1e-9)
+    assert cg.current("debt")[0] - cg.prev("debt")[0] == pytest.approx(cg.current("deficit")[0], rel=1e-9)

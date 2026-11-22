@@ -1268,12 +1268,12 @@ def build_macro_output_df(model, country_code):
         "other_social_transfers",
         "necessity_support",
         "minimum_income",
-        "social_rent_written_off",
         "household_social_transfers",
     ]:
         value = get_column(component)
         add_ratio(f"{component}_to_gdp", value, gdp)
         add_ratio(f"{component}_to_expenditure", value, fiscal_expenditure)
+    add_ratio("social_rent_written_off_to_gdp", get_column("social_rent_written_off"), gdp)
     add_ratio("landlord_rent_loss_to_gdp", get_column("landlord_rent_loss"), gdp)
 
     if "policy_rate" in df_cb_ts.columns:

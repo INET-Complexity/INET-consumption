@@ -5310,8 +5310,8 @@ class Country:
             # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
             "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
             "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
-            # Self-tenancy: owes nobody, so not in gdp_income (zero in legacy and in the smoke runs).
-            "+Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
+            # Memo item, not part of gdp_income: self-tenancy owes nobody (zero in legacy and in the smoke runs).
+            "memo_Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components
@@ -5373,8 +5373,8 @@ class Country:
             # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
             "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
             "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
-            # Self-tenancy: owes nobody, so not in gdp_income (zero in legacy and in the smoke runs).
-            "+Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
+            # Memo item, not part of gdp_income: self-tenancy owes nobody (zero in legacy and in the smoke runs).
+            "memo_Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components

@@ -13,6 +13,7 @@ Money is nominal, in model monetary units, per model period. Shares are unweight
 from __future__ import annotations
 
 import ast
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -24,6 +25,16 @@ SUPPORT_LEGACY = "legacy_stage5"
 SUPPORT_MINIMUM_INCOME = "minimum_income"
 QUINTILES = ("Q1", "Q2", "Q3", "Q4", "Q5")
 RE_ENTRY_WINDOW = 4
+# Wealth-ratio and wealth-drag clipping flags of the consumption rule (PLAN section 8, review item R5).
+WEALTH_CLIP_SERIES = (
+    "target_consumption_lfa_ratio_winsorized",
+    "target_consumption_ifa_ratio_winsorized",
+    "target_consumption_ha_ratio_winsorized",
+    "target_consumption_nla_ratio_winsorized",
+    "target_consumption_wealth_drag_clipped",
+)
+# Quarters of behavioural-income history (guard window) that mix legacy and guard floors after activation.
+GUARD_WINDOW = 4
 
 
 def _parse_household_support(configured: Mapping) -> dict:
@@ -42,7 +53,7 @@ def resolve_household_support(
     Order of precedence: the ``household_support`` mapping passed by the caller (``source`` "argument"), the
     ``configuration`` attribute saved in the HDF5 file ("saved_configuration"), then inference ("inferred").
     Inference calls a run ``minimum_income`` only when it booked a positive top-up and never paid Stage 5
-    support. It cannot see the goods-floor switch, so it assumes the floor is on.
+    support. It cannot see the goods-floor switch, so it assumes the floor is on and emits a ``UserWarning``.
     """
     if configured is not None:
         return {**_parse_household_support(configured), "source": "argument"}
@@ -68,6 +79,12 @@ def resolve_household_support(
             )
             if np.any(booked > 0.0) and not np.any(stage5 != 0.0):
                 mode = SUPPORT_MINIMUM_INCOME
+    warnings.warn(
+        f"No household_support configuration in {h5_path}: inferred mode {mode!r} from the saved series, "
+        "assuming goods_floor=True (the series cannot show a switched-off goods floor).",
+        UserWarning,
+        stacklevel=2,
+    )
     return {"mode": mode, "goods_floor": True, "source": "inferred"}
 
 
@@ -97,13 +114,18 @@ def _re_entries(social: np.ndarray, first_period: int) -> tuple[np.ndarray, np.n
     return entries, re_entries
 
 
-def minimum_income_metrics(h5_path: str | Path, country_code: str, *, first_period: int = 1) -> pd.DataFrame:
+def minimum_income_metrics(
+    h5_path: str | Path, country_code: str, *, first_period: int = 1 + GUARD_WINDOW
+) -> pd.DataFrame:
     """PLAN section 8 metrics by income quintile for one saved run (rows Q1..Q5 and "all").
 
     Households are ranked in each period by cash income before any support
     (``income - income_minimum_income - stage5_subsistence_support``), so that recipients are not moved up by the
     transfer. Quintile cuts use the quintile of the period in which the event is counted. Periods
-    ``first_period..end`` are used; row 0 is the initialisation row. A metric whose series is not in the file is NaN.
+    ``first_period..end`` are used; row 0 is the initialisation row. The default ``first_period=5`` is activation
+    (row 1) plus the 4-quarter guard window (PLAN section 8): earlier rows mix legacy and guard floors in the
+    behavioural-income history. Pass ``first_period=1`` to include them. A metric whose series is not in the file
+    is NaN.
 
     Columns:
     - ``share_receiving_T``: share of household-periods with a booked top-up T > 0;
@@ -112,6 +134,8 @@ def minimum_income_metrics(h5_path: str | Path, country_code: str, *, first_peri
       averaged over periods; the quintile values add up to the "all" row;
     - ``guard_binding_share``: share with ``income_guard_bound`` set (in legacy mode the series is the legacy
       subsistence floor, so it measures how often that floor binds);
+    - ``wealth_ratio_clipped_share``: share with any of the five wealth-ratio winsorisation or wealth-drag clipping
+      flags set (``WEALTH_CLIP_SERIES``; the flags present in the file are used), to be read with guard binding;
     - ``unpaid_rent_events``: household-periods with unpaid rent > 0 (count);
     - ``social_housing_entries``: moves into social housing (count);
     - ``re_entries_within_4q``: entries within 4 periods of a previous exit (count; periods are quarters);
@@ -133,6 +157,7 @@ def minimum_income_metrics(h5_path: str | Path, country_code: str, *, first_peri
         unpaid = household("unpaid_rent")
         social = household("social_housing_tenant")
         unmet = household("unmet_floor")
+        clip_flags = [household(name) for name in WEALTH_CLIP_SERIES if name in households]
         gdp_path = f"{country_code}/economy/gdp_output"
         gdp = np.asarray(handle[gdp_path], dtype=float).reshape(-1) if gdp_path in handle else None
     if income is None or top_up is None or level is None:
@@ -153,6 +178,9 @@ def minimum_income_metrics(h5_path: str | Path, country_code: str, *, first_peri
         entries, re_entries = entries[rows], re_entries[rows]
     flags = {
         "guard_binding_share": None if guard is None else guard[rows] != 0.0,
+        "wealth_ratio_clipped_share": (
+            None if not clip_flags else np.any([flag[rows] != 0.0 for flag in clip_flags], axis=0)
+        ),
         "unpaid_rent_events": None if unpaid is None else unpaid[rows] > 0.0,
         "social_housing_entries": None if social is None else entries,
         "re_entries_within_4q": None if social is None else re_entries,

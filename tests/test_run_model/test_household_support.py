@@ -1,4 +1,6 @@
+import inspect
 import sys
+import warnings
 from pathlib import Path
 
 import h5py
@@ -59,7 +61,7 @@ def _write_run(path, *, configuration=None, drop=(), **overrides):
 
 
 def test_metrics_by_income_quintile_on_a_synthetic_run(tmp_path):
-    table = minimum_income_metrics(_write_run(tmp_path / "run.h5"), "FRA")
+    table = minimum_income_metrics(_write_run(tmp_path / "run.h5"), "FRA", first_period=1)
     assert list(table.index) == ["Q1", "Q2", "Q3", "Q4", "Q5", "all"]
     assert table["n_household_periods"].tolist() == [6, 6, 6, 6, 6, 30]
     assert table["share_receiving_T"].tolist() == pytest.approx([1.0, 0.5, 0, 0, 0, 0.3])
@@ -72,6 +74,31 @@ def test_metrics_by_income_quintile_on_a_synthetic_run(tmp_path):
     assert table["social_housing_entries"].tolist() == [0, 0, 2, 1, 1, 4]
     assert table["re_entries_within_4q"].tolist() == [0, 0, 1, 0, 1, 2]
     assert table["unmet_floor_share"].tolist() == pytest.approx([0, 0.5, 0, 0, 0, 0.1])
+
+
+def test_metrics_default_to_activation_plus_the_four_quarter_guard_window(tmp_path):
+    assert inspect.signature(minimum_income_metrics).parameters["first_period"].default == 5
+    with pytest.raises(ValueError, match="beyond"):  # the four-row synthetic run has no row 5
+        minimum_income_metrics(_write_run(tmp_path / "run.h5"), "FRA")
+
+
+def test_wealth_ratio_clipped_share_counts_a_household_period_once_if_any_flag_is_set(tmp_path):
+    lfa, drag = np.zeros((ROWS, N)), np.zeros((ROWS, N))
+    lfa[1, 0] = lfa[2, 0] = 1.0  # household 0 (Q1)
+    drag[2, 0] = 1.0  # same household-period as an lfa flag: counted once
+    drag[3, 9] = 1.0  # household 9 (Q5)
+    path = _write_run(tmp_path / "run.h5")
+    with h5py.File(path, "a") as handle:
+        handle.create_dataset("FRA/households/target_consumption_lfa_ratio_winsorized", data=lfa)
+        handle.create_dataset("FRA/households/target_consumption_wealth_drag_clipped", data=drag)
+    table = minimum_income_metrics(path, "FRA", first_period=1)
+    assert table["wealth_ratio_clipped_share"].tolist() == pytest.approx([2 / 6, 0, 0, 0, 1 / 6, 3 / 30])
+    # Without any of the flags in the file the metric is missing, not zero.
+    assert (
+        minimum_income_metrics(_write_run(tmp_path / "bare.h5"), "FRA", first_period=1)["wealth_ratio_clipped_share"]
+        .isna()
+        .all()
+    )
 
 
 def test_metrics_use_exit_history_before_first_period_and_count_from_first_period(tmp_path):
@@ -88,14 +115,14 @@ def test_metrics_rank_households_before_support_so_recipients_keep_their_place(t
     top_up[1:, 0] = 5000.0
     base = np.tile(100.0 * np.arange(1, N + 1), (ROWS, 1))
     path = _write_run(tmp_path / "run.h5", income=base + top_up, income_minimum_income=top_up)
-    table = minimum_income_metrics(path, "FRA")
+    table = minimum_income_metrics(path, "FRA", first_period=1)
     assert table.loc["Q1", "share_receiving_T"] == 0.5
     assert table.loc["Q5", "share_receiving_T"] == 0.0
 
 
 def test_metrics_report_missing_series_as_nan_and_validate_arguments(tmp_path):
     path = _write_run(tmp_path / "run.h5", drop=("social_housing_tenant", "unmet_floor", "income_guard_bound"))
-    table = minimum_income_metrics(path, "FRA")
+    table = minimum_income_metrics(path, "FRA", first_period=1)
     for column in ("social_housing_entries", "re_entries_within_4q", "unmet_floor_share", "guard_binding_share"):
         assert table[column].isna().all()
     assert table.loc["all", "unpaid_rent_events"] == 3
@@ -104,13 +131,13 @@ def test_metrics_report_missing_series_as_nan_and_validate_arguments(tmp_path):
     with pytest.raises(ValueError, match="beyond"):
         minimum_income_metrics(path, "FRA", first_period=ROWS)
     with pytest.raises(ValueError, match="required"):
-        minimum_income_metrics(_write_run(tmp_path / "bad.h5", drop=("income_minimum_income",)), "FRA")
+        minimum_income_metrics(_write_run(tmp_path / "bad.h5", drop=("income_minimum_income",)), "FRA", first_period=1)
 
 
 def test_metrics_of_a_legacy_run_have_no_recipients(tmp_path):
     zeros = np.zeros((ROWS, N))
     path = _write_run(tmp_path / "run.h5", income_minimum_income=zeros, minimum_income_level=zeros)
-    table = minimum_income_metrics(path, "FRA")
+    table = minimum_income_metrics(path, "FRA", first_period=1)
     assert (table["share_receiving_T"] == 0).all() and (table["fiscal_cost_pct_gdp"] == 0).all()
     assert table["mean_T_over_M_recipients"].isna().all()
 
@@ -127,7 +154,9 @@ def test_resolve_support_reads_the_saved_configuration(tmp_path, block, expected
     configuration = "{'t_max': 12, 'country_configurations': {'FRA': {'household_support': " + block + "}}}"
     # Saved configuration wins over the series, which here look like a minimum_income run.
     path = _write_run(tmp_path / "run.h5", configuration=configuration)
-    resolved = resolve_household_support(path, "FRA")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        resolved = resolve_household_support(path, "FRA")
     assert (resolved["mode"], resolved["goods_floor"], resolved["source"]) == (*expected, "saved_configuration")
 
 
@@ -141,13 +170,17 @@ def test_resolve_support_prefers_the_argument_and_rejects_unknown_modes(tmp_path
 
 
 def test_resolve_support_infers_the_mode_only_without_a_saved_configuration(tmp_path):
-    inferred = resolve_household_support(_write_run(tmp_path / "a.h5"), "FRA")
+    with pytest.warns(UserWarning, match="assuming goods_floor=True"):
+        inferred = resolve_household_support(_write_run(tmp_path / "a.h5"), "FRA")
     assert (inferred["mode"], inferred["goods_floor"], inferred["source"]) == (SUPPORT_MINIMUM_INCOME, True, "inferred")
     support = np.zeros((ROWS, N))
     support[2, 3] = 1.0
     with_stage5 = _write_run(tmp_path / "b.h5", stage5_subsistence_support=support)
-    assert resolve_household_support(with_stage5, "FRA")["mode"] == SUPPORT_LEGACY
+    with pytest.warns(UserWarning):
+        assert resolve_household_support(with_stage5, "FRA")["mode"] == SUPPORT_LEGACY
     no_top_up = _write_run(tmp_path / "c.h5", income_minimum_income=np.zeros((ROWS, N)))
-    assert resolve_household_support(no_top_up, "FRA")["mode"] == SUPPORT_LEGACY
+    with pytest.warns(UserWarning):
+        assert resolve_household_support(no_top_up, "FRA")["mode"] == SUPPORT_LEGACY
     unparseable = _write_run(tmp_path / "d.h5", configuration="not a python literal {")
-    assert resolve_household_support(unparseable, "FRA")["source"] == "inferred"
+    with pytest.warns(UserWarning):
+        assert resolve_household_support(unparseable, "FRA")["source"] == "inferred"

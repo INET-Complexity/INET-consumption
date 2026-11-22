@@ -261,6 +261,8 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["social_rent_written_off"].tolist() == [0.0, 0.2, 0.3]
     assert output["landlord_rent_loss"].tolist() == [0.0, 0.4, 0.6]
     assert output["rent_unpaid_no_counterparty"].tolist() == pytest.approx([0.0, 0.3, 0.5])
+    assert "social_rent_written_off_to_expenditure" not in output.columns
+    assert output["social_rent_written_off_to_gdp"].tolist() == pytest.approx([0.0, 0.2 / 110, 0.3 / 121])
     assert output["minimum_income_to_gdp"].tolist() == pytest.approx([0.0, 1.5 / 110, 2.5 / 121])
     assert output["landlord_rent_loss_to_gdp"].tolist() == pytest.approx([0.0, 0.4 / 110, 0.6 / 121])
     assert output["public_pension_benefits_to_gdp"].tolist() == pytest.approx([0.03, 3.1 / 110, 3.2 / 121])

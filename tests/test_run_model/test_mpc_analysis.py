@@ -731,7 +731,8 @@ def test_mpc_panel_classifies_minimum_income_recipients_against_the_effective_go
 
 
 def test_mpc_panel_keeps_legacy_stage5_regimes_without_minimum_income_inputs(tmp_path):
-    panel = _regimes(tmp_path, configuration=None, floor=30.0, support=12.0)
+    with pytest.warns(UserWarning, match="inferred mode 'legacy_stage5'"):
+        panel = _regimes(tmp_path, configuration=None, floor=30.0, support=12.0)
     assert panel["mpc_regime"].tolist() == ["floor_bound_supported", "floor_bound_self_funded", "unconstrained"]
     assert "baseline_minimum_income" not in panel.columns
 

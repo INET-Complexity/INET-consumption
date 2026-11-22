@@ -49,7 +49,7 @@ M_t = rsa_base_monthly × scale × time_unit × CU_h × I_t × (CPI_{t−1} / CP
 I_t = total_other_benefits_t / total_other_benefits_0        (real level ratio produced by the active setter)
 ```
 
-- M uses the last realised CPI because period-t CPI is computed after goods clearing; M therefore lags other transfers by one period of inflation (close to RSA practice of revaluing on past inflation).
+- M uses the last realised CPI because period-t CPI is computed after goods clearing. All benefits (public pensions, other transfers, unemployment benefits and M) are priced at `Country.benefit_price_level()` = CPI_{t−1}, both at planning and at payment (PR #222), so M does not lag other transfers. Revaluing on past inflation is close to RSA practice.
 - `scale` is the same population expansion applied once to the SMIC in `Country._select_net_smic_base`.
 - `I_t` follows any setter. Under `regular_transfer_indexation: average_wage`, `CentralGovernment.update_benefits` sets `total_other_benefits = initial × _contract_wage_index_ratio()`, and `_firm_contract_rates` is a real rate, so `I_t` is the real contract-wage index. Under the constant setter, `I_t = 1` and M is CPI-indexed only.
 - `CU_h` = `Households.states["Consumption Units"]` (`_current_consumption_units`), updated with household composition.
@@ -260,7 +260,7 @@ Method: GitNexus `context`/`impact` on every symbol in §4, cross-checked with g
 | R1 | `borrowing_rates.py` floors income at S. Draft 7 missed it. | important | Added to §4.5 and increment 4. |
 | R2 | The graph shows no production caller of `settle_consumption_floor`; the call goes through the `self.financial_feasibility` attribute. Live via `Households.apply_consumption_floor_to_post_grant_plan`. | note | Recorded in §4.2. Do not trust graph impact alone for attribute calls; grep each site. |
 | R3 | Landlord income (`compute_rental_income`), rental tax (`compute_taxes`) and tenant outflow (`update_wealth`) all use rent due. Unpaid rent needs three changes, not a diagnostic. | important | §4.4, §5.3 step 5, invariant 5. |
-| R4 | `I_t` must use the setter's real level ratio; `_firm_contract_rates` is real and CPI is applied at payment, so `M = base × I × CPI ratio` does not count inflation twice. | checked | §3.1. |
+| R4 | `I_t` must use the setter's real level ratio; `_firm_contract_rates` is real and the benefit price level `benefit_price_level()` = CPI_{t−1} is applied at payment to every benefit, M included, so `M = base × I × CPI ratio` does not count inflation twice. | checked | §3.1. |
 | R5 | The behavioural-income window is 4 quarters. One guarded quarter at 1% M lowers the geometric mean to about 0.32× for a household normally near M. Activation mixes S- and G-floored rows for up to 3 quarters. | important | Compare from activation + 4 quarters (§8); report guard binding with ratio clipping. |
 | R6 | t−1 assessment removes the two-step estimate/replace contract of draft 7: T is known at period start and the same in both passes. | simplification | §3.2, §5.3. |
 | R7 | Assessing from component series automatically excludes last period's T, Stage 5 and the MPC shock (D6, D7). Using `income` or `income_social_transfers` would break both. | important | §3.2; invariant 9. |

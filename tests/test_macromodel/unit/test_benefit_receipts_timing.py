@@ -1,9 +1,9 @@
 """Benefits planned as known receipts must equal benefits paid in the same period.
 
 Known receipts (``financing_income``) are refreshed after labour-market clearing.
-They must use the post-clearing unemployment-benefit vector, the vector that the
-realised booking and the fiscal totals use, so that planned benefit receipts equal
-paid benefit receipts.
+They must use the post-clearing unemployment-benefit vector and the benefit price
+level CPI_{t-1}, the same quantities that the realised booking and the fiscal
+totals use, so that planned benefit receipts equal paid benefit receipts.
 """
 
 import numpy as np
@@ -85,6 +85,36 @@ def test_known_receipts_use_the_unemployment_benefit_paid_this_period(instrument
     assert np.all(paid[losers] > 0.0)
     for group in (finders, losers, unchanged):
         np.testing.assert_array_equal(planned[group], paid[group])
+
+
+def test_planned_household_benefits_equal_paid_household_benefits(instrumented_period):
+    country, record = instrumented_period
+    hh = country.households
+    pension, unemployment, other, _ = record["planned_components"]
+    np.testing.assert_allclose(pension, hh.ts.current("income_public_pension"), rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(unemployment, hh.ts.current("income_unemployment_benefits"), rtol=1e-12, atol=0.0)
+    np.testing.assert_allclose(other, hh.ts.current("income_other_social_transfers"), rtol=1e-12, atol=0.0)
+
+
+def test_benefits_are_priced_at_last_realised_cpi(instrumented_period):
+    country, record = instrumented_period
+    economy, hh, individuals = country.economy, country.households, country.individuals
+    cpi_series = economy.consumer_price_level_series_name()
+    cpi_now, cpi_prev = economy.current_consumer_price_level(), economy.ts.prev(cpi_series)[0]
+    assert cpi_now != cpi_prev
+    assert record["planned_benefit_price_level"] == cpi_prev
+    assert country.benefit_price_level() == cpi_prev
+    household_id = individuals.states["Corresponding Household ID"]
+    np.testing.assert_allclose(
+        hh.ts.current("income_unemployment_benefits"),
+        cpi_prev * hh.aggregate_individual_amount(individuals.ts.current(UB_NAME), household_id),
+        rtol=1e-12,
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("income_public_pension"),
+        cpi_prev * hh.aggregate_individual_amount(individuals.ts.current("public_pension_benefits"), household_id),
+        rtol=1e-12,
+    )
 
 
 def test_fiscal_benefit_totals_equal_household_receipts(instrumented_period):

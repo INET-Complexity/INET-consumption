@@ -605,6 +605,7 @@ class Country:
         self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
+        self._benefit_price_level = self.economy.current_consumer_price_level()
         self._initialize_household_unemployment_benefits()
         self._initialize_unemployment_benefit_base()
         self._lock_wage_price_basis()
@@ -667,6 +668,17 @@ class Country:
         """Lock the CPI and the anchor factor together, before goods clearing changes the price level."""
         self._wage_price_level = self.economy.current_consumer_price_level()
         self._wage_anchor_factor = self._wage_inflation_anchor_factor()
+
+    def benefit_price_level(self) -> float:
+        """Price level at which period-t benefits are planned and paid: CPI_{t-1}.
+
+        Period-t CPI is computed only after goods clearing, so public pensions, other
+        social transfers and unemployment benefits are indexed to the last realised
+        level, locked when the period's benefits are set. Known receipts, the realised
+        household booking and the fiscal totals all use this one level, so planned
+        benefits equal paid benefits and the government outlay equals household receipts.
+        """
+        return getattr(self, "_benefit_price_level", self.economy.current_consumer_price_level())
 
     def nominal_employee_income(self) -> np.ndarray:
         """Current wage-only nominal receipts, on the payroll price basis."""
@@ -750,7 +762,7 @@ class Country:
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
-        return self.economy.current_consumer_price_level() * self.households.aggregate_individual_amount(
+        return self.benefit_price_level() * self.households.aggregate_individual_amount(
             individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
@@ -910,15 +922,15 @@ class Country:
             retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
             public_pension_weights=self.individuals.states["Public Pension Weight"],
         )
-        current_cpi = self.economy.current_consumer_price_level()
-        public_pensions = current_cpi * self.households.aggregate_individual_amount(
+        benefit_price_level = self.benefit_price_level()
+        public_pensions = benefit_price_level * self.households.aggregate_individual_amount(
             individual_amount=public_pension_by_individual,
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
         unemployment_benefits = self._household_unemployment_benefits_from_individuals()
         other_transfers = self.households.compute_social_transfer_income(
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=current_cpi,
+            cpi=benefit_price_level,
         )
         return (
             public_pensions,
@@ -1498,6 +1510,7 @@ class Country:
         self.central_bank.reset(configuration=configuration.central_bank)
 
         self.economy.reset(configuration=configuration.economy)
+        self._benefit_price_level = self.economy.current_consumer_price_level()
 
         self.labour_market.reset(configuration=configuration.labour_market)
         self.credit_market.reset(configuration=configuration.credit_market)
@@ -1948,9 +1961,9 @@ class Country:
         level = self._compute_minimum_income_level(
             transfer_index=government_ts.current("total_other_benefits")[0]
             / government_ts.initial("total_other_benefits")[0],
-            # Last realised CPI, as for the subsistence floor. Transfers are paid at the period-t CPI, which is
-            # only known after goods clearing; T is fixed at the start of the period (PLAN.md D5).
-            cpi_ratio=self.economy.current_consumer_price_level() / self.economy.initial_consumer_price_level(),
+            # Last realised CPI, the price basis of every benefit (benefit_price_level), as for the subsistence
+            # floor: period-t CPI is only known after goods clearing; T is fixed at the start of the period (D5).
+            cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
         )
         flow = {
             name: assessment_flow(hh.ts.historic(name), time_unit=time_unit)
@@ -2073,6 +2086,12 @@ class Country:
         )
         # Contract wages are now set for this quarter: refresh what the employed would receive if separated.
         self._update_unemployment_benefit_base()
+        # Activity status is final for the period. Replace the pre-clearing planning vector (appended in
+        # _update_benefit_planning_metrics) with the benefit actually paid this period, so known receipts,
+        # the realised household booking and the fiscal total all read this one vector.
+        self.individuals.ts.override_current(
+            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
+        )
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
@@ -2122,6 +2141,8 @@ class Country:
 
     def _update_benefit_planning_metrics(self) -> None:
         self.clear_stage5_subsistence_support()
+        # Benefits are priced at the last realised CPI for the whole period (see benefit_price_level).
+        self._benefit_price_level = self.economy.current_consumer_price_level()
         # The central government updates unemployment benefits paid to individuals and social transfers to households
         self.central_government.update_benefits(
             historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
@@ -2152,7 +2173,7 @@ class Country:
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
             expected_bank_profits=self.banks.ts.current("expected_profits"),
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=self.benefit_price_level(),
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
@@ -2168,38 +2189,16 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        expected_unemployment_benefits = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.economy.current_consumer_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
         expected_income_employee = (
             1 + self.economy.current_expected_consumer_period_inflation()
         ) * self.households.compute_employee_income(
             individual_income=self.nominal_employee_income(),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
-        expected_public_pension_by_individual = (
-            self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
-                public_pension_weights=self.individuals.states["Public Pension Weight"],
-            )
-        )
-        expected_income_public_pension = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.economy.current_consumer_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=expected_public_pension_by_individual,
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
-        expected_income_other_social_transfers = self.households.compute_expected_social_transfer_income(
-            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=self.economy.current_consumer_price_level(),
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+        # Benefits are known at planning: the amounts paid this period, priced at benefit_price_level() with no
+        # expected-inflation uplift (the wage term keeps its uplift). Pass 1 uses the pre-clearing UB vector.
+        expected_income_public_pension, expected_unemployment_benefits, expected_income_other_social_transfers = (
+            self.compute_realised_household_social_income_components()[:3]
         )
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
@@ -4743,12 +4742,8 @@ class Country:
         self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
-        # Benefits were needed during planning for reservation-wage decisions,
-        # but realised payments must follow the activity status after labour
-        # market clearing. Replace the planning vector before computing income.
-        self.individuals.ts.override_current(
-            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
-        )
+        # income_from_unemployment_benefits already holds the post-clearing vector
+        # (set in update_post_labour_planning_metrics); it is the vector paid here.
         # Update individual income components
         self.individuals.ts.income.append(
             self.individuals.compute_income(
@@ -4766,6 +4761,10 @@ class Country:
             nominal_wages[employed]
             - self.economy.current_consumer_price_level() * self.individuals.ts.current("employee_income")[employed]
         )
+        # Benefits are paid at the benefit price level, not at the post-clearing CPI.
+        corrected_individual_income += (
+            self.benefit_price_level() - self.economy.current_consumer_price_level()
+        ) * self.individuals.ts.current("income_from_unemployment_benefits")
         self.individuals.ts.override_current("income", corrected_individual_income)
         self.individuals.ts.income_histogram.append(get_histogram(self.individuals.ts.current("income"), self.scale))
 
@@ -5064,11 +5063,9 @@ class Country:
                 )
             ]
         )
+        # Government outlay is the settled household receipt (one booking, same price level).
         self.central_government.ts.total_unemployment_benefits.append(
-            [
-                self.economy.current_consumer_price_level()
-                * self.individuals.ts.current("income_from_unemployment_benefits").sum()
-            ]
+            [self.households.ts.current("income_unemployment_benefits").sum()]
         )
         self.central_government.ts.total_public_pension_benefits.append(
             [self.households.ts.current("income_public_pension").sum()]
@@ -5103,7 +5100,7 @@ class Country:
         self.central_government.ts.deficit.append(
             self.central_government.compute_deficit(
                 current_ind_activity=self.individuals.states["Activity Status"],
-                current_cpi=self.economy.current_consumer_price_level(),
+                current_cpi=self.benefit_price_level(),
                 current_government_nominal_amount_spent=self.government_entities.ts.current(
                     "nominal_amount_spent_in_lcu"
                 ),

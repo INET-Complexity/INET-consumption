@@ -2214,7 +2214,9 @@ class TestCountry:
         unemployment_by_individual = np.linspace(2.0, 3.0, n_individuals)
         other_transfers = np.full(n_households, 5.0)
         stage5_support = np.full(n_households, 3.0)
-        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        # Benefits are paid at the benefit price level (CPI_{t-1}), not at the post-clearing CPI.
+        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 3.0)
+        monkeypatch.setattr(test_country, "_benefit_price_level", 2.0)
         monkeypatch.setattr(
             test_country.central_government,
             "distribute_public_pension_benefits_to_individuals",
@@ -2500,7 +2502,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **kwargs: np.full(n_households, 3.0),
         )
         monkeypatch.setattr(
@@ -2613,7 +2615,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **_kwargs: np.zeros(n_households),
         )
         monkeypatch.setattr(test_country.households, "compute_rental_income", lambda **_kwargs: np.zeros(n_households))

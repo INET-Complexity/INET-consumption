@@ -177,6 +177,83 @@ def _read_subsistence_floor_parameters(block: Mapping[str, Any] | None) -> Subsi
     return SubsistenceFloorParameters(smic_share, cu_weights, housing_deduction)
 
 
+class MinimumIncomeParameters(NamedTuple):
+    """RSA-style minimum income parameters (2014 RSA single-person amount, notional asset return, guard share)."""
+
+    rsa_base_monthly: float = 499.31
+    base_year: int = 2014
+    notional_asset_return_annual: float = 0.03
+    guard_share_of_m: float = 0.01
+
+
+class HouseholdSupportParameters(NamedTuple):
+    """Household support regime; the defaults reproduce the legacy Stage 5 support."""
+
+    mode: str = "legacy_stage5"
+    goods_floor: bool = True
+    minimum_income: MinimumIncomeParameters = MinimumIncomeParameters()
+
+
+def _read_household_support_parameters(block: Mapping[str, Any] | None) -> HouseholdSupportParameters:
+    """Validate the ``household_support`` configuration block; an empty block gives the legacy defaults.
+
+    The ``base_year == initial_year`` check needs the model's initial year and is done by ``Country``.
+    """
+    block = dict(block or {})
+    defaults = HouseholdSupportParameters()
+    unknown = set(block) - {"mode", "goods_floor", "minimum_income"}
+    if unknown:
+        raise ValueError(f"Unknown household_support keys: {sorted(str(key) for key in unknown)}")
+
+    mode = block.get("mode", defaults.mode)
+    if mode not in ("legacy_stage5", "minimum_income"):
+        raise ValueError("household_support.mode must be 'legacy_stage5' or 'minimum_income'.")
+    goods_floor = block.get("goods_floor", defaults.goods_floor)
+    if not isinstance(goods_floor, bool):
+        raise ValueError("household_support.goods_floor must be a boolean.")
+    if mode == "legacy_stage5" and not goods_floor:
+        raise ValueError("household_support.mode 'legacy_stage5' requires goods_floor: true.")
+
+    minimum_income = dict(block.get("minimum_income") or {})
+    unknown = set(minimum_income) - set(MinimumIncomeParameters._fields)
+    if unknown:
+        raise ValueError(f"Unknown household_support.minimum_income keys: {sorted(str(key) for key in unknown)}")
+
+    def positive(name: str) -> float:
+        value = minimum_income.get(name, getattr(defaults.minimum_income, name))
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"household_support.minimum_income.{name} must be a finite positive number.")
+        return float(value)
+
+    base_year = positive("base_year")
+    if base_year != int(base_year):
+        raise ValueError("household_support.minimum_income.base_year must be an integer.")
+    guard_share = positive("guard_share_of_m")
+    if not guard_share < 1.0:
+        raise ValueError("household_support.minimum_income.guard_share_of_m must lie in (0, 1).")
+    return HouseholdSupportParameters(
+        mode,
+        goods_floor,
+        MinimumIncomeParameters(
+            rsa_base_monthly=positive("rsa_base_monthly"),
+            base_year=int(base_year),
+            notional_asset_return_annual=positive("notional_asset_return_annual"),
+            guard_share_of_m=guard_share,
+        ),
+    )
+
+
+def _validate_minimum_income_base_year(support: HouseholdSupportParameters, initial_year: Optional[int]) -> None:
+    """The 2014 RSA amount is only valid when the model starts in its base year (minimum_income mode only)."""
+    if support.mode != "minimum_income":
+        return
+    if initial_year != support.minimum_income.base_year:
+        raise ValueError(
+            f"household_support.minimum_income.base_year ({support.minimum_income.base_year}) "
+            f"must equal the model initial_year ({initial_year})."
+        )
+
+
 def _resolve_frm_coefficients_path(
     configured_path: str | Path | None,
     data_paths: Optional[DataPaths],
@@ -474,6 +551,8 @@ class Country:
         self.running_multiple_countries = running_multiple_countries
 
         self.configuration = configuration
+        self.household_support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
+        _validate_minimum_income_base_year(self.household_support, initial_year)
         self.economy.configure_consumer_price_sources(configuration.economy)
 
         validate_portfolio_settlement_configuration(

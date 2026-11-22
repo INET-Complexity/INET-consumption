@@ -37,6 +37,7 @@ class CountryConfiguration(BaseModel):
     goods_market: GoodsMarketConfiguration = GoodsMarketConfiguration()
     consumer_credit: dict[str, Any] = Field(default_factory=dict)
     subsistence_consumption: dict[str, Any] = Field(default_factory=dict)
+    household_support: dict[str, Any] = Field(default_factory=dict)
 
     forecasting_window: int = 60
     assume_zero_growth: bool = False

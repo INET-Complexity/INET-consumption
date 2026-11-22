@@ -240,6 +240,11 @@ class DefaultHousingMarketClearer(HousingMarketClearer):
                 property_prices = housing_data.loc[property_open_ind, "Sale Price"]
             price_diff = max_willing_to_pay[household_id] - property_prices
             price_diff[price_diff < 0] = np.inf
+            if is_rental_market:
+                # A household cannot rent a dwelling it owns.
+                price_diff[
+                    housing_data.loc[property_open_ind, "Corresponding Owner Household ID"].values == household_id
+                ] = np.inf
             if len(price_diff) == 0:
                 continue
             property_id_rel = np.argmin(price_diff.values)
@@ -408,6 +413,10 @@ class AutomaticHousingMarketClearer(HousingMarketClearer):
             * property_prices
         )[None, :]
         affordable = asks <= bids
+        if is_rental_market:
+            # A household cannot rent a dwelling it owns.
+            owner_ids = housing_data.loc[property_open_ind, "Corresponding Owner Household ID"].to_numpy()
+            affordable &= households_with_demand[:, None] != owner_ids[None, :]
         if not affordable.any():
             return _empty_transactions()
         gap = np.where(affordable, bids - asks, 0.0)

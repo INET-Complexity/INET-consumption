@@ -5,6 +5,8 @@ import pytest
 
 from macromodel.agents.households.func.minimum_income import (
     assessed_income,
+    assessment_flow,
+    assessment_stock,
     income_guard,
     minimum_income_level,
     minimum_income_top_up,
@@ -167,6 +169,58 @@ def test_purity_inputs_are_not_modified():
     np.testing.assert_array_equal(m, m0)
     np.testing.assert_array_equal(y, y0)
     np.testing.assert_allclose(t, [m0[0] - 100.0, 0.0])
+
+
+# --- assessment window (PLAN.md section 3.2) ------------------------------------------------------
+
+
+def history(n_rows):
+    """Rows 0..n_rows-1 with row k equal to [k, 10k]; the last row is t-1."""
+    return [np.array([float(k), 10.0 * k]) for k in range(n_rows)]
+
+
+@pytest.mark.parametrize("n_rows", [1, 2, 5])
+def test_quarterly_assessment_uses_the_t_minus_1_row(n_rows):
+    rows = history(n_rows)
+    np.testing.assert_array_equal(assessment_flow(rows, time_unit=3), rows[-1])
+    np.testing.assert_array_equal(assessment_stock(rows, time_unit=3), rows[-1])
+
+
+@pytest.mark.parametrize(
+    "n_rows, flow_rows, stock_row",
+    [
+        (1, [0], 0),  # first period: opening values
+        (2, [0], 0),
+        (3, [0, 1], 1),
+        (4, [0, 1, 2], 2),  # full window t-4..t-2 starting at the opening row
+        (6, [2, 3, 4], 4),
+    ],
+)
+def test_monthly_assessment_uses_mean_of_t_minus_4_to_t_minus_2(n_rows, flow_rows, stock_row):
+    rows = history(n_rows)
+    expected_flow = np.mean([rows[k] for k in flow_rows], axis=0)
+    np.testing.assert_allclose(assessment_flow(rows, time_unit=1), expected_flow, rtol=0, atol=1e-12)
+    np.testing.assert_array_equal(assessment_stock(rows, time_unit=1), rows[stock_row])
+
+
+def test_monthly_window_excludes_t_minus_1():
+    rows = history(5)
+    rows[-1] = np.array([1e9, 1e9])
+    np.testing.assert_allclose(assessment_flow(rows, time_unit=1), np.mean(rows[1:4], axis=0))
+    np.testing.assert_array_equal(assessment_stock(rows, time_unit=1), rows[3])
+
+
+def test_assessment_window_rejects_invalid_inputs():
+    with pytest.raises(ValueError, match="opening row"):
+        assessment_flow([], time_unit=3)
+    with pytest.raises(ValueError, match="time_unit 1"):
+        assessment_flow(history(3), time_unit=12)
+    with pytest.raises(ValueError, match="time_unit 1"):
+        assessment_stock(history(3), time_unit=2)
+    with pytest.raises(ValueError, match="finite"):
+        assessment_flow([np.array([np.nan])], time_unit=3)
+    with pytest.raises(ValueError, match="equal shapes"):
+        assessment_flow([np.zeros(1), np.zeros(2), np.zeros(2)], time_unit=1)
 
 
 # --- configuration ---------------------------------------------------------------------------------

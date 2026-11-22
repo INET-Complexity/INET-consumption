@@ -330,6 +330,12 @@ def create_households_timeseries(
         income_social_transfers=data["Regular Social Transfers"].values,
         total_income_social_transfers=[data["Regular Social Transfers"].values.sum()],
         stage5_subsistence_support=np.zeros(len(data)),
+        # Minimum income (PLAN.md section 3): level M, assessed income Y and top-up T fixed at period start,
+        # and T as booked in realised social income. Zero in legacy_stage5 mode.
+        minimum_income_level=np.zeros(len(data)),
+        minimum_income_assessed=np.zeros(len(data)),
+        minimum_income_entitlement=np.zeros(len(data)),
+        income_minimum_income=np.zeros(len(data)),
         pre_relief_funding_gap=np.zeros(len(data)),
         post_relief_funding_gap=np.zeros(len(data)),
         actual_mortgage_payment=np.zeros(len(data)),

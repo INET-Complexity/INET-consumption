@@ -4,6 +4,8 @@ All amounts are per household per period, nominal, in model monetary units (popu
 No state and no RNG: the caller assembles the inputs and stores the outputs.
 """
 
+from collections.abc import Sequence
+
 import numpy as np
 
 
@@ -25,6 +27,35 @@ def _scalar(value: float, name: str, *, positive: bool = True) -> float:
     return value
 
 
+def _assessment_rows(history: Sequence[np.ndarray], time_unit: int) -> list[int]:
+    n_rows = len(history)
+    if n_rows == 0:
+        raise ValueError("history must contain at least the opening row.")
+    if time_unit == 3:
+        return [n_rows - 1]
+    if time_unit == 1:
+        return list(range(max(n_rows - 4, 0), max(n_rows - 2, 0) + 1))
+    raise ValueError("The assessment window is defined for time_unit 1 (monthly) or 3 (quarterly) only.")
+
+
+def assessment_flow(history: Sequence[np.ndarray], *, time_unit: int) -> np.ndarray:
+    """Assessed value of a realised flow for period t (PLAN.md section 3.2).
+
+    ``history`` holds one realised row per period, oldest first; row 0 is the opening value and the last row is
+    t-1. Quarterly: the t-1 row. Monthly: the mean of rows t-4..t-2, restricted to the rows that exist (in the
+    first periods the window starts at the opening row).
+    """
+    rows = [_array(history[index], "history row") for index in _assessment_rows(history, time_unit)]
+    if len({row.shape for row in rows}) != 1:
+        raise ValueError("history rows must have equal shapes.")
+    return sum(rows) / len(rows)
+
+
+def assessment_stock(history: Sequence[np.ndarray], *, time_unit: int) -> np.ndarray:
+    """Assessed closing stock for period t: the t-1 row (quarterly) or the t-2 row (monthly), at least row 0."""
+    return _array(history[_assessment_rows(history, time_unit)[-1]], "history row")
+
+
 def notional_rate_period(annual_rate: float, time_unit: float) -> float:
     """Notional asset return per period: ``annual_rate * time_unit / 12`` (``time_unit`` in months)."""
     return _scalar(annual_rate, "annual_rate") * _scalar(time_unit, "time_unit") / 12.0
@@ -38,7 +69,9 @@ def minimum_income_level(
     transfer_index: float,
     cpi_ratio: float,
 ) -> np.ndarray:
-    """Guaranteed level ``M = rsa_base_monthly * time_unit * CU * I_t * (CPI_t / CPI_0)`` per household.
+    """Guaranteed level ``M = rsa_base_monthly * time_unit * CU * I_t * (CPI_{t-1} / CPI_0)`` per household.
+
+    ``cpi_ratio`` is the last realised CPI over the initial CPI (PLAN.md section 3.1).
 
     ``rsa_base_monthly_model_units`` is the RSA base amount already multiplied by the population scale factor.
     """

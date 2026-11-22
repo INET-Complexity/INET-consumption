@@ -25,7 +25,7 @@ Why it matters for the paper: today a zero MPC at the bottom can come from compu
 | ID | Decision |
 |---|---|
 | D1 | Stage 5 support is removed in the new mode. The compulsory goods floor becomes an independent switch (on or off). The legacy mode stays available for comparison. The two support mechanisms can never be active together. |
-| D2 | M = 2014 RSA single-person amount, €499.31/month (décret 2013-1263, from 2014-01-01), × household consumption units (existing weights 1 / 0.5 / 0.3). Indexed like other transfers by the active benefit setter (§3.1). |
+| D2 | M = 2014 RSA single-person amount, €499.31/month (décret 2013-1263, from 2014-01-01), × household consumption units (existing weights 1 / 0.5 / 0.3). Indexed like other transfers by the active benefit setter (§3.1) (CPI lag: §3.1). |
 | D3 | Assessed income Y uses the previous period's realised values (t−1), the quarterly counterpart of RSA's m−4..m−2 window. Monthly model: mean of t−4..t−2. |
 | D4 | Y = net wages + unemployment benefit + pensions + other transfers + rent received after tax + notional asset income. Notional asset income = 3%/yr of gross financial assets (liquid + illiquid, debt not subtracted). It replaces actual deposit interest and dividends. Housing wealth does not count. |
 | D5 | T = max(M − Y, 0), euro-for-euro withdrawal. Computed once at the start of the period and fixed for it. No true-up or clawback within the period. |
@@ -45,10 +45,11 @@ All amounts per household per period, nominal, in model monetary units (populati
 ### 3.1 Guaranteed level M
 
 ```
-M_t = rsa_base_monthly × scale × time_unit × CU_h × I_t × (CPI_t / CPI_0)
+M_t = rsa_base_monthly × scale × time_unit × CU_h × I_t × (CPI_{t−1} / CPI_0)
 I_t = total_other_benefits_t / total_other_benefits_0        (real level ratio produced by the active setter)
 ```
 
+- M uses the last realised CPI because period-t CPI is computed after goods clearing; M therefore lags other transfers by one period of inflation (close to RSA practice of revaluing on past inflation).
 - `scale` is the same population expansion applied once to the SMIC in `Country._select_net_smic_base`.
 - `I_t` follows any setter. Under `regular_transfer_indexation: average_wage`, `CentralGovernment.update_benefits` sets `total_other_benefits = initial × _contract_wage_index_ratio()`, and `_firm_contract_rates` is a real rate, so `I_t` is the real contract-wage index. Under the constant setter, `I_t = 1` and M is CPI-indexed only.
 - `CU_h` = `Households.states["Consumption Units"]` (`_current_consumption_units`), updated with household composition.
@@ -245,7 +246,7 @@ Report, by income quintile: share receiving T; mean T / M; fiscal cost (% GDP) v
 
 1. VERIFY the R132-1 wording on Légifrance (currently quoted from AN written answers and the CE decision). Only affects how the departure is described.
 2. Rent-before-floor order in §5.4: confirm.
-3. Monthly frequency: the monthly history window length is not fixed by the quarterly check; confirm when monthly runs are needed.
+3. Monthly frequency: the monthly history window length is not fixed by the quarterly check; confirm when monthly runs are needed. Monthly early periods: window truncated at the opening row (t=2 uses row 0, t=3 rows 0–1).
 
 ## 10. Review of this plan (2026-11-21)
 

@@ -207,6 +207,23 @@ class TestCentralGovernment:
         expected_deficit = expected_benefits + current_government_spending.sum() + interest_payments - revenue
         assert np.isclose(deficit[0], expected_deficit)
 
+    def test__compute_deficit_includes_minimum_income_once(self, test_central_government):
+        revenue = test_central_government.ts.current("revenue")[0]
+        test_central_government.ts.total_public_pension_benefits.append([10.0])
+        test_central_government.ts.total_other_social_transfers.append([20.0])
+        test_central_government.ts.total_necessity_support.append([12.0])
+        test_central_government.ts.total_minimum_income.append([7.0])
+        test_central_government.ts.total_unemployment_benefits.append([4.0])
+
+        deficit = test_central_government.compute_deficit(
+            current_ind_activity=np.array([ActivityStatus.EMPLOYED]),
+            current_cpi=2.0,
+            current_government_nominal_amount_spent=np.array([10.0]),
+            interest_payments_on_debt=5.0,
+        )
+
+        assert np.isclose(deficit[0], 4.0 + 10.0 + 20.0 + 12.0 + 7.0 + 10.0 + 5.0 - revenue)
+
     def test__public_pensions_only_pay_eligible_weighted_recipients(self, test_central_government):
         test_central_government.ts.public_pension_benefits.append([90.0])
 

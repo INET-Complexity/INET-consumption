@@ -18,7 +18,7 @@ In scope:
 
 Out of scope: changes to pensions, unemployment benefit or other transfers; HFCS opening allocation; wage setting; credit contracts; fiscal closure; consumption-rule estimates.
 
-Why it matters for the paper: today a zero MPC at the bottom can come from compulsory spending or from the artificial income floor. After the change, a zero response has one structural cause: euro-for-euro withdrawal of the top-up. Do not choose any parameter to change the shape of the MPC profile.
+Why it matters for the paper: today a zero MPC at the bottom can come from compulsory spending or from the artificial income floor. After the change, neither cause exists. The MPC experiment receipt is paid on top of T (D7) and T is fixed for the period (D5), so the impact MPC of recipients is set by the consumption rule. Euro-for-euro withdrawal of T acts only on income counted in Y, from the next period onward (e.g. a wage shock). Do not choose any parameter to change the shape of the MPC profile.
 
 ## 2. Decisions (all user-confirmed, 2026-11-17 to 2026-11-21)
 

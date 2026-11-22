@@ -1213,9 +1213,21 @@ def build_macro_output_df(model, country_code):
         "total_public_pension_benefits": "public_pension_benefits",
         "total_other_social_transfers": "other_social_transfers",
         "total_necessity_support": "necessity_support",
+        "total_minimum_income": "minimum_income",
+        "social_rent_written_off": "social_rent_written_off",
     }.items():
         if source_name in df_gov_ts.columns:
             add_column(output_name, df_gov_ts[source_name])
+    # Unpaid private rent absorbed by landlords (minimum_income mode; zero otherwise).
+    household_ts = getattr(getattr(country, "households", None), "ts", None)
+    landlord_loss = _safe_ts_values(household_ts, "total_rent_unpaid_absorbed")
+    if landlord_loss is not None:
+        add_column("landlord_rent_loss", as_output_series(landlord_loss))
+    # Unpaid rent of a tenant living in a dwelling it owns: no counterparty. With landlord_rent_loss and
+    # social_rent_written_off it accounts for all unpaid rent.
+    no_counterparty = _safe_ts_values(household_ts, "rent_unpaid_no_counterparty")
+    if no_counterparty is not None:
+        add_column("rent_unpaid_no_counterparty", as_output_series([np.asarray(row).sum() for row in no_counterparty]))
 
     if "total_household_social_transfers" in df_gov_ts.columns:
         add_column("household_social_transfers", df_gov_ts["total_household_social_transfers"])
@@ -1255,11 +1267,14 @@ def build_macro_output_df(model, country_code):
         "public_pension_benefits",
         "other_social_transfers",
         "necessity_support",
+        "minimum_income",
         "household_social_transfers",
     ]:
         value = get_column(component)
         add_ratio(f"{component}_to_gdp", value, gdp)
         add_ratio(f"{component}_to_expenditure", value, fiscal_expenditure)
+    add_ratio("social_rent_written_off_to_gdp", get_column("social_rent_written_off"), gdp)
+    add_ratio("landlord_rent_loss_to_gdp", get_column("landlord_rent_loss"), gdp)
 
     if "policy_rate" in df_cb_ts.columns:
         add_column("central_bank_policy_rate", periods_per_year * df_cb_ts["policy_rate"])

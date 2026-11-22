@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.colors import qualitative
 from plotly.subplots import make_subplots
+from src.household_support import SUPPORT_MINIMUM_INCOME, resolve_household_support
 
 # Panels specify one unit and one economic concept; never sum rates or shares.
 PANELS = {
@@ -40,6 +41,7 @@ PANELS = {
                 "income_public_pension",
                 "income_unemployment_benefits",
                 "income_other_social_transfers",
+                "income_minimum_income",
                 "income_rental",
                 "income_financial_assets",
             ],
@@ -90,6 +92,8 @@ PANELS = {
                 "liquidation_planned",
                 "consumption_cut_amount",
                 "remaining_subsistence_shortfall",
+                "unpaid_rent",
+                "unmet_floor",
             ],
         ),
         (
@@ -163,6 +167,17 @@ PANELS = {
     ],
 }
 
+# In minimum_income mode there is no Stage 5 support. remaining_subsistence_shortfall (and the
+# pre_relief_funding_gap and economy subsistence_consumption_shortfall series built from it) then holds
+# unpaid debt service only; the unpaid rent and unmet goods floor are the separate series
+# unpaid_rent and unmet_floor. Keys are unchanged; only the display labels differ.
+MINIMUM_INCOME_LABELS = {
+    "remaining_subsistence_shortfall": "unpaid debt service (no support)",
+    "pre_relief_funding_gap": "unpaid debt service (no support)",
+    "stage5_subsistence_support": "Stage 5 support (zero in this mode)",
+    "income_minimum_income": "minimum income top-up T",
+}
+
 MEANS = {
     "target_consumption_partial_adjustment_gap",
     "target_consumption_income_growth",
@@ -225,6 +240,7 @@ def build_household_diagnostics(source, *, country_code, index=None):
     path = Path(source.model_h5_path if hasattr(source, "model_h5_path") else source)
     names = {name for panels in PANELS.values() for _, _, series in panels for name in series}
     names = (names - DERIVED) | EXTRA | {"expected_income_employee", "wealth", "debt"}
+    support = resolve_household_support(path, country_code)
     coverage = []
     with h5py.File(path, "r") as handle:
         group = handle[f"{country_code}/households"]
@@ -342,6 +358,9 @@ def build_household_diagnostics(source, *, country_code, index=None):
             "liquidity_shortfall_before_repair",
             "liquidation_planned",
             "remaining_subsistence_shortfall",
+            "income_minimum_income",
+            "unpaid_rent",
+            "unmet_floor",
             "cash_saving_before_financing",
             "credit_requested",
             "credit_rationing_gap",
@@ -360,11 +379,20 @@ def build_household_diagnostics(source, *, country_code, index=None):
     frame.attrs.update(
         source=str(path),
         country_code=country_code,
+        support_mode=support["mode"],
+        goods_floor=support["goods_floor"],
         n_households=n_households,
         money_units="nominal LCU billions; flows per model period",
         shares="unweighted households",
     )
     return frame, pd.DataFrame(coverage).set_index("dataset")
+
+
+def display_label(name, frame):
+    """Legend text for a series; minimum_income runs relabel the series that no longer mean Stage 5 support."""
+    if frame.attrs.get("support_mode") == SUPPORT_MINIMUM_INCOME and name in MINIMUM_INCOME_LABELS:
+        return MINIMUM_INCOME_LABELS[name]
+    return name.replace("_", " ")
 
 
 def plot_household_diagnostics(runs, *, section):
@@ -386,7 +414,7 @@ def plot_household_diagnostics(runs, *, section):
                     go.Scatter(
                         x=x,
                         y=frame[name],
-                        name=name.replace("_", " "),
+                        name=display_label(name, frame),
                         legendgroup=name,
                         showlegend=(name not in seen),
                         connectgaps=False,
@@ -394,7 +422,7 @@ def plot_household_diagnostics(runs, *, section):
                         hovertemplate="%{x}<br>%{y:.4g}<extra>"
                         + escape(run_name)
                         + ": "
-                        + name.replace("_", " ")
+                        + display_label(name, frame)
                         + "</extra>",
                     ),
                     row=row + 1,
@@ -435,6 +463,9 @@ def household_diagnostic_summary(runs):
         "credit_rationing_gap",
         "consumption_cut_amount",
         "stage5_subsistence_support",
+        "income_minimum_income",
+        "unpaid_rent",
+        "unmet_floor",
         "cash_ledger_max_abs_residual",
     ]
     records = []

@@ -49,6 +49,25 @@ def model_stub():
     return SimpleNamespace(countries={"FRA": country}, timestep=SimpleNamespace(year=2019, month=1), posthooks=[])
 
 
+def test_minimum_income_series_are_captured_when_present_and_reported_missing_otherwise():
+    model = model_stub()
+    country = model.countries["FRA"]
+    hh_ts = country.households.ts
+    hh_ts.dicts["income_minimum_income"] = [np.array([0.0, 4.0])]
+    hh_ts.dicts["unpaid_rent"] = [np.array([1.0, 0.0])]
+    country.central_government.ts.dicts["total_minimum_income"] = [np.array([4.0])]
+    with collector(model) as capture:
+        settle(model)
+        fire(model, 0)
+        row = capture.records[0]
+    np.testing.assert_array_equal(row.household_state["income_minimum_income"], [0.0, 4.0])
+    np.testing.assert_array_equal(row.household_state["unpaid_rent"], [1.0, 0.0])
+    np.testing.assert_array_equal(row.government["total_minimum_income"], [4.0])
+    assert row.unavailable["household.unmet_floor"] == "missing"
+    assert row.unavailable["government.social_rent_written_off"] == "missing"
+    assert "household.income_minimum_income" not in row.unavailable
+
+
 def collector(model, **changes):
     args = dict(revision="fixture", arm="control", seed=12, start_iteration=0, household_ids={"FRA": ["h0", "h1"]})
     args.update(changes)

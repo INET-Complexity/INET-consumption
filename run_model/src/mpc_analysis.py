@@ -16,6 +16,7 @@ import h5py
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from src.household_support import SUPPORT_LEGACY, SUPPORT_MINIMUM_INCOME, resolve_household_support
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 
@@ -41,6 +42,8 @@ WINSOR_MODES = {"clip", "trim"}
 PLOT_OUTPUT_FORMATS = {"html", "png", "both"}
 # Regimes of the floor settlement, classified on the baseline run in the shock period.
 MPC_REGIME_SUPPORTED = "floor_bound_supported"
+# minimum_income mode: T > 0 replaces Stage 5 support (always zero in that mode).
+MPC_REGIME_MINIMUM_INCOME = "minimum_income_recipient"
 MPC_REGIME_FLOOR_SELF_FUNDED = "floor_bound_self_funded"
 MPC_REGIME_CONSTRAINED = "liquidity_constrained"
 MPC_REGIME_UNCONSTRAINED = "unconstrained"
@@ -50,6 +53,7 @@ MPC_REGIMES = (
     MPC_REGIME_CONSTRAINED,
     MPC_REGIME_FLOOR_SELF_FUNDED,
     MPC_REGIME_SUPPORTED,
+    MPC_REGIME_MINIMUM_INCOME,
 )
 MPC_REGIME_INPUTS = (
     "stage5_subsistence_support",
@@ -59,6 +63,8 @@ MPC_REGIME_INPUTS = (
     "unpaid_consumer_payment",
     "unpaid_mortgage_payment",
 )
+# Read when saved; needed only in minimum_income mode (top-up, unpaid rent, unmet goods floor).
+MPC_MINIMUM_INCOME_INPUTS = ("income_minimum_income", "unpaid_rent", "unmet_floor")
 MPC_REGIME_RELATIVE_TOLERANCE = 1e-9
 SAVED_PLOT_BASE_HEIGHT = 600
 SAVED_PLOT_HEIGHT_SCALE = 0.8
@@ -279,13 +285,20 @@ def _series_or_nan(values: np.ndarray | None, *, row: int, n_households: int) ->
 
 
 def read_household_regime_inputs(h5_path: str | Path, country_code: str, *, row: int) -> dict[str, np.ndarray] | None:
-    """Read the floor-settlement outcomes of one period; None when the file predates them."""
+    """Read the floor-settlement outcomes of one period; None when the file predates them.
+
+    ``subsistence_floor`` is the saved economy series. In minimum_income mode it is the full floor even when the
+    goods floor is switched off; the caller applies the switch (see ``resolve_household_support``).
+    """
     with h5py.File(h5_path, "r") as handle:
         group = handle[f"{country_code}/households"]
         floor_path = f"{country_code}/economy/subsistence_consumption"
         if floor_path not in handle or any(name not in group for name in MPC_REGIME_INPUTS):
             return None
         inputs = {name: np.asarray(group[name][row], dtype=float) for name in MPC_REGIME_INPUTS}
+        inputs.update(
+            {name: np.asarray(group[name][row], dtype=float) for name in MPC_MINIMUM_INCOME_INPUTS if name in group}
+        )
         inputs["subsistence_floor"] = np.asarray(handle[floor_path][row], dtype=float)
     return inputs
 
@@ -298,23 +311,31 @@ def classify_mpc_regime(
     consumption_cut: np.ndarray,
     unpaid_service: np.ndarray,
     subsistence_floor: np.ndarray,
+    minimum_income: np.ndarray | None = None,
 ) -> np.ndarray:
     """Classify each household into one regime of the floor settlement.
 
+    ``minimum_income`` is the booked top-up T. Pass it in minimum_income mode,
+    where it replaces Stage 5 support; ``subsistence_floor`` must then be the
+    effective goods floor (zero when the goods floor is off) and ``support`` is
+    ignored. Omit it in legacy mode.
+
     In order of precedence:
-    - floor-bound supported: support S > 0;
-    - floor-bound self-funded: desired goods G do not exceed the floor F, so
-      consumption equals F, paid from own resources;
+    - floor-bound supported: support S > 0 (legacy mode);
+    - minimum-income recipient: top-up T > 0 (minimum_income mode);
+    - floor-bound self-funded: a positive floor F, desired goods G do not exceed
+      it, so consumption equals F, paid from own resources;
     - liquidity-constrained: consumption above the floor is cut, or debt
       service is unpaid;
     - unconstrained: none of the above.
     A household with a non-finite input is "unknown". Amounts are compared
     with a tolerance relative to the household's floor.
     """
+    recipient_label = MPC_REGIME_SUPPORTED if minimum_income is None else MPC_REGIME_MINIMUM_INCOME
     arrays = [
         np.asarray(values, dtype=float)
         for values in (
-            support,
+            support if minimum_income is None else minimum_income,
             consumption_before_floor,
             consumption_after_floor,
             consumption_cut,
@@ -327,11 +348,12 @@ def classify_mpc_regime(
     support, desired, consumed, cut, unpaid, floor = arrays
     tolerance = MPC_REGIME_RELATIVE_TOLERANCE * np.maximum(np.abs(floor), 1.0)
     supported = support > tolerance
-    floor_bound = (desired <= floor + tolerance) & (np.abs(consumed - floor) <= tolerance)
+    # With the goods floor off (F = 0) nobody is floor-bound, including households that desire and buy nothing.
+    floor_bound = (floor > 0.0) & (desired <= floor + tolerance) & (np.abs(consumed - floor) <= tolerance)
     constrained = (cut > tolerance) | (unpaid > tolerance)
     regime = np.select(
         [supported, floor_bound, constrained],
-        [MPC_REGIME_SUPPORTED, MPC_REGIME_FLOOR_SELF_FUNDED, MPC_REGIME_CONSTRAINED],
+        [recipient_label, MPC_REGIME_FLOOR_SELF_FUNDED, MPC_REGIME_CONSTRAINED],
         default=MPC_REGIME_UNCONSTRAINED,
     ).astype(object)
     regime[~np.all(np.isfinite(np.vstack(arrays)), axis=0)] = MPC_REGIME_UNKNOWN
@@ -422,8 +444,13 @@ def extract_mpc_window(
     shock_row: int,
     horizon_periods: int,
     cpi_source: str = "cpi_fixed_basket",
+    household_support: dict | None = None,
 ) -> dict[str, np.ndarray]:
     """Read everything the household MPC panel needs from one saved simulation.
+
+    ``household_support`` is the run's configured ``household_support`` block. When omitted, the mode is read
+    from the configuration saved in the HDF5 file, else inferred (see ``resolve_household_support``). The
+    mode and goods-floor switch are stored with the regime inputs as ``regime_support_mode`` and ``regime_goods_floor``.
 
     Per-household series are cut to HDF5 rows ``shock_row .. shock_row + horizon_periods - 1``
     (the measurement window). CPI is validated over the full series and then cut the same way.
@@ -453,6 +480,9 @@ def extract_mpc_window(
     if regime_inputs is not None:
         for name, values in regime_inputs.items():
             out[f"regime_{name}"] = values
+        support = resolve_household_support(h5_path, country_code, household_support)
+        out["regime_support_mode"] = np.asarray(support["mode"])
+        out["regime_goods_floor"] = np.asarray(support["goods_floor"])
     return out
 
 
@@ -678,16 +708,32 @@ def build_household_mpc_panel(
     if regime_inputs is None:
         additions["mpc_regime"] = np.full(len(panel), MPC_REGIME_UNKNOWN, dtype=object)
     else:
+        # baseline_subsistence_floor is the floor used for classification: the effective goods floor
+        # (zero when switched off in minimum_income mode), equal to the saved series in legacy mode.
+        floor = regime_inputs["subsistence_floor"]
+        unpaid_service = regime_inputs["unpaid_consumer_payment"] + regime_inputs["unpaid_mortgage_payment"]
+        top_up = None
+        if str(regime_inputs.get("support_mode", SUPPORT_LEGACY)) == SUPPORT_MINIMUM_INCOME:
+            missing = [name for name in MPC_MINIMUM_INCOME_INPUTS if name not in regime_inputs]
+            if missing:
+                raise ValueError(f"minimum_income run is missing regime inputs: {missing}.")
+            if not bool(regime_inputs.get("goods_floor", True)):
+                floor = np.zeros_like(floor)
+            top_up = regime_inputs["income_minimum_income"]
+            additions["baseline_minimum_income"] = top_up
+            # Unpaid rent and an unmet goods floor are unmet payments, like unpaid debt service.
+            unpaid_service = unpaid_service + regime_inputs["unpaid_rent"] + regime_inputs["unmet_floor"]
         additions["baseline_floor_support"] = regime_inputs["stage5_subsistence_support"]
-        additions["baseline_subsistence_floor"] = regime_inputs["subsistence_floor"]
+        additions["baseline_subsistence_floor"] = floor
         additions["baseline_consumption_before_floor"] = regime_inputs["consumption_before_floor"]
         additions["mpc_regime"] = classify_mpc_regime(
             support=regime_inputs["stage5_subsistence_support"],
             consumption_before_floor=regime_inputs["consumption_before_floor"],
             consumption_after_floor=regime_inputs["consumption_after_floor"],
             consumption_cut=regime_inputs["consumption_cut_amount"],
-            unpaid_service=regime_inputs["unpaid_consumer_payment"] + regime_inputs["unpaid_mortgage_payment"],
-            subsistence_floor=regime_inputs["subsistence_floor"],
+            unpaid_service=unpaid_service,
+            subsistence_floor=floor,
+            minimum_income=top_up,
         )
     return pd.concat([panel, pd.DataFrame(additions, index=panel.index)], axis=1)
 

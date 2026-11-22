@@ -2526,6 +2526,19 @@ class Firms(Agent):
             + np.maximum(0.0, -self.ts.current("deposits"))
         )
 
+    def compute_deposit_interest_components(
+        self,
+        bank_interest_rate_on_firm_deposits: np.ndarray,
+        bank_overdraft_rate_on_firm_deposits: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Deposit interest received on a positive balance and overdraft interest due on a negative one."""
+        bank = self.states["Corresponding Bank ID"]
+        deposits = self.ts.current("deposits")
+        return (
+            bank_interest_rate_on_firm_deposits[bank] * np.maximum(0.0, deposits),
+            bank_overdraft_rate_on_firm_deposits[bank] * np.maximum(0.0, -deposits),
+        )
+
     def compute_interest_paid_on_deposits(
         self,
         bank_interest_rate_on_firm_deposits: np.ndarray,

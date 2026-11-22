@@ -3187,15 +3187,30 @@ class Country:
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
 
         # Calculate the interest on deposits received/paid by households
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
 
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
+    def record_household_deposit_interest(self) -> None:
+        """Settle interest on household accounts and book it at each household's own bank.
+
+        The bank receives exactly the overdraft interest the households pay and
+        pays exactly the deposit interest they receive.
+        """
+        rates = {
+            "bank_interest_rate_on_household_deposits": self.banks.ts.current("interest_rate_on_household_deposits"),
+            "bank_overdraft_rate_on_household_deposits": self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        }
+        deposit_interest, overdraft_interest = self.households.compute_deposit_interest_components(**rates)
+        self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
+        self.households.ts.overdraft_interest_paid.append(overdraft_interest)
+        self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
+        self.banks.record_household_deposit_interest(
+            deposit_interest_received=deposit_interest,
+            overdraft_interest_paid=overdraft_interest,
+            households_corresponding_bank=self.households.states["Corresponding Bank ID"],
+        )
 
     def reconcile_post_grant_feasible_plan(self) -> None:
         """Build settled household feasibility after consumer-credit clearing."""
@@ -3358,12 +3373,7 @@ class Country:
         self.households.ts.debt.append(self.households.compute_debt())
         self.households.ts.debt_histogram.append(get_histogram(self.households.ts.current("debt"), self.scale))
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
     def validate_stage5_closing_balance_sheets(self) -> None:
@@ -4556,6 +4566,15 @@ class Country:
         firm_interest_paid_on_deposits = self.firms.compute_interest_paid_on_deposits(
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        firm_deposit_interest, firm_overdraft_interest = self.firms.compute_deposit_interest_components(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        self.banks.record_firm_deposit_interest(
+            deposit_interest_received=firm_deposit_interest,
+            overdraft_interest_paid=firm_overdraft_interest,
+            firm_corresponding_bank=self.firms.states["Corresponding Bank ID"],
         )
         firm_corporate_tax_obligation_preview = self.current_firm_corporate_tax_obligation_preview()
         self.firms.draw_operating_revolving_facility(

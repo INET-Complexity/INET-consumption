@@ -130,8 +130,11 @@ class OneTimeIncomeTransfer:
         ):
             raise RuntimeError("Realised income does not reconcile with the one-time receipt.")
         ids = np.asarray(self._layout_key[1], dtype=int)
+        # Household balances are booked gross: deposits are the positive balances only.
         bank_households = np.bincount(
-            ids, weights=hh.ts.current("liquid_financial_assets"), minlength=banks.ts.current("n_banks")
+            ids,
+            weights=np.maximum(hh.ts.current("liquid_financial_assets"), 0.0),
+            minlength=banks.ts.current("n_banks"),
         )
         for field, expected_balance in (
             ("deposits_from_households", bank_households),

@@ -3619,6 +3619,22 @@ class Households(Agent):
             0.0, self.ts.current("liquid_financial_assets")
         )
 
+    def compute_deposit_interest_components(
+        self,
+        bank_interest_rate_on_household_deposits: np.ndarray,
+        bank_overdraft_rate_on_household_deposits: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Deposit interest received on a positive opening balance and overdraft interest due on a negative one.
+
+        Both are charged at the household's own bank on the opening liquid
+        balance. ``compute_interest_paid_on_deposits`` is their difference.
+        """
+        bank = self.states["Corresponding Bank ID"]
+        lfa = self.ts.current("liquid_financial_assets")
+        deposit_interest = bank_interest_rate_on_household_deposits[bank] * np.maximum(0.0, lfa)
+        overdraft_interest = bank_overdraft_rate_on_household_deposits[bank] * np.maximum(0.0, -lfa)
+        return deposit_interest, overdraft_interest
+
     def compute_interest_paid(self) -> np.ndarray:
         """Calculate total interest paid.
 

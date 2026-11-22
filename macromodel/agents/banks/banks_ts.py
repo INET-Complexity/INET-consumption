@@ -104,6 +104,11 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         total_deposits_from_firms=[bank_data["Deposits from Firms"].values.sum()],
         deposits_from_households=bank_data["Deposits from Households"].values,
         total_deposits_from_households=[bank_data["Deposits from Households"].values.sum()],
+        # Overdrafts are a bank asset booked gross, depositor by depositor (zero at t0).
+        overdrafts_to_firms=np.zeros(len(bank_data)),
+        total_overdrafts_to_firms=[0.0],
+        overdrafts_to_households=np.zeros(len(bank_data)),
+        total_overdrafts_to_households=[0.0],
         #
         short_term_loans_to_firms=np.zeros(len(bank_data)),
         total_short_term_loans_to_firms=[0.0],
@@ -130,6 +135,11 @@ def create_banks_timeseries(bank_data: pd.DataFrame, scale: int) -> TimeSeries:
         household_sale_fee_income=np.zeros(len(bank_data)),
         recognized_interest_received_on_loans=bank_data["Interest received from Loans"].values,
         interest_received_on_deposits=bank_data["Interest received from Deposits"].values,
+        # Interest on depositors' accounts, booked when the depositors pay or receive it.
+        household_overdraft_interest_received=np.zeros(len(bank_data)),
+        household_deposit_interest_paid=np.zeros(len(bank_data)),
+        firm_overdraft_interest_received=np.zeros(len(bank_data)),
+        firm_deposit_interest_paid=np.zeros(len(bank_data)),
         interest_received=bank_data["Interest received from Loans"].values
         + bank_data["Interest received from Deposits"].values,
         firm_default_loan_writeoff=np.zeros(len(bank_data)),

@@ -446,6 +446,8 @@ def create_households_timeseries(
         total_debt_installments=[data["Debt Installments"].values.sum()],
         #
         interest_paid_on_deposits=np.full(len(data), np.nan),
+        overdraft_interest_paid=np.full(len(data), np.nan),
+        total_overdraft_interest_paid=[0.0],
         interest_paid_on_loans=np.full(len(data), np.nan),
         interest_paid=np.full(len(data), np.nan),
         consumption_emissions=consumption_emissions,

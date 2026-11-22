@@ -73,6 +73,64 @@ class TestBanks:
             cohort_loans + facility_exposure,
         )
 
+    def test__update_deposits_books_each_depositor_gross_at_its_own_bank(self, test_banks):
+        n_banks = test_banks.ts.current("n_banks")
+        household_bank = np.array([0, 0, 1, 1, 0]) % n_banks
+        household_lfa = np.array([100.0, -30.0, -5.0, 40.0, -1e-9])
+        firm_bank = np.array([0, 1]) % n_banks
+        firm_deposits = np.array([-7.0, 20.0])
+        test_banks.update_deposits(
+            current_firm_deposits=firm_deposits,
+            current_household_deposits=household_lfa,
+            firm_corresponding_bank=firm_bank,
+            households_corresponding_bank=household_bank,
+        )
+        for name, ids, balances in (
+            ("households", household_bank, household_lfa),
+            ("firms", firm_bank, firm_deposits),
+        ):
+            deposits = test_banks.ts.current("deposits_from_" + name)
+            overdrafts = test_banks.ts.current("overdrafts_to_" + name)
+            for bank in range(n_banks):
+                own = balances[ids == bank]
+                assert deposits[bank] == own[own > 0.0].sum()
+                assert overdrafts[bank] == -own[own < 0.0].sum()
+            assert test_banks.ts.current("total_deposits_from_" + name)[0] == deposits.sum()
+            assert test_banks.ts.current("total_overdrafts_to_" + name)[0] == overdrafts.sum()
+        # The central-bank balance is unchanged by gross booking: liabilities less loans and overdrafts.
+        np.testing.assert_allclose(
+            test_banks.compute_deposits(),
+            np.bincount(firm_bank, weights=firm_deposits, minlength=n_banks)
+            + np.bincount(household_bank, weights=household_lfa, minlength=n_banks)
+            + test_banks.ts.current("equity")
+            - test_banks.ts.current("total_outstanding_loans"),
+            rtol=1e-12,
+        )
+
+    def test__bank_receives_exactly_the_overdraft_interest_its_depositors_pay(self, test_banks):
+        n_banks = test_banks.ts.current("n_banks")
+        household_bank = np.array([0, 1, 0, 1]) % n_banks
+        firm_bank = np.array([1, 0]) % n_banks
+        test_banks.ts.override_current("deposits", np.zeros(n_banks))
+        test_banks.record_household_deposit_interest(
+            deposit_interest_received=np.array([1.0, 0.0, 2.0, 0.0]),
+            overdraft_interest_paid=np.array([0.0, 3.0, 0.0, 4.0]),
+            households_corresponding_bank=household_bank,
+        )
+        test_banks.record_firm_deposit_interest(
+            deposit_interest_received=np.array([0.5, 0.0]),
+            overdraft_interest_paid=np.array([0.0, 6.0]),
+            firm_corresponding_bank=firm_bank,
+        )
+        expected = np.bincount(household_bank, weights=[-1.0, 3.0, -2.0, 4.0], minlength=n_banks) + np.bincount(
+            firm_bank, weights=[-0.5, 6.0], minlength=n_banks
+        )
+        np.testing.assert_allclose(
+            test_banks.compute_interest_received_on_deposits(central_bank_policy_rate=0.01), expected, rtol=1e-12
+        )
+        assert test_banks.ts.current("household_overdraft_interest_received").sum() == 7.0
+        assert test_banks.ts.current("firm_overdraft_interest_received").sum() == 6.0
+
     def test__compute_profits_subtracts_firm_default_credit_loss(self, test_banks):
         n_banks = test_banks.ts.current("n_banks")
         test_banks.ts.override_current("interest_received_on_loans", np.full(n_banks, 10.0))

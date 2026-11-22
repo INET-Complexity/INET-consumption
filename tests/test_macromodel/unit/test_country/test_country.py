@@ -2456,6 +2456,8 @@ class TestCountry:
             test_country.households, "refresh_post_labour_feasibility", lambda service: events.append("cash_refresh")
         )
         monkeypatch.setattr(test_country, "settle_authoritative_household_payments", lambda: events.append("payments"))
+        # The fixture's placeholder credit market is not household-sized; the refresh is mocked anyway.
+        monkeypatch.setattr(test_country, "household_overdraft_interest_due", lambda: 0.0)
 
         test_country.assume_zero_growth = False
         test_country.update_post_labour_planning_metrics()
@@ -3134,6 +3136,14 @@ class TestCountry:
             "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(n_households),
         )
+
+        # Overdraft interest due on the negative opening balance (-5) is planned as debt service.
+        overdraft_interest = test_country.household_overdraft_interest_due()
+        assert np.all(overdraft_interest[deposits < 0.0] > 0.0)
+        np.testing.assert_array_equal(overdraft_interest[deposits >= 0.0], 0.0)
+        expected_shortfall = expected_shortfall + overdraft_interest
+        expected_funded = np.minimum(expected_shortfall, np.maximum(deposits, 0.0))
+        expected_residual = expected_shortfall - expected_funded
 
         test_country._set_household_target_demand(replace_current=False)
 

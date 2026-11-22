@@ -190,6 +190,10 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "unpaid_rent": 0.0,
     "unmet_floor": 0.0,
     "resource_deficit": 0.0,
+    # Overdraft interest due on the opening negative LFA (planned as debt service) and the part left unpaid,
+    # which capitalises into the overdraft.
+    "scheduled_overdraft_interest": 0.0,
+    "unpaid_overdraft_interest": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -1235,6 +1239,7 @@ class Households(Agent):
         if np.any(consumption < 0.0) or np.any(mortgage < 0.0) or np.any(scheduled < 0.0):
             raise ValueError("Consumption and debt service must be non-negative.")
 
+        overdraft_interest = self.post_grant_feasible_plan.scheduled_overdraft_interest
         capacity = np.where(
             eligible,
             np.maximum(
@@ -1243,7 +1248,8 @@ class Households(Agent):
                 - mortgage
                 - scheduled
                 - self.current_consumption_cash_rent()
-                - self.target_investment_cash(),
+                - self.target_investment_cash()
+                - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float)),
                 0.0,
             ),
             0.0,
@@ -1531,6 +1537,8 @@ class Households(Agent):
             "unpaid_rent",
             "unmet_floor",
             "resource_deficit",
+            "scheduled_overdraft_interest",
+            "unpaid_overdraft_interest",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1552,6 +1560,7 @@ class Households(Agent):
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
+        scheduled_overdraft_interest: np.ndarray | None = None,
     ) -> None:
         """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
@@ -1591,6 +1600,7 @@ class Households(Agent):
             investment=investment,
             support_exempt_resources=support_exempt_resources,
             support_enabled=support_enabled,
+            scheduled_overdraft_interest=scheduled_overdraft_interest,
         )
         self._record_consumption_floor_diagnostics()
 

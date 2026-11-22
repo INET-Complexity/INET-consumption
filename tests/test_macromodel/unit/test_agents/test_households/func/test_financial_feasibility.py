@@ -394,3 +394,34 @@ def test__support_exempt_resources_play_no_role_without_support():
 def test__support_switch_must_be_a_boolean():
     with pytest.raises(TypeError, match="support_enabled"):
         _settle_legacy_grid(support_enabled=np.array([True, False]))
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__overdraft_interest_is_debt_service_paid_before_goods_above_the_floor(support_enabled):
+    # F + R = 100, consumer + mortgage service = 40, overdraft interest = 5, goods above the floor = 40, V = 15.
+    resources = np.array([100.0, 130.0, 142.0, 145.0, 165.0, 185.0, 200.0, 500.0])
+    settled = _settle_floor(resources=resources, scheduled_overdraft_interest=5.0, support_enabled=support_enabled)
+    without = _settle_floor(resources=resources, support_enabled=support_enabled)
+
+    np.testing.assert_array_equal(settled.scheduled_overdraft_interest, 5.0)
+    # Consumer and mortgage suspension are unchanged; the overdraft interest goes unpaid first.
+    np.testing.assert_array_equal(settled.unpaid_consumer_service, without.unpaid_consumer_service)
+    np.testing.assert_array_equal(settled.unpaid_mortgage_service, without.unpaid_mortgage_service)
+    np.testing.assert_allclose(settled.unpaid_overdraft_interest, [5, 5, 3, 0, 0, 0, 0, 0])
+    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 100, 120, 120, 120], rtol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 0, 15, 15], atol=1e-9)
+    # The unpaid interest is recorded, not handed to support or to the subsistence shortfall.
+    np.testing.assert_array_equal(settled.floor_support, without.floor_support)
+    np.testing.assert_array_equal(settled.remaining_subsistence_shortfall, without.remaining_subsistence_shortfall)
+    service_paid = 45.0 - settled.unpaid_consumer_service - settled.unpaid_mortgage_service
+    spent = settled.consumption_after_floor + 20.0 + service_paid - settled.unpaid_overdraft_interest
+    np.testing.assert_allclose(spent + settled.investment_after_floor, np.minimum(resources, 200.0), rtol=1e-9)
+
+
+def test__no_overdraft_interest_leaves_the_allocation_unchanged():
+    resources = np.array([60.0, 100.0, 125.0, 140.0, 195.0, 500.0])
+    default = _settle_floor(resources=resources)
+    explicit = _settle_floor(resources=resources, scheduled_overdraft_interest=0.0)
+    for name in ("consumption_after_floor", "investment_after_floor", "unpaid_consumer_service", "floor_support"):
+        np.testing.assert_array_equal(getattr(explicit, name), getattr(default, name), err_msg=name)
+    np.testing.assert_array_equal(default.unpaid_overdraft_interest, 0.0)

@@ -2134,6 +2134,7 @@ class Country:
             self.households.refresh_post_labour_feasibility(
                 self.credit_market.compute_opening_scheduled_consumption_payments_by_household()
                 + self.credit_market.compute_opening_scheduled_mortgage_payments_by_household()
+                + self.household_overdraft_interest_due()
             )
             self.settle_authoritative_household_payments()
         else:
@@ -2785,6 +2786,9 @@ class Country:
             clear_post_grant=not replace_current,
         )
         scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
+        if uses_feasibility_resolver:
+            # Overdraft interest on the opening negative balance is scheduled debt service in the plan.
+            scheduled_debt_service = scheduled_debt_service + self.household_overdraft_interest_due()
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
             scheduled_debt_service=scheduled_debt_service,
@@ -3192,6 +3196,13 @@ class Country:
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
+    def household_overdraft_interest_due(self) -> np.ndarray:
+        """Overdraft interest due this period on each household's opening negative LFA, at its bank's current rate."""
+        return self.households.compute_deposit_interest_components(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )[1]
+
     def record_household_deposit_interest(self) -> None:
         """Settle interest on household accounts and book it at each household's own bank.
 
@@ -3272,6 +3283,7 @@ class Country:
             investment=investment_cash,
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
             support_enabled=self._stage5_support_enabled(),
+            scheduled_overdraft_interest=self.household_overdraft_interest_due(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,

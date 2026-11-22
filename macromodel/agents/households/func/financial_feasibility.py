@@ -93,6 +93,10 @@ class PostGrantFeasiblePlan:
     unpaid_rent: np.ndarray | None = None
     unmet_floor: np.ndarray | None = None
     resource_deficit: np.ndarray | None = None
+    # Overdraft interest due on the opening negative liquid balance, and the part the allocation leaves
+    # unpaid; the unpaid part capitalises into the overdraft.
+    scheduled_overdraft_interest: np.ndarray | None = None
+    unpaid_overdraft_interest: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -291,6 +295,7 @@ class HouseholdFinancialFeasibility:
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
+        scheduled_overdraft_interest: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Allocate resources in the Stage 5 payment order, without writing household state.
 
@@ -307,6 +312,12 @@ class HouseholdFinancialFeasibility:
 
         Support S covers the goods floor and rent only. Unpaid service U is
         suspended on consumer credit first, then on the mortgage.
+
+        O includes the overdraft interest due on the opening negative liquid
+        balance (``scheduled_overdraft_interest``, default zero). It is paid
+        after consumer and mortgage service, so their suspension is unchanged;
+        the unpaid part ``unpaid_overdraft_interest`` capitalises into the
+        overdraft, since the bank charges it to the account in any case.
 
         ``support_exempt_resources`` (E, default zero) is the part of A that the
         support test does not count: S = max(F + R - (A - E), 0). The household
@@ -337,7 +348,21 @@ class HouseholdFinancialFeasibility:
         available = np.asarray(resources, dtype=float)
         residual_before_floor = self._non_negative(plan.residual_shortfall_after_granted_credit)
         shape = residual_before_floor.shape
-        for values in (desired, floor, rent, consumer_service, mortgage_service, desired_investment, available):
+        overdraft_interest = (
+            np.zeros(shape)
+            if scheduled_overdraft_interest is None
+            else self._non_negative(scheduled_overdraft_interest)
+        )
+        for values in (
+            desired,
+            floor,
+            rent,
+            consumer_service,
+            mortgage_service,
+            desired_investment,
+            available,
+            overdraft_interest,
+        ):
             if values.shape != shape:
                 raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
         if not np.all(np.isfinite(available)):
@@ -371,7 +396,9 @@ class HouseholdFinancialFeasibility:
         unpaid_service = service - service_paid
         unpaid_consumer = np.minimum(unpaid_service, consumer_service)
         unpaid_mortgage = unpaid_service - unpaid_consumer
-        after_service = after_floor_and_rent - service_paid
+        overdraft_interest_paid = np.minimum(overdraft_interest, after_floor_and_rent - service_paid)
+        unpaid_overdraft_interest = overdraft_interest - overdraft_interest_paid
+        after_service = after_floor_and_rent - service_paid - overdraft_interest_paid
         consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
         consumption_after_floor = floor_paid + consumption_above_floor
         investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
@@ -392,4 +419,6 @@ class HouseholdFinancialFeasibility:
             unpaid_rent=unpaid_rent,
             unmet_floor=unmet_floor,
             resource_deficit=resource_deficit,
+            scheduled_overdraft_interest=overdraft_interest,
+            unpaid_overdraft_interest=unpaid_overdraft_interest,
         )

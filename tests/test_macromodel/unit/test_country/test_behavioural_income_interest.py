@@ -41,7 +41,7 @@ def _country_with_market(market):
             overdraft_rate_on_household_deposits=np.zeros(1),
         )
     )
-    country.economy = SimpleNamespace(ts=TimeSeries(subsistence_consumption=np.ones(1)))
+    country.economy = SimpleNamespace(ts=TimeSeries(subsistence_consumption=np.ones(1), income_guard=np.ones(1)))
     return country
 
 

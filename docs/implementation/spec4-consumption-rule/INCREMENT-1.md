@@ -55,7 +55,7 @@ monthly/annual cases below test units, not a different window/dynamic policy.
 |---|---|
 | `period_id`, `pass_kind`, `household_layout_key` | Explicit nonnegative integer planning-period identity, first/replacement pass and owner-supplied run/layout identity. Runtime period tags follow the completed-income row count used by the existing uncertainty producer; startup may use explicit period0. A layout key identifies run, positional household order and H, not invented persistent household IDs. |
 | `behavioural_income_nominal_history` | K x H, expected behavioural B through the current provisional/revised row; existing model monetary units. |
-| `subsistence_nominal_history` | K x H, period-matched canonical S; already population-expanded by b1db808e. |
+| `guard_nominal_history` (formerly `subsistence_nominal_history`) | K x H, period-matched behavioural-income lower bound (`income_guard`: canonical S in legacy_stage5 mode, G in minimum_income mode); already population-expanded by b1db808e. |
 | `consumer_price_history`, `price_history_layout` | Positive finite raw selected index levels: K rows with layout=aligned, or K-1 rows with layout=missing_current. No other layout is accepted. |
 | `current_consumer_price`, `initial_consumer_price` | Explicit positive finite scalars C_current and C0. Define d_current=C_current/C0, including when the price history is already complete. |
 | `pi_payload` | Copied period_id/pass_kind/household_layout_key plus H-vectors monetary_income_nominal M and pi_log_ratio_original q from the same ready learning_inputs result. M positive; q already includes the common term once. Tags must match this preparation call. |
@@ -259,7 +259,7 @@ increment 2 work.
   window, with counts per household. Full supplied upstream diagnostics stay in
   `histories`, without reconstructing unavailable observations.
 - `ConsumptionSources(households, economy, credit_market, income_units,
-  subsistence_units, stock_units, principal_units)` declares production objects.
+  guard_units, stock_units, principal_units)` declares production objects.
 - `ConsumptionInputAdapter.capture_opening(sources, *, period_id,
   household_layout_key, pass_kind="first")` captures explicitly. `prepare(...)`
   uses the stored snapshot; `collect_inputs(sources, pi_payload, *, period_id,

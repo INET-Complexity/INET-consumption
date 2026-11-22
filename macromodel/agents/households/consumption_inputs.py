@@ -170,27 +170,30 @@ class IncomeHistories(_ImmutableRecord):
 
     If any labels are supplied, all three paths must carry corresponding labels.
     Optional upstream histories are retained only where the producer supplies them.
+    ``guard_nominal_history`` is the economy series ``income_guard``: the lower bound on behavioural income in
+    force in each period (the subsistence series S in legacy_stage5 mode, G = guard share x M in minimum_income
+    mode; PLAN.md section 5.5). Rows are not rewritten when the mode changes.
     """
 
     behavioural_income_nominal_history: np.ndarray
-    subsistence_nominal_history: np.ndarray
+    guard_nominal_history: np.ndarray
     consumer_price_history: np.ndarray
     current_consumer_price: float
     initial_consumer_price: float
     price_history_layout: PriceHistoryLayout
     income_units: MonetaryUnits
-    subsistence_units: MonetaryUnits
+    guard_units: MonetaryUnits
     months_per_period: float = 3
     history_window: int = 4
     income_period_labels: tuple | None = None
-    subsistence_period_labels: tuple | None = None
+    guard_period_labels: tuple | None = None
     price_period_labels: tuple | None = None
     upstream_raw_history: np.ndarray | None = None
     upstream_floor_used_history: np.ndarray | None = None
     upstream_component_floor_used_history: np.ndarray | None = None
 
     def __post_init__(self):
-        _units(self.income_units, self.subsistence_units)
+        _units(self.income_units, self.guard_units)
         for name in ("current_consumer_price", "initial_consumer_price", "months_per_period"):
             object.__setattr__(self, name, _positive_scalar(getattr(self, name), name))
         if (
@@ -201,7 +204,7 @@ class IncomeHistories(_ImmutableRecord):
             raise ValueError("history_window must be a positive integer.")
         if self.months_per_period == 3 and self.history_window != 4:
             raise ValueError("quarterly history_window must be 4.")
-        for name in ("behavioural_income_nominal_history", "subsistence_nominal_history", "consumer_price_history"):
+        for name in ("behavioural_income_nominal_history", "guard_nominal_history", "consumer_price_history"):
             object.__setattr__(
                 self,
                 name,
@@ -213,8 +216,8 @@ class IncomeHistories(_ImmutableRecord):
                 ),
             )
         shape = self.behavioural_income_nominal_history.shape
-        if not all(shape) or self.subsistence_nominal_history.shape != shape:
-            raise ValueError("B and subsistence histories must have identical nonempty K x H dimensions.")
+        if not all(shape) or self.guard_nominal_history.shape != shape:
+            raise ValueError("B and guard histories must have identical nonempty K x H dimensions.")
         k = shape[0]
         missing = self.price_history_layout == "missing_current"
         if self.price_history_layout not in ("aligned", "missing_current") or self.consumer_price_history.shape != (
@@ -225,14 +228,14 @@ class IncomeHistories(_ImmutableRecord):
             self.consumer_price_history[-1], self.current_consumer_price, rtol=1e-12, atol=0
         ):
             raise ValueError("consumer_price_history final price must match current_consumer_price.")
-        label_names = ("income_period_labels", "subsistence_period_labels", "price_period_labels")
+        label_names = ("income_period_labels", "guard_period_labels", "price_period_labels")
         labels = [getattr(self, name) for name in label_names]
         if any(value is not None for value in labels):
             if any(value is None for value in labels):
                 raise ValueError("period labels must be supplied for all three histories.")
             labels = [tuple(value) for value in labels]
             if len(labels[0]) != k or labels[0] != labels[1] or labels[2] != labels[0][: k - int(missing)]:
-                raise ValueError("income, subsistence and price period labels must match.")
+                raise ValueError("income, guard and price period labels must match.")
             for name, value in zip(label_names, labels):
                 object.__setattr__(self, name, value)
         for name in ("upstream_raw_history", "upstream_floor_used_history", "upstream_component_floor_used_history"):
@@ -307,7 +310,7 @@ def prepare_inputs(
             raise ValueError("opening snapshot and PI payload period/layout tags must match preparation.")
     if pi_payload.pass_kind != pass_kind:
         raise ValueError("PI payload pass_kind must match preparation.")
-    _units(histories.income_units, histories.subsistence_units, opening_snapshot.units, pi_payload.units)
+    _units(histories.income_units, histories.guard_units, opening_snapshot.units, pi_payload.units)
     h = histories.behavioural_income_nominal_history.shape[1]
     if opening_snapshot.nominal.liquid_financial_assets.shape != (h,) or pi_payload.monetary_income_nominal.shape != (
         h,
@@ -323,7 +326,7 @@ def prepare_inputs(
     _positive_scalar(d, "current_deflator")
     n = min(histories.history_window, prices.size)
     b_nom = histories.behavioural_income_nominal_history[-n:]
-    s_nom = histories.subsistence_nominal_history[-n:]
+    s_nom = histories.guard_nominal_history[-n:]
     with np.errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
         log_b = np.mean(
             np.log(np.maximum(b_nom, s_nom))
@@ -373,12 +376,12 @@ class ConsumptionSources:
     economy: "Economy"
     credit_market: "CreditMarket"
     income_units: MonetaryUnits
-    subsistence_units: MonetaryUnits
+    guard_units: MonetaryUnits
     stock_units: MonetaryUnits
     principal_units: MonetaryUnits
 
     def __post_init__(self):
-        _units(self.income_units, self.subsistence_units, self.stock_units, self.principal_units)
+        _units(self.income_units, self.guard_units, self.stock_units, self.principal_units)
 
 
 class ConsumptionInputAdapter:
@@ -471,7 +474,7 @@ class ConsumptionInputAdapter:
         _units(
             snapshot.units,
             sources.income_units,
-            sources.subsistence_units,
+            sources.guard_units,
             sources.stock_units,
             sources.principal_units,
         )
@@ -494,13 +497,13 @@ class ConsumptionInputAdapter:
                 prices = prices[:, 0]
             histories = IncomeHistories(
                 hh.historic("expected_behavioural_income"),
-                economy.ts.historic("subsistence_consumption"),
+                economy.ts.historic("income_guard"),
                 prices,
                 current_consumer_price,
                 economy.initial_consumer_price_level(),
                 price_history_layout,
                 sources.income_units,
-                sources.subsistence_units,
+                sources.guard_units,
                 months_per_period=economy.time_unit,
                 history_window=history_window,
                 **optional,

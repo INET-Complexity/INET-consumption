@@ -33,7 +33,7 @@ Why it matters for the paper: today a zero MPC at the bottom can come from compu
 | D7 | The MPC experiment receipt is excluded from Y and paid on top. |
 | D8 | Renter with unpaid rent → moves into existing social housing in the next period. The landlord absorbs the unpaid rent. Exit through the existing market bid rule. Social rent rule unchanged (0.25 × scalar UB × adults). |
 | D9 | Existing fiscal closure kept; the cost of T is recorded separately. No budget-neutral retuning. |
-| D10 | Policy comparisons clone one shared, fully initialised checkpoint (lazy residual already created). |
+| D10 | Policy comparisons clone one shared, fully initialised checkpoint (lazy residual already created). The shared checkpoint must be built in legacy_stage5 mode; policy arms switch mode by reset. A minimum_income-built country cannot be reset to another guard basis. |
 | D11 | Numerical guard G = 1% of M_household per period, separate from the goods floor. |
 
 Stated departures from RSA practice, for the paper: notional 3% applies to all financial assets (RSA: only to assets that pay nothing, CE 14 June 2017 n°401637); no forfait logement; no neutralisation of lost income; no earnings disregard; M uses the model's CU scale, not the RSA schedule. Level of M equals the 2014 RSA.
@@ -238,7 +238,7 @@ Run GitNexus `impact` on each symbol before changing it. Each increment is one P
 
 ## 8. Validation (after increment 6; multi-seed, ≤ 4 parallel runs)
 
-Registered as a vault experiment spec before running. Arms: legacy; minimum income + floor on; minimum income + floor off. Shared checkpoint (D10). Compare from activation + 4 quarters (guard window, §10 R5).
+Registered as a vault experiment spec before running. Arms: legacy; minimum income + floor on; minimum income + floor off. Shared checkpoint (D10). The shared checkpoint must be built in legacy_stage5 mode; policy arms switch mode by reset. A minimum_income-built country cannot be reset to another guard basis. Compare from activation + 4 quarters (guard window, §10 R5).
 
 Report, by income quintile: share receiving T; mean T / M; fiscal cost (% GDP) vs the data on RSA spending; MPC profile; share of household-periods with guard binding (target < 0.5%) together with wealth-ratio clipping incidence; unpaid-rent events; social-housing entries; re-entries within 4 quarters of leaving; unmet-floor incidence (floor-on arm). No parameter is tuned to these outputs.
 

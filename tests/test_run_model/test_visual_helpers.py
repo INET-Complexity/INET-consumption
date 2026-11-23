@@ -103,6 +103,8 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
                     "total_public_pension_benefits": [3.0, 3.1, 3.2],
                     "total_other_social_transfers": [2.0, 2.1, 2.2],
                     "total_necessity_support": [0.1, 0.2, 0.3],
+                    "total_minimum_income": [0.0, 1.5, 2.5],
+                    "social_rent_written_off": [0.0, 0.2, 0.3],
                     "total_household_social_transfers": [5.0, 5.1, 5.2],
                     "taxes_vat": [6.0, 6.1, 6.2],
                     "taxes_corporate_income": [7.0, 7.1, 7.2],
@@ -110,6 +112,14 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
             )
         ),
         central_bank=SimpleNamespace(ts=_ts({"policy_rate": [0.01, 0.011, 0.012]})),
+        households=SimpleNamespace(
+            ts=_ts(
+                {
+                    "total_rent_unpaid_absorbed": [[0.0], [0.4], [0.6]],
+                    "rent_unpaid_no_counterparty": [np.zeros(2), np.array([0.1, 0.2]), np.array([0.0, 0.5])],
+                }
+            )
+        ),
         banks=SimpleNamespace(
             ts=_ts(
                 {
@@ -247,6 +257,14 @@ def test_build_macro_output_df_uses_canonical_columns_and_expands_economy_series
     assert output["other_social_transfers"].tolist() == [2.0, 2.1, 2.2]
     assert output["necessity_support"].tolist() == [0.1, 0.2, 0.3]
     assert output["household_social_transfers"].tolist() == [5.0, 5.1, 5.2]
+    assert output["minimum_income"].tolist() == [0.0, 1.5, 2.5]
+    assert output["social_rent_written_off"].tolist() == [0.0, 0.2, 0.3]
+    assert output["landlord_rent_loss"].tolist() == [0.0, 0.4, 0.6]
+    assert output["rent_unpaid_no_counterparty"].tolist() == pytest.approx([0.0, 0.3, 0.5])
+    assert "social_rent_written_off_to_expenditure" not in output.columns
+    assert output["social_rent_written_off_to_gdp"].tolist() == pytest.approx([0.0, 0.2 / 110, 0.3 / 121])
+    assert output["minimum_income_to_gdp"].tolist() == pytest.approx([0.0, 1.5 / 110, 2.5 / 121])
+    assert output["landlord_rent_loss_to_gdp"].tolist() == pytest.approx([0.0, 0.4 / 110, 0.6 / 121])
     assert output["public_pension_benefits_to_gdp"].tolist() == pytest.approx([0.03, 3.1 / 110, 3.2 / 121])
     assert output["total_number_of_bought_houses"].tolist() == pytest.approx([np.nan, 4.0, 5.0], nan_ok=True)
     assert output["total_number_of_newly_rented_houses"].tolist() == pytest.approx([np.nan, 2.0, 3.0], nan_ok=True)

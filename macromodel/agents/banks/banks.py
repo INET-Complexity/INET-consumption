@@ -337,11 +337,11 @@ class Banks(Agent):
     def compute_interest_received_on_deposits(self, central_bank_policy_rate: float) -> np.ndarray:
         """Calculate net interest received on deposits.
 
-        Computes interest considering:
-        - Positive and negative deposit balances
-        - Different rates for firms and households
-        - Overdraft rates for negative balances
-        - Regular deposit rates for positive balances
+        The bank earns the policy rate on its central-bank balance and pays it
+        on a negative one. On its depositors' accounts it receives exactly the
+        overdraft interest they paid and pays exactly the deposit interest they
+        received, booked depositor by depositor when the depositors settle
+        (``record_household_deposit_interest`` / ``record_firm_deposit_interest``).
 
         Args:
             central_bank_policy_rate (float): Current policy rate
@@ -351,15 +351,61 @@ class Banks(Agent):
         """
         return (
             central_bank_policy_rate * np.maximum(0, self.ts.current("deposits"))
-            + self.ts.current("overdraft_rate_on_firm_deposits")
-            * np.maximum(0, -self.ts.current("deposits_from_firms"))
-            + self.ts.current("overdraft_rate_on_household_deposits")
-            * np.maximum(0, -self.ts.current("deposits_from_households"))
+            + self.ts.current("firm_overdraft_interest_received")
+            + self.ts.current("household_overdraft_interest_received")
         ) - (
             central_bank_policy_rate * np.maximum(0, -self.ts.current("deposits"))
-            + self.ts.current("interest_rate_on_firm_deposits") * np.maximum(0, self.ts.current("deposits_from_firms"))
-            + self.ts.current("interest_rate_on_household_deposits")
-            * np.maximum(0, self.ts.current("deposits_from_households"))
+            + self.ts.current("firm_deposit_interest_paid")
+            + self.ts.current("household_deposit_interest_paid")
+        )
+
+    def record_household_deposit_interest(
+        self,
+        deposit_interest_received: np.ndarray,
+        overdraft_interest_paid: np.ndarray,
+        households_corresponding_bank: np.ndarray,
+        overdraft_interest_capitalised: np.ndarray | None = None,
+    ) -> None:
+        """Book, at each household's own bank, the deposit and overdraft interest it settled this period.
+
+        ``overdraft_interest_capitalised`` is the part of the overdraft interest the household's plan left
+        unpaid: it is income accrued on the overdraft asset, not cash, so it is excluded from distributable
+        and taxable profit.
+        """
+        self.ts.household_deposit_interest_paid.append(
+            np.bincount(
+                households_corresponding_bank, weights=deposit_interest_received, minlength=self.ts.current("n_banks")
+            )
+        )
+        self.ts.household_overdraft_interest_received.append(
+            np.bincount(
+                households_corresponding_bank, weights=overdraft_interest_paid, minlength=self.ts.current("n_banks")
+            )
+        )
+        if overdraft_interest_capitalised is None:
+            overdraft_interest_capitalised = np.zeros_like(np.asarray(overdraft_interest_paid, dtype=float))
+        self.ts.household_overdraft_interest_capitalised.append(
+            np.bincount(
+                households_corresponding_bank,
+                weights=overdraft_interest_capitalised,
+                minlength=self.ts.current("n_banks"),
+            )
+        )
+
+    def record_firm_deposit_interest(
+        self,
+        deposit_interest_received: np.ndarray,
+        overdraft_interest_paid: np.ndarray,
+        firm_corresponding_bank: np.ndarray,
+    ) -> None:
+        """Book, at each firm's own bank, the deposit and overdraft interest it settled this period."""
+        self.ts.firm_deposit_interest_paid.append(
+            np.bincount(
+                firm_corresponding_bank, weights=deposit_interest_received, minlength=self.ts.current("n_banks")
+            )
+        )
+        self.ts.firm_overdraft_interest_received.append(
+            np.bincount(firm_corresponding_bank, weights=overdraft_interest_paid, minlength=self.ts.current("n_banks"))
         )
 
     def compute_profits(self) -> np.ndarray:
@@ -389,12 +435,17 @@ class Banks(Agent):
         )
 
     def compute_cash_distributable_profits(self) -> np.ndarray:
-        """Return current cash-backed profit excluding prior income collection."""
+        """Return current cash-backed profit excluding prior income collection.
+
+        Overdraft interest capitalised into the overdraft is accrued, not cash, and is excluded, like accrued
+        consumer and mortgage interest.
+        """
         return (
             self.ts.current("interest_received_on_loans")
             - self.ts.current("consumer_opening_interest_arrears_collected")
             - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
+            - self.ts.current("household_overdraft_interest_capitalised")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
             - self.ts.current("mortgage_default_credit_loss")
@@ -409,13 +460,11 @@ class Banks(Agent):
         firm_corresponding_bank: np.ndarray,
         households_corresponding_bank: np.ndarray,
     ) -> None:
-        """Update deposit balances.
+        """Book depositors' balances gross at each depositor's own bank.
 
-        Records:
-        - Firm deposits by bank
-        - Household deposits by bank
-        - Total deposits from firms
-        - Total deposits from households
+        A positive balance is a deposit (bank liability) and a negative balance
+        an overdraft (bank asset); one depositor's overdraft is never netted
+        against another's deposit.
 
         Args:
             current_firm_deposits (np.ndarray): Current firm deposits
@@ -423,20 +472,19 @@ class Banks(Agent):
             firm_corresponding_bank (np.ndarray): Bank IDs for firms
             households_corresponding_bank (np.ndarray): Bank IDs for households
         """
-        current_deposits_from_firms = np.bincount(
-            firm_corresponding_bank,
-            weights=current_firm_deposits,
-            minlength=self.ts.current("n_banks"),
-        )
-        current_deposits_from_households = np.bincount(
-            households_corresponding_bank,
-            weights=current_household_deposits,
-            minlength=self.ts.current("n_banks"),
-        )
-        self.ts.deposits_from_firms.append(current_deposits_from_firms)
-        self.ts.total_deposits_from_firms.append([current_deposits_from_firms.sum()])
-        self.ts.deposits_from_households.append(current_deposits_from_households)
-        self.ts.total_deposits_from_households.append([current_deposits_from_households.sum()])
+        n_banks = self.ts.current("n_banks")
+        firm_balances = np.asarray(current_firm_deposits, dtype=float)
+        household_balances = np.asarray(current_household_deposits, dtype=float)
+        for name, ids, balances in (
+            ("firms", firm_corresponding_bank, firm_balances),
+            ("households", households_corresponding_bank, household_balances),
+        ):
+            deposits = np.bincount(ids, weights=np.maximum(balances, 0.0), minlength=n_banks)
+            overdrafts = np.bincount(ids, weights=np.maximum(-balances, 0.0), minlength=n_banks)
+            getattr(self.ts, "deposits_from_" + name).append(deposits)
+            getattr(self.ts, "total_deposits_from_" + name).append([deposits.sum()])
+            getattr(self.ts, "overdrafts_to_" + name).append(overdrafts)
+            getattr(self.ts, "total_overdrafts_to_" + name).append([overdrafts.sum()])
 
     def update_loans(
         self,
@@ -487,17 +535,16 @@ class Banks(Agent):
         Returns:
             np.ndarray: Market share by bank
         """
-        total_amount_of_loans_and_deposits = (
-            np.absolute(self.ts.current("total_outstanding_loans")).sum()
-            + np.absolute(self.ts.current("deposits_from_firms")).sum()
-            + np.absolute(self.ts.current("deposits_from_households")).sum()
+        loans_and_deposits = (
+            np.absolute(self.ts.current("total_outstanding_loans"))
+            + self.ts.current("deposits_from_firms")
+            + self.ts.current("deposits_from_households")
+            + self.ts.current("overdrafts_to_firms")
+            + self.ts.current("overdrafts_to_households")
         )
+        total_amount_of_loans_and_deposits = loans_and_deposits.sum()
         if total_amount_of_loans_and_deposits > 0:
-            return (
-                np.absolute(self.ts.current("total_outstanding_loans"))
-                + np.absolute(self.ts.current("deposits_from_firms"))
-                + np.absolute(self.ts.current("deposits_from_households"))
-            ) / total_amount_of_loans_and_deposits
+            return loans_and_deposits / total_amount_of_loans_and_deposits
         else:
             return np.full(self.ts.current("n_banks"), 1.0 / self.ts.current("n_banks"))
 
@@ -542,20 +589,21 @@ class Banks(Agent):
         )
 
     def compute_deposits(self) -> np.ndarray:
-        """Calculate total deposits.
+        """Calculate the bank's central-bank balance.
 
-        Sums:
-        - Deposits from firms
-        - Deposits from households
+        Liabilities (deposits from firms and households, equity) less the
+        assets held with non-banks (loans and overdrafts).
 
         Returns:
-            np.ndarray: Total deposits by bank
+            np.ndarray: Central-bank balance by bank
         """
         return (
             self.ts.current("deposits_from_firms")
             + self.ts.current("deposits_from_households")
             + self.ts.current("equity")
             - self.ts.current("total_outstanding_loans")
+            - self.ts.current("overdrafts_to_firms")
+            - self.ts.current("overdrafts_to_households")
         )
 
     def handle_insolvency(self, credit_market: CreditMarket) -> float:

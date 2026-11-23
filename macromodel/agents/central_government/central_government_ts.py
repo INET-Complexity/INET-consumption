@@ -67,6 +67,7 @@ def create_central_government_timeseries(
         total_public_pension_benefits=[public_pension_benefits],
         total_other_social_transfers=[other_social_benefits],
         total_necessity_support=[0.0],
+        total_minimum_income=[0.0],
         total_household_social_transfers=[
             settled_initial_unemployment_benefits + public_pension_benefits + other_social_benefits
         ],
@@ -86,6 +87,8 @@ def create_central_government_timeseries(
         taxes_on_products=[data["Taxes on Products"].values[0]],
         total_rent_received=[data["Total Social Housing Rent"].values[0]],
         diagnostic_total_rent_received=[data["Total Social Housing Rent"].values[0]],
+        # Social rent left unpaid by social tenants and written off (minimum_income mode, PLAN.md section 3.3).
+        social_rent_written_off=[0.0],
         #
         revenue=[
             data["Revenue"].values[0],

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from macromodel.agents.households.households import Households
-from macromodel.country.country import Country
+from macromodel.country.country import Country, _read_household_support_parameters
 from macromodel.timeseries import TimeSeries
 
 _NO_HOUSE = dict(price=0.0, mortgage=0.0, lfa=0.0, purchase_sale=0.0)
@@ -36,9 +36,10 @@ def test_final_support_uses_actual_receipts_and_posts_once(
     """Realised support counts the forced sale net of its cost and never finances a property purchase."""
     country, hh = _country(receipt, sale_proceeds, liquidation, sale_cost, housing)
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
-    assert hh.ts.current("income_social_transfers")[0] == expected_support
-    assert country.current_stage5_subsistence_support_fiscal_increment() == expected_support
+    # Support also covers the plan round-down, 1e-12 x (|resources| + floor + rent).
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
+    assert hh.ts.current("income_social_transfers")[0] == hh.ts.current("stage5_subsistence_support")[0]
+    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support, abs=1e-9)
     assert hh.ts.current("financing_income_error")[0] == receipt - 80
     # Proceeds are financing, not income: income is receipts plus support only,
     # and income together with proceeds covers spending.
@@ -72,8 +73,8 @@ def test_final_support_uses_actual_receipts_and_posts_once(
 def test_final_support_covers_the_goods_floor_and_cash_rent_only(case, expected_support):
     country, hh = _country(**case)
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support)
-    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support)
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
+    assert country.current_stage5_subsistence_support_fiscal_increment() == pytest.approx(expected_support, abs=1e-9)
 
 
 @pytest.mark.parametrize("exempt,expected_support", [(False, 20.0), (True, 50.0)])
@@ -84,7 +85,22 @@ def test_final_support_counts_or_ignores_the_staged_transfer(exempt, expected_su
     country._staged_household_income_shock = np.array([30.0])
     country._household_income_shock_exempt_from_support = exempt
     country.reconcile_realised_household_support()
-    assert hh.ts.current("stage5_subsistence_support")[0] == expected_support
+    assert hh.ts.current("stage5_subsistence_support")[0] == pytest.approx(expected_support, abs=1e-9)
+
+
+def test_final_support_is_a_no_op_in_minimum_income_mode():
+    """minimum_income mode has no Stage 5 support: a household below the floor is not topped up ex post."""
+    country, hh = _country(50.0)  # legacy would pay 100 - 50 = 50
+    country.household_support = _read_household_support_parameters({"mode": "minimum_income"})
+    hh.ts.override_current("stage5_subsistence_support", np.zeros(1))
+    country._stage5_subsistence_support_by_household = np.zeros(1)
+    country.reconcile_realised_household_support()
+    assert hh.ts.current("stage5_subsistence_support")[0] == 0.0
+    assert hh.ts.current("income_social_transfers")[0] == 40.0
+    assert country.current_stage5_subsistence_support_total() == 0.0
+    # The financing diagnostic is still recorded once.
+    assert len(hh.ts.dicts["financing_income_error"]) == 2
+    assert hh.ts.current("financing_income_error")[0] == hh.compute_income()[0] - 80.0
 
 
 def test_stage_household_income_shock_records_the_exemption_and_clears_it():
@@ -147,6 +163,7 @@ def _country(
     country.households = hh
     country._stage5_subsistence_support_by_household = np.array([40.0])
     country._staged_household_income_shock = None
+    country.household_support = _read_household_support_parameters({})  # legacy_stage5 defaults
     country.central_government = SimpleNamespace(
         states={"Value-added Tax": vat, "Household Capital Formation Tax": 0.0, "Household Investment VAT Rate": 0.0}
     )

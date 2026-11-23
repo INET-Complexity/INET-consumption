@@ -4,6 +4,10 @@ from dataclasses import dataclass, fields, replace
 
 import numpy as np
 
+# Relative margin by which the plan rounds discretionary spending down. A plan that spends all its resources
+# would otherwise close at about -1e-9 after the realised ledger re-adds the same flows in another order.
+PLAN_ROUND_DOWN = 1e-12
+
 
 def gross_liquidation_sale(net_sale: np.ndarray, sale_cost: np.ndarray, available_ifa: np.ndarray) -> np.ndarray:
     """Gross illiquid sale that delivers ``net_sale`` in cash after the sale cost.
@@ -87,6 +91,16 @@ class PostGrantFeasiblePlan:
     liquidation_reservation_ifa: np.ndarray | None = None
     liquidation_sale_cost: np.ndarray | None = None
     purchase_liquidation_total: np.ndarray | None = None
+    # Minimum-income allocation (support off): rent and goods floor the household's own resources leave unpaid,
+    # and the negative part of those resources, max(-A, 0), that nobody covers. The floor settlement sets all
+    # three; they are zero whenever support is enabled.
+    unpaid_rent: np.ndarray | None = None
+    unmet_floor: np.ndarray | None = None
+    resource_deficit: np.ndarray | None = None
+    # Overdraft interest due on the opening negative liquid balance, and the part the allocation leaves
+    # unpaid; the unpaid part capitalises into the overdraft.
+    scheduled_overdraft_interest: np.ndarray | None = None
+    unpaid_overdraft_interest: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -284,6 +298,8 @@ class HouseholdFinancialFeasibility:
         scheduled_mortgage_service: np.ndarray,
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
+        support_enabled: bool = True,
+        scheduled_overdraft_interest: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Allocate resources in the Stage 5 payment order, without writing household state.
 
@@ -301,9 +317,38 @@ class HouseholdFinancialFeasibility:
         Support S covers the goods floor and rent only. Unpaid service U is
         suspended on consumer credit first, then on the mortgage.
 
+        O includes the overdraft interest due on the opening negative liquid
+        balance (``scheduled_overdraft_interest``, default zero). It is paid
+        after consumer and mortgage service, so their suspension is unchanged;
+        the unpaid part ``unpaid_overdraft_interest`` capitalises into the
+        overdraft, since the bank charges it to the account in any case.
+
         ``support_exempt_resources`` (E, default zero) is the part of A that the
         support test does not count: S = max(F + R - (A - E), 0). The household
-        still spends E, so A1 = A + S - F - R is unchanged in form.
+        still spends E, so A1 = A + S - F - R is unchanged in form. With support,
+        resources A < 0 are covered too: S = F + R - (A - E) > F + R.
+
+        ``support_enabled=False`` (minimum-income mode, PLAN.md section 5.4): no
+        support, and rent is paid before the floor from the non-negative part of
+        the resources A+ = max(A, 0). A negative A is not covered by anyone here:
+        it is recorded as ``resource_deficit`` = max(-A, 0) and stays in the
+        household's realised cash ledger. E plays no role.
+
+            S   = 0
+            Rp  = min(R, A+)                    unpaid_rent = R - Rp
+            Fp  = min(F, A+ - Rp)               unmet_floor = F - Fp
+            A1  = A+ - Rp - Fp
+            C^f = Fp + min(max(G - F, 0), A1 - P), P and V^p as above
+
+        An unmet floor leaves A1 = 0, so nothing is bought above it. With the
+        goods floor switched off the caller passes F = 0 and C^f <= G.
+
+        The whole allocation is made from the rounded-down resources
+        A - m, m = ``PLAN_ROUND_DOWN`` x (|A| + F + R), so that a plan spending
+        all resources closes at LFA >= m rather than at a floating-point residue
+        below zero. Support absorbs m (S + A - m still covers F + R exactly);
+        unpaid amounts change by at most m. ``resource_deficit`` is max(-A, 0) of
+        the unrounded A, and a cut no larger than m does not make the floor binding.
         """
         desired = self._non_negative(consumption_before_floor)
         floor = self._non_negative(subsistence_floor)
@@ -314,7 +359,21 @@ class HouseholdFinancialFeasibility:
         available = np.asarray(resources, dtype=float)
         residual_before_floor = self._non_negative(plan.residual_shortfall_after_granted_credit)
         shape = residual_before_floor.shape
-        for values in (desired, floor, rent, consumer_service, mortgage_service, desired_investment, available):
+        overdraft_interest = (
+            np.zeros(shape)
+            if scheduled_overdraft_interest is None
+            else self._non_negative(scheduled_overdraft_interest)
+        )
+        for values in (
+            desired,
+            floor,
+            rent,
+            consumer_service,
+            mortgage_service,
+            desired_investment,
+            available,
+            overdraft_interest,
+        ):
             if values.shape != shape:
                 raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
         if not np.all(np.isfinite(available)):
@@ -324,17 +383,37 @@ class HouseholdFinancialFeasibility:
         )
         if exempt.shape != shape or not np.all(np.isfinite(exempt)) or np.any(exempt < 0.0):
             raise ValueError("Support-exempt resources must be finite, non-negative household values.")
+        if not isinstance(support_enabled, (bool, np.bool_)):
+            raise TypeError("support_enabled must be a boolean switch, not a household vector.")
 
-        support = np.maximum(floor + rent - (available - exempt), 0.0)
-        after_floor_and_rent = np.maximum(available + support - floor - rent, 0.0)
+        margin = PLAN_ROUND_DOWN * (np.abs(available) + floor + rent)
+        rounded = available - margin
+        if support_enabled:
+            support = np.maximum(floor + rent - (rounded - exempt), 0.0)
+            after_floor_and_rent = np.maximum(rounded + support - floor - rent, 0.0)
+            floor_paid = floor
+            unpaid_rent = np.zeros(shape)
+            unmet_floor = np.zeros(shape)
+            resource_deficit = np.zeros(shape)
+        else:
+            support = np.zeros(shape)
+            own_resources = np.maximum(rounded, 0.0)
+            resource_deficit = np.maximum(-available, 0.0)
+            rent_paid = np.minimum(rent, own_resources)
+            floor_paid = np.minimum(floor, own_resources - rent_paid)
+            unpaid_rent = rent - rent_paid
+            unmet_floor = floor - floor_paid
+            after_floor_and_rent = own_resources - rent_paid - floor_paid
         service = consumer_service + mortgage_service
         service_paid = np.minimum(service, after_floor_and_rent)
         unpaid_service = service - service_paid
         unpaid_consumer = np.minimum(unpaid_service, consumer_service)
         unpaid_mortgage = unpaid_service - unpaid_consumer
-        after_service = after_floor_and_rent - service_paid
+        overdraft_interest_paid = np.minimum(overdraft_interest, after_floor_and_rent - service_paid)
+        unpaid_overdraft_interest = overdraft_interest - overdraft_interest_paid
+        after_service = after_floor_and_rent - service_paid - overdraft_interest_paid
         consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
-        consumption_after_floor = floor + consumption_above_floor
+        consumption_after_floor = floor_paid + consumption_above_floor
         investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
         consumption_cut_amount = np.maximum(desired - consumption_after_floor, 0.0)
         floor_top_up = np.maximum(consumption_after_floor - desired, 0.0)
@@ -349,5 +428,11 @@ class HouseholdFinancialFeasibility:
             unpaid_consumer_service=unpaid_consumer,
             unpaid_mortgage_service=unpaid_mortgage,
             investment_after_floor=investment_after_floor,
-            floor_binding=(consumption_cut_amount + floor_top_up) > 0.0,
+            # A cut of the order of the round-down margin (2m allows for rounding) is not a binding floor.
+            floor_binding=(consumption_cut_amount + floor_top_up) > 2.0 * margin,
+            unpaid_rent=unpaid_rent,
+            unmet_floor=unmet_floor,
+            resource_deficit=resource_deficit,
+            scheduled_overdraft_interest=overdraft_interest,
+            unpaid_overdraft_interest=unpaid_overdraft_interest,
         )

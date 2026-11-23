@@ -480,6 +480,14 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
     monkeypatch.setattr(
         mpc_runner, "write_selected", lambda model, path, country, paths: model.save(path.parent, path.name)
     )
+    support_seen = []
+    real_extract = mpc_runner.extract_mpc_window
+
+    def spy(*args, **kwargs):
+        support_seen.append(kwargs["household_support"])
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(mpc_runner, "extract_mpc_window", spy)
     seed_dir = tmp_path / "baseline" / "seed-1"
     seed_dir.mkdir(parents=True)
     stale = seed_dir / "multi_country_simulation.h5"
@@ -487,7 +495,11 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
 
     mpc_runner._run_one(
         data=SimpleNamespace(configuration=SimpleNamespace(year=2014), time_unit=3),
-        country_configurations={},
+        country_configurations={
+            "FRA": SimpleNamespace(
+                model_dump=lambda: {}, household_support={"mode": "minimum_income", "goods_floor": False}
+            )
+        },
         country_code="FRA",
         seed=1,
         t_max=4,
@@ -499,6 +511,7 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
         keep_full_h5=keep_full_h5,
         output_variables=["cash"],
     )
+    assert support_seen == [{"mode": "minimum_income", "goods_floor": False}]
 
     window = np.load(seed_dir / "mpc_window.npz")
     assert {k for k in window.files if k.startswith("outcome_")} == {"outcome_cash"}

@@ -1238,9 +1238,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         therefore required whenever the window reaches back more than one period.
 
         A household with NO positive income anywhere in the window floors at
-        ``subsistence_income`` (CU-adjusted subsistence consumption -- half net SMIC
-        per consumption unit, the same concept Stage 5 uses as its floor), not at
-        ``income_floor``. Flooring at ``income_floor`` (1e-12) here is exactly the
+        ``subsistence_income`` (the behavioural-income lower bound ``income_guard``:
+        the subsistence series S in legacy_stage5 mode, the numerical guard
+        G = guard share x M in minimum_income mode), not at ``income_floor``. Flooring at ``income_floor`` (1e-12) here is exactly the
         near-zero-denominator blow-up mechanism behind issue #90 that this method
         exists to prevent -- every wealth ratio divides by this value. No silent
         fallback: if this case can occur for the caller's inputs, it must supply

@@ -75,6 +75,10 @@ class OneTimeLFAEndowment(OneTimeIncomeTransfer):
                 "total_deposits_from_households",
                 "deposits_from_firms",
                 "total_deposits_from_firms",
+                "overdrafts_to_households",
+                "total_overdrafts_to_households",
+                "overdrafts_to_firms",
+                "total_overdrafts_to_firms",
                 "deposits",
                 "liability",
             )

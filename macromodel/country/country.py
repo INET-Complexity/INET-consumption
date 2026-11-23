@@ -78,7 +78,16 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
-from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+from macromodel.agents.households.func.financial_feasibility import PLAN_ROUND_DOWN, forced_liquidation_cash
+from macromodel.agents.households.func.minimum_income import (
+    assessed_income,
+    assessment_flow,
+    assessment_stock,
+    income_guard,
+    minimum_income_level,
+    minimum_income_top_up,
+    notional_rate_period,
+)
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
 from macromodel.agents.individuals.individual_properties import ActivityStatus
@@ -175,6 +184,90 @@ def _read_subsistence_floor_parameters(block: Mapping[str, Any] | None) -> Subsi
             raise ValueError("subsistence_consumption.housing_deduction_monthly must be non-negative.")
 
     return SubsistenceFloorParameters(smic_share, cu_weights, housing_deduction)
+
+
+class MinimumIncomeParameters(NamedTuple):
+    """RSA-style minimum income parameters (2014 RSA single-person amount, notional asset return, guard share)."""
+
+    rsa_base_monthly: float = 499.31
+    base_year: int = 2014
+    notional_asset_return_annual: float = 0.03
+    guard_share_of_m: float = 0.01
+
+
+class HouseholdSupportParameters(NamedTuple):
+    """Household support regime; the defaults reproduce the legacy Stage 5 support."""
+
+    mode: str = "legacy_stage5"
+    goods_floor: bool = True
+    minimum_income: MinimumIncomeParameters = MinimumIncomeParameters()
+
+
+def _read_household_support_parameters(block: Mapping[str, Any] | None) -> HouseholdSupportParameters:
+    """Validate the ``household_support`` configuration block; an empty block gives the legacy defaults.
+
+    The ``base_year == initial_year`` check needs the model's initial year and is done by ``Country``.
+    """
+    block = dict(block or {})
+    defaults = HouseholdSupportParameters()
+    unknown = set(block) - {"mode", "goods_floor", "minimum_income"}
+    if unknown:
+        raise ValueError(f"Unknown household_support keys: {sorted(str(key) for key in unknown)}")
+
+    mode = block.get("mode", defaults.mode)
+    if mode not in ("legacy_stage5", "minimum_income"):
+        raise ValueError("household_support.mode must be 'legacy_stage5' or 'minimum_income'.")
+    goods_floor = block.get("goods_floor", defaults.goods_floor)
+    if not isinstance(goods_floor, bool):
+        raise ValueError("household_support.goods_floor must be a boolean.")
+    if mode == "legacy_stage5" and not goods_floor:
+        raise ValueError("household_support.mode 'legacy_stage5' requires goods_floor: true.")
+
+    minimum_income = dict(block.get("minimum_income") or {})
+    unknown = set(minimum_income) - set(MinimumIncomeParameters._fields)
+    if unknown:
+        raise ValueError(f"Unknown household_support.minimum_income keys: {sorted(str(key) for key in unknown)}")
+
+    def positive(name: str) -> float:
+        value = minimum_income.get(name, getattr(defaults.minimum_income, name))
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"household_support.minimum_income.{name} must be a finite positive number.")
+        return float(value)
+
+    base_year = positive("base_year")
+    if base_year != int(base_year):
+        raise ValueError("household_support.minimum_income.base_year must be an integer.")
+    guard_share = positive("guard_share_of_m")
+    if not guard_share < 1.0:
+        raise ValueError("household_support.minimum_income.guard_share_of_m must lie in (0, 1).")
+    return HouseholdSupportParameters(
+        mode,
+        goods_floor,
+        MinimumIncomeParameters(
+            rsa_base_monthly=positive("rsa_base_monthly"),
+            base_year=int(base_year),
+            notional_asset_return_annual=positive("notional_asset_return_annual"),
+            guard_share_of_m=guard_share,
+        ),
+    )
+
+
+def _validate_minimum_income_base_year(support: HouseholdSupportParameters, initial_year: Optional[int]) -> None:
+    """The 2014 RSA amount is only valid when the model starts in its base year (minimum_income mode only)."""
+    if support.mode != "minimum_income":
+        return
+    if initial_year != support.minimum_income.base_year:
+        raise ValueError(
+            f"household_support.minimum_income.base_year ({support.minimum_income.base_year}) "
+            f"must equal the model initial_year ({initial_year})."
+        )
+
+
+def _validate_minimum_income_resolver(support: HouseholdSupportParameters, uses_feasibility_resolver: bool) -> None:
+    """minimum_income mode needs the Stage 5 feasibility resolver: only its allocator applies the mode's payment
+    order and goods-floor switch (PLAN.md section 5.4). Without it the allocator never runs."""
+    if support.mode == "minimum_income" and not uses_feasibility_resolver:
+        raise ValueError("household_support.mode 'minimum_income' requires households uses_feasibility_resolver: true.")
 
 
 def _resolve_frm_coefficients_path(
@@ -448,6 +541,7 @@ class Country:
         self.firms.states["Capital Formation Tax"] = central_government.states["Firm Capital Formation Tax"]
         self.government_entities = government_entities
         self.banks = banks
+        self._book_opening_balances_gross()
         self.central_bank = central_bank
 
         # The economy
@@ -474,8 +568,16 @@ class Country:
         self.running_multiple_countries = running_multiple_countries
 
         self.configuration = configuration
+        self._initial_year = initial_year
+        self.household_support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
+        _validate_minimum_income_base_year(self.household_support, initial_year)
+        # None (no entitlement computed yet), "assessed" (T fixed for the period) or "booked" (T settled).
+        self._minimum_income_status: Optional[str] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
+        _validate_minimum_income_resolver(
+            self.household_support, configuration.households.parameters.uses_feasibility_resolver
+        )
         validate_portfolio_settlement_configuration(
             households.functions["wealth"],
             configuration.households.parameters.uses_feasibility_resolver,
@@ -504,10 +606,13 @@ class Country:
         self._permanent_income_forecast_inputs = permanent_income_forecast_inputs
         self._permanent_income_design_matrix = permanent_income_design_matrix
         self._stage5_subsistence_support_by_household: np.ndarray | None = None
+        self._benefit_price_level = self.economy.current_consumer_price_level()
         self._initialize_household_unemployment_benefits()
         self._initialize_unemployment_benefit_base()
         self._lock_wage_price_basis()
         self._initialize_nominal_employee_income()
+        # The t0 behavioural-income lower bound, before the t0 income records that it floors.
+        self._set_opening_income_guard()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
@@ -565,6 +670,17 @@ class Country:
         self._wage_price_level = self.economy.current_consumer_price_level()
         self._wage_anchor_factor = self._wage_inflation_anchor_factor()
 
+    def benefit_price_level(self) -> float:
+        """Price level at which period-t benefits are planned and paid: CPI_{t-1}.
+
+        Period-t CPI is computed only after goods clearing, so public pensions, other
+        social transfers and unemployment benefits are indexed to the last realised
+        level, locked when the period's benefits are set. Known receipts, the realised
+        household booking and the fiscal totals all use this one level, so planned
+        benefits equal paid benefits and the government outlay equals household receipts.
+        """
+        return getattr(self, "_benefit_price_level", self.economy.current_consumer_price_level())
+
     def nominal_employee_income(self) -> np.ndarray:
         """Current wage-only nominal receipts, on the payroll price basis."""
         from macromodel.util.wage_receipts import wage_price_factor
@@ -621,7 +737,10 @@ class Country:
             bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
             bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
         )
-        gross = bridge["gross_wages"] + hh.ts.current("expected_income_social_transfers")
+        # The minimum income top-up is excluded from underwriting (consumer-credit DSTI, housing affordability),
+        # as legacy Stage 5 support never entered it: orchestrator decision on PR #215.
+        social = hh.ts.current("expected_income_social_transfers") - hh.ts.current("minimum_income_entitlement")
+        gross = bridge["gross_wages"] + social
         gross = gross + (hh.ts.current("income_rental") + financial) / (1.0 - tau) + np.maximum(-deposit, 0.0)
         return np.maximum(self._apply_household_income_shock(gross), 0.0)
 
@@ -631,19 +750,20 @@ class Country:
         wages = hh.aggregate_individual_amount(
             self.nominal_employee_income(), self.individuals.states["Corresponding Household ID"]
         )
-        pension, unemployment, other, _ = self.compute_realised_household_social_income_components()
+        pension, unemployment, other, _, minimum_income = self.compute_realised_household_social_income_components()
         receipts = (
             hh.ts.current("expected_income")
             - hh.ts.current("expected_income_employee")
             - hh.ts.current("expected_income_social_transfers")
         )
-        receipts = receipts + wages + pension + unemployment + other
+        # The expected social income removed above contains the period's minimum income T once; carry it back.
+        receipts = receipts + wages + pension + unemployment + other + minimum_income
         hh.ts.override_current("financing_income", receipts)
         hh._known_receipts_ready = True
 
     def _household_unemployment_benefits_from_individuals(self) -> np.ndarray:
         """Aggregate the current individual unemployment payments to households in nominal units."""
-        return self.economy.current_consumer_price_level() * self.households.aggregate_individual_amount(
+        return self.benefit_price_level() * self.households.aggregate_individual_amount(
             individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
@@ -665,6 +785,38 @@ class Country:
             "expected_income_social_transfers",
             self.households.ts.current("expected_income_social_transfers") + unemployment_benefits,
         )
+
+    def _stage5_support_enabled(self) -> bool:
+        """Stage 5 support exists only in legacy_stage5 mode (D1); minimum_income mode replaces it with T."""
+        return self.household_support.mode == "legacy_stage5"
+
+    def _current_unpaid_rent(self) -> np.ndarray | None:
+        """Rent the support-off allocator left unpaid this period (D8); ``None`` in legacy_stage5 mode."""
+        if self._stage5_support_enabled():
+            return None
+        return np.asarray(self.households.ts.current("unpaid_rent"), dtype=float)
+
+    def _vacate_unpaid_rent_tenancies(self) -> None:
+        """D8: a private renter (tenure 3, with a dwelling) that left rent unpaid last period moves into social housing.
+
+        Runs before the listing step of this period's housing market, so the dwelling is offered for rent and
+        the household searches from social housing in this period. ``unpaid_rent`` still holds the last
+        settled period: this period's allocator has not run yet. Social tenants who left social rent unpaid
+        stay where they are (PLAN.md section 10, R13), and so does a tenure-3 household in a dwelling it owns.
+        """
+        hh = self.households
+        vacating = np.zeros(hh.ts.current("n_households"), dtype=bool)
+        if not self._stage5_support_enabled():
+            vacating = (np.asarray(hh.ts.current("unpaid_rent"), dtype=float) > 0.0) & hh.renting_from_landlord(
+                self.housing_market.states["properties"]
+            )
+            self.housing_market.vacate_tenancies(household_states=hh.states, household_ids=np.flatnonzero(vacating))
+        hh.ts.unpaid_rent_vacated.append(vacating)
+
+    def _effective_goods_floor(self) -> np.ndarray:
+        """The compulsory goods floor F, or zero when ``household_support.goods_floor`` is switched off."""
+        floor = np.asarray(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        return floor if self.household_support.goods_floor else np.zeros_like(floor)
 
     def clear_stage5_subsistence_support(self) -> None:
         """Clear current-period Stage 5 emergency subsistence support."""
@@ -709,6 +861,10 @@ class Country:
             return
         planned_support = hh.ts.current("stage5_subsistence_support")
         income_without_support = self._apply_household_income_shock(hh.compute_income()) - planned_support
+        if not self._stage5_support_enabled():
+            # No Stage 5 support in minimum_income mode: nothing to reconcile; keep the financing diagnostic.
+            hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
+            return
         spent = hh.ts.current("nominal_amount_spent_in_lcu")
         goods_consumption = np.minimum(spent, hh.ts.current("target_consumption"))
         if getattr(hh.functions["investment"], "disables_household_investment", False):
@@ -731,6 +887,8 @@ class Country:
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
         if not np.all(np.isfinite(resources)) or not np.all(np.isfinite(uses)):
             raise ValueError("Final household funding must use finite receipts and obligations.")
+        # Round resources down as the settlement does, so support leaves the household at LFA >= 0.
+        resources = resources - PLAN_ROUND_DOWN * (np.abs(resources) + floor + hh.current_consumption_cash_rent())
         support = np.maximum(uses - (resources - self._household_resources_exempt_from_support_test()), 0.0)
         hh.ts.financing_income_error.append(income_without_support - hh.current_financing_income())
         self.set_stage5_subsistence_support_by_household(support)
@@ -752,29 +910,37 @@ class Country:
         """Return the nominal fiscal expenditure increment implied by settled Stage 5 support."""
         return self.current_settled_stage5_subsistence_support_total()
 
+    def compute_realised_minimum_income(self) -> np.ndarray:
+        """Return the minimum income top-up T paid this period: the entitlement fixed at the start of the period."""
+        return np.asarray(self.households.ts.current("minimum_income_entitlement"), dtype=float).copy()
+
     def compute_realised_household_social_income_components(
         self,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Return realised pension, unemployment, other-transfer, and Stage 5 components."""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return realised pension, unemployment, other-transfer, Stage 5 and minimum income components.
+
+        The minimum income top-up T is the entitlement fixed at the start of the period (zero in legacy mode).
+        """
         public_pension_by_individual = self.central_government.distribute_public_pension_benefits_to_individuals(
             retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
             public_pension_weights=self.individuals.states["Public Pension Weight"],
         )
-        current_cpi = self.economy.current_consumer_price_level()
-        public_pensions = current_cpi * self.households.aggregate_individual_amount(
+        benefit_price_level = self.benefit_price_level()
+        public_pensions = benefit_price_level * self.households.aggregate_individual_amount(
             individual_amount=public_pension_by_individual,
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
         unemployment_benefits = self._household_unemployment_benefits_from_individuals()
         other_transfers = self.households.compute_social_transfer_income(
             total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=current_cpi,
+            cpi=benefit_price_level,
         )
         return (
             public_pensions,
             unemployment_benefits,
             other_transfers,
             self.compute_realised_stage5_subsistence_support(),
+            self.compute_realised_minimum_income(),
         )
 
     def compute_realised_household_social_transfers(self) -> np.ndarray:
@@ -783,10 +949,15 @@ class Country:
 
     def settle_household_social_transfers(self) -> None:
         """Persist each realised social-income component once on the late settlement path."""
-        public_pensions, unemployment_benefits, other_transfers, realised_support = (
+        if self._minimum_income_status == "booked":
+            raise RuntimeError("The minimum income top-up is booked once per period; it is already booked.")
+        if self.household_support.mode == "minimum_income" and self._minimum_income_status != "assessed":
+            raise RuntimeError("The minimum income top-up must be assessed for the period before it is booked.")
+        public_pensions, unemployment_benefits, other_transfers, realised_support, minimum_income = (
             self.compute_realised_household_social_income_components()
         )
         realised_transfers = public_pensions + unemployment_benefits + other_transfers + realised_support
+        realised_transfers = realised_transfers + minimum_income
         self.individuals.ts.override_current(
             "public_pension_benefits",
             self.central_government.distribute_public_pension_benefits_to_individuals(
@@ -798,8 +969,10 @@ class Country:
         self.households.ts.income_unemployment_benefits.append(unemployment_benefits)
         self.households.ts.income_other_social_transfers.append(other_transfers)
         self.households.ts.stage5_subsistence_support.append(realised_support)
+        self.households.ts.income_minimum_income.append(minimum_income)
         self.households.ts.income_social_transfers.append(realised_transfers)
         self.households.ts.total_income_social_transfers.append([realised_transfers.sum()])
+        self._minimum_income_status = "booked"
 
     @classmethod
     def from_pickled_country(
@@ -1312,6 +1485,18 @@ class Country:
         Args:
             configuration (CountryConfiguration): New model parameters
         """
+        # Validate before any component is reset.
+        support = _read_household_support_parameters(getattr(configuration, "household_support", {}))
+        _validate_minimum_income_resolver(support, configuration.households.parameters.uses_feasibility_resolver)
+        # Reset keeps the t0 rows. Rows floored at a minimum_income opening guard G_0 cannot serve another basis
+        # (D10: build the shared checkpoint in legacy_stage5 mode; policy arms switch mode by reset).
+        if self._construction_guard_basis is not None and self._opening_guard_basis(support) != (
+            self._construction_guard_basis
+        ):
+            raise ValueError(
+                "t0 behavioural-income rows were floored at the opening guard; "
+                "build comparison checkpoints in legacy_stage5 mode"
+            )
         self.forecasting_window = configuration.forecasting_window
         self.assume_zero_growth = configuration.assume_zero_growth
         self.assume_zero_noise = configuration.assume_zero_noise
@@ -1328,6 +1513,7 @@ class Country:
         self.central_bank.reset(configuration=configuration.central_bank)
 
         self.economy.reset(configuration=configuration.economy)
+        self._benefit_price_level = self.economy.current_consumer_price_level()
 
         self.labour_market.reset(configuration=configuration.labour_market)
         self.credit_market.reset(configuration=configuration.credit_market)
@@ -1337,9 +1523,14 @@ class Country:
         self.exogenous.reset()
 
         self.configuration = deepcopy(configuration)
+        self.household_support = _read_household_support_parameters(
+            getattr(self.configuration, "household_support", {})
+        )
+        _validate_minimum_income_base_year(self.household_support, self._initial_year)
         self._consumption_input_adapter.reset()
         self._consumption_run_id += 1
         self._clear_household_income_shock()
+        self._minimum_income_status = None
 
     def _clear_household_income_shock(self) -> None:
         """Clear any staged household income shock used by MPC experiments."""
@@ -1729,8 +1920,126 @@ class Country:
     def update_pre_credit_household_finance_metrics(self) -> None:
         """Update household finance inputs needed before housing and credit clearing."""
         self._update_benefit_planning_metrics()
+        # After the benefit setter (I_t current) and before the expectations pass, which overwrites income_rental.
+        self._set_minimum_income_entitlement()
         self._set_household_income_expectations(replace_current=False)
         self._set_household_target_demand(replace_current=False)
+
+    def _set_minimum_income_entitlement(self) -> None:
+        """Fix the minimum income level M, assessed income Y and top-up T for period t (PLAN.md section 5.3 step 1).
+
+        Y is assessed from realised series that are still the t-1 rows here (monthly: the t-4..t-2 window), so T
+        is independent of every period-t outcome. Computed once per period; legacy mode stores zeros.
+        """
+        if self._minimum_income_status == "assessed":
+            raise RuntimeError("The minimum income entitlement is computed once per period; it is already set.")
+        hh = self.households
+        if self.household_support.mode == "minimum_income":
+            level, assessed, entitlement = self._compute_minimum_income_entitlement()
+        else:
+            n_households = hh.ts.current("n_households")
+            level, assessed, entitlement = (np.zeros(n_households) for _ in range(3))
+        hh.ts.minimum_income_level.append(level)
+        hh.ts.minimum_income_assessed.append(assessed)
+        hh.ts.minimum_income_entitlement.append(entitlement)
+        self._minimum_income_status = "assessed"
+
+    def _compute_minimum_income_level(self, *, transfer_index: float, cpi_ratio: float) -> np.ndarray:
+        """Guaranteed level M per household from the current consumption units (PLAN.md section 3.1)."""
+        return minimum_income_level(
+            # Population expansion applied once, as for the SMIC in _select_net_smic_base.
+            rsa_base_monthly_model_units=self.household_support.minimum_income.rsa_base_monthly * self.scale,
+            time_unit=self.economy.time_unit,
+            consumption_units=self.households._current_consumption_units(),
+            transfer_index=transfer_index,
+            cpi_ratio=cpi_ratio,
+        )
+
+    def _compute_minimum_income_entitlement(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return (M, Y, T) per household from the current setter index, CPI and the realised t-1 series."""
+        hh = self.households
+        parameters = self.household_support.minimum_income
+        time_unit = self.economy.time_unit
+        government_ts = self.central_government.ts
+        level = self._compute_minimum_income_level(
+            transfer_index=government_ts.current("total_other_benefits")[0]
+            / government_ts.initial("total_other_benefits")[0],
+            # Last realised CPI, the price basis of every benefit (benefit_price_level), as for the subsistence
+            # floor: period-t CPI is only known after goods clearing; T is fixed at the start of the period (D5).
+            cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
+        )
+        flow = {
+            name: assessment_flow(hh.ts.historic(name), time_unit=time_unit)
+            for name in (
+                "income_employee",
+                "income_unemployment_benefits",
+                "income_public_pension",
+                "income_other_social_transfers",
+                "income_rental",
+            )
+        }
+        assessed = assessed_income(
+            employee=flow["income_employee"],
+            unemployment=flow["income_unemployment_benefits"],
+            pension=flow["income_public_pension"],
+            other_transfers=flow["income_other_social_transfers"],
+            rental=flow["income_rental"],
+            # Gross financial assets, debt not subtracted: an overdraft (negative liquid balance) is debt, not an
+            # asset, so it contributes zero assets rather than negative notional income.
+            liquid_assets=np.maximum(
+                assessment_stock(hh.ts.historic("liquid_financial_assets"), time_unit=time_unit), 0.0
+            ),
+            illiquid_assets=assessment_stock(hh.ts.historic("illiquid_financial_assets"), time_unit=time_unit),
+            notional_rate_period=notional_rate_period(parameters.notional_asset_return_annual, time_unit),
+        )
+        return level, assessed, minimum_income_top_up(level=level, assessed=assessed)
+
+    @staticmethod
+    def _opening_guard_basis(support: HouseholdSupportParameters) -> Optional[tuple]:
+        """Parameters that fix the t0 guard G_0 in minimum_income mode; None in legacy_stage5 (G_0 = S)."""
+        if support.mode != "minimum_income":
+            return None
+        return support.mode, support.minimum_income.guard_share_of_m, support.minimum_income.rsa_base_monthly
+
+    def _set_opening_income_guard(self) -> None:
+        """Store the t0 behavioural-income lower bound: S (legacy_stage5) or G_0 = share x M_0 (minimum_income).
+
+        No assessment has run at t0, so the opening M_0 uses the opening consumption units with I = 1 and a CPI
+        ratio of 1 (the period-start formula evaluated at t0). M_0 is stored as the t0 ``minimum_income_level``
+        row, so G = share x M holds at every row; the t0 assessed income and entitlement stay zero (no T at t0).
+        The t0 rows floored at G_0 cannot be reset to another guard basis (see ``reset``).
+        """
+        self._construction_guard_basis = self._opening_guard_basis(self.household_support)
+        if self.household_support.mode != "minimum_income":
+            self.economy.ts["income_guard"] = np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+            return
+        level = self._compute_minimum_income_level(transfer_index=1.0, cpi_ratio=1.0)
+        self.households.ts.override_current("minimum_income_level", level)
+        self.economy.ts["income_guard"] = income_guard(
+            level=level, share=self.household_support.minimum_income.guard_share_of_m
+        )
+
+    def _update_income_guard(self, *, replace_current: bool) -> None:
+        """Store this period's lower bound on behavioural income, the economy series ``income_guard``.
+
+        The bound in force at the five behavioural-income floors (PLAN.md sections 3.4, 4.5, 5.5): the subsistence
+        series S in legacy_stage5 mode (bit-identical to reading S), G = guard share x M in minimum_income mode,
+        with M fixed at the start of the period by _set_minimum_income_entitlement. Rows of earlier periods are
+        never rewritten. The goods floor (S, switched by ``goods_floor``) is a separate series.
+        """
+        if self.household_support.mode != "minimum_income":
+            guard = np.array(self.economy.ts.current("subsistence_consumption"), dtype=float)
+        elif self._minimum_income_status != "assessed":
+            raise RuntimeError("The income guard needs this period's minimum income level; assess it first.")
+        else:
+            guard = income_guard(
+                level=self.households.ts.current("minimum_income_level"),
+                share=self.household_support.minimum_income.guard_share_of_m,
+            )
+        if replace_current:
+            self.economy.ts.override_current("income_guard", guard)
+        else:
+            self.economy.ts.income_guard.append(guard)
 
     def update_post_labour_planning_metrics(self) -> None:
         """Update planning metrics that depend on labour clearing."""
@@ -1780,6 +2089,12 @@ class Country:
         )
         # Contract wages are now set for this quarter: refresh what the employed would receive if separated.
         self._update_unemployment_benefit_base()
+        # Activity status is final for the period. Replace the pre-clearing planning vector (appended in
+        # _update_benefit_planning_metrics) with the benefit actually paid this period, so known receipts,
+        # the realised household booking and the fiscal total all read this one vector.
+        self.individuals.ts.override_current(
+            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
+        )
         self.individuals.ts.employee_income_histogram.append(
             get_histogram(self.individuals.ts.current("employee_income"), self.scale)
         )
@@ -1822,6 +2137,7 @@ class Country:
             self.households.refresh_post_labour_feasibility(
                 self.credit_market.compute_opening_scheduled_consumption_payments_by_household()
                 + self.credit_market.compute_opening_scheduled_mortgage_payments_by_household()
+                + self.household_overdraft_interest_due()
             )
             self.settle_authoritative_household_payments()
         else:
@@ -1829,6 +2145,8 @@ class Country:
 
     def _update_benefit_planning_metrics(self) -> None:
         self.clear_stage5_subsistence_support()
+        # Benefits are priced at the last realised CPI for the whole period (see benefit_price_level).
+        self._benefit_price_level = self.economy.current_consumer_price_level()
         # The central government updates unemployment benefits paid to individuals and social transfers to households
         self.central_government.update_benefits(
             historic_benefit_indexation_inflation=self.economy.historic_consumer_period_inflation(),
@@ -1859,7 +2177,7 @@ class Country:
         expected_individual_income = self.individuals.compute_expected_income(
             expected_firm_profits=self.firms.ts.current("expected_profits"),
             expected_bank_profits=self.banks.ts.current("expected_profits"),
-            cpi=self.economy.current_consumer_price_level(),
+            cpi=self.benefit_price_level(),
             expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
@@ -1875,42 +2193,28 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        expected_unemployment_benefits = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.economy.current_consumer_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=self.individuals.ts.current("income_from_unemployment_benefits"),
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
         expected_income_employee = (
             1 + self.economy.current_expected_consumer_period_inflation()
         ) * self.households.compute_employee_income(
             individual_income=self.nominal_employee_income(),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
-        expected_public_pension_by_individual = (
-            self.central_government.distribute_public_pension_benefits_to_individuals(
-                retirement_eligibility=self.individuals.states["Public Pension Weight"] > 0.0,
-                public_pension_weights=self.individuals.states["Public Pension Weight"],
-            )
-        )
-        expected_income_public_pension = (
-            (1 + self.economy.current_expected_consumer_period_inflation())
-            * self.economy.current_consumer_price_level()
-            * self.households.aggregate_individual_amount(
-                individual_amount=expected_public_pension_by_individual,
-                corr_households=self.individuals.states["Corresponding Household ID"],
-            )
-        )
-        expected_income_other_social_transfers = self.households.compute_expected_social_transfer_income(
-            total_other_social_transfers=self.central_government.ts.current("total_other_benefits")[0],
-            cpi=self.economy.current_consumer_price_level(),
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
+        # Benefits are known at planning: the amounts paid this period, priced at benefit_price_level() with no
+        # expected-inflation uplift (the wage term keeps its uplift). Pass 1 uses the pre-clearing UB vector.
+        expected_income_public_pension, expected_unemployment_benefits, expected_income_other_social_transfers = (
+            self.compute_realised_household_social_income_components()[:3]
         )
         expected_income_social_transfers = (
             expected_income_public_pension + expected_unemployment_benefits + expected_income_other_social_transfers
         )
+        # The minimum income top-up is known for the period: added once; pass 2 replaces the whole row.
+        expected_income_social_transfers = expected_income_social_transfers + self.households.ts.current(
+            "minimum_income_entitlement"
+        )
+        # Planned rent is the rent due: unpaid rent (minimum_income mode) is only known once the allocator has
+        # run; the final recompute in update_realised_metrics books the rent actually received. A landlord thus
+        # plans on rent due and realises rent received: the shortfall (1 - tax) x unpaid rent lands in its
+        # realised cash, with no true-up (PLAN.md section 3.3).
         diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
@@ -2016,6 +2320,7 @@ class Country:
         else:
             deposit_paid = hh.ts.current("interest_paid_on_deposits")
             loan_interest = hh.ts.current("interest_paid_on_loans")
+        guard = self.economy.ts.current("income_guard")
         parts = reconcile_behavioural_income(
             non_property=non_property,
             rental=hh.ts.current("income_rental"),
@@ -2023,7 +2328,7 @@ class Country:
             deposit_receipts=np.maximum(-deposit_paid, 0.0),
             borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
             imputed_rent=hh.current_consumption_imputed_rent(),
-            subsistence=self.economy.ts.current("subsistence_consumption"),
+            subsistence=guard,
         )
         # Keep loan interest separate from deposit/overdraft interest so only
         # the contractual opening-loan amount is frozen across planning passes.
@@ -2036,16 +2341,25 @@ class Country:
                 hh.ts.override_current(key, values.copy())
             else:
                 hh.ts.dicts[key].append(values.copy())
+        if expected:
+            # Planning income is the floored series entering the consumption rule: flag where the guard binds,
+            # strictly below it. Raw income is kept in the _raw series.
+            bound = (parts["raw"] < guard).astype(float)
+            if initial:
+                hh.ts["income_guard_bound"] = bound
+            elif replace_current:
+                hh.ts.override_current("income_guard_bound", bound)
+            else:
+                hh.ts.income_guard_bound.append(bound)
 
         if initial and expected:
             # PI forecasts wages/transfers only. Keep the legacy bridge field
             # names, but seed them on the same non-property basis as planning.
             # Property receipts remain in behavioural income and cash accounts.
             n = parts["non_property"]
-            floor = self.economy.ts.current("subsistence_consumption")
-            hh.ts.override_current("income_bridge_current", np.maximum(n, floor))
+            hh.ts.override_current("income_bridge_current", np.maximum(n, guard))
             hh.ts.override_current("income_bridge_property", np.zeros_like(n))
-            hh.ts.override_current("income_bridge_floor_used", (n < floor).astype(float))
+            hh.ts.override_current("income_bridge_floor_used", (n < guard).astype(float))
             hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
             if isinstance(hh.functions.get("consumption"), CreditAugmentedConsumption):
                 service = self._contractual_debt_service_components()
@@ -2158,6 +2472,8 @@ class Country:
                     household_layout_key=input_layout,
                 )
         self._update_subsistence_consumption(replace_current=replace_current)
+        # Before the behavioural-income record and every floor site below.
+        self._update_income_guard(replace_current=replace_current)
         aligned_income = getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False)
         if aligned_income:
             self._record_behavioural_income(expected=True, replace_current=replace_current)
@@ -2192,7 +2508,7 @@ class Country:
                 bridge_arguments["monetary_income_components"] = {
                     "non_property": non_property,
                     "property_income": np.zeros_like(non_property),
-                    "income_floor": self.economy.ts.current("subsistence_consumption"),
+                    "income_floor": self.economy.ts.current("income_guard"),
                 }
             learning_inputs = self.households.current_income_belief_learning_inputs(
                 common_permanent_income_log_ratio=common_log_ratio,
@@ -2407,12 +2723,11 @@ class Country:
             uncertainty_delta=uncertainty_delta,
             replace_current_diagnostics=replace_current,
             time_unit=self.economy.time_unit,
-            # CU-adjusted subsistence consumption (half net SMIC per consumption
-            # unit), already refreshed above by _update_subsistence_consumption
-            # (line 1189). Used only as the geometric-average income denominator's
-            # floor for a household with no positive income anywhere in its
-            # history window (PR #138 review finding 1); ignored otherwise.
-            subsistence_income=self.economy.ts.current("subsistence_consumption"),
+            # The behavioural-income lower bound (S in legacy_stage5, G in minimum_income), already
+            # refreshed above by _update_income_guard. Used only as the geometric-average income
+            # denominator's floor for a household with no positive income anywhere in its history
+            # window (PR #138 review finding 1); ignored otherwise.
+            subsistence_income=self.economy.ts.current("income_guard"),
             consumption_inputs=consumption_inputs,
             **({"debt_service_payments": debt_service_payments} if debt_service_payments is not None else {}),
         )
@@ -2474,6 +2789,11 @@ class Country:
             clear_post_grant=not replace_current,
         )
         scheduled_debt_service = scheduled_mortgage_payment + scheduled_consumption_loan_payment
+        if uses_feasibility_resolver:
+            # Overdraft interest on the opening negative balance is scheduled debt service in the plan. In the
+            # pre-credit pass this uses last period's rate r_{t-1}: bank rates are set later, in
+            # prepare_credit_market_clearing. The post-labour refresh and the settlement use r_t, the rate charged.
+            scheduled_debt_service = scheduled_debt_service + self.household_overdraft_interest_due()
         liquidity_shortfall = self.households.compute_and_record_liquidity_shortfall(
             target_consumption=self.households.ts.current("target_consumption"),
             scheduled_debt_service=scheduled_debt_service,
@@ -2586,6 +2906,8 @@ class Country:
         Updates property values and household housing decisions before
         market clearing.
         """
+        self._vacate_unpaid_rent_tenancies()
+
         # Update property values
         self.housing_market.update_property_value()
 
@@ -2874,15 +3196,63 @@ class Country:
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
 
         # Calculate the interest on deposits received/paid by households
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
 
         # Calculate paid interest of households
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
+
+    def _book_opening_balances_gross(self) -> None:
+        """Make the t0 bank deposits gross: deposits = sum max(balance, 0), overdrafts = sum max(-balance, 0).
+
+        The data sums each bank's depositor balances, which is already gross when no depositor is overdrawn
+        (the usual case, left bit-for-bit unchanged). Otherwise the t0 rows are rebooked from the balances.
+        """
+        balances = {
+            "households": (self.households.ts.current("liquid_financial_assets"), self.households.states),
+            "firms": (self.firms.ts.current("deposits"), self.firms.states),
+        }
+        if all(np.all(np.asarray(values) >= 0.0) for values, _ in balances.values()):
+            return
+        n_banks = self.banks.ts.current("n_banks")
+        for name, (values, states) in balances.items():
+            values = np.asarray(values, dtype=float)
+            ids = states["Corresponding Bank ID"]
+            deposits = np.bincount(ids, weights=np.maximum(values, 0.0), minlength=n_banks)
+            overdrafts = np.bincount(ids, weights=np.maximum(-values, 0.0), minlength=n_banks)
+            self.banks.ts.override_current("deposits_from_" + name, deposits)
+            self.banks.ts.override_current("total_deposits_from_" + name, [deposits.sum()])
+            self.banks.ts.override_current("overdrafts_to_" + name, overdrafts)
+            self.banks.ts.override_current("total_overdrafts_to_" + name, [overdrafts.sum()])
+
+    def household_overdraft_interest_due(self) -> np.ndarray:
+        """Overdraft interest due this period on each household's opening negative LFA, at its bank's current rate."""
+        return self.households.compute_deposit_interest_components(
+            bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
+            bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        )[1]
+
+    def record_household_deposit_interest(self) -> None:
+        """Settle interest on household accounts and book it at each household's own bank.
+
+        The bank receives exactly the overdraft interest the households pay and
+        pays exactly the deposit interest they receive.
+        """
+        rates = {
+            "bank_interest_rate_on_household_deposits": self.banks.ts.current("interest_rate_on_household_deposits"),
+            "bank_overdraft_rate_on_household_deposits": self.banks.ts.current("overdraft_rate_on_household_deposits"),
+        }
+        deposit_interest, overdraft_interest = self.households.compute_deposit_interest_components(**rates)
+        self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
+        self.households.ts.overdraft_interest_paid.append(overdraft_interest)
+        self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
+        plan = self.households.post_grant_feasible_plan
+        unpaid = None if plan is None else plan.unpaid_overdraft_interest
+        self.banks.record_household_deposit_interest(
+            deposit_interest_received=deposit_interest,
+            overdraft_interest_paid=overdraft_interest,
+            households_corresponding_bank=self.households.states["Corresponding Bank ID"],
+            overdraft_interest_capitalised=np.zeros_like(overdraft_interest) if unpaid is None else unpaid,
+        )
 
     def reconcile_post_grant_feasible_plan(self) -> None:
         """Build settled household feasibility after consumer-credit clearing."""
@@ -2931,17 +3301,20 @@ class Country:
         if self.economy.time_unit not in (1, 3):
             raise ValueError("Stage 6 FICP supports monthly (1) and quarterly (3) periods only.")
         target_consumption = self.households.ts.current("target_consumption")
-        subsistence_consumption = self.economy.ts.current("subsistence_consumption")
         investment_cash = self.households.target_investment_cash()
+        # Resources already contain the minimum income T once, through financing_income
+        # (refresh_known_household_receipts). In minimum_income mode no support is paid (PLAN.md 5.4).
         self.households.apply_consumption_floor_to_post_grant_plan(
             consumption_before_floor=self.households.consumption_cash_factor() * target_consumption.sum(axis=1),
-            subsistence_floor=subsistence_consumption,
+            subsistence_floor=self._effective_goods_floor(),
             cash_rent=self.households.current_consumption_cash_rent(),
             resources=self.households.current_floor_settlement_resources(),
             scheduled_consumer_service=self.credit_market.compute_opening_scheduled_consumption_payments_by_household(),
             scheduled_mortgage_service=self.credit_market.compute_opening_scheduled_mortgage_payments_by_household(),
             investment=investment_cash,
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
+            support_enabled=self._stage5_support_enabled(),
+            scheduled_overdraft_interest=self.household_overdraft_interest_due(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -3043,12 +3416,7 @@ class Country:
         self.households.ts.debt.append(self.households.compute_debt())
         self.households.ts.debt_histogram.append(get_histogram(self.households.ts.current("debt"), self.scale))
         self.households.ts.interest_paid_on_loans.append(self.credit_market.compute_interest_paid_by_household())
-        self.households.ts.interest_paid_on_deposits.append(
-            self.households.compute_interest_paid_on_deposits(
-                bank_interest_rate_on_household_deposits=self.banks.ts.current("interest_rate_on_household_deposits"),
-                bank_overdraft_rate_on_household_deposits=self.banks.ts.current("overdraft_rate_on_household_deposits"),
-            )
-        )
+        self.record_household_deposit_interest()
         self.households.ts.interest_paid.append(self.households.compute_interest_paid())
 
     def validate_stage5_closing_balance_sheets(self) -> None:
@@ -3278,7 +3646,8 @@ class Country:
             self.households.current_post_grant_residual_shortfall()
         subsistence_consumption_shortfall = self.households.prepare_goods_market_clearing(
             exchange_rate_usd_to_lcu=self.exchange_rate_usd_to_lcu,
-            subsistence_consumption=self.economy.ts.current("subsistence_consumption"),
+            subsistence_consumption=self._effective_goods_floor(),
+            support_enabled=self._stage5_support_enabled(),
         )
         if self.configuration.households.parameters.uses_feasibility_resolver:
             scheduled_consumer_payments = (
@@ -3296,11 +3665,14 @@ class Country:
                 scheduled_consumer_payments=scheduled_consumer_payments,
                 scheduled_mortgage_payments=scheduled_mortgage_payments,
             )
-            support_by_household = compute_stage5_subsistence_support(
-                self.households.ts.current("post_relief_funding_gap")
-                if self.credit_market.consumer_payments_settled()
-                else self.households.current_floor_support()
-            )
+            if self._stage5_support_enabled():
+                support_by_household = compute_stage5_subsistence_support(
+                    self.households.ts.current("post_relief_funding_gap")
+                    if self.credit_market.consumer_payments_settled()
+                    else self.households.current_floor_support()
+                )
+            else:
+                support_by_household = np.zeros(expected_shape)
             self.set_stage5_subsistence_support_by_household(support_by_household)
         self.economy.ts.override_current("subsistence_consumption_shortfall", subsistence_consumption_shortfall)
         self.government_entities.prepare_goods_market_clearing(
@@ -4238,6 +4610,15 @@ class Country:
             bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
             bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
         )
+        firm_deposit_interest, firm_overdraft_interest = self.firms.compute_deposit_interest_components(
+            bank_interest_rate_on_firm_deposits=self.banks.ts.current("interest_rate_on_firm_deposits"),
+            bank_overdraft_rate_on_firm_deposits=self.banks.ts.current("overdraft_rate_on_firm_deposits"),
+        )
+        self.banks.record_firm_deposit_interest(
+            deposit_interest_received=firm_deposit_interest,
+            overdraft_interest_paid=firm_overdraft_interest,
+            firm_corresponding_bank=self.firms.states["Corresponding Bank ID"],
+        )
         firm_corporate_tax_obligation_preview = self.current_firm_corporate_tax_obligation_preview()
         self.firms.draw_operating_revolving_facility(
             intermediate_purchases=self.firms.ts.current("total_intermediate_inputs_bought_costs"),
@@ -4423,12 +4804,8 @@ class Country:
         self.record_dividend_fund_settlement_receipts()
 
         # E1. INDIVIDUAL AND HOUSEHOLD INCOME
-        # Benefits were needed during planning for reservation-wage decisions,
-        # but realised payments must follow the activity status after labour
-        # market clearing. Replace the planning vector before computing income.
-        self.individuals.ts.override_current(
-            "income_from_unemployment_benefits", self._distribute_unemployment_benefits()
-        )
+        # income_from_unemployment_benefits already holds the post-clearing vector
+        # (set in update_post_labour_planning_metrics); it is the vector paid here.
         # Update individual income components
         self.individuals.ts.income.append(
             self.individuals.compute_income(
@@ -4446,19 +4823,57 @@ class Country:
             nominal_wages[employed]
             - self.economy.current_consumer_price_level() * self.individuals.ts.current("employee_income")[employed]
         )
+        # Benefits are paid at the benefit price level, not at the post-clearing CPI.
+        corrected_individual_income += (
+            self.benefit_price_level() - self.economy.current_consumer_price_level()
+        ) * self.individuals.ts.current("income_from_unemployment_benefits")
         self.individuals.ts.override_current("income", corrected_individual_income)
         self.individuals.ts.income_histogram.append(get_histogram(self.individuals.ts.current("income"), self.scale))
 
         # E2. HOUSEHOLD INCOME COMPONENTS
-        # Recalculate rental income with final housing market data and overwrite the planned value
+        # Recalculate rental income with final housing market data and overwrite the planned value.
+        # Rent left unpaid (minimum_income mode, D8): the private landlord absorbs it and government writes
+        # off unpaid social rent. A tenure-3 household in a dwelling it owns owes nobody: booked separately.
+        unpaid_rent = self._current_unpaid_rent()
+        n_households = self.households.ts.current("n_households")
+        if unpaid_rent is None:
+            rent_unpaid_absorbed = np.zeros(n_households)
+            rent_unpaid_no_counterparty = np.zeros(n_households)
+            social_rent_written_off = 0.0
+            renting_from_landlord = None
+        else:
+            properties = self.housing_market.states["properties"]
+            renting_from_landlord = self.households.renting_from_landlord(properties)
+            in_social_housing = self.households.states["Corresponding Inhabited House ID"] == -1
+            rent_unpaid_absorbed = self.households.unpaid_rent_by_landlord(properties, unpaid_rent)
+            social_rent_written_off = unpaid_rent[in_social_housing].sum()
+            rent_unpaid_no_counterparty = np.where(renting_from_landlord | in_social_housing, 0.0, unpaid_rent)
+            # Rent due = rent paid + unpaid rent, and every unpaid unit has exactly one destination.
+            if not np.isclose(
+                unpaid_rent.sum(),
+                rent_unpaid_absorbed.sum() + social_rent_written_off + rent_unpaid_no_counterparty.sum(),
+                rtol=1e-12,
+                atol=1e-6,
+            ):
+                raise RuntimeError(
+                    "Unpaid rent must be absorbed by a private landlord, written off by government, or booked "
+                    "without counterparty."
+                )
+        self.households.ts.rent_unpaid_no_counterparty.append(rent_unpaid_no_counterparty)
+        self.households.ts.rent_unpaid_absorbed.append(rent_unpaid_absorbed)
+        self.households.ts.total_rent_unpaid_absorbed.append([rent_unpaid_absorbed.sum()])
         final_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
+            unpaid_rent=unpaid_rent,
         )
         self.households.ts.dicts["income_rental"][-1] = final_income_rental
         self.households.ts.dicts["total_income_rental"][-1] = [final_income_rental.sum()]
         self.households.ts.dicts["diagnostic_income_rental"][-1] = final_income_rental
         self.households.ts.dicts["total_diagnostic_income_rental"][-1] = [final_income_rental.sum()]
+        if unpaid_rent is not None:
+            # compute_rental_market_aggregates recorded the planned rental income, which counts rent due.
+            self.economy.ts.override_current("total_real_rent_rec", [final_income_rental.sum()])
 
         self.households.ts.income_employee.append(
             self.households.compute_employee_income(
@@ -4564,6 +4979,7 @@ class Country:
             period_index=period_index,
             tau_vat=self.central_government.states["Value-added Tax"],
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
+            unpaid_rent=unpaid_rent,
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))
@@ -4672,11 +5088,16 @@ class Country:
             if getattr(self.households.functions["wealth"], "illiquid_returns_are_capital_gains", False)
             else self.households.ts.current("income_financial_assets")
         )
+        # The rental-income tax base is the rent private landlords actually received.
+        rental_income_tax_base = (
+            self.households.ts.current("rent")[self.households.states["Tenure Status of the Main Residence"] == 3].sum()
+            if unpaid_rent is None
+            else (self.households.ts.current("rent") - unpaid_rent)[renting_from_landlord].sum()
+        )
+        self.central_government.ts.social_rent_written_off.append([social_rent_written_off])
         self.central_government.compute_taxes(
             current_ind_employee_income=self.nominal_employee_income(),
-            current_total_rent_paid=self.households.ts.current("rent")[
-                self.households.states["Tenure Status of the Main Residence"] == 3
-            ].sum(),
+            current_total_rent_paid=rental_income_tax_base,
             current_income_financial_assets=taxable_household_financial_income,
             current_ind_activity=self.individuals.states["Activity Status"],
             current_ind_realised_cons=self.households.ts.current("consumption"),
@@ -4696,15 +5117,17 @@ class Country:
         self.central_government.ts.revenue.append(
             [
                 self.central_government.compute_revenue(
-                    household_rent_paid_to_government=self.households.states["Rent paid to Government"]
+                    household_rent_paid_to_government=(
+                        self.households.states["Rent paid to Government"]
+                        if unpaid_rent is None
+                        else self.households.states["Rent paid to Government"] - social_rent_written_off
+                    )
                 )
             ]
         )
+        # Government outlay is the settled household receipt (one booking, same price level).
         self.central_government.ts.total_unemployment_benefits.append(
-            [
-                self.economy.current_consumer_price_level()
-                * self.individuals.ts.current("income_from_unemployment_benefits").sum()
-            ]
+            [self.households.ts.current("income_unemployment_benefits").sum()]
         )
         self.central_government.ts.total_public_pension_benefits.append(
             [self.households.ts.current("income_public_pension").sum()]
@@ -4714,6 +5137,9 @@ class Country:
         )
         self.central_government.ts.total_necessity_support.append(
             [self.households.ts.current("stage5_subsistence_support").sum()]
+        )
+        self.central_government.ts.total_minimum_income.append(
+            [self.households.ts.current("income_minimum_income").sum()]
         )
         self.central_government.ts.total_household_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
@@ -4736,7 +5162,7 @@ class Country:
         self.central_government.ts.deficit.append(
             self.central_government.compute_deficit(
                 current_ind_activity=self.individuals.states["Activity Status"],
-                current_cpi=self.economy.current_consumer_price_level(),
+                current_cpi=self.benefit_price_level(),
                 current_government_nominal_amount_spent=self.government_entities.ts.current(
                     "nominal_amount_spent_in_lcu"
                 ),
@@ -4775,9 +5201,15 @@ class Country:
             imports=self.economy.ts.current("imports").sum(),
             operating_surplus=self.firms.ts.current("gross_operating_surplus_mixed_income").sum(),
             wages=self.firms.ts.current("total_wage").sum(),
+            # Output and consumption of rental housing services are on an accrual basis, at the rent due
+            # (total_real_rent_paid). Unpaid rent is a write-off of the landlord's or government's claim (SNA:
+            # other change in volume), not lower output, so it is added back here. Household income_rental is
+            # on a cash basis (rent received).
             rent_received=self.economy.ts.current("total_real_rent_rec")[0]
-            + self.central_government.ts.current("taxes_rental_income")[0],
-            central_government_rent_received=self.central_government.ts.current("total_rent_received")[0],
+            + self.central_government.ts.current("taxes_rental_income")[0]
+            + (0.0 if unpaid_rent is None else rent_unpaid_absorbed.sum()),
+            central_government_rent_received=self.central_government.ts.current("total_rent_received")[0]
+            + (0.0 if unpaid_rent is None else social_rent_written_off),
             running_multiple_countries=self.running_multiple_countries,
         )
         self.economy.compute_output_gap()
@@ -4934,6 +5366,11 @@ class Country:
             "+Wages": self.firms.ts.get_aggregate("total_wage"),
             "+Rent_Received": self.economy.ts.get_aggregate("total_real_rent_rec"),
             "+Central_Government_Rent_Received": self.central_government.ts.get_aggregate("total_rent_received"),
+            # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
+            "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
+            "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
+            # Memo item, not part of gdp_income: self-tenancy owes nobody (zero in legacy and in the smoke runs).
+            "memo_Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components
@@ -4992,6 +5429,11 @@ class Country:
             "+Wages": self.firms.ts.get_aggregate("total_wage"),
             "+Rent_Received": self.economy.ts.get_aggregate("total_real_rent_rec"),
             "+Central_Government_Rent_Received": self.central_government.ts.get_aggregate("total_rent_received"),
+            # Unpaid rent is income-side GDP: absorbed by landlords or written off by the government (zero in legacy).
+            "+Rent_Unpaid_Absorbed": self.households.ts.get_aggregate("total_rent_unpaid_absorbed"),
+            "+Social_Rent_Written_Off": self.central_government.ts.get_aggregate("social_rent_written_off"),
+            # Memo item, not part of gdp_income: self-tenancy owes nobody (zero in legacy and in the smoke runs).
+            "memo_Rent_Unpaid_No_Counterparty": self.households.ts.get_aggregate("rent_unpaid_no_counterparty"),
             "+Central_Government_Rental_Taxes": self.central_government.ts.get_aggregate("taxes_rental_income"),
             "+Central_Government_Product_Taxes": self.central_government.ts.get_aggregate("taxes_on_products"),
             # Additional Value Added Components

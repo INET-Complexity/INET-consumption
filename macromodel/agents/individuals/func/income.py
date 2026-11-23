@@ -64,8 +64,8 @@ class IncomeSetter(ABC):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Current price index
-            expected_inflation (float): Expected inflation rate
+            cpi (float): Benefit price level (CPI_{t-1}); benefits are known at planning
+            expected_inflation (float): Expected inflation rate, applied to wages only
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -160,8 +160,8 @@ class DefaultIncomeSetter(IncomeSetter):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Current price index
-            expected_inflation (float): Expected inflation rate
+            cpi (float): Benefit price level (CPI_{t-1}); benefits are known at planning
+            expected_inflation (float): Expected inflation rate, applied to wages only
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -200,7 +200,8 @@ class DefaultIncomeSetter(IncomeSetter):
             * (1 - tau_firm)
             * np.maximum(0.0, expected_bank_profits[corr_invested_banks[bank_inv_ind]])
         )
-        return (1 + expected_inflation) * cpi * individual_social_benefits + income
+        # Benefits are known at planning (cpi is the benefit price level): no expected-inflation uplift.
+        return cpi * individual_social_benefits + income
 
     def compute_income(
         self,

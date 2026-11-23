@@ -25,6 +25,9 @@ _HOUSEHOLD = (
     "live_credit_requested",
     "funded_from_liquid_assets",
     "stage5_subsistence_support",
+    "income_minimum_income",
+    "unpaid_rent",
+    "unmet_floor",
     "income_social_transfers",
     "income_public_pension",
     "income_other_social_transfers",
@@ -52,6 +55,10 @@ _PLAN = (
 _BANK = (
     "deposits_from_households",
     "deposits_from_firms",
+    "overdrafts_to_households",
+    "total_overdrafts_to_households",
+    "overdrafts_to_firms",
+    "total_overdrafts_to_firms",
     "deposits",
     "equity",
     "liability",
@@ -66,6 +73,8 @@ _GOVERNMENT = (
     "total_public_pension_benefits",
     "total_other_social_transfers",
     "total_necessity_support",
+    "total_minimum_income",
+    "social_rent_written_off",
 )
 _ECONOMY = ("gdp_output", "unemployment_rate", "total_growth")
 

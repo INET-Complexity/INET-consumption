@@ -11,9 +11,11 @@ if str(RUN_MODEL_PATH) not in sys.path:
     sys.path.insert(0, str(RUN_MODEL_PATH))
 
 from src.mpc_analysis import (  # noqa: E402
+    MPC_MINIMUM_INCOME_INPUTS,
     MPC_REGIME_CONSTRAINED,
     MPC_REGIME_FLOOR_SELF_FUNDED,
     MPC_REGIME_INPUTS,
+    MPC_REGIME_MINIMUM_INCOME,
     MPC_REGIME_SUPPORTED,
     MPC_REGIME_UNCONSTRAINED,
     MPC_REGIME_UNKNOWN,
@@ -50,6 +52,43 @@ def test_classify_mpc_regime_precedence_and_unknown():
         MPC_REGIME_SUPPORTED,
         MPC_REGIME_UNKNOWN,
     ]
+
+
+def test_classify_mpc_regime_minimum_income_recipients_replace_stage5_support():
+    # F = 100. 0: T > 0 consumes the floor            -> recipient (precedence over floor-bound)
+    # 1: desired 60 < F, consumes F, T = 0            -> floor-bound self-funded
+    # 2: desired 150, unpaid obligations              -> constrained
+    # 3: desired 150 met                              -> unconstrained
+    # 4: support 50 but T = 0: Stage 5 is ignored     -> unconstrained
+    regime = classify_mpc_regime(
+        support=np.array([0.0, 0.0, 0.0, 0.0, 50.0]),
+        consumption_before_floor=np.array([60.0, 60.0, 150.0, 150.0, 150.0]),
+        consumption_after_floor=np.array([100.0, 100.0, 150.0, 150.0, 150.0]),
+        consumption_cut=np.zeros(5),
+        unpaid_service=np.array([0.0, 0.0, 3.0, 0.0, 0.0]),
+        subsistence_floor=np.full(5, 100.0),
+        minimum_income=np.array([20.0, 0.0, 0.0, 0.0, 0.0]),
+    )
+    assert regime.tolist() == [
+        MPC_REGIME_MINIMUM_INCOME,
+        MPC_REGIME_FLOOR_SELF_FUNDED,
+        MPC_REGIME_CONSTRAINED,
+        MPC_REGIME_UNCONSTRAINED,
+        MPC_REGIME_UNCONSTRAINED,
+    ]
+
+
+def test_classify_mpc_regime_with_a_zero_floor_has_no_floor_bound_households():
+    regime = classify_mpc_regime(
+        support=np.zeros(2),
+        consumption_before_floor=np.array([0.0, 40.0]),
+        consumption_after_floor=np.array([0.0, 40.0]),
+        consumption_cut=np.zeros(2),
+        unpaid_service=np.zeros(2),
+        subsistence_floor=np.zeros(2),
+        minimum_income=np.zeros(2),
+    )
+    assert regime.tolist() == [MPC_REGIME_UNCONSTRAINED, MPC_REGIME_UNCONSTRAINED]
 
 
 def test_classify_mpc_regime_ignores_rounding_noise_relative_to_the_floor():
@@ -91,6 +130,13 @@ def test_read_household_regime_inputs_reads_one_row_or_reports_absence(tmp_path)
     assert inputs["unpaid_mortgage_payment"].tolist() == [52.0, 53.0]
     assert inputs["subsistence_floor"].tolist() == [7.0, 7.0]
     assert read_household_regime_inputs(legacy, "FRA", row=1) is None
+    assert not set(MPC_MINIMUM_INCOME_INPUTS) & set(inputs)  # optional: absent in files that predate them
+
+    with h5py.File(full, "a") as handle:
+        handle.create_dataset("FRA/households/income_minimum_income", data=np.arange(6.0).reshape(3, 2))
+    inputs = read_household_regime_inputs(full, "FRA", row=1)
+    assert inputs["income_minimum_income"].tolist() == [2.0, 3.0]
+    assert "unpaid_rent" not in inputs
 
 
 def _labour_panel():

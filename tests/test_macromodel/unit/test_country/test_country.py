@@ -2214,7 +2214,9 @@ class TestCountry:
         unemployment_by_individual = np.linspace(2.0, 3.0, n_individuals)
         other_transfers = np.full(n_households, 5.0)
         stage5_support = np.full(n_households, 3.0)
-        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 2.0)
+        # Benefits are paid at the benefit price level (CPI_{t-1}), not at the post-clearing CPI.
+        monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 3.0)
+        monkeypatch.setattr(test_country, "_benefit_price_level", 2.0)
         monkeypatch.setattr(
             test_country.central_government,
             "distribute_public_pension_benefits_to_individuals",
@@ -2454,6 +2456,8 @@ class TestCountry:
             test_country.households, "refresh_post_labour_feasibility", lambda service: events.append("cash_refresh")
         )
         monkeypatch.setattr(test_country, "settle_authoritative_household_payments", lambda: events.append("payments"))
+        # The fixture's placeholder credit market is not household-sized; the refresh is mocked anyway.
+        monkeypatch.setattr(test_country, "household_overdraft_interest_due", lambda: 0.0)
 
         test_country.assume_zero_growth = False
         test_country.update_post_labour_planning_metrics()
@@ -2500,7 +2504,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **kwargs: np.full(n_households, 3.0),
         )
         monkeypatch.setattr(
@@ -2613,7 +2617,7 @@ class TestCountry:
         )
         monkeypatch.setattr(
             test_country.households,
-            "compute_expected_social_transfer_income",
+            "compute_social_transfer_income",
             lambda **_kwargs: np.zeros(n_households),
         )
         monkeypatch.setattr(test_country.households, "compute_rental_income", lambda **_kwargs: np.zeros(n_households))
@@ -3132,6 +3136,14 @@ class TestCountry:
             "compute_scheduled_consumption_loan_payments_by_household",
             lambda: np.zeros(n_households),
         )
+
+        # Overdraft interest due on the negative opening balance (-5) is planned as debt service.
+        overdraft_interest = test_country.household_overdraft_interest_due()
+        assert np.all(overdraft_interest[deposits < 0.0] > 0.0)
+        np.testing.assert_array_equal(overdraft_interest[deposits >= 0.0], 0.0)
+        expected_shortfall = expected_shortfall + overdraft_interest
+        expected_funded = np.minimum(expected_shortfall, np.maximum(deposits, 0.0))
+        expected_residual = expected_shortfall - expected_funded
 
         test_country._set_household_target_demand(replace_current=False)
 

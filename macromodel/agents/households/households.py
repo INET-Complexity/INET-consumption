@@ -40,6 +40,7 @@ from macromodel.agents.households.func.consumer_distress import (
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption, validate_consumption_weights
 from macromodel.agents.households.func.financial_feasibility import (
+    PLAN_ROUND_DOWN,
     HouseholdFinancialFeasibility,
     PostGrantFeasiblePlan,
     PreGrantFeasiblePlan,
@@ -185,6 +186,15 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "consumption_cut_amount": 0.0,
     "remaining_subsistence_shortfall": 0.0,
     "floor_binding": False,
+    # Minimum-income allocation (support off): rent and goods floor left unpaid by own resources, and the
+    # negative part of those resources, max(-A, 0), that nobody covers.
+    "unpaid_rent": 0.0,
+    "unmet_floor": 0.0,
+    "resource_deficit": 0.0,
+    # Overdraft interest due on the opening negative LFA (planned as debt service) and the part left unpaid,
+    # which capitalises into the overdraft.
+    "scheduled_overdraft_interest": 0.0,
+    "unpaid_overdraft_interest": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -692,6 +702,9 @@ class Households(Agent):
         # state distinct from the Stage 5 pre-support diagnostic layer.
         for _field_name, _zero_value in _STAGE6_DISTRESS_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
+
+        # Households living in social housing (no dwelling), recorded after each housing clearing.
+        ts["social_housing_tenant"] = np.asarray(states["Corresponding Inhabited House ID"]) == -1
 
         # Update the household type
         states["Type"] = map_to_enum(states["Type"], HouseholdType)
@@ -1227,19 +1240,22 @@ class Households(Agent):
         if np.any(consumption < 0.0) or np.any(mortgage < 0.0) or np.any(scheduled < 0.0):
             raise ValueError("Consumption and debt service must be non-negative.")
 
-        capacity = np.where(
-            eligible,
-            np.maximum(
-                income
-                - consumption
-                - mortgage
-                - scheduled
-                - self.current_consumption_cash_rent()
-                - self.target_investment_cash(),
-                0.0,
-            ),
-            0.0,
+        overdraft_interest = self.post_grant_feasible_plan.scheduled_overdraft_interest
+        surplus = (
+            income
+            - consumption
+            - mortgage
+            - scheduled
+            - self.current_consumption_cash_rent()
+            - self.target_investment_cash()
+            - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
+        # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
+        # planned uses, is negative. Rounded down like the allocator so it cannot leave a negative residue.
+        opening_lfa = np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
+        overdraft = np.minimum(opening_lfa, 0.0)
+        surplus = surplus + overdraft - PLAN_ROUND_DOWN * (np.abs(income) - overdraft)
+        capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
             self.post_grant_feasible_plan,
             early_consumer_repayment_capacity=capacity.copy(),
@@ -1520,6 +1536,11 @@ class Households(Agent):
             "consumption_cut_amount",
             "remaining_subsistence_shortfall",
             "floor_binding",
+            "unpaid_rent",
+            "unmet_floor",
+            "resource_deficit",
+            "scheduled_overdraft_interest",
+            "unpaid_overdraft_interest",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1540,8 +1561,10 @@ class Households(Agent):
         scheduled_mortgage_service: np.ndarray,
         investment: np.ndarray,
         support_exempt_resources: np.ndarray | None = None,
+        support_enabled: bool = True,
+        scheduled_overdraft_interest: np.ndarray | None = None,
     ) -> None:
-        """Apply the Stage 5 payment order to the settled carrier."""
+        """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
             raise RuntimeError(
                 "Stage 5 consumption-floor enforcement requires post_grant_feasible_plan "
@@ -1578,6 +1601,8 @@ class Households(Agent):
             scheduled_mortgage_service=scheduled_mortgage_service,
             investment=investment,
             support_exempt_resources=support_exempt_resources,
+            support_enabled=support_enabled,
+            scheduled_overdraft_interest=scheduled_overdraft_interest,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -1622,40 +1647,6 @@ class Households(Agent):
         initial = np.stack([self.ts.initial(ind.lower()) for ind in inds], axis=1)
         return current, initial
 
-    def compute_expected_social_transfer_income(
-        self,
-        total_other_social_transfers: float,
-        cpi: float,
-        expected_inflation: float,
-    ) -> np.ndarray:
-        """Calculate expected social transfer income.
-
-        Computes expected transfers based on:
-        - Total transfer budget
-        - Price level changes
-        - Inflation expectations
-
-        Args:
-            total_other_social_transfers (float): Total transfer budget
-            cpi (float): Current price index
-            expected_inflation (float): Expected inflation rate
-
-        Returns:
-            np.ndarray: Expected transfers by household
-        """
-        current_independents, initial_independents = self._social_transfer_independents()
-        return (
-            (1 + expected_inflation)
-            * cpi
-            * self.functions["social_transfers"].get_social_transfers(
-                n_households=self.ts.current("n_households"),
-                total_other_social_transfers=total_other_social_transfers,
-                current_independents=current_independents,
-                initial_independents=initial_independents,
-                model=self.states["social_transfers_model"],
-            )
-        )
-
     def compute_social_transfer_income(
         self,
         total_other_social_transfers: float,
@@ -1687,6 +1678,7 @@ class Households(Agent):
         self,
         housing_data: pd.DataFrame,
         income_taxes: float,
+        unpaid_rent: np.ndarray | None = None,
     ) -> np.ndarray:
         """Calculate rental income from property ownership.
 
@@ -1698,6 +1690,10 @@ class Households(Agent):
         Args:
             housing_data (pd.DataFrame): Property market data
             income_taxes (float): Income tax rate
+            unpaid_rent (np.ndarray | None): Rent each tenant left unpaid this period (minimum_income mode,
+                PLAN.md section 3.3). The landlord absorbs it: rental income and its tax base are the rent
+                actually received. ``None`` (legacy mode, and the period-t planning pass, before unpaid rent
+                is known) counts the full rent of every rented-out dwelling.
 
         Returns:
             np.ndarray: Rental income by household
@@ -1712,10 +1708,48 @@ class Households(Agent):
             "Rent"
         ].sum()
         rental_income = np.zeros(self.ts.current("n_households"))
-        rental_income[housing_data_rented_out_grouped.index.values] = (
-            1 - income_taxes
-        ) * housing_data_rented_out_grouped.values
-        return rental_income
+        if unpaid_rent is None:
+            rental_income[housing_data_rented_out_grouped.index.values] = (
+                1 - income_taxes
+            ) * housing_data_rented_out_grouped.values
+            return rental_income
+        rental_income[housing_data_rented_out_grouped.index.values] = housing_data_rented_out_grouped.values
+        return (1 - income_taxes) * (rental_income - self.unpaid_rent_by_landlord(housing_data, unpaid_rent))
+
+    def renting_from_landlord(self, housing_data: pd.DataFrame) -> np.ndarray:
+        """Private renters with a landlord: tenure 3, in a dwelling owned by another household.
+
+        Clearing can leave a tenure-3 household in a dwelling it owns itself; its rent has no counterparty.
+        """
+        house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
+        renting = (self.states["Tenure Status of the Main Residence"] == 3) & (house_id != -1)
+        owner = np.full(house_id.shape, -1)
+        owner[renting] = housing_data.loc[house_id[renting], "Corresponding Owner Household ID"].to_numpy(dtype=int)
+        return renting & (owner != np.arange(house_id.size))
+
+    def unpaid_rent_by_landlord(self, housing_data: pd.DataFrame, unpaid_rent: np.ndarray) -> np.ndarray:
+        """Charge each private tenant's unpaid rent to the owner of the dwelling it rents (D8: the landlord absorbs it).
+
+        Only households renting from a landlord (``renting_from_landlord``) are charged: social tenants (no
+        dwelling, house ID -1) owe their rent to government, and a tenure-3 household in its own dwelling has
+        no counterparty.
+        """
+        n_households = self.ts.current("n_households")
+        unpaid = np.asarray(unpaid_rent, dtype=float)
+        if unpaid.shape != (n_households,) or not np.all(np.isfinite(unpaid)) or np.any(unpaid < 0.0):
+            raise ValueError("unpaid_rent must be a finite non-negative household vector.")
+        house_id = np.asarray(self.states["Corresponding Inhabited House ID"], dtype=int)
+        tenants = np.flatnonzero((unpaid > 0.0) & self.renting_from_landlord(housing_data))
+        dwellings = housing_data.loc[house_id[tenants]]
+        if not (
+            np.array_equal(dwellings["Corresponding Inhabitant Household ID"].to_numpy(dtype=int), tenants)
+            and np.all(dwellings["Is Owner-Occupied"].to_numpy() == 0)
+        ):
+            raise ValueError("Unpaid rent must belong to the tenant of a rented-out dwelling.")
+        landlords = dwellings["Corresponding Owner Household ID"].to_numpy(dtype=int)
+        if np.any(landlords < 0) or np.any(landlords >= n_households):
+            raise ValueError("Every dwelling with unpaid rent needs a household landlord.")
+        return np.bincount(landlords, weights=unpaid[tenants], minlength=n_households)
 
     def compute_expected_income_from_financial_assets(self) -> np.ndarray:
         """Calculate expected income from financial assets.
@@ -2059,9 +2093,9 @@ class Households(Agent):
             replace_current_diagnostics (bool): Replace latest target diagnostics instead of appending
             time_unit (int): Model period length in months, used by credit-augmented consumption
                 to annualize income in its calibrated wealth/income and price/income ratios
-            subsistence_income (Optional[np.ndarray]): CU-adjusted subsistence consumption
-                (Stage 5's ``subsistence_consumption``, half net SMIC per consumption unit).
-                Used only as the geometric-average income denominator's floor when a household
+            subsistence_income (Optional[np.ndarray]): The behavioural-income lower bound, the economy
+                series ``income_guard`` (the subsistence series S in legacy_stage5 mode, the numerical
+                guard G = guard share x M in minimum_income mode). Used only as the geometric-average income denominator's floor when a household
                 has no positive income anywhere in its history window; ignored otherwise
 
         Returns:
@@ -3389,6 +3423,7 @@ class Households(Agent):
         )
         self.ts.rent.append(rent_by_household)
         self.ts.rent_imputed.append(imputed_rent_by_household)
+        self.ts.social_housing_tenant.append(self.states["Corresponding Inhabited House ID"] == -1)
 
         # Price paid by buyers and proceeds received by sellers. ``current_sales``
         # holds only completed sales. A self-sale is a move, not a purchase:
@@ -3596,6 +3631,22 @@ class Households(Agent):
             0.0, self.ts.current("liquid_financial_assets")
         )
 
+    def compute_deposit_interest_components(
+        self,
+        bank_interest_rate_on_household_deposits: np.ndarray,
+        bank_overdraft_rate_on_household_deposits: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Deposit interest received on a positive opening balance and overdraft interest due on a negative one.
+
+        Both are charged at the household's own bank on the opening liquid
+        balance. ``compute_interest_paid_on_deposits`` is their difference.
+        """
+        bank = self.states["Corresponding Bank ID"]
+        lfa = self.ts.current("liquid_financial_assets")
+        deposit_interest = bank_interest_rate_on_household_deposits[bank] * np.maximum(0.0, lfa)
+        overdraft_interest = bank_overdraft_rate_on_household_deposits[bank] * np.maximum(0.0, -lfa)
+        return deposit_interest, overdraft_interest
+
     def compute_interest_paid(self) -> np.ndarray:
         """Calculate total interest paid.
 
@@ -3684,6 +3735,7 @@ class Households(Agent):
         self,
         exchange_rate_usd_to_lcu: float,
         subsistence_consumption: np.ndarray | None = None,
+        support_enabled: bool = True,
     ) -> np.ndarray:
         """Prepare for goods market clearing.
 
@@ -3696,7 +3748,10 @@ class Households(Agent):
             exchange_rate_usd_to_lcu (float): USD to local currency rate
             subsistence_consumption (np.ndarray | None): CU-adjusted subsistence
                 floor used to settle the final household consumption target
-                when the feasibility resolver is active.
+                when the feasibility resolver is active (zero when the goods
+                floor is switched off).
+            support_enabled (bool): False in minimum-income mode: the
+                compatibility settlement then pays no Stage 5 support.
 
         Returns:
             np.ndarray: Per-household remaining subsistence shortfall after
@@ -3734,6 +3789,7 @@ class Households(Agent):
                     scheduled_consumer_service=nothing,
                     scheduled_mortgage_service=nothing,
                     investment=nothing,
+                    support_enabled=support_enabled,
                 )
                 goods_consumption = self._scale_consumption_matrix_to_household_totals(
                     target_consumption=target_consumption,
@@ -3976,6 +4032,7 @@ class Households(Agent):
         period_index: int | None = None,
         tau_vat_on_investment: float = 0.0,
         tau_vat: float = 0.0,
+        unpaid_rent: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -3988,6 +4045,8 @@ class Households(Agent):
         Args:
             housing_data (pd.DataFrame): Property market data
             tau_cf (float): Capital formation tax rate
+            unpaid_rent (np.ndarray | None): Rent each tenant left unpaid this period (minimum_income mode,
+                PLAN.md section 3.3); the tenant's cash outflow is the rent actually paid. ``None`` pays it in full.
         """
         # Stage the real-wealth values until the final feasibility authority has
         # been validated. A failed settled run must not leave a partial period
@@ -4013,6 +4072,16 @@ class Households(Agent):
         # Cash rent is paid separately to landlords rather than through firm
         # purchases, so it is a distinct household cash use.
         cash_rent = self.current_consumption_cash_rent()
+        if unpaid_rent is not None:
+            unpaid_rent = np.asarray(unpaid_rent, dtype=float)
+            if (
+                unpaid_rent.shape != cash_rent.shape
+                or not np.all(np.isfinite(unpaid_rent))
+                or np.any(unpaid_rent < 0.0)
+                or np.any(unpaid_rent > cash_rent)
+            ):
+                raise ValueError("unpaid_rent must be a finite household vector between zero and the cash rent.")
+            cash_rent = cash_rent - unpaid_rent
         realised_cash_balance = income_for_residual_saving - realised_expenditure - cash_rent
         if self.uses_feasibility_resolver:
 
@@ -4103,14 +4172,19 @@ class Households(Agent):
             new_loans = granted_credit + optional_cash_flow("received_mortgages")
             # Sale proceeds swap housing for cash: financing, not saving, so
             # they bypass the new-wealth split between LFA and IFA.
-            base_lfa = (
+            lfa_before_illiquid_purchase = (
                 self.ts.current("liquid_financial_assets")
                 + cash_saving_before_financing
                 + new_loans
                 + optional_cash_flow("property_sale_proceeds")
                 - optional_cash_flow("mortgage_sale_repayment")
-                - new_wealth_in_other_financial_assets
             )
+            # Saving reduces an overdraft before it buys illiquid assets: no purchase while LFA, net of this
+            # period's flows, is negative, and none beyond the positive part.
+            new_wealth_in_other_financial_assets = np.minimum(
+                new_wealth_in_other_financial_assets, np.maximum(lfa_before_illiquid_purchase, 0.0)
+            )
+            base_lfa = lfa_before_illiquid_purchase - new_wealth_in_other_financial_assets
         else:
             base_lfa = self.compute_wealth_in_deposits(
                 new_wealth_in_deposits=new_wealth_in_deposits,
@@ -4285,6 +4359,7 @@ class Households(Agent):
         self.ts.total_illiquid_financial_asset_capital_gains.append([illiquid_financial_asset_capital_gains.sum()])
         self.ts.income_for_residual_saving.append(income_for_residual_saving)
         self.ts.realised_household_expenditure.append(realised_expenditure)
+        self.ts.rent_paid.append(cash_rent)
         self.ts.cash_saving_before_financing.append(cash_saving_before_financing)
         self.ts.realised_cash_flow_adjustment.append(realised_cash_flow_adjustment)
         self.ts.stage5_cash_ledger_residual.append(stage5_cash_ledger_residual)

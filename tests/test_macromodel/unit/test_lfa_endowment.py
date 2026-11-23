@@ -55,10 +55,15 @@ def model():
     banks = SimpleNamespace(
         ts=TimeSeries(
             n_banks=2,
-            deposits_from_households=np.array([400.0, -20.0]),
+            # Household balances [100, -20, 300] at banks [0, 1, 0], booked gross.
+            deposits_from_households=np.array([400.0, 0.0]),
             deposits_from_firms=np.array([30.0, 40.0]),
-            total_deposits_from_households=np.array([380.0]),
+            total_deposits_from_households=np.array([400.0]),
             total_deposits_from_firms=np.array([70.0]),
+            overdrafts_to_households=np.array([0.0, 20.0]),
+            total_overdrafts_to_households=np.array([20.0]),
+            overdrafts_to_firms=np.zeros(2),
+            total_overdrafts_to_firms=np.array([0.0]),
             equity=np.array([50.0, 60.0]),
             total_outstanding_loans=np.array([100.0, 200.0]),
             deposits=np.array([380.0, -120.0]),

@@ -330,6 +330,12 @@ def create_households_timeseries(
         income_social_transfers=data["Regular Social Transfers"].values,
         total_income_social_transfers=[data["Regular Social Transfers"].values.sum()],
         stage5_subsistence_support=np.zeros(len(data)),
+        # Minimum income (PLAN.md section 3): level M, assessed income Y and top-up T fixed at period start,
+        # and T as booked in realised social income. Zero in legacy_stage5 mode.
+        minimum_income_level=np.zeros(len(data)),
+        minimum_income_assessed=np.zeros(len(data)),
+        minimum_income_entitlement=np.zeros(len(data)),
+        income_minimum_income=np.zeros(len(data)),
         pre_relief_funding_gap=np.zeros(len(data)),
         post_relief_funding_gap=np.zeros(len(data)),
         actual_mortgage_payment=np.zeros(len(data)),
@@ -384,6 +390,14 @@ def create_households_timeseries(
         illiquid_trade_cost_paid=np.zeros(len(data)),
         rent=data["Rent Paid"].values,
         rent_imputed=data["Rent Imputed"].values,
+        # Rent unpaid by tenants (minimum_income mode, PLAN.md section 3.3): cash rent actually paid by each tenant,
+        # the private landlord's loss on its dwellings, and the private renters moved to social housing for it.
+        rent_paid=np.maximum(data["Rent Paid"].values, 0.0),
+        rent_unpaid_absorbed=np.zeros(len(data)),
+        # Unpaid rent of a tenure-3 household living in a dwelling it owns: nobody is owed it.
+        rent_unpaid_no_counterparty=np.zeros(len(data)),
+        total_rent_unpaid_absorbed=[0.0],
+        unpaid_rent_vacated=np.zeros(len(data), dtype=bool),
         max_price_willing_to_pay=np.full(len(data), np.nan),
         max_rent_willing_to_pay=np.full(len(data), np.nan),
         rent_div_income_histogram=get_histogram(
@@ -432,6 +446,8 @@ def create_households_timeseries(
         total_debt_installments=[data["Debt Installments"].values.sum()],
         #
         interest_paid_on_deposits=np.full(len(data), np.nan),
+        overdraft_interest_paid=np.full(len(data), np.nan),
+        total_overdraft_interest_paid=[0.0],
         interest_paid_on_loans=np.full(len(data), np.nan),
         interest_paid=np.full(len(data), np.nan),
         consumption_emissions=consumption_emissions,

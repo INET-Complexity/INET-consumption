@@ -4252,3 +4252,72 @@ def test_uncertainty_change_keeps_previous_period_fixed_during_replanning(test_h
         households.current_income_belief_learning_inputs(common_forecast_variance=0.0)["uncertainty_delta"],
         decreased_common["uncertainty_delta"],
     )
+
+
+def _frm_ready_households(households):
+    """Give the households known FRM covariates and coefficients (net wealth is the only varying input)."""
+    n = households.ts.current("n_households")
+    households.states["household_head_age"] = np.full(n, 50.0)
+    households.states["household_members_in_employment"] = np.ones(n)
+    households.states["Investment Attitudes"] = np.full(n, 2)
+    households.states["Tenure Status of the Main Residence"] = np.full(n, 3)
+    households.states["portfolio_participates"] = np.ones(n, dtype=bool)
+    households.states["population_scale_factor"] = 1.0
+    households.states["frm_coefficients"] = SimpleNamespace(
+        magnitude_coefficients={
+            "constant": 0.0,
+            "age": 0.0,
+            "household_members_in_employment": 0.0,
+            "investment_attitudes": 0.0,
+            "mortgagor": 0.5,
+            "owner": 0.3,
+            "net_wealth": 0.2,
+        },
+        net_wealth_scale_divisor=1.0,
+    )
+    households.states.pop("frm_target_share", None)
+    return n
+
+
+def test_frm_target_share_is_fixed_at_t0_when_only_net_wealth_changes(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    t0_net_wealth = households.ts.dicts["net_wealth"][0]
+    expected = households_module.compute_frm_magnitude_target_share(
+        age=households.states["household_head_age"],
+        household_members_in_employment=households.states["household_members_in_employment"],
+        investment_attitudes=households.states["Investment Attitudes"],
+        mortgagor=np.zeros(n),
+        owner=np.zeros(n),
+        net_wealth=t0_net_wealth,
+        portfolio_participates=households.states["portfolio_participates"],
+        magnitude_coefficients=households.states["frm_coefficients"].magnitude_coefficients,
+        population_scale_factor=1.0,
+        net_wealth_scale_divisor=1.0,
+    )[0]
+    first, _ = households.frm_target_share()
+    np.testing.assert_array_equal(first, expected)
+
+    households.ts.override_current("net_wealth", households.ts.current("net_wealth") * 3.0 + 1e5)
+    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e5)
+    second, _ = households.frm_target_share()
+    np.testing.assert_array_equal(second, first)
+    np.testing.assert_array_equal(households.states["frm_target_share"], first)
+
+
+def test_frm_target_share_recomputes_only_for_households_with_a_discrete_change(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    before = households.frm_target_share()[0].copy()
+    households.ts.override_current("net_wealth", np.full(n, 2.0))
+
+    # Renter -> owner for household 0 only; social/renter changes without owner or mortgagor dummies do not matter.
+    households.states["Tenure Status of the Main Residence"][0] = 1
+    households.states["Tenure Status of the Main Residence"][1] = 5
+    after = households.frm_target_share()[0]
+
+    assert after[0] != before[0]
+    np.testing.assert_array_equal(after[1:], before[1:])
+    # The new target stays fixed afterwards.
+    households.ts.override_current("net_wealth", np.full(n, 9.0))
+    np.testing.assert_array_equal(households.frm_target_share()[0], after)

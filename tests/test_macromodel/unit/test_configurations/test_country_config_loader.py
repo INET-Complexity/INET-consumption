@@ -413,7 +413,7 @@ def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
     assert params["mu_eq"] == 0.0029
     assert params["equity_weight"] == 0.5
     assert params["uses_portfolio_choice"] is True
-    assert params["target_share_source"] == "scalar"
+    assert params["target_share_source"] == "frm_magnitude"
     assert params["default_target_illiquid_share"] == 0.65
     assert params["phi_1"] == 5.0
     assert params["lambda_kappa"] == 0.1

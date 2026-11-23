@@ -67,6 +67,7 @@ def compute_target_illiquid_share(
     frm_magnitude_coefficients: dict[str, float] | None = None,
     population_scale_factor: float | None = None,
     net_wealth_scale_divisor: float | None = None,
+    frm_target: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the runtime target illiquid share per household.
 
@@ -103,6 +104,11 @@ def compute_target_illiquid_share(
             ``target_share_source="frm_magnitude"``.
         net_wealth_scale_divisor (float | None): Required only when
             ``target_share_source="frm_magnitude"``.
+        frm_target (tuple[np.ndarray, np.ndarray] | None): Optional
+            ``(target_illiquid_share, target_share_clipped_flag)`` already
+            computed once at initialisation (``Households.frm_target_share``).
+            Under ``"frm_magnitude"`` it is returned as is and the covariate
+            arguments are not needed.
 
     Returns:
         tuple[np.ndarray, np.ndarray]: ``(target_illiquid_share,
@@ -128,6 +134,9 @@ def compute_target_illiquid_share(
         return target_illiquid_share, target_share_clipped_flag
 
     # target_share_source == "frm_magnitude"
+    if frm_target is not None:
+        return frm_target
+
     missing = [
         name
         for name, value in (

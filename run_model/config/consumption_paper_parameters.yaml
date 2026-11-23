@@ -240,7 +240,7 @@ portfolio_composition:
   # asset-return and Stage 4 diagnostics.
   uses_portfolio_choice: true      # gates Stage 4 diagnostics and optional settlement; false keeps the portfolio block inactive
   settles_portfolio_choice: true   # requires uses_portfolio_choice and an active Stage 5 post-grant feasibility carrier
-  target_share_source: scalar       # scalar (default, fixed share below) | frm_magnitude (opt-in, Increment 5: household-covariate FRM target share). Switching to frm_magnitude does not change this default for countries that leave it unset.
+  target_share_source: frm_magnitude   # frm_magnitude (GTP-FRM household target, fixed at initialisation) or scalar (fixed share below)
   participation_source: initial_ifa_positive   # extensive margin fixed at init from initial_IFA > 0; nonparticipants never buy IFA
   default_target_illiquid_share: 0.65   # first-pass intensive-margin target for all participating households
   liquid_return_source: policy_rate_markup   # r_ell = liquid_asset_policy_rate_markup * policy_rate

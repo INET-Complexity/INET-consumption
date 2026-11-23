@@ -534,6 +534,10 @@ class Country:
             and "income_belief_priors" in households.states
         ):
             households.initial_states["income_belief_priors"] = deepcopy(households.states["income_belief_priors"])
+        # The FRM coefficient table is likewise installed after the initial snapshot and read every
+        # period under target_share_source="frm_magnitude"; keep it across reset.
+        if "frm_coefficients" in households.states:
+            households.initial_states["frm_coefficients"] = deepcopy(households.states["frm_coefficients"])
         self._consumption_input_adapter = ConsumptionInputAdapter()
         self._consumption_run_id = 0
         self.firms = firms
@@ -1297,12 +1301,8 @@ class Country:
                     "uses_portfolio_choice=True requires a non-null frm_coefficients_path, "
                     "either on the wealth function configuration or via DataPaths."
                 )
-            # NOTE: stored for a future increment's use (the precomputed/grouped
-            # target_share_source paths, e.g. compute_frm_magnitude_target_share);
-            # Increment 3's active "scalar" target_share_source does not read this
-            # state at all, so loading the wrong file would currently go unnoticed
-            # by tests. Validate this path resolution again when a later increment
-            # starts reading households.states["frm_coefficients"].
+            # Read by Households.frm_target_share under target_share_source="frm_magnitude";
+            # the "scalar" source does not read it.
             households.states["frm_coefficients"] = load_frm_coefficients(resolved_frm_path)
 
         permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None

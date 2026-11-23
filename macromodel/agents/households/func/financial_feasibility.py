@@ -250,6 +250,16 @@ class HouseholdFinancialFeasibility:
         net = np.minimum(np.maximum(planned - surplus, 0.0), available)
         reserved = gross_liquidation_sale(net + purchase, cost, available)
         cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
+        # Minimum sale size (paper fixed-cost logic): a forced sale is not executed when the cash it
+        # must raise does not exceed the fixed trade cost (paying the cost to raise less than the cost is
+        # a dust sale), nor when its gross amount delivers no cash after the cost. The shortfall then
+        # stays in residual_shortfall_after_granted_credit and is handled as an unpaid obligation or
+        # overdraft, like any shortfall the illiquid assets cannot cover. A sale that pays for a completed
+        # property purchase is never skipped here: the completion rule has already sized it.
+        dust_sale = (purchase <= 0.0) & (reserved > 0.0) & ((net <= cost) | (reserved - cost_paid <= 0.0))
+        net = np.where(dust_sale, 0.0, net)
+        reserved = np.where(dust_sale, 0.0, reserved)
+        cost_paid = np.where(dust_sale, 0.0, cost_paid)
         # The completion rule only lets a purchase through if the illiquid
         # assets cover the forced sale, the purchase sale and the cost.
         if np.any((purchase > 0.0) & (reserved - cost_paid - net < purchase - (1e-6 + 1e-9 * purchase))):

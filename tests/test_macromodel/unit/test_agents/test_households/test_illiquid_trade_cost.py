@@ -33,7 +33,6 @@ def _plan(*, planned, residual_after_lfa, granted=0.0):
     [
         (80.0, 100.0, 5.0, 85.0, 5.0, 0.0),  # sale grossed up by the cost; need met
         (98.0, 100.0, 5.0, 100.0, 5.0, 3.0),  # IFA cap binds: 95 cash against a need of 98
-        (2.0, 2.0, 5.0, 2.0, 2.0, 2.0),  # tiny sale: cost capped by the sale, never lowers LFA
         (0.0, 100.0, 5.0, 0.0, 0.0, 0.0),  # no sale, no cost
     ],
 )
@@ -186,3 +185,28 @@ def test_reservation_nets_the_planned_sale_by_the_own_property_sale_surplus(plan
     assert plan.reserved_liquidation_total[0] == pytest.approx(gross)
     assert plan.liquidation_sale_cost[0] == pytest.approx(cost_paid)
     assert plan.residual_shortfall_after_granted_credit[0] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    "planned,ifa,cost,net,gross",
+    [
+        (2.0, 2.0, 5.0, 0.0, 0.0),  # IFA below the cost: the whole IFA would only pay the cost
+        (50.0, 5.0, 5.0, 0.0, 0.0),  # gross sale equals the cost: no cash, not executed
+        (50.0, 5.5, 5.0, 5.5, 5.5),  # gross above the cost: a sale of 0.5 net is executed (cap binds)
+        (3.0, 100.0, 5.0, 0.0, 0.0),  # need below the cost: not worth paying the cost, unpaid obligation
+        (5.0, 100.0, 5.0, 0.0, 0.0),  # need equal to the cost: not executed
+        (6.0, 100.0, 5.0, 6.0, 11.0),  # need above the cost: executed, cost paid once
+    ],
+)
+def test_forced_sale_that_delivers_no_cash_after_the_cost_is_not_executed(planned, ifa, cost, net, gross):
+    plan = HouseholdFinancialFeasibility().reserve_executable_liquidation(
+        _plan(planned=[planned], residual_after_lfa=[planned]),
+        available_pre_stage4_ifa=np.array([ifa]),
+        sale_cost=np.array([cost]),
+    )
+    assert plan.reserved_liquidation_total[0] == pytest.approx(gross)
+    assert plan.liquidation_sale_cost[0] == pytest.approx(0.0 if gross == 0.0 else cost)
+    # The shortfall the skipped sale would have met stays as a residual obligation.
+    assert plan.residual_shortfall_after_granted_credit[0] == pytest.approx(
+        planned - (gross - plan.liquidation_sale_cost[0])
+    )

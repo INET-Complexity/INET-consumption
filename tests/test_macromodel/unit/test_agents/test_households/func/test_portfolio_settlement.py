@@ -13,7 +13,6 @@ from macromodel.agents.households.func.portfolio_settlement import (
     SETTLEMENT_FORCED_LIQUIDATION,
     SETTLEMENT_INACTION,
     SETTLEMENT_INVALID_INPUT,
-    SETTLEMENT_NO_SURPLUS,
     SETTLEMENT_SETTLED,
     settle_portfolio_reallocation,
 )
@@ -47,7 +46,6 @@ def _settle(
     *,
     base_lfa=120.0,
     base_ifa=50.0,
-    surplus=20.0,
     lfa_flow=-8.0,
     ifa_flow=8.0,
     cost=0.0,
@@ -59,7 +57,6 @@ def _settle(
     return settle_portfolio_reallocation(
         base_lfa=np.array([base_lfa]),
         base_ifa=np.array([base_ifa]),
-        investable_surplus=np.array([surplus]),
         rebalancing=_rebalancing(
             lfa_flow=[lfa_flow],
             ifa_flow=[ifa_flow],
@@ -95,13 +92,6 @@ def test_adjustment_cost_is_charged_only_to_lfa():
     np.testing.assert_allclose(result.closing_tfa, [168.0])
 
 
-def test_non_positive_surplus_blocks_reallocation():
-    result = _settle(surplus=0.0)
-    np.testing.assert_allclose(result.closing_lfa, [120.0])
-    np.testing.assert_allclose(result.closing_ifa, [50.0])
-    assert result.settlement_status[0] == SETTLEMENT_NO_SURPLUS
-
-
 def test_negative_lfa_blocks_purchase():
     result = _settle(base_lfa=-5.0)
     np.testing.assert_allclose(result.closing_lfa, [-5.0])
@@ -109,8 +99,8 @@ def test_negative_lfa_blocks_purchase():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_forced_liquidation_precedes_no_surplus():
-    result = _settle(surplus=0.0, forced=True)
+def test_forced_liquidation_takes_precedence_over_a_rebalancing_trade():
+    result = _settle(forced=True)
     assert result.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
 
 
@@ -125,7 +115,6 @@ def test_forced_liquidation_uses_post_liquidation_base_without_reapplying_sale()
         base_lfa=stage5.post_liquidation_lfa[0],
         base_ifa=stage5.post_liquidation_ifa[0],
         forced=bool(stage5.settled_liquidation_total[0] > 0.0),
-        surplus=0.0,
     )
 
     np.testing.assert_allclose(result.closing_lfa, [108.0])
@@ -167,7 +156,6 @@ def test_shape_validation_covers_inaction_flag():
         settle_portfolio_reallocation(
             base_lfa=np.array([120.0]),
             base_ifa=np.array([50.0]),
-            investable_surplus=np.array([20.0]),
             rebalancing=rebalancing,
             settlement_enabled=True,
             forced_liquidation_active=np.array([False]),
@@ -215,17 +203,14 @@ def test_overdrawn_household_without_trade_stays_blocked():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_overdrawn_sale_still_requires_surplus_and_valid_inputs():
-    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, surplus=0.0).settlement_status[0] == (
-        SETTLEMENT_NO_SURPLUS
-    )
+def test_overdrawn_sale_still_requires_valid_inputs():
     assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, valid=False).settlement_status[0] == (
         SETTLEMENT_INVALID_INPUT
     )
 
 
 def test_non_overdrawn_behaviour_is_unchanged():
-    # Same statuses and flows as before the change for base_lfa >= 0.
+    # Same statuses and flows as before for base_lfa >= 0.
     for base_lfa, lfa_flow, ifa_flow, status in [
         (120.0, -8.0, 8.0, SETTLEMENT_SETTLED),
         (5.0, -8.0, 8.0, SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY),
@@ -256,7 +241,6 @@ def test_upper_bound_sale_that_clears_overdraft_does_not_close_in_float_noise_be
     result = settle_portfolio_reallocation(
         base_lfa=lfa,
         base_ifa=ifa,
-        investable_surplus=np.ones(n),
         rebalancing=rebalancing,
         settlement_enabled=True,
         forced_liquidation_active=np.zeros(n, dtype=bool),

@@ -7,6 +7,8 @@ import numpy as np
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 
 SETTLEMENT_DISABLED = 0.0
+# Retired: rebalancing no longer requires new saving, so this status is never assigned. The code is kept
+# so the numeric status values of older output files keep their meaning.
 SETTLEMENT_NO_SURPLUS = 1.0
 SETTLEMENT_INACTION = 2.0
 SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY = 3.0
@@ -39,7 +41,6 @@ def settle_portfolio_reallocation(
     *,
     base_lfa: np.ndarray,
     base_ifa: np.ndarray,
-    investable_surplus: np.ndarray,
     rebalancing: PortfolioRebalancingResult,
     settlement_enabled: bool,
     forced_liquidation_active: np.ndarray,
@@ -48,8 +49,11 @@ def settle_portfolio_reallocation(
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
     ``base_lfa`` is the current liquid balance after the ordinary wealth update;
-    it already includes positive saving. The Stage 4 flows therefore only move
-    wealth between LFA and IFA and charge adjustment cost on LFA.
+    it already includes this period's saving, whatever its sign. The Stage 4 flows
+    therefore only move wealth between LFA and IFA and charge adjustment cost on
+    LFA. Households rebalance their existing portfolio whether or not they saved
+    this period: the rebalancing rule is a function of the stocks, never of the
+    period saving flow, so no saving input is needed here.
 
     ``waive_fixed_cost`` marks households that already paid the illiquid-trade
     cost this period on a Stage 5 sale. Their trade settles without the fixed
@@ -58,7 +62,6 @@ def settle_portfolio_reallocation(
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
-    investable_surplus = np.asarray(investable_surplus, dtype=float)
     forced_liquidation_active = np.asarray(forced_liquidation_active, dtype=bool)
     portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
     counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
@@ -68,7 +71,6 @@ def settle_portfolio_reallocation(
     arrays = (
         base_lfa,
         base_ifa,
-        investable_surplus,
         forced_liquidation_active,
         portfolio_valid_flag,
         counterfactual_lfa_flow,
@@ -91,7 +93,6 @@ def settle_portfolio_reallocation(
         finite_inputs = (
             np.isfinite(base_lfa)
             & np.isfinite(base_ifa)
-            & np.isfinite(investable_surplus)
             & np.isfinite(counterfactual_lfa_flow)
             & np.isfinite(counterfactual_ifa_flow)
             & np.isfinite(adjustment_cost)
@@ -105,8 +106,8 @@ def settle_portfolio_reallocation(
         invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
         conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid
 
-        # Fixed precedence: invalid, forced liquidation, no surplus, negative
-        # LFA, then ordinary valid settlement.
+        # Fixed precedence: invalid, forced liquidation, negative LFA, then
+        # ordinary valid settlement.
         status[invalid & ~conservation_failure] = SETTLEMENT_INVALID_INPUT
         status[conservation_failure] = SETTLEMENT_CONSERVATION_FAILURE
         valid[invalid] = False
@@ -114,24 +115,17 @@ def settle_portfolio_reallocation(
         forced = ~invalid & forced_liquidation_active
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
 
-        no_surplus = ~invalid & ~forced & (investable_surplus <= 0.0)
-        status[no_surplus] = SETTLEMENT_NO_SURPLUS
-
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.
         overdrawn = base_lfa < 0.0
         # A sale whose proceeds net of the trade cost are not positive would deepen the overdraft: it stays blocked.
         sale_while_overdrawn = overdrawn & (counterfactual_ifa_flow < 0.0) & (counterfactual_lfa_flow > 0.0)
         negative_lfa = (
-            ~invalid
-            & ~forced
-            & ~no_surplus
-            & ~sale_while_overdrawn
-            & (overdrawn | (base_lfa + counterfactual_lfa_flow < 0.0))
+            ~invalid & ~forced & ~sale_while_overdrawn & (overdrawn | (base_lfa + counterfactual_lfa_flow < 0.0))
         )
         status[negative_lfa] = SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
-        eligible = ~invalid & ~forced & ~no_surplus & ~negative_lfa
+        eligible = ~invalid & ~forced & ~negative_lfa
         # Stage 4's counterfactual LFA flow already includes the fixed cost;
         # expose the transfer separately so the settled stock update charges it
         # exactly once on the liquid side.

@@ -79,8 +79,8 @@ def compute_stage4_household_diagnostics(
     resulting ``target_illiquid_assets`` and ``target_tfa_base`` as separate,
     precomputed inputs (per Increment 2's finalized 5-array signature).
 
-    ``post_surplus_lfa`` is supplied by the caller already inclusive of any
-    positive investable surplus — this function does not floor or add
+    ``post_surplus_lfa`` is supplied by the caller already inclusive of the
+    period's saving, whatever its sign — this function does not floor or add
     ``investable_surplus`` to it. ``investable_surplus`` is forwarded only as
     a diagnostic value, independent of the ``post_surplus_lfa`` arithmetic.
 
@@ -88,7 +88,7 @@ def compute_stage4_household_diagnostics(
         opening_tfa_scale (np.ndarray): Previous-period total financial
             assets, ``LFA_{t-1} + IFA_{t-1}``.
         post_surplus_lfa (np.ndarray): Liquid assets after the period's
-            return and after any positive investable surplus has already
+            return and after the period's saving (of either sign) has already
             been incorporated (the page's ``post_surplus_lfa`), supplied
             directly by the caller from the actual household balance sheet.
         post_return_ifa (np.ndarray): Illiquid assets after the period's

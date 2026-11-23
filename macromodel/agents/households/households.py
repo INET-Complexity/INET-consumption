@@ -4308,7 +4308,6 @@ class Households(Agent):
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
-                investable_surplus=diagnostics.portfolio_investable_surplus,
                 rebalancing=diagnostics.rebalancing,
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,

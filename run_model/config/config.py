@@ -181,8 +181,8 @@ WAGE_COMPETITION_OFF_OVERRIDES: dict[str, Any] = {
 
 # Government consumption from the estimated ARDL rule (French data 1985-2019): momentum plus a response
 # to real GDP growth one to three years earlier; data-estimated intercept; sectoral weights as in the YAML.
-GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES: dict[str, Any] = {
-    "government_entities.functions.consumption.name": "ARDLGovernmentConsumptionSetter",
+GOVERNMENT_CONSUMPTION_OVERRIDES: dict[str, Any] = {
+    "government_entities.functions.consumption.name": "ExpectedGrowthGovernmentConsumptionSetter",
     "government_entities.functions.consumption.path_name": "consumption",
     "government_entities.functions.consumption.parameters.['consistency']": 1.0,
     "government_entities.functions.consumption.parameters.['sectoral_weights']": "initial_fixed",
@@ -217,7 +217,7 @@ WAGE_INDEXED_TRANSFERS_OVERRIDES: dict[str, Any] = {
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
-    "government_consumption_ardl": GOVERNMENT_CONSUMPTION_ARDL_OVERRIDES,
+    "government_consumption": GOVERNMENT_CONSUMPTION_OVERRIDES,
     "wage_indexed_transfers": WAGE_INDEXED_TRANSFERS_OVERRIDES,
     "unemployment_replacement_rate": UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES,
     "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,

@@ -182,3 +182,10 @@ def test_purchase_that_would_overdraw_the_account_is_blocked_and_a_sale_is_not()
     sale = _settle(base_lfa=1.0, lfa_flow=8.0, ifa_flow=-8.0)
     assert sale.settlement_status[0] == SETTLEMENT_SETTLED
     np.testing.assert_array_equal(sale.closing_lfa, [9.0])
+
+
+def test_overdrawn_household_does_not_sell_ifa_characterisation():
+    result = _settle(base_lfa=-5.0, base_ifa=50.0, lfa_flow=8.0, ifa_flow=-8.0)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+    np.testing.assert_array_equal(result.closing_lfa, [-5.0])
+    np.testing.assert_array_equal(result.closing_ifa, [50.0])

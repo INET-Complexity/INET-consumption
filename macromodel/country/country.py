@@ -3360,6 +3360,24 @@ class Country:
         self.credit_market.prepare_household_service_snapshot()
         self.households.persist_post_grant_planned_liquidation_total()
 
+    def _household_debt_arrears_active(self) -> np.ndarray | None:
+        """Households with unpaid or suspended debt service this period, or consumer or mortgage arrears.
+
+        They may not buy illiquid assets in Stage 4: debt is serviced before investment.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        credit_market = self.credit_market
+        owed = (
+            np.asarray(self.households.current_unpaid_consumer_service(), dtype=float)
+            + np.asarray(self.households.current_unpaid_mortgage_service(), dtype=float)
+            + credit_market._consumer_interest_arrears_by_cell.sum(axis=0)
+            + credit_market._consumer_principal_arrears_by_cell.sum(axis=0)
+            + credit_market._mortgage_interest_arrears_by_cell.sum(axis=0)
+            + credit_market._mortgage_principal_arrears_by_cell.sum(axis=0)
+        )
+        return owed > 0.0
+
     def settle_authoritative_household_payments(self) -> None:
         """Apply the floor, settle consumer service, and commit household debt once."""
         if self.credit_market.consumer_payments_settled():
@@ -5060,6 +5078,7 @@ class Country:
             tau_vat=self.central_government.states["Value-added Tax"],
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             unpaid_rent=unpaid_rent,
+            debt_arrears_active=self._household_debt_arrears_active(),
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))

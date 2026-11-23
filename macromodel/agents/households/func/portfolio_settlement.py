@@ -19,6 +19,9 @@ SETTLEMENT_FORCED_LIQUIDATION = 4.0
 SETTLEMENT_INVALID_INPUT = 5.0
 SETTLEMENT_CONSERVATION_FAILURE = 6.0
 SETTLEMENT_SETTLED = 7.0
+# Stage 4 illiquid purchase blocked because the household has unpaid or suspended debt service this period,
+# or outstanding consumer or mortgage arrears: debt is serviced before resources go to investment.
+SETTLEMENT_BLOCKED_DEBT_ARREARS = 8.0
 
 _CLEARING_NOISE_TOL = 1e-6
 # Conservation check: |lfa_flow + ifa_flow + cost| <= atol + rtol * (|lfa_flow| + |ifa_flow| + |cost|).
@@ -53,6 +56,7 @@ def settle_portfolio_reallocation(
     settlement_enabled: bool,
     forced_liquidation_active: np.ndarray,
     waive_fixed_cost: np.ndarray | None = None,
+    debt_arrears_active: np.ndarray | None = None,
 ) -> PortfolioSettlement:
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
@@ -71,10 +75,20 @@ def settle_portfolio_reallocation(
     ``forced_liquidation_active`` marks households with a settled Stage 5 sale this
     period. Their illiquid purchases are blocked (``SETTLEMENT_FORCED_LIQUIDATION``,
     flows zero, no cost); their sales settle as for any other household.
+
+    ``debt_arrears_active`` marks households with unpaid or suspended debt service this
+    period or outstanding arrears. Their illiquid purchases are blocked
+    (``SETTLEMENT_BLOCKED_DEBT_ARREARS``); sales stay allowed. Forced-liquidation
+    status takes precedence when both apply.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
     forced_liquidation_active = np.asarray(forced_liquidation_active, dtype=bool)
+    debt_arrears_active = (
+        np.zeros(base_lfa.shape, dtype=bool)
+        if debt_arrears_active is None
+        else np.asarray(debt_arrears_active, dtype=bool)
+    )
     portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
     counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
     counterfactual_ifa_flow = np.asarray(rebalancing.counterfactual_ifa_flow, dtype=float)
@@ -84,6 +98,7 @@ def settle_portfolio_reallocation(
         base_lfa,
         base_ifa,
         forced_liquidation_active,
+        debt_arrears_active,
         portfolio_valid_flag,
         counterfactual_lfa_flow,
         counterfactual_ifa_flow,
@@ -131,6 +146,10 @@ def settle_portfolio_reallocation(
         # (fixed cost waived by the caller); a zero flow is not blocked here and keeps its normal status.
         forced = ~invalid & forced_liquidation_active & (counterfactual_ifa_flow > 0.0)
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
+        # Unpaid or suspended debt service, or arrears: no illiquid purchase until debt is serviced.
+        arrears_blocked = ~invalid & ~forced & debt_arrears_active & (counterfactual_ifa_flow > 0.0)
+        status[arrears_blocked] = SETTLEMENT_BLOCKED_DEBT_ARREARS
+        forced = forced | arrears_blocked
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.

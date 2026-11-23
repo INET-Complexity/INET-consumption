@@ -4098,6 +4098,7 @@ class Households(Agent):
         tau_vat_on_investment: float = 0.0,
         tau_vat: float = 0.0,
         unpaid_rent: np.ndarray | None = None,
+        debt_arrears_active: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -4382,6 +4383,7 @@ class Households(Agent):
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,
                 waive_fixed_cost=None if settled_sale is None else forced_liquidation_active,
+                debt_arrears_active=debt_arrears_active,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa

@@ -8,6 +8,7 @@ from macromodel.agents.households.func.portfolio_rebalancing import (
     compute_portfolio_rebalancing,
 )
 from macromodel.agents.households.func.portfolio_settlement import (
+    SETTLEMENT_BLOCKED_DEBT_ARREARS,
     SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY,
     SETTLEMENT_CONSERVATION_FAILURE,
     SETTLEMENT_FORCED_LIQUIDATION,
@@ -416,3 +417,35 @@ def test_conservation_check_does_not_cancel_rule_outputs_on_population_expanded_
     )
     assert not np.any(result.settlement_status == SETTLEMENT_CONSERVATION_FAILURE)
     assert (result.committed_ifa_flow != 0.0).sum() > 1000
+
+
+def _settle_with_arrears(*, arrears, forced=False, lfa_flow=-8.0, ifa_flow=8.0, cost=0.0, base_lfa=120.0):
+    return settle_portfolio_reallocation(
+        base_lfa=np.array([base_lfa]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[lfa_flow], ifa_flow=[ifa_flow], cost=[cost]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([forced]),
+        debt_arrears_active=np.array([arrears]),
+    )
+
+
+def test_household_in_debt_arrears_cannot_buy_illiquid_assets():
+    result = _settle_with_arrears(arrears=True)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_DEBT_ARREARS
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+
+
+def test_household_in_debt_arrears_can_still_sell_illiquid_assets():
+    result = _settle_with_arrears(arrears=True, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [127.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+
+
+def test_forced_liquidation_status_precedes_arrears_status_and_default_is_no_arrears():
+    assert _settle_with_arrears(arrears=True, forced=True).settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+    assert _settle_with_arrears(arrears=False).settlement_status[0] == SETTLEMENT_SETTLED
+    assert _settle().settlement_status[0] == SETTLEMENT_SETTLED

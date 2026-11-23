@@ -241,3 +241,30 @@ def test_compute_credit_supply_caps_by_type_counts_overdrafts_in_car_headroom():
 
     # Headroom = equity / CAR - (loans + household overdrafts + firm overdrafts).
     assert np.allclose(caps["total"], np.array([10.0, 50.0]))
+
+
+def test_available_tranche_supply_adds_back_the_exposure_the_tranche_retires():
+    from macromodel.markets.credit_market.func.clearing import compute_available_bank_supply_for_credit_tranche
+
+    banks = _make_banks_stub(
+        equity=np.array([10.0, 10.0]),
+        total_outstanding_loans=np.array([80.0, 80.0]),
+        firms_fraction=np.array([0.5, 0.5]),
+        hh_cons_fraction=np.array([0.3, 0.3]),
+        mortgage_fraction=np.array([0.2, 0.2]),
+        capital_adequacy_ratio=0.1,
+        overdrafts_to_firms=np.array([20.0, 15.0]),
+    )
+    kwargs = {
+        "new_credit_by_bank": np.zeros(2),
+        "max_supply_based_on_preferences": np.full(2, np.inf),
+        "new_preference_credit_by_bank": np.zeros(2),
+    }
+    np.testing.assert_allclose(compute_available_bank_supply_for_credit_tranche(banks=banks, **kwargs), [0.0, 5.0])
+    # A refinance loan repaying 20 of bank 0's overdrafts does not count them a second time.
+    np.testing.assert_allclose(
+        compute_available_bank_supply_for_credit_tranche(
+            banks=banks, exposure_relief_by_bank=np.array([20.0, 0.0]), **kwargs
+        ),
+        [20.0, 5.0],
+    )

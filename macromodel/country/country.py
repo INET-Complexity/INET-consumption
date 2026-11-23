@@ -2226,7 +2226,9 @@ class Country:
             "illiquid_returns_are_capital_gains",
             False,
         )
-        expected_dividend_income = self.households.compute_expected_dividend_income()
+        expected_dividend_income = self.households.compute_expected_dividend_income(
+            income_tax_rate=self.central_government.states["Income Tax"]
+        )
         expected_income_financial_assets = (
             expected_dividend_income
             if paper_returns_are_capital_gains
@@ -4898,6 +4900,10 @@ class Country:
         self.households.ts.total_dividend_fund_income_tax_withheld.append([dividend_income_tax_withheld.sum()])
         self.households.ts.income_dividend_distributions.append(dividend_income)
         self.households.ts.total_income_dividend_distributions.append([dividend_income.sum()])
+        # Settled less planned: zero unless a payer's cash cap left part of a declaration unpaid (then negative).
+        forecast_error = dividend_income - self.households.ts.current("expected_income_dividend_distributions")
+        self.households.ts.dividend_income_forecast_error.append(forecast_error)
+        self.households.ts.total_dividend_income_forecast_error.append([forecast_error.sum()])
         if paper_returns_are_capital_gains:
             self.households.stage_illiquid_valuation_return(period_index=period_index)
             financial_asset_income = dividend_income

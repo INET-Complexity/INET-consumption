@@ -1774,18 +1774,38 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
-    def compute_expected_dividend_income(self) -> np.ndarray:
-        """Forecast only dividends realised before the current planning period.
+    def compute_expected_dividend_income(self, income_tax_rate: float) -> np.ndarray:
+        """Plan on the dividends already declared for this period, net of withholding.
 
-        Current declarations settle after the planning and goods-market phases,
-        so they cannot finance the current period's Stage 5 feasibility.
+        A distribution settled in period t is the one declared at the end of
+        t-1 (``record_diagnostic_dividend_fund``), and settlement never exceeds
+        the declaration. The household's share of both declarations is known
+        when period t is planned, so
+
+            E_{h,t} = (1 - tau) x (declared firm_{h,t-1} + declared bank_{h,t-1}),
+
+        with tau the Income Tax withheld at source on settlement
+        (``compute_dividend_income_after_withholding``). The current rows of the
+        declared series are still the t-1 rows at planning. When a firm's cash
+        cap binds, the settled amount is below the declaration and the gap is a
+        negative forecast error (``dividend_income_forecast_error``).
+
+        At t = 1 the current rows are the opening t0 rows, which are zero: no
+        declaration exists before the first period, so nothing is settled at
+        t = 1 and the forecast is zero as well, with no surprise. The first
+        payment, at t = 2, is the declaration made at the end of t = 1.
         """
-        distribution = np.asarray(self.ts.current("income_dividend_distributions"), dtype=float)
-        if distribution.shape != self.ts.current("illiquid_financial_assets").shape:
+        declared = np.asarray(self.ts.current("dividend_fund_declared_firm_distribution"), dtype=float) + np.asarray(
+            self.ts.current("dividend_fund_declared_bank_distribution"), dtype=float
+        )
+        if declared.shape != self.ts.current("illiquid_financial_assets").shape:
             raise ValueError("Expected dividend income must contain one value per household.")
-        if not np.all(np.isfinite(distribution)) or np.any(distribution < -1e-9):
-            raise ValueError("Dividend income must be finite and non-negative.")
-        return np.maximum(distribution, 0.0)
+        if not np.all(np.isfinite(declared)) or np.any(declared < -1e-9):
+            raise ValueError("Declared dividends must be finite and non-negative.")
+        tax_rate = float(income_tax_rate)
+        if not np.isfinite(tax_rate) or not 0.0 <= tax_rate <= 1.0:
+            raise ValueError("income_tax_rate must be a finite scalar between zero and one.")
+        return (1.0 - tax_rate) * np.maximum(declared, 0.0)
 
     def compute_income_from_financial_assets(self, period_index: int | None = None) -> np.ndarray:
         """Calculate current income from financial assets.

@@ -76,6 +76,10 @@ def compute_residual_capacity_fallback(
     Stage 4 sale while overdrawn (``settle_portfolio_reallocation``) starts
     from the post-liquidation LFA and IFA, so the two never sell the same
     assets, and its fixed cost is waived once a Stage 5 sale has paid it.
+    Since Stage 4 rebalances without a new-saving gate, a household that sold
+    here may also trade in Stage 4 in the same period (sell more, or buy back
+    once the overdraft is repaid); whether a Stage 5 seller should sit out
+    Stage 4 is an open decision.
     """
     preferred_margin_after_lfa = np.asarray(preferred_margin_after_lfa, dtype=float)
     preferred_margin_amount = np.asarray(preferred_margin_amount, dtype=float)

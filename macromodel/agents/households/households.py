@@ -1815,9 +1815,14 @@ class Households(Agent):
 
         with tau the Income Tax withheld at source on settlement
         (``compute_dividend_income_after_withholding``). The current rows of the
-        declared series are still the t-1 rows at planning. When a firm's cash
-        cap binds, the settled amount is below the declaration and the gap is a
-        negative forecast error (``dividend_income_forecast_error``).
+        declared series are still the t-1 rows at planning. Bank declarations
+        always settle in full. A firm pays less than its declaration, and the
+        gap is a negative forecast error (``dividend_income_forecast_error``),
+        when (i) the firm is distressed or insolvent at settlement (nothing is
+        paid), (ii) its pre-credit plan reserves less than the proposal
+        (``dividend_fund_planned_distribution`` below the declaration, from
+        forecast cash), or (iii) its cash after debt service and the facility
+        repayment does not cover the planned amount at settlement.
 
         At t = 1 the current rows are the opening t0 rows, which are zero: no
         declaration exists before the first period, so nothing is settled at

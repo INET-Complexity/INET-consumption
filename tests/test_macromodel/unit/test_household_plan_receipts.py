@@ -77,6 +77,11 @@ def _run(simulation):
                 "bank_overdraft_interest_accrued": banks.ts.current("household_overdraft_interest_accrued").copy(),
                 "floor_support": hh.post_grant_feasible_plan.floor_support.copy(),
                 "overdraft_sale_cash": hh.current_overdraft_sale_cash().copy(),
+                "closing_consumer_interest_arrears": credit_market._consumer_interest_arrears_by_cell.sum(
+                    axis=0
+                ).copy(),
+                "unpaid_consumer_payment": hh.ts.current("unpaid_consumer_payment").copy(),
+                "missed_payment_count_consumer": hh.ts.current("missed_payment_count_consumer").copy(),
                 "credit_rationing_gap": hh.post_grant_feasible_plan.credit_rationing_gap.copy(),
                 "scheduled_service": hh.ts.current("scheduled_consumer_payment")
                 + hh.ts.current("actual_mortgage_payment")
@@ -198,3 +203,26 @@ def test_rental_income_planned_after_the_housing_market_is_the_realised_rent(run
             rtol=1e-12,
             atol=1e-6,
         )
+
+
+def test_overdraft_interest_arrears_are_collected_next_period_or_counted_as_a_consumer_miss(run):
+    _, _, records = run
+    booked, following = records[OVERDRAWN_FROM], records[OVERDRAWN_FROM + 1]
+    in_arrears = booked["unpaid_overdraft_interest"] > 0.0
+    assert in_arrears.sum() >= 5
+    # Due first in next period's consumer service.
+    assert np.all(
+        following["scheduled_service"][in_arrears]
+        >= booked["closing_consumer_interest_arrears"][in_arrears] * (1.0 - 1e-12)
+    )
+    added_next = following["arrears_added"].sum(axis=0)
+    paid = in_arrears & (following["unpaid_consumer_payment"] == 0.0)
+    missed = in_arrears & (following["unpaid_consumer_payment"] > 0.0)
+    assert paid.sum() >= 1
+    # Paid in full: the old arrears are collected, only next period's new unpaid overdraft interest remains.
+    np.testing.assert_allclose(
+        following["closing_consumer_interest_arrears"][paid], added_next[paid], rtol=1e-9, atol=1e-6
+    )
+    # Not paid: a consumer miss, as for unpaid consumer service.
+    assert missed.sum() >= 1
+    assert np.all(following["missed_payment_count_consumer"][missed] >= 1)

@@ -15,6 +15,8 @@ SETTLEMENT_INVALID_INPUT = 5.0
 SETTLEMENT_CONSERVATION_FAILURE = 6.0
 SETTLEMENT_SETTLED = 7.0
 
+_CLEARING_NOISE_TOL = 1e-6
+
 
 @dataclass(frozen=True)
 class PortfolioSettlement:
@@ -81,6 +83,7 @@ def settle_portfolio_reallocation(
     committed_lfa = np.zeros(shape, dtype=float)
     committed_ifa = np.zeros(shape, dtype=float)
     committed_cost = np.zeros(shape, dtype=float)
+    sale_while_overdrawn_eligible = np.zeros(shape, dtype=bool)
     status = np.full(shape, SETTLEMENT_DISABLED if not settlement_enabled else SETTLEMENT_SETTLED)
     valid = np.ones(shape, dtype=bool)
 
@@ -115,8 +118,16 @@ def settle_portfolio_reallocation(
         status[no_surplus] = SETTLEMENT_NO_SURPLUS
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
+        # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.
+        overdrawn = base_lfa < 0.0
+        # A sale whose proceeds net of the trade cost are not positive would deepen the overdraft: it stays blocked.
+        sale_while_overdrawn = overdrawn & (counterfactual_ifa_flow < 0.0) & (counterfactual_lfa_flow > 0.0)
         negative_lfa = (
-            ~invalid & ~forced & ~no_surplus & ((base_lfa < 0.0) | (base_lfa + counterfactual_lfa_flow < 0.0))
+            ~invalid
+            & ~forced
+            & ~no_surplus
+            & ~sale_while_overdrawn
+            & (overdrawn | (base_lfa + counterfactual_lfa_flow < 0.0))
         )
         status[negative_lfa] = SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
@@ -133,8 +144,17 @@ def settle_portfolio_reallocation(
                 raise ValueError("Portfolio fixed-cost waiver must have one value per household.")
             committed_cost[eligible & waived] = 0.0
         status[eligible & inaction_flag] = SETTLEMENT_INACTION
+        sale_while_overdrawn_eligible = eligible & sale_while_overdrawn
 
     closing_lfa = base_lfa + committed_lfa - committed_cost
+    # A sale that exactly clears an overdraft can close at float noise below zero. Sell that noise too, so
+    # the household closes at zero or above rather than in a (-tol, 0) residue.
+    clearing_noise = sale_while_overdrawn_eligible & (closing_lfa < 0.0) & (closing_lfa > -_CLEARING_NOISE_TOL)
+    if np.any(clearing_noise):
+        bump = np.where(clearing_noise, -closing_lfa + np.spacing(np.abs(committed_lfa)), 0.0)
+        committed_lfa = committed_lfa + bump
+        committed_ifa = committed_ifa - bump
+        closing_lfa = base_lfa + committed_lfa - committed_cost
     closing_ifa = base_ifa + committed_ifa
     closing_tfa = closing_lfa + closing_ifa
     return PortfolioSettlement(

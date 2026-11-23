@@ -3,7 +3,10 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
+from macromodel.agents.households.func.portfolio_rebalancing import (
+    PortfolioRebalancingResult,
+    compute_portfolio_rebalancing,
+)
 from macromodel.agents.households.func.portfolio_settlement import (
     SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY,
     SETTLEMENT_CONSERVATION_FAILURE,
@@ -99,7 +102,7 @@ def test_non_positive_surplus_blocks_reallocation():
     assert result.settlement_status[0] == SETTLEMENT_NO_SURPLUS
 
 
-def test_negative_lfa_blocks_reallocation():
+def test_negative_lfa_blocks_purchase():
     result = _settle(base_lfa=-5.0)
     np.testing.assert_allclose(result.closing_lfa, [-5.0])
     np.testing.assert_allclose(result.closing_ifa, [50.0])
@@ -182,3 +185,94 @@ def test_purchase_that_would_overdraw_the_account_is_blocked_and_a_sale_is_not()
     sale = _settle(base_lfa=1.0, lfa_flow=8.0, ifa_flow=-8.0)
     assert sale.settlement_status[0] == SETTLEMENT_SETTLED
     np.testing.assert_array_equal(sale.closing_lfa, [9.0])
+
+
+def test_overdrawn_household_sells_ifa_and_repays_overdraft_net_of_cost():
+    result = _settle(base_lfa=-5.0, base_ifa=50.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [2.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [1.0])
+    # TFA falls only by the trade cost.
+    np.testing.assert_allclose(result.closing_tfa, [44.0])
+
+
+def test_overdrawn_sale_smaller_than_overdraft_reduces_it():
+    result = _settle(base_lfa=-20.0, lfa_flow=8.0, ifa_flow=-8.0)
+    np.testing.assert_allclose(result.closing_lfa, [-12.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+
+
+def test_overdrawn_household_purchase_remains_blocked():
+    result = _settle(base_lfa=-5.0, lfa_flow=-8.0, ifa_flow=8.0)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+    np.testing.assert_array_equal(result.closing_lfa, [-5.0])
+    np.testing.assert_array_equal(result.closing_ifa, [50.0])
+
+
+def test_overdrawn_household_without_trade_stays_blocked():
+    result = _settle(base_lfa=-5.0, lfa_flow=0.0, ifa_flow=0.0, inaction=True)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+
+
+def test_overdrawn_sale_still_requires_surplus_and_valid_inputs():
+    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, surplus=0.0).settlement_status[0] == (
+        SETTLEMENT_NO_SURPLUS
+    )
+    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, valid=False).settlement_status[0] == (
+        SETTLEMENT_INVALID_INPUT
+    )
+
+
+def test_non_overdrawn_behaviour_is_unchanged():
+    # Same statuses and flows as before the change for base_lfa >= 0.
+    for base_lfa, lfa_flow, ifa_flow, status in [
+        (120.0, -8.0, 8.0, SETTLEMENT_SETTLED),
+        (5.0, -8.0, 8.0, SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY),
+        (1.0, 8.0, -8.0, SETTLEMENT_SETTLED),
+        (0.0, 8.0, -8.0, SETTLEMENT_SETTLED),
+    ]:
+        result = _settle(base_lfa=base_lfa, lfa_flow=lfa_flow, ifa_flow=ifa_flow)
+        assert result.settlement_status[0] == status
+
+
+def test_upper_bound_sale_that_clears_overdraft_does_not_close_in_float_noise_below_zero():
+    rng = np.random.default_rng(0)
+    n = 20000
+    scale = 10 ** rng.uniform(3, 8, n)
+    lfa = -scale * rng.uniform(0.001, 0.5, n)
+    ifa = scale * rng.uniform(0.6, 3.0, n)
+    rebalancing = compute_portfolio_rebalancing(
+        opening_tfa_scale=scale,
+        post_return_lfa=lfa,
+        post_return_ifa=ifa,
+        target_illiquid_assets=np.zeros(n),
+        target_tfa_base=lfa + ifa,
+        portfolio_participates=np.ones(n, dtype=bool),
+        phi_1=1.0,
+        lambda_kappa=0.05,
+        fixed_cost_share=0.002,
+    )
+    result = settle_portfolio_reallocation(
+        base_lfa=lfa,
+        base_ifa=ifa,
+        investable_surplus=np.ones(n),
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.zeros(n, dtype=bool),
+    )
+    sellers = (result.settlement_status == SETTLEMENT_SETTLED) & rebalancing.upper_bound_flag
+    assert sellers.sum() > 1000
+    raw_closing = lfa + rebalancing.counterfactual_lfa_flow + rebalancing.adjustment_cost - rebalancing.adjustment_cost
+    # Without the guard a large share of these households closes at float noise below zero.
+    assert ((raw_closing < 0.0) & sellers).sum() > 100
+    assert np.all(result.closing_lfa[sellers] >= 0.0)
+    np.testing.assert_allclose(result.committed_lfa_flow + result.committed_ifa_flow, 0.0, atol=1e-8)
+
+
+def test_overdrawn_sale_with_non_positive_net_proceeds_is_blocked():
+    for lfa_flow, cost in [(0.0, 8.0), (-1.0, 9.0)]:
+        result = _settle(base_lfa=-5.0, lfa_flow=lfa_flow, ifa_flow=-8.0, cost=cost)
+        assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+        np.testing.assert_array_equal(result.closing_lfa, [-5.0])
+        np.testing.assert_array_equal(result.closing_ifa, [50.0])

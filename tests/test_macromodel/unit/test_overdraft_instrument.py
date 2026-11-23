@@ -45,7 +45,7 @@ def _run(simulation):
                 "total_outstanding_loans",
                 "consumer_interest_accrued",
                 "mortgage_interest_accrued",
-                "household_overdraft_interest_capitalised",
+                "household_overdraft_interest_accrued",
             )
         }
         bank["opening_equity"] = opening_equity
@@ -119,10 +119,13 @@ def test_banks_book_household_balances_gross(run):
 def test_planned_overdraft_interest_is_the_interest_charged(run):
     _, overdrawn, records = run
     record = records[OVERDRAWN_FROM]
-    np.testing.assert_array_equal(record["scheduled_overdraft_interest"], record["overdraft_interest_paid"])
     assert np.all(record["scheduled_overdraft_interest"][overdrawn] > 0.0)
     unpaid = record["unpaid_overdraft_interest"]
     assert np.all((unpaid >= 0.0) & (unpaid <= record["scheduled_overdraft_interest"]))
+    # The account is charged the interest the plan pays; the unpaid part becomes consumer interest arrears.
+    np.testing.assert_allclose(
+        record["overdraft_interest_paid"], record["scheduled_overdraft_interest"] - unpaid, rtol=1e-12, atol=0.0
+    )
 
 
 def test_overdrawn_households_repay_the_overdraft_before_anything_else(run):
@@ -162,17 +165,17 @@ def test_bank_equity_flow_and_balance_sheet_identities_hold_every_period(run):
             - bank["dividend_fund_settlement_debit"],
             rtol=1e-12,
         )
-        # Accrued interest, including capitalised overdraft interest, is profit but not distributable cash.
+        # Accrued interest, including unpaid overdraft interest, is profit but not distributable cash.
         np.testing.assert_allclose(
             bank["profits"] - bank["cash_distributable_profits"],
             bank["consumer_interest_accrued"]
             + bank["mortgage_interest_accrued"]
-            + bank["household_overdraft_interest_capitalised"],
+            + bank["household_overdraft_interest_accrued"],
             rtol=1e-9,
             atol=1e-3,
         )
         np.testing.assert_allclose(
-            bank["household_overdraft_interest_capitalised"],
+            bank["household_overdraft_interest_accrued"],
             np.bincount(banks, weights=record["unpaid_overdraft_interest"], minlength=n_banks),
             rtol=1e-12,
         )

@@ -1191,23 +1191,22 @@ class TestHouseholds:
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
 
-    def test__expected_dividend_income_ignores_current_unsettled_receipts(self, test_households):
+    def test__expected_dividend_income_is_last_declaration_net_of_withholding(self, test_households):
         n_households = test_households.ts.current("n_households")
-        prior_settled_income = np.full(n_households, 7.0)
-        test_households.ts.override_current("income_dividend_distributions", prior_settled_income)
-        test_households.ts.override_current(
-            "dividend_fund_settled_firm_distribution",
-            np.full(n_households, 100.0),
-        )
-        test_households.ts.override_current(
-            "dividend_fund_settled_bank_distribution",
-            np.full(n_households, 50.0),
-        )
+        # Last period's settled income and this period's receipts do not enter the forecast.
+        test_households.ts.override_current("income_dividend_distributions", np.full(n_households, 7.0))
+        test_households.ts.override_current("dividend_fund_settled_firm_distribution", np.full(n_households, 100.0))
+        test_households.ts.override_current("dividend_fund_declared_firm_distribution", np.arange(n_households) * 4.0)
+        test_households.ts.override_current("dividend_fund_declared_bank_distribution", np.full(n_households, 2.0))
 
         np.testing.assert_allclose(
-            test_households.compute_expected_dividend_income(),
-            prior_settled_income,
+            test_households.compute_expected_dividend_income(income_tax_rate=0.25),
+            0.75 * (np.arange(n_households) * 4.0 + 2.0),
         )
+
+    def test__expected_dividend_income_rejects_invalid_tax_rate(self, test_households):
+        with pytest.raises(ValueError, match="income_tax_rate"):
+            test_households.compute_expected_dividend_income(income_tax_rate=1.5)
 
     def test__residual_illiquid_return_base_excludes_fixed_direct_share_proxy(self, test_households):
         direct_share_fraction = np.array([0.0, 0.25, 1.0])
@@ -3575,6 +3574,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         # The expected capacity of 40 assumes no cash rent and no investment, so set both
         # explicitly instead of relying on the sample household's initial state.
@@ -3606,6 +3613,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_reduces_an_overdraft_and_planned_overdraft_interest_first(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         test_households.ts.override_current("rent", np.zeros(n_households))
         test_households.ts.override_current("target_investment", np.zeros(n_households))

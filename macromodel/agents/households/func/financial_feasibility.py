@@ -55,6 +55,8 @@ class PreGrantFeasiblePlan:
     residual_shortfall_after_lfa: np.ndarray
     credit_requested: np.ndarray | None = None
     planned_liquidation_total: np.ndarray | None = None
+    # Part of planned_liquidation_total that repays the opening overdraft.
+    overdraft_liquidation_total: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -98,9 +100,13 @@ class PostGrantFeasiblePlan:
     unmet_floor: np.ndarray | None = None
     resource_deficit: np.ndarray | None = None
     # Overdraft interest due on the opening negative liquid balance, and the part the allocation leaves
-    # unpaid; the unpaid part capitalises into the overdraft.
+    # unpaid; the unpaid part becomes consumer interest arrears at the household's bank.
     scheduled_overdraft_interest: np.ndarray | None = None
     unpaid_overdraft_interest: np.ndarray | None = None
+    # Opening overdraft max(D - LFA, 0) the allocation repays as a senior use; the rest stays overdrawn.
+    overdraft_repayment: np.ndarray | None = None
+    # Part of planned_liquidation_total (net) that repays the opening overdraft.
+    overdraft_liquidation_total: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -136,12 +142,21 @@ class HouseholdFinancialFeasibility:
         *,
         planned_liquidation_total: np.ndarray,
         available_illiquid_assets: np.ndarray,
+        overdraft_liquidation_total: np.ndarray | None = None,
     ) -> PreGrantFeasiblePlan:
         liquidation = self._non_negative(planned_liquidation_total)
         available = self._non_negative(available_illiquid_assets)
         if liquidation.shape != available.shape:
             raise ValueError("planned liquidation and available illiquid assets must have the same shape")
-        return replace(plan, planned_liquidation_total=np.minimum(liquidation, available).copy())
+        planned = np.minimum(liquidation, available)
+        overdraft = (
+            np.zeros_like(planned)
+            if overdraft_liquidation_total is None
+            else np.minimum(self._non_negative(overdraft_liquidation_total), planned)
+        )
+        if overdraft.shape != planned.shape:
+            raise ValueError("overdraft liquidation must be a household vector")
+        return replace(plan, planned_liquidation_total=planned.copy(), overdraft_liquidation_total=overdraft.copy())
 
     def build_post_grant_plan(
         self,
@@ -177,6 +192,9 @@ class HouseholdFinancialFeasibility:
             credit_granted=granted.copy(),
             credit_rationing_gap=np.maximum(requested - granted, 0.0).copy(),
             planned_liquidation_total=liquidation.copy(),
+            overdraft_liquidation_total=(
+                None if plan.overdraft_liquidation_total is None else plan.overdraft_liquidation_total.copy()
+            ),
             residual_shortfall_after_granted_credit=np.maximum(residual - granted - liquidation, 0.0).copy(),
             funded_from_liquid_assets=plan.funded_from_liquid_assets.copy(),
             granted_consumer_credit_by_bank_and_household=None if matrix is None else matrix.copy(),
@@ -229,9 +247,13 @@ class HouseholdFinancialFeasibility:
         if np.any((purchase > 0.0) & (reserved - cost_paid - net < purchase - (1e-6 + 1e-9 * purchase))):
             raise RuntimeError("Illiquid assets cannot fund the sale reserved for a completed property purchase.")
         cash = np.maximum(reserved - cost_paid - purchase, 0.0)
+        overdraft = (
+            None if plan.overdraft_liquidation_total is None else np.minimum(plan.overdraft_liquidation_total, net)
+        )
         return replace(
             plan,
             planned_liquidation_total=net.copy(),
+            overdraft_liquidation_total=overdraft,
             reserved_liquidation_total=reserved.copy(),
             liquidation_sale_cost=cost_paid.copy(),
             purchase_liquidation_total=purchase.copy(),
@@ -274,7 +296,9 @@ class HouseholdFinancialFeasibility:
         if plan.consumption_after_floor is not None:
             raise RuntimeError("Cash needs must be refreshed before floor/payment settlement.")
         liquidation_cash = forced_liquidation_cash(plan)
-        need = np.maximum(arrays["cash_uses"] - arrays["cash_income"], 0.0)
+        # An opening overdraft is a use to be repaid, not zero cash: residual = max(uses - income - (LFA - D), 0).
+        overdraft = np.maximum(-arrays["available_lfa"], 0.0)
+        need = np.maximum(arrays["cash_uses"] + overdraft - arrays["cash_income"], 0.0)
         funded = np.minimum(need, np.maximum(arrays["available_lfa"], 0.0))
         residual = need - funded
         return replace(
@@ -300,14 +324,15 @@ class HouseholdFinancialFeasibility:
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
         scheduled_overdraft_interest: np.ndarray | None = None,
+        opening_overdraft: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Allocate resources in the Stage 5 payment order, without writing household state.
 
         All inputs are nominal cash amounts per household. ``resources`` (A) is
         income without support plus liquid assets, granted consumer credit and
         the reserved liquidation net of its cost. The order is: goods up to the
-        floor F and cash rent R; debt service O; goods above the floor up to
-        desired goods G; investment V.
+        floor F and cash rent R; debt service O; the opening overdraft B;
+        goods above the floor up to desired goods G; investment V.
 
             S   = max(F + R - A, 0)             A1 = A + S - F - R
             P   = min(O, A1)                    U  = O - P
@@ -319,9 +344,22 @@ class HouseholdFinancialFeasibility:
 
         O includes the overdraft interest due on the opening negative liquid
         balance (``scheduled_overdraft_interest``, default zero). It is paid
-        after consumer and mortgage service, so their suspension is unchanged;
-        the unpaid part ``unpaid_overdraft_interest`` capitalises into the
-        overdraft, since the bank charges it to the account in any case.
+        after consumer and mortgage service, so their suspension is unchanged.
+        The unpaid part ``unpaid_overdraft_interest`` is not charged to the
+        account: the caller books it as consumer interest arrears at the
+        household's bank, the unpaid-service path of consumer credit.
+
+        The opening overdraft B = max(D - LFA, 0) (``opening_overdraft``,
+        default zero) is a senior use: A counts liquid assets as
+        max(LFA - D, 0), and B is repaid right after debt service, before goods
+        above the floor and investment,
+
+            B^p = min(B, A1 - P)                C^f = F + min(max(G - F, 0), A1 - P - B^p)
+            V^p = min(V, A1 - P - B^p - (C^f - F))
+
+        so the household's own resources are A - B = income + (LFA - D) + K +
+        liquidation: LFA - D without the zero floor. Support never covers B: it is set from
+        A, which excludes it. The part B - B^p stays overdrawn.
 
         ``support_exempt_resources`` (E, default zero) is the part of A that the
         support test does not count: S = max(F + R - (A - E), 0). The household
@@ -364,6 +402,7 @@ class HouseholdFinancialFeasibility:
             if scheduled_overdraft_interest is None
             else self._non_negative(scheduled_overdraft_interest)
         )
+        overdraft = np.zeros(shape) if opening_overdraft is None else self._non_negative(opening_overdraft)
         for values in (
             desired,
             floor,
@@ -373,6 +412,7 @@ class HouseholdFinancialFeasibility:
             desired_investment,
             available,
             overdraft_interest,
+            overdraft,
         ):
             if values.shape != shape:
                 raise ValueError("Stage 5 consumption-floor inputs must be equal-length household vectors.")
@@ -412,6 +452,8 @@ class HouseholdFinancialFeasibility:
         overdraft_interest_paid = np.minimum(overdraft_interest, after_floor_and_rent - service_paid)
         unpaid_overdraft_interest = overdraft_interest - overdraft_interest_paid
         after_service = after_floor_and_rent - service_paid - overdraft_interest_paid
+        overdraft_repayment = np.minimum(overdraft, after_service)
+        after_service = after_service - overdraft_repayment
         consumption_above_floor = np.minimum(np.maximum(desired - floor, 0.0), after_service)
         consumption_after_floor = floor_paid + consumption_above_floor
         investment_after_floor = np.minimum(desired_investment, after_service - consumption_above_floor)
@@ -435,4 +477,5 @@ class HouseholdFinancialFeasibility:
             resource_deficit=resource_deficit,
             scheduled_overdraft_interest=overdraft_interest,
             unpaid_overdraft_interest=unpaid_overdraft_interest,
+            overdraft_repayment=overdraft_repayment,
         )

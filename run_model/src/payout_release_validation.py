@@ -195,7 +195,15 @@ def validate_payout_release_file(
     dividend_income = arrays["household dividend income"][1:].sum(axis=1)
     dividend_income_tax_withheld = arrays["household dividend income tax withheld"][1:].sum(axis=1)
     expected_dividend_income = arrays["expected household dividend income"][1:].sum(axis=1)
-    previous_dividend_income = arrays["household dividend income"][:-1].sum(axis=1)
+    previous_declarations = (arrays["household firm declaration"][:-1] + arrays["household bank declaration"][:-1]).sum(
+        axis=1
+    )
+    # Households plan on last period's declarations net of the Income Tax withheld at source; the flat rate is
+    # recovered from the realised withholding (no receipts: no rate to recover, and nothing to check).
+    gross_receipts = (arrays["household dividend income"] + arrays["household dividend income tax withheld"]).sum()
+    withholding_rate = (
+        arrays["household dividend income tax withheld"].sum() / gross_receipts if gross_receipts > 0.0 else 0.0
+    )
     firm_debits = arrays["firm payer settlement debit"][1:].sum(axis=1)
     bank_debits = arrays["bank payer settlement debit"][1:].sum(axis=1)
     quota_sums = arrays["ownership quota"][1:].sum(axis=1)
@@ -234,7 +242,11 @@ def validate_payout_release_file(
     firm_receipt_identity_error = firm_receipts - firm_debits
     bank_receipt_identity_error = bank_receipts - bank_debits
     household_income_identity_error = dividend_income + dividend_income_tax_withheld - firm_receipts - bank_receipts
-    expected_dividend_timing_error = expected_dividend_income - previous_dividend_income
+    expected_dividend_timing_error = (
+        expected_dividend_income - (1.0 - withholding_rate) * previous_declarations
+        if gross_receipts > 0.0
+        else np.zeros_like(expected_dividend_income)
+    )
     declaration_activity = np.abs(arrays["firm payer declaration"][1:]).sum(axis=1) + np.abs(
         arrays["bank payer declaration"][1:]
     ).sum(axis=1)

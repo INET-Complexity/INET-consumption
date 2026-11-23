@@ -363,6 +363,8 @@ def create_households_timeseries(
         total_dividend_fund_income_tax_withheld=[0.0],
         expected_income_dividend_distributions=np.zeros(len(data)),
         total_expected_income_dividend_distributions=[0.0],
+        dividend_income_forecast_error=np.zeros(len(data)),
+        total_dividend_income_forecast_error=[0.0],
         illiquid_financial_asset_capital_gains=np.zeros(len(data)),
         total_illiquid_financial_asset_capital_gains=[0.0],
         dividend_fund_settled_firm_distribution=np.zeros(len(data)),

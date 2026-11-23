@@ -350,7 +350,7 @@ def _compute_credit_supply_caps_by_type(
     """Compute CAR-based bank credit supply caps (total + split by type).
 
     Total cap is lending headroom implied by the capital adequacy requirement:
-        max_car = max(0, equity / capital_adequacy_ratio - total_outstanding_loans)
+        max_car = max(0, equity / capital_adequacy_ratio - (total_outstanding_loans + overdrafts))
 
     Type caps follow the same preference-weighted split as credit clearing:
     initial `new_loans_fraction_*` shares adjusted by `credit_supply_temperature`
@@ -361,10 +361,11 @@ def _compute_credit_supply_caps_by_type(
     of total short-term borrower demand, but it is excluded from this cap split so
     old overdraft repair cannot mechanically starve long-term investment capacity.
     """
+    from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
+
     max_car = np.maximum(
         0.0,
-        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-        - banks.ts.current("total_outstanding_loans"),
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
     )
 
     # Import locally to keep CreditMarket module lightweight and avoid circular-import risk.
@@ -1359,6 +1360,26 @@ class CreditMarket:
         if self._pending_consumer_loans_this_period is None:
             raise RuntimeError("No unbooked consumer-credit settlement is available for this period.")
         return self._pending_consumer_loans_this_period[0].copy()
+
+    def book_unpaid_household_overdraft_interest(self, unpaid: np.ndarray, corresponding_bank: np.ndarray) -> None:
+        """Hold overdraft interest a household left unpaid as consumer interest arrears at its own bank.
+
+        This is the unpaid-service path of consumer credit: the arrears bear no
+        interest, are due first in next period's consumer service, and are
+        written off with the household's consumer cells on FICP forgiveness or
+        default. They do not enter the overdraft, so unpaid interest does not
+        compound.
+        """
+        unpaid = np.asarray(unpaid, dtype=float)
+        bank = np.asarray(corresponding_bank, dtype=int)
+        n_banks, n_households = self._consumer_interest_arrears_by_cell.shape
+        if unpaid.shape != (n_households,) or bank.shape != (n_households,):
+            raise ValueError("Unpaid overdraft interest and corresponding banks must be household vectors.")
+        if not np.all(np.isfinite(unpaid)) or np.any(unpaid < 0.0):
+            raise ValueError("Unpaid overdraft interest must be finite and non-negative.")
+        if np.any((bank < 0) | (bank >= n_banks)):
+            raise ValueError("Every household needs a valid corresponding bank.")
+        self._consumer_interest_arrears_by_cell[bank, np.arange(n_households)] += unpaid
 
     def current_consumer_debt_components_by_household(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return contractual principal and committed arrears by household."""
@@ -2625,7 +2646,9 @@ class CreditMarket:
             loans = self.states[key]
             ind = np.isclose(loans[0], 0.0, atol=1e-2)
             if key == "cons_loans":
-                ind &= np.isclose(self._consumer_interest_arrears_by_cell, 0.0, atol=1e-2)
+                # Interest arrears are never dropped within the tolerance: a cell keeps them (unpaid overdraft
+                # interest can sit on a cell without principal) until they are paid or written off.
+                ind &= self._consumer_interest_arrears_by_cell == 0.0
             if key == "mort_loans":
                 ind &= np.isclose(self._mortgage_interest_arrears_by_cell, 0.0, atol=1e-2)
                 self._mortgage_interest_arrears_by_cell[ind] = 0.0

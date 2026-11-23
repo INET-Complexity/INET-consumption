@@ -84,7 +84,8 @@ def _write_release_file(path: Path, *, periods: int = 3) -> None:
     gross_dividend_income = household_firm_receipts + household_bank_receipts
     dividend_income_tax_withheld = 0.25 * gross_dividend_income
     dividend_income = gross_dividend_income - dividend_income_tax_withheld
-    expected_dividend_income = np.vstack((np.zeros(2), dividend_income[:-1]))
+    # Planned on the declarations of the previous period, net of withholding; equal to income when no cap binds.
+    expected_dividend_income = dividend_income.copy()
     with h5py.File(path, "w") as h5_file:
         households = h5_file.create_group("FRA/households")
         firms = h5_file.create_group("FRA/firms")
@@ -173,7 +174,7 @@ def test__release_validator_allows_final_unsettled_declarations(tmp_path: Path) 
         ),
         (
             lambda h5_file: h5_file["FRA/households/expected_income_dividend_distributions"].__setitem__(
-                (3, 0),
+                (2, 0),
                 0.0,
             ),
             "expected dividend timing",

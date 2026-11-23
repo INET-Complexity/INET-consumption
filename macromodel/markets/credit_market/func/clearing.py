@@ -35,6 +35,7 @@ import pandas as pd
 from numba import njit
 
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
 from macromodel.agents.firms import Firms
 from macromodel.agents.households.households import Households
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
@@ -115,8 +116,7 @@ def _compute_loan_type_preference_caps(
     """Compute currency-valued bank supply caps from loan-type preference shares."""
     max_car = np.maximum(
         0.0,
-        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-        - banks.ts.current("total_outstanding_loans"),
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
     )
     firm_weights = banks.ts.initial("new_loans_fraction_firms") * np.exp(
         -credit_supply_temperature * current_npl_firm_loans
@@ -435,13 +435,18 @@ def compute_available_bank_supply_for_credit_tranche(
     new_credit_by_bank: np.ndarray,
     max_supply_based_on_preferences: np.ndarray,
     new_preference_credit_by_bank: np.ndarray,
+    exposure_relief_by_bank: np.ndarray | float = 0.0,
 ) -> np.ndarray:
-    """Return bank supply available to the current credit-clearing tranche."""
+    """Return bank supply available to the current credit-clearing tranche.
+
+    ``exposure_relief_by_bank`` is existing exposure the tranche retires, such as the firm overdrafts an
+    overdraft-refinance loan repays: it is not counted twice against the capital requirement.
+    """
     return np.maximum(
         0.0,
         np.minimum(
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - (capital_requirement_exposure(banks) - exposure_relief_by_bank)
             - new_credit_by_bank,
             max_supply_based_on_preferences - new_preference_credit_by_bank,
         ),
@@ -651,8 +656,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         # Bank-side diagnostic rooms/caps at the start of clearing
         car_room_initial = np.maximum(
             0.0,
-            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans"),
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
         )
         _append_scalar(banks.ts, "credit_market_car_room_initial", float(car_room_initial.sum()))
 
@@ -850,7 +854,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -998,7 +1002,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -1126,7 +1130,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -1311,7 +1315,8 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
                     break
                 bank_cap_req = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - (1 - 1.0 / loan_maturity) * banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
+                    + banks.ts.current("total_outstanding_loans")[bank_id] / loan_maturity
                     - new_credit_by_bank[bank_id]
                 )
                 capital_stock_collateral_capacity = (
@@ -1583,7 +1588,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         residual_car_room = np.maximum(
             0.0,
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - capital_requirement_exposure(banks)
             - new_credit_by_bank,
         )
         new_debt_rollover_st_loans = self.clear_loans(
@@ -1604,10 +1609,23 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_firm += new_debt_rollover_st_loans[0].sum(axis=0)
         new_credit_by_bank += new_debt_rollover_st_loans[0].sum(axis=1)
 
+        # The refinance loan repays the firm's overdraft at its own bank: that overdraft leaves the
+        # capital-requirement exposure, so it is not counted next to the new loan.
+        refinanced_overdraft_by_bank = np.minimum(
+            np.bincount(
+                np.asarray(firms.states["Corresponding Bank ID"], dtype=int),
+                weights=np.minimum(
+                    target_overdraft_refinance_credit,
+                    np.maximum(-np.asarray(firms.ts.current("deposits"), dtype=float), 0.0),
+                ),
+                minlength=banks.ts.current("n_banks"),
+            ),
+            np.asarray(banks.ts.current("overdrafts_to_firms"), dtype=float),
+        )
         residual_car_room = np.maximum(
             0.0,
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - (capital_requirement_exposure(banks) - refinanced_overdraft_by_bank)
             - new_credit_by_bank,
         )
         firm_pref_room_before_refinance = np.maximum(
@@ -1632,6 +1650,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_preference_credit_by_bank=np.zeros(banks.ts.current("n_banks")),
             target_credit_override=target_overdraft_refinance_credit,
             append_firm_diagnostics=False,
+            exposure_relief_by_bank=refinanced_overdraft_by_bank,
         )
         self._last_received_overdraft_refinance_credit_by_firm = new_refinance_st_loans[0].sum(axis=0)
         new_credit_by_firm += new_refinance_st_loans[0].sum(axis=0)
@@ -1796,6 +1815,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_preference_credit_by_bank: np.ndarray | None = None,
         target_credit_override: np.ndarray | None = None,
         append_firm_diagnostics: bool = True,
+        exposure_relief_by_bank: np.ndarray | float = 0.0,
     ) -> np.ndarray:
         """Clear the market for a specific loan type using the water bucket algorithm.
 
@@ -1821,6 +1841,9 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             target_credit_override (np.ndarray | None): Optional demand vector used
                 for tranche-level clearing, such as ordinary short-term or overdraft
                 refinance demand. The recorded target series is left unchanged.
+            exposure_relief_by_bank (np.ndarray | float): Existing exposure this
+                tranche retires (the firm overdrafts an overdraft-refinance loan
+                repays), added back to each bank's capital-requirement room.
             append_firm_diagnostics (bool): Whether this call appends firm-level
                 binding diagnostics. Split short-term tranches disable this and
                 append one aggregate short-term diagnostic after the tranches are
@@ -1980,7 +2003,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             car_room = np.maximum(
                 0.0,
                 banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-                - banks.ts.current("total_outstanding_loans")
+                - capital_requirement_exposure(banks)
                 - new_credit_by_bank,
             )
             pref_room = np.maximum(0.0, max_supply_based_on_preferences - new_preference_credit_by_bank)
@@ -2087,6 +2110,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_credit_by_bank=new_credit_by_bank,
             max_supply_based_on_preferences=max_supply_based_on_preferences,
             new_preference_credit_by_bank=new_preference_credit_by_bank,
+            exposure_relief_by_bank=exposure_relief_by_bank,
         )
         supply_sum = supply.sum()
         if supply_sum == 0.0:

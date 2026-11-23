@@ -4,7 +4,8 @@ Runs a short Simulation in legacy_stage5 and minimum_income modes, with a few
 households pushed into overdraft, and checks the plan against the settled
 period: dividends are planned on last period's declarations net of withholding,
 and an opening overdraft is a senior use, financed by selling illiquid assets
-if needed, with unpaid overdraft interest held as consumer interest arrears.
+if needed, with unpaid overdraft interest held as consumer interest arrears;
+rental income is planned on the rent of the dwellings let after the housing market.
 """
 
 import numpy as np
@@ -39,6 +40,14 @@ def _run(simulation):
         return needs[-1]
 
     country._planned_overdraft_repayment_need = need_and_record
+    planned_rent = {}
+    realise = country.update_realised_metrics
+
+    def realise_and_record(*args, **kwargs):
+        planned_rent["income_rental"] = hh.ts.current("income_rental").copy()
+        return realise(*args, **kwargs)
+
+    country.update_realised_metrics = realise_and_record
     for period in range(PERIODS):
         if period == OVERDRAWN_FROM:
             overdrawn[::40] = True
@@ -68,6 +77,9 @@ def _run(simulation):
                 "bank_overdraft_interest_accrued": banks.ts.current("household_overdraft_interest_accrued").copy(),
                 "floor_support": hh.post_grant_feasible_plan.floor_support.copy(),
                 "overdraft_repayment_need": needs[0],
+                "planned_rental": planned_rent["income_rental"],
+                "rental": hh.ts.current("income_rental").copy(),
+                "rent_unpaid_absorbed": hh.ts.current("rent_unpaid_absorbed").copy(),
             }
         )
     return country, overdrawn, records
@@ -148,4 +160,18 @@ def test_unpaid_overdraft_interest_is_consumer_interest_arrears_not_overdraft(ru
         )
         np.testing.assert_allclose(
             record["bank_overdraft_interest_accrued"], np.bincount(bank, weights=unpaid, minlength=n_banks), rtol=1e-12
+        )
+
+
+def test_rental_income_planned_after_the_housing_market_is_the_realised_rent(run):
+    country, _, records = run
+    tax = country.central_government.states["Income Tax"]
+    assert sum(record["rental"].sum() for record in records) > 0.0
+    for record in records:
+        # Pass 2 plans the rent due on the dwellings let after clearing; realised rent is the rent received.
+        np.testing.assert_allclose(
+            record["planned_rental"],
+            record["rental"] + (1.0 - tax) * record["rent_unpaid_absorbed"],
+            rtol=1e-12,
+            atol=1e-6,
         )

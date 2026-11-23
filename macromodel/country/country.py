@@ -2215,6 +2215,11 @@ class Country:
         # run; the final recompute in update_realised_metrics books the rent actually received. A landlord thus
         # plans on rent due and realises rent received: the shortfall (1 - tax) x unpaid rent lands in its
         # realised cash, with no true-up (PLAN.md section 3.3).
+        # Pass 1 (pre-credit) runs before the housing market: it forecasts from the current lettings, the
+        # dwellings let at the end of t-1 at their t-1 rents. Pass 2 (post-labour) runs after the housing market
+        # is processed, so it reads the period-t rent of the dwellings actually let; the known receipts
+        # (refresh_known_household_receipts) and the allocator use this pass-2 value, which equals the realised
+        # rental income up to unpaid rent.
         diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],

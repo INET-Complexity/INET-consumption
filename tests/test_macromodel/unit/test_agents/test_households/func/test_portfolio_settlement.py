@@ -99,7 +99,7 @@ def test_non_positive_surplus_blocks_reallocation():
     assert result.settlement_status[0] == SETTLEMENT_NO_SURPLUS
 
 
-def test_negative_lfa_blocks_reallocation():
+def test_negative_lfa_blocks_purchase():
     result = _settle(base_lfa=-5.0)
     np.testing.assert_allclose(result.closing_lfa, [-5.0])
     np.testing.assert_allclose(result.closing_ifa, [50.0])
@@ -184,8 +184,58 @@ def test_purchase_that_would_overdraw_the_account_is_blocked_and_a_sale_is_not()
     np.testing.assert_array_equal(sale.closing_lfa, [9.0])
 
 
-def test_overdrawn_household_does_not_sell_ifa_characterisation():
-    result = _settle(base_lfa=-5.0, base_ifa=50.0, lfa_flow=8.0, ifa_flow=-8.0)
+def test_overdrawn_household_sells_ifa_and_repays_overdraft_net_of_cost():
+    result = _settle(base_lfa=-5.0, base_ifa=50.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [2.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [1.0])
+    # TFA falls only by the trade cost.
+    np.testing.assert_allclose(result.closing_tfa, [44.0])
+
+
+def test_overdrawn_sale_smaller_than_overdraft_reduces_it():
+    result = _settle(base_lfa=-20.0, lfa_flow=8.0, ifa_flow=-8.0)
+    np.testing.assert_allclose(result.closing_lfa, [-12.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+
+
+def test_overdrawn_household_purchase_remains_blocked():
+    result = _settle(base_lfa=-5.0, lfa_flow=-8.0, ifa_flow=8.0)
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
     np.testing.assert_array_equal(result.closing_lfa, [-5.0])
     np.testing.assert_array_equal(result.closing_ifa, [50.0])
+
+
+def test_overdrawn_household_without_trade_stays_blocked():
+    result = _settle(base_lfa=-5.0, lfa_flow=0.0, ifa_flow=0.0, inaction=True)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+
+
+def test_overdrawn_sale_still_requires_surplus_and_valid_inputs():
+    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, surplus=0.0).settlement_status[0] == (
+        SETTLEMENT_NO_SURPLUS
+    )
+    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, valid=False).settlement_status[0] == (
+        SETTLEMENT_INVALID_INPUT
+    )
+
+
+def test_non_overdrawn_behaviour_is_unchanged():
+    # Same statuses and flows as before the change for base_lfa >= 0.
+    for base_lfa, lfa_flow, ifa_flow, status in [
+        (120.0, -8.0, 8.0, SETTLEMENT_SETTLED),
+        (5.0, -8.0, 8.0, SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY),
+        (1.0, 8.0, -8.0, SETTLEMENT_SETTLED),
+        (0.0, 8.0, -8.0, SETTLEMENT_SETTLED),
+    ]:
+        result = _settle(base_lfa=base_lfa, lfa_flow=lfa_flow, ifa_flow=ifa_flow)
+        assert result.settlement_status[0] == status
+
+
+def test_sale_that_clears_overdraft_does_not_close_in_float_noise_below_zero():
+    base = -4877935.56913224
+    result = _settle(base_lfa=base, base_ifa=1e8, lfa_flow=-base, ifa_flow=base, cost=0.0)
+    assert result.closing_lfa[0] >= 0.0
+    np.testing.assert_allclose(result.closing_lfa, [0.0], atol=1e-6)
+    np.testing.assert_allclose(result.committed_lfa_flow + result.committed_ifa_flow, [0.0], atol=1e-8)

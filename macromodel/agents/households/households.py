@@ -518,7 +518,8 @@ class Households(Agent):
 
         # Stage 4 (portfolio choice) Increment 5: household-head age and employed-
         # member count, required by the opt-in target_share_source="frm_magnitude"
-        # path (compute_frm_magnitude_target_share). Frozen at init like
+        # path (compute_frm_magnitude_target_share). Initial values: the employed-member
+        # count is refreshed every period by Country (head age is static). Sourced like
         # portfolio_participates above, consistent with how every other FRM
         # covariate (Investment Attitudes, Tenure Status, Wealth Quintile) is
         # sourced in this method. No production code aggregates individual-level
@@ -4697,59 +4698,49 @@ class Households(Agent):
         return self.ts.current("consumption_loan_debt") + self.ts.current("mortgage_debt")
 
     def frm_target_share(self) -> tuple[np.ndarray, np.ndarray]:
-        """Household-level FRM target illiquid share omega*_i, fixed at initialisation.
+        """Household-level FRM target illiquid share omega*_it = Phi(x_it' beta) (GTP-FRM).
 
-        Paper (GTP-FRM, minimal implementation): omega*_i = Phi(x_i' beta) is computed
-        once at initialisation and updated only on discrete characteristic changes.
-        First call: computed for all households from opening characteristics and
-        opening (t0) net wealth. Later calls: recomputed only for households whose
-        discrete covariates (head age, employed members, investment attitude, owner
-        and mortgagor tenure dummies) differ from the values used for the stored
-        target, with the last closed period's net wealth. Net wealth changes alone
-        never recompute. At runtime only tenure changes (housing market); the other
-        covariates are frozen states. Inspectable as ``states["frm_target_share"]``.
+        Evaluated each period on the household's current characteristics:
+        owner and mortgagor dummies, employed household members, head age,
+        investment attitude and net wealth (``compute_net_wealth()``, scaled as in
+        ``compute_frm_magnitude_target_share``). Which of these move in the model:
+        owner/mortgagor (housing market purchases and sales, mortgage origination and
+        repayment), employed members (live: ``Country`` refreshes
+        ``states["household_members_in_employment"]`` from the individuals' activity
+        status before each use) and net wealth. Head age is static (the demography
+        function only updates the population count) and investment attitude is a frozen
+        state.
+
+        The dummies follow DHHST, on which the FRM was estimated, not the model tenure
+        code (HB0300; buyers are set to 1 whatever their financing): owner = owns the main
+        residence (model owner codes 1, 2, 4) with no mortgage outstanding; mortgagor =
+        owns it with a mortgage outstanding. The model's mortgage ledger pools
+        main-residence and other-property mortgages, so a mortgage on another property
+        also counts. Renters and social tenants are 0/0.
+
+        Known wedges (handled in the initialisation work): head age is the RA0100
+        reference person (FRM: DHAGEH1), and model net wealth (other properties and real
+        assets, NA-rescaled IFA) differs from the FRM definition (TFA + main residence -
+        debt, raw HFCS IFA).
 
         Returns:
             ``(target_illiquid_share, target_share_clipped_flag)``, each ``(n_households,)``.
         """
-        tenure_status = self.states["Tenure Status of the Main Residence"]
-        covariates = {
-            "age": self.states["household_head_age"],
-            "household_members_in_employment": self.states["household_members_in_employment"],
-            "investment_attitudes": self.states["Investment Attitudes"],
-            "mortgagor": (tenure_status == 2).astype(float),
-            "owner": (tenure_status == 1).astype(float),
-        }
-        discrete = np.column_stack([np.asarray(v, dtype=float) for v in covariates.values()])
+        owns_residence = np.isin(self.states["Tenure Status of the Main Residence"], [1, 2, 4])
+        has_mortgage = self.ts.current("mortgage_debt") > 0.0
         frm_coefficients = self.states["frm_coefficients"]
-
-        def compute(net_wealth: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-            return compute_frm_magnitude_target_share(
-                age=covariates["age"],
-                household_members_in_employment=covariates["household_members_in_employment"],
-                investment_attitudes=covariates["investment_attitudes"],
-                mortgagor=covariates["mortgagor"],
-                owner=covariates["owner"],
-                net_wealth=net_wealth,
-                portfolio_participates=self.states["portfolio_participates"],
-                magnitude_coefficients=frm_coefficients.magnitude_coefficients,
-                population_scale_factor=self.states["population_scale_factor"],
-                net_wealth_scale_divisor=frm_coefficients.net_wealth_scale_divisor,
-            )
-
-        if "frm_target_share" not in self.states:
-            share, flag = compute(self.ts.dicts["net_wealth"][0])
-            self.states["frm_target_share"] = share
-            self.states["frm_target_clipped_flag"] = flag
-            self.states["frm_target_covariates"] = discrete
-        else:
-            changed = (self.states["frm_target_covariates"] != discrete).any(axis=1)
-            if changed.any():
-                share, flag = compute(self.ts.current("net_wealth"))
-                self.states["frm_target_share"] = np.where(changed, share, self.states["frm_target_share"])
-                self.states["frm_target_clipped_flag"] = np.where(changed, flag, self.states["frm_target_clipped_flag"])
-                self.states["frm_target_covariates"] = discrete
-        return self.states["frm_target_share"], self.states["frm_target_clipped_flag"]
+        return compute_frm_magnitude_target_share(
+            age=self.states["household_head_age"],
+            household_members_in_employment=self.states["household_members_in_employment"],
+            investment_attitudes=self.states["Investment Attitudes"],
+            mortgagor=(owns_residence & has_mortgage).astype(float),
+            owner=(owns_residence & ~has_mortgage).astype(float),
+            net_wealth=self.compute_net_wealth(),
+            portfolio_participates=self.states["portfolio_participates"],
+            magnitude_coefficients=frm_coefficients.magnitude_coefficients,
+            population_scale_factor=self.states["population_scale_factor"],
+            net_wealth_scale_divisor=frm_coefficients.net_wealth_scale_divisor,
+        )
 
     def compute_net_wealth(self) -> np.ndarray:
         """Calculate household net wealth.

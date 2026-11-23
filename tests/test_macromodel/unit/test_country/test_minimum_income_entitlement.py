@@ -458,3 +458,13 @@ def test_reset_reparses_household_support(datawrapper):
     }
     with pytest.raises(ValueError, match="base_year"):
         simulation.reset(configuration)
+
+
+def test_frm_coefficients_survive_reset_under_frm_magnitude(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    households = simulation.countries["FRA"].households
+    assert households.functions["wealth"].target_share_source == "frm_magnitude"
+    before = households.states["frm_coefficients"]
+    simulation.reset(deepcopy(simulation.configuration))
+    after = simulation.countries["FRA"].households.states["frm_coefficients"]
+    assert after.magnitude_coefficients == before.magnitude_coefficients

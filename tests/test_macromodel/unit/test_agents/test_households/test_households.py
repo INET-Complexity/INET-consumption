@@ -4262,7 +4262,7 @@ def _frm_ready_households(households):
     households.states["Investment Attitudes"] = np.full(n, 2)
     households.states["Tenure Status of the Main Residence"] = np.full(n, 3)
     households.states["portfolio_participates"] = np.ones(n, dtype=bool)
-    households.states["population_scale_factor"] = 1.0
+    households.states["population_scale_factor"] = 1e12
     households.states["frm_coefficients"] = SimpleNamespace(
         magnitude_coefficients={
             "constant": 0.0,
@@ -4275,49 +4275,65 @@ def _frm_ready_households(households):
         },
         net_wealth_scale_divisor=1.0,
     )
+    households.ts.override_current("mortgage_debt", np.zeros(n))
     households.states.pop("frm_target_share", None)
     return n
 
 
-def test_frm_target_share_is_fixed_at_t0_when_only_net_wealth_changes(test_households):
+def _target(households):
+    return households.frm_target_share()[0].copy()
+
+
+def test_frm_target_share_responds_to_each_current_covariate(test_households):
     households = test_households
     n = _frm_ready_households(households)
-    t0_net_wealth = households.ts.dicts["net_wealth"][0]
-    expected = households_module.compute_frm_magnitude_target_share(
-        age=households.states["household_head_age"],
-        household_members_in_employment=households.states["household_members_in_employment"],
-        investment_attitudes=households.states["Investment Attitudes"],
-        mortgagor=np.zeros(n),
-        owner=np.zeros(n),
-        net_wealth=t0_net_wealth,
-        portfolio_participates=households.states["portfolio_participates"],
-        magnitude_coefficients=households.states["frm_coefficients"].magnitude_coefficients,
-        population_scale_factor=1.0,
-        net_wealth_scale_divisor=1.0,
-    )[0]
-    first, _ = households.frm_target_share()
-    np.testing.assert_array_equal(first, expected)
+    households.states["frm_coefficients"].magnitude_coefficients.update(
+        {"age": 0.01, "household_members_in_employment": 0.1, "investment_attitudes": 0.05}
+    )
+    households.states["Tenure Status of the Main Residence"][:] = 1
+    base = _target(households)
 
-    households.ts.override_current("net_wealth", households.ts.current("net_wealth") * 3.0 + 1e5)
-    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e5)
-    second, _ = households.frm_target_share()
-    np.testing.assert_array_equal(second, first)
-    np.testing.assert_array_equal(households.states["frm_target_share"], first)
+    def changed(mutate):
+        mutate()
+        out = _target(households)
+        assert out[0] != base[0]
+        np.testing.assert_array_equal(out[1:], base[1:])
+        return out
+
+    mortgage = households.ts.current("mortgage_debt")
+    changed(lambda: mortgage.__setitem__(0, 10.0))  # owner -> mortgagor
+    mortgage[0] = 0.0
+    changed(lambda: households.states["household_members_in_employment"].__setitem__(0, 3.0))
+    households.states["household_members_in_employment"][0] = 1.0
+    changed(lambda: households.states["household_head_age"].__setitem__(0, 70.0))
+    households.states["household_head_age"][0] = 50.0
+    wealth = households.ts.current("net_wealth")
+    households.ts.override_current("wealth", households.ts.current("wealth") + np.eye(n)[0] * 1e13)
+    out = _target(households)
+    assert out[0] != base[0]
+    np.testing.assert_array_equal(out[1:], base[1:])
+    del wealth
 
 
-def test_frm_target_share_recomputes_only_for_households_with_a_discrete_change(test_households):
+def test_frm_target_share_follows_net_wealth_each_period(test_households):
+    households = test_households
+    _frm_ready_households(households)
+    first = _target(households)
+    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e13)
+    assert not np.array_equal(_target(households), first)
+
+
+def test_frm_owner_and_mortgagor_dummies_follow_mortgage_not_tenure_code(test_households):
     households = test_households
     n = _frm_ready_households(households)
-    before = households.frm_target_share()[0].copy()
-    households.ts.override_current("net_wealth", np.full(n, 2.0))
-
-    # Renter -> owner for household 0 only; social/renter changes without owner or mortgagor dummies do not matter.
-    households.states["Tenure Status of the Main Residence"][0] = 1
-    households.states["Tenure Status of the Main Residence"][1] = 5
-    after = households.frm_target_share()[0]
-
-    assert after[0] != before[0]
-    np.testing.assert_array_equal(after[1:], before[1:])
-    # The new target stays fixed afterwards.
-    households.ts.override_current("net_wealth", np.full(n, 9.0))
-    np.testing.assert_array_equal(households.frm_target_share()[0], after)
+    households.states["frm_coefficients"].magnitude_coefficients["net_wealth"] = 0.0
+    tenure = households.states["Tenure Status of the Main Residence"]
+    tenure[:] = np.array([1, 1, 2, 3, -1] + [3] * (n - 5))
+    mortgage = np.zeros(n)
+    mortgage[[1, 3]] = 5.0  # a buyer coded 1 with a mortgage is a mortgagor; a renter stays 0/0
+    households.ts.override_current("mortgage_debt", mortgage)
+    target = _target(households)
+    renter, owner, mortgagor = target[4], target[0], target[1]
+    assert renter < owner < mortgagor
+    assert target[2] == owner  # tenure 2 without a mortgage is an owner
+    assert target[3] == target[4] == renter  # a renter with a mortgage and a social tenant are 0/0

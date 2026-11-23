@@ -2464,6 +2464,15 @@ class Country:
                 hh.ts.dicts[key].append(values.copy())
         return payments
 
+    def _refresh_household_employment(self) -> None:
+        """Set each household's current number of employed members (an FRM covariate)."""
+        if getattr(self.households.functions["wealth"], "target_share_source", None) != "frm_magnitude":
+            return
+        employed = (self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED).astype(float)
+        self.households.states["household_members_in_employment"] = self.households.aggregate_individual_amount(
+            employed, self.individuals.states["Corresponding Household ID"]
+        )
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         consumption_function = self.households.functions["consumption"]
         integrate_inputs = (
@@ -2829,6 +2838,7 @@ class Country:
         else:
             self.households.clear_pre_grant_feasible_plan()
             stage5_residual_shortfall = residual_shortfall_after_lfa
+        self._refresh_household_employment()
         borrow_vs_sell_inputs = self.households.build_borrow_vs_sell_inputs(
             target_consumption_total=(
                 self.households.consumption_cash_factor() * self.households.ts.current("target_consumption").sum(axis=1)
@@ -5052,6 +5062,7 @@ class Country:
             readjusted_factors_ch4=readjusted_factors_ch4,
             emitting_indices_ch4=self.emitting_indices_ch4,
         )
+        self._refresh_household_employment()
         illiquid_financial_asset_return_rate = self.households.update_wealth(
             housing_data=self.housing_market.states["properties"],
             tau_cf=self.central_government.states["Household Capital Formation Tax"],

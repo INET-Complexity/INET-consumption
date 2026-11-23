@@ -75,6 +75,25 @@ def test__investable_surplus_is_recorded_as_diagnostic_only_not_added_to_lfa():
     np.testing.assert_allclose(result.portfolio_investable_surplus, [-200.0])
 
 
+def test__rebalancing_is_identical_for_positive_zero_and_negative_saving():
+    # The rule is a function of the stocks only: saving of either sign changes nothing but the diagnostic.
+    results = [
+        _run(
+            opening_tfa_scale=[1000.0],
+            post_surplus_lfa=[700.0],
+            post_return_ifa=[300.0],
+            investable_surplus=[surplus],
+            portfolio_participates=[True],
+        )
+        for surplus in (100.0, 0.0, -200.0)
+    ]
+    reference = results[0].rebalancing
+    assert reference.counterfactual_ifa_flow[0] > 0.0
+    for result in results[1:]:
+        for field in ("counterfactual_ifa_flow", "counterfactual_lfa_flow", "adjustment_cost", "inaction_flag"):
+            np.testing.assert_array_equal(getattr(result.rebalancing, field), getattr(reference, field))
+
+
 def test__nonparticipant_gets_zero_target_share_and_zero_target_assets():
     result = _run(
         opening_tfa_scale=[1000.0],

@@ -130,7 +130,6 @@ def test_portfolio_waiver_zeroes_only_the_cost(waived, closing_lfa, cost):
     settlement = settle_portfolio_reallocation(
         base_lfa=np.array([100.0]),
         base_ifa=np.array([0.0]),
-        investable_surplus=np.array([50.0]),
         rebalancing=_rebalancing_buying_ifa(20.0, 1.0),
         settlement_enabled=True,
         forced_liquidation_active=np.zeros(1, dtype=bool),

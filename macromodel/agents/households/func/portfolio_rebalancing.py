@@ -90,7 +90,11 @@ def compute_portfolio_rebalancing(
         opening_tfa_scale (np.ndarray): Previous-period total financial
             assets, ``LFA_{t-1} + IFA_{t-1}``; the normalization scale.
         post_return_lfa (np.ndarray): Liquid assets after the period's return
-            and positive investable surplus, before the rebalancing decision.
+            and saving (of either sign, already embedded in the realised
+            balance), before the rebalancing decision. The rule takes stocks
+            only: no saving flow enters it, so a household with zero or
+            negative saving rebalances its existing portfolio like any other
+            and negative saving is never "invested".
         post_return_ifa (np.ndarray): Illiquid assets after the period's
             return, before the rebalancing decision.
         target_illiquid_assets (np.ndarray): Precomputed target illiquid

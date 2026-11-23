@@ -2241,6 +2241,42 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             np.zeros(n_households),
         )
 
+    @pytest.mark.parametrize("consumption", [0.0, 100.0, 150.0], ids=["positive", "zero", "negative"])
+    def test__settled_update_rebalances_the_stock_whatever_the_sign_of_period_saving(
+        self, test_households, monkeypatch, consumption
+    ):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+            use_actual_diagnostics=True,
+            use_real_liquidation=True,
+        )
+        test_households.functions["wealth"].fixed_cost_share = 0.005
+        test_households.ts.override_current("consumption", np.full(n_households, consumption))
+        test_households.ts.override_current("debt_installments", np.zeros(n_households))
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        # income 100 - consumption: saving 100 / 0 / -50. The rule acts on the stocks (LFA 100, IFA 50), not on
+        # the saving flow, so households trade toward the 0.5 target whatever the sign of saving.
+        np.testing.assert_allclose(
+            test_households.ts.current("portfolio_investable_surplus"), np.full(n_households, 100.0 - consumption)
+        )
+        ifa_flow = test_households.ts.current("portfolio_counterfactual_ifa_flow")
+        cost = test_households.ts.current("portfolio_adjustment_cost")
+        status = test_households.ts.current("portfolio_settlement_status")
+        traders = cost > 0.0
+        assert traders.sum() > 0 and (ifa_flow[traders] != 0.0).all()
+        assert not np.any(status == 1.0)  # the retired no-surplus status is never assigned
+        np.testing.assert_array_equal(status[traders], np.full(traders.sum(), 7.0))
+        np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_committed_ifa_flow"), ifa_flow)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0 + ifa_flow)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), 100.0 - ifa_flow - cost)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_trade_cost_paid"), cost)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), 0.0, atol=1e-9)
+
     def test__legacy_compatibility_disabled_settlement_preserves_shadow_stock_update(
         self, test_households, monkeypatch
     ):

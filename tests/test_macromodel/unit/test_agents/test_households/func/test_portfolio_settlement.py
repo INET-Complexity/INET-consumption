@@ -13,7 +13,6 @@ from macromodel.agents.households.func.portfolio_settlement import (
     SETTLEMENT_FORCED_LIQUIDATION,
     SETTLEMENT_INACTION,
     SETTLEMENT_INVALID_INPUT,
-    SETTLEMENT_NO_SURPLUS,
     SETTLEMENT_SETTLED,
     settle_portfolio_reallocation,
 )
@@ -47,7 +46,6 @@ def _settle(
     *,
     base_lfa=120.0,
     base_ifa=50.0,
-    surplus=20.0,
     lfa_flow=-8.0,
     ifa_flow=8.0,
     cost=0.0,
@@ -59,7 +57,6 @@ def _settle(
     return settle_portfolio_reallocation(
         base_lfa=np.array([base_lfa]),
         base_ifa=np.array([base_ifa]),
-        investable_surplus=np.array([surplus]),
         rebalancing=_rebalancing(
             lfa_flow=[lfa_flow],
             ifa_flow=[ifa_flow],
@@ -95,13 +92,6 @@ def test_adjustment_cost_is_charged_only_to_lfa():
     np.testing.assert_allclose(result.closing_tfa, [168.0])
 
 
-def test_non_positive_surplus_blocks_reallocation():
-    result = _settle(surplus=0.0)
-    np.testing.assert_allclose(result.closing_lfa, [120.0])
-    np.testing.assert_allclose(result.closing_ifa, [50.0])
-    assert result.settlement_status[0] == SETTLEMENT_NO_SURPLUS
-
-
 def test_negative_lfa_blocks_purchase():
     result = _settle(base_lfa=-5.0)
     np.testing.assert_allclose(result.closing_lfa, [-5.0])
@@ -109,8 +99,8 @@ def test_negative_lfa_blocks_purchase():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_forced_liquidation_precedes_no_surplus():
-    result = _settle(surplus=0.0, forced=True)
+def test_forced_liquidation_takes_precedence_over_a_rebalancing_trade():
+    result = _settle(forced=True)
     assert result.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
 
 
@@ -125,7 +115,6 @@ def test_forced_liquidation_uses_post_liquidation_base_without_reapplying_sale()
         base_lfa=stage5.post_liquidation_lfa[0],
         base_ifa=stage5.post_liquidation_ifa[0],
         forced=bool(stage5.settled_liquidation_total[0] > 0.0),
-        surplus=0.0,
     )
 
     np.testing.assert_allclose(result.closing_lfa, [108.0])
@@ -167,7 +156,6 @@ def test_shape_validation_covers_inaction_flag():
         settle_portfolio_reallocation(
             base_lfa=np.array([120.0]),
             base_ifa=np.array([50.0]),
-            investable_surplus=np.array([20.0]),
             rebalancing=rebalancing,
             settlement_enabled=True,
             forced_liquidation_active=np.array([False]),
@@ -215,17 +203,14 @@ def test_overdrawn_household_without_trade_stays_blocked():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_overdrawn_sale_still_requires_surplus_and_valid_inputs():
-    assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, surplus=0.0).settlement_status[0] == (
-        SETTLEMENT_NO_SURPLUS
-    )
+def test_overdrawn_sale_still_requires_valid_inputs():
     assert _settle(base_lfa=-5.0, lfa_flow=8.0, ifa_flow=-8.0, valid=False).settlement_status[0] == (
         SETTLEMENT_INVALID_INPUT
     )
 
 
 def test_non_overdrawn_behaviour_is_unchanged():
-    # Same statuses and flows as before the change for base_lfa >= 0.
+    # Same statuses and flows as before for base_lfa >= 0.
     for base_lfa, lfa_flow, ifa_flow, status in [
         (120.0, -8.0, 8.0, SETTLEMENT_SETTLED),
         (5.0, -8.0, 8.0, SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY),
@@ -256,7 +241,6 @@ def test_upper_bound_sale_that_clears_overdraft_does_not_close_in_float_noise_be
     result = settle_portfolio_reallocation(
         base_lfa=lfa,
         base_ifa=ifa,
-        investable_surplus=np.ones(n),
         rebalancing=rebalancing,
         settlement_enabled=True,
         forced_liquidation_active=np.zeros(n, dtype=bool),
@@ -276,3 +260,74 @@ def test_overdrawn_sale_with_non_positive_net_proceeds_is_blocked():
         assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
         np.testing.assert_array_equal(result.closing_lfa, [-5.0])
         np.testing.assert_array_equal(result.closing_ifa, [50.0])
+
+
+@pytest.mark.parametrize("scale", [1.0, 1e4, 1e8, 1e10])
+def test_conservation_tolerates_ulp_scale_residual_on_population_expanded_flows(scale):
+    ifa_flow = 0.37 * scale
+    cost = 0.002 * scale
+    lfa_flow = -ifa_flow - cost
+    residual = 4 * np.spacing(abs(ifa_flow))  # a few ulps of the flow size
+    result = _settle(
+        base_lfa=5 * scale,
+        base_ifa=scale,
+        lfa_flow=lfa_flow - residual,
+        ifa_flow=ifa_flow,
+        cost=cost,
+    )
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    assert result.settlement_valid_flag[0]
+    np.testing.assert_allclose(result.committed_ifa_flow, [ifa_flow])
+
+
+@pytest.mark.parametrize("scale", [1.0, 1e4, 1e8, 1e10])
+def test_conservation_still_flags_a_genuine_imbalance(scale):
+    for imbalance in (1.0, -1.0, 1e-3 * scale):
+        result = _settle(
+            base_lfa=5 * scale,
+            base_ifa=scale,
+            lfa_flow=-0.37 * scale - 0.002 * scale + imbalance,
+            ifa_flow=0.37 * scale,
+            cost=0.002 * scale,
+        )
+        assert result.settlement_status[0] == SETTLEMENT_CONSERVATION_FAILURE
+        assert not result.settlement_valid_flag[0]
+        np.testing.assert_array_equal(result.committed_ifa_flow, [0.0])
+
+
+def test_conservation_absolute_floor_covers_tiny_flows_only():
+    assert _settle(lfa_flow=-8.0 + 5e-9, ifa_flow=8.0).settlement_status[0] == SETTLEMENT_SETTLED
+    assert _settle(lfa_flow=-8.0 + 1e-6, ifa_flow=8.0).settlement_status[0] == SETTLEMENT_CONSERVATION_FAILURE
+
+
+def test_conservation_check_does_not_cancel_rule_outputs_on_population_expanded_stocks():
+    rng = np.random.default_rng(1)
+    n = 20000
+    scale = 10 ** rng.uniform(8, 11, n)
+    lfa = scale * rng.uniform(0.05, 2.0, n)
+    ifa = scale * rng.uniform(0.05, 3.0, n)
+    rebalancing = compute_portfolio_rebalancing(
+        opening_tfa_scale=scale,
+        post_return_lfa=lfa,
+        post_return_ifa=ifa,
+        target_illiquid_assets=0.5 * (lfa + ifa),
+        target_tfa_base=lfa + ifa,
+        portfolio_participates=np.ones(n, dtype=bool),
+        phi_1=1.0,
+        lambda_kappa=0.05,
+        fixed_cost_share=0.002,
+    )
+    residual = np.abs(
+        rebalancing.counterfactual_lfa_flow + rebalancing.counterfactual_ifa_flow + rebalancing.adjustment_cost
+    )
+    # The previous absolute tolerance (1e-8) would have cancelled these trades.
+    assert (residual > 1e-8).sum() > 100
+    result = settle_portfolio_reallocation(
+        base_lfa=lfa,
+        base_ifa=ifa,
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.zeros(n, dtype=bool),
+    )
+    assert not np.any(result.settlement_status == SETTLEMENT_CONSERVATION_FAILURE)
+    assert (result.committed_ifa_flow != 0.0).sum() > 1000

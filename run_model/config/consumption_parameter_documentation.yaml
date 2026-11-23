@@ -231,8 +231,8 @@ stage_4:
       opening_tfa_formula: LFA + IFA
       post_return_ifa_formula: (1 + r_kappa) * IFA_lagged
       post_return_lfa_formula: (1 + r_ell) * LFA_lagged
-      target_tfa_base_formula: post_return_lfa + post_return_ifa + max(investable_surplus, 0)
-      positive_surplus_only: true
+      target_tfa_base_formula: post_surplus_lfa + post_return_ifa  # realised LFA already holds the period saving, any sign
+      positive_surplus_only: false  # households rebalance the stock even with zero or negative saving
     adjustment_rule:
       lambda_formula: phi_1 / (phi_1 + phi_2)
       fixed_cost_base: total_financial_assets

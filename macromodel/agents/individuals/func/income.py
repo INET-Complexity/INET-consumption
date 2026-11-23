@@ -63,7 +63,7 @@ class IncomeSetter(ABC):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Price level of the period's known receipts (wage and benefits); no expected inflation
+            cpi (float): Benefit price level (CPI_{t-1}); wages arrive pre-scaled to the payroll basis (wage_price_factor / cpi)
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -156,7 +156,7 @@ class DefaultIncomeSetter(IncomeSetter):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Price level of the period's known receipts (wage and benefits); no expected inflation
+            cpi (float): Benefit price level (CPI_{t-1}); wages arrive pre-scaled to the payroll basis (wage_price_factor / cpi)
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -168,7 +168,8 @@ class DefaultIncomeSetter(IncomeSetter):
 
         # Employed individuals
         emp_ind = current_individual_activity_status == ActivityStatus.EMPLOYED
-        # Period-t wages are known at planning (cpi is their locked price level): no expected-inflation uplift.
+        # Period-t wages are known at planning: current_wage is pre-scaled to the locked payroll basis, so
+        # cpi * current_wage is the wage paid, with no expected-inflation uplift.
         income[emp_ind] = cpi * current_wage[emp_ind]
 
         # Unemployed individuals

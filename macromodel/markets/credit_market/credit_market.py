@@ -2646,7 +2646,9 @@ class CreditMarket:
             loans = self.states[key]
             ind = np.isclose(loans[0], 0.0, atol=1e-2)
             if key == "cons_loans":
-                ind &= np.isclose(self._consumer_interest_arrears_by_cell, 0.0, atol=1e-2)
+                # Interest arrears are never dropped within the tolerance: a cell keeps them (unpaid overdraft
+                # interest can sit on a cell without principal) until they are paid or written off.
+                ind &= self._consumer_interest_arrears_by_cell == 0.0
             if key == "mort_loans":
                 ind &= np.isclose(self._mortgage_interest_arrears_by_cell, 0.0, atol=1e-2)
                 self._mortgage_interest_arrears_by_cell[ind] = 0.0

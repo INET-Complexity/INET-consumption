@@ -273,10 +273,9 @@ class Individuals(Agent):
         expected_firm_profits: np.ndarray,
         expected_bank_profits: np.ndarray,
         cpi: float,
-        expected_inflation: float,
         income_taxes: float,
         tau_firm: float,
-        wage_price_factor: float | None = None,
+        wage_price_factor: float,
     ) -> np.ndarray:
         """Calculate expected future income for individuals.
 
@@ -285,17 +284,17 @@ class Individuals(Agent):
         - Social benefits
         - Investment returns (firms/banks)
         Adjusted for:
-        - Expected inflation
         - Tax rates
         - CPI changes
 
         Args:
             expected_firm_profits (np.ndarray): Expected profits by firm
             expected_bank_profits (np.ndarray): Expected profits by bank
-            cpi (float): Current price index
-            expected_inflation (float): Expected inflation rate
+            cpi (float): Benefit price level (CPI_{t-1}), the price basis of benefits
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
+            wage_price_factor (float): Payroll price factor of the locked wage basis; wages are pre-scaled by
+                ``wage_price_factor / cpi`` so that the setter's ``cpi`` multiplication yields the paid wage
 
         Returns:
             np.ndarray: Expected total income by individual
@@ -303,15 +302,13 @@ class Individuals(Agent):
         return (
             self.functions["income"].compute_expected_income(
                 current_individual_activity_status=self.states["Activity Status"],
-                current_wage=self.ts.current("employee_income")
-                * (1.0 if wage_price_factor is None else wage_price_factor / cpi),
+                current_wage=self.ts.current("employee_income") * (wage_price_factor / cpi),
                 individual_social_benefits=self.ts.current("income_from_unemployment_benefits"),
                 expected_firm_profits=expected_firm_profits,
                 corr_invested_firms=self.states["Corresponding Invested Firm"],
                 expected_bank_profits=expected_bank_profits,
                 corr_invested_banks=self.states["Corresponding Invested Bank"],
                 cpi=cpi,
-                expected_inflation=expected_inflation,
                 dividend_payout_ratio=self.states["Dividend Payout Ratio"],
                 income_taxes=income_taxes,
                 tau_firm=tau_firm,

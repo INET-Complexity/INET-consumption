@@ -120,7 +120,8 @@ def settle_portfolio_reallocation(
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.
         overdrawn = base_lfa < 0.0
-        sale_while_overdrawn = overdrawn & (counterfactual_ifa_flow < 0.0)
+        # A sale whose proceeds net of the trade cost are not positive would deepen the overdraft: it stays blocked.
+        sale_while_overdrawn = overdrawn & (counterfactual_ifa_flow < 0.0) & (counterfactual_lfa_flow > 0.0)
         negative_lfa = (
             ~invalid
             & ~forced

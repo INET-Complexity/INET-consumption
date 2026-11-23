@@ -239,3 +239,11 @@ def test_sale_that_clears_overdraft_does_not_close_in_float_noise_below_zero():
     assert result.closing_lfa[0] >= 0.0
     np.testing.assert_allclose(result.closing_lfa, [0.0], atol=1e-6)
     np.testing.assert_allclose(result.committed_lfa_flow + result.committed_ifa_flow, [0.0], atol=1e-8)
+
+
+def test_overdrawn_sale_with_non_positive_net_proceeds_is_blocked():
+    for lfa_flow, cost in [(0.0, 8.0), (-1.0, 9.0)]:
+        result = _settle(base_lfa=-5.0, lfa_flow=lfa_flow, ifa_flow=-8.0, cost=cost)
+        assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
+        np.testing.assert_array_equal(result.closing_lfa, [-5.0])
+        np.testing.assert_array_equal(result.closing_ifa, [50.0])

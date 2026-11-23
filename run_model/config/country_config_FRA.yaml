@@ -566,9 +566,11 @@ FRA:
       production_tax_vector_scale: 1.0
     functions:
       social_benefits:
-        name: ConstantSocialBenefitsSetter
+        # name: ConstantSocialBenefitsSetter
+        name: ReplacementRateSocialBenefitsSetter
         path_name: social_benefits
-        parameters: {}
+        parameters:
+          regular_transfer_indexation: average_wage
       social_housing:
         name: DefaultSocialHousing
         path_name: social_housing

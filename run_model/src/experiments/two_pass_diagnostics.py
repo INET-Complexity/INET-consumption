@@ -103,6 +103,7 @@ def _prepared_record(prepared):
         "declared_consumer_price_history": history.consumer_price_history,
         "current_consumer_price": history.current_consumer_price,
         "initial_consumer_price": history.initial_consumer_price,
+        "expected_inflation": history.expected_inflation,
         "price_history_layout": history.price_history_layout,
         "months_per_period": history.months_per_period,
         "population_scale": history.income_units.population_scale,

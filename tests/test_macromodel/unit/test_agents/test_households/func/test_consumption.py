@@ -672,6 +672,125 @@ class TestCreditAugmentedHouseholdConsumption:
         np.testing.assert_allclose(components["target_consumption_delta_log_consumption"], 0.5)
         np.testing.assert_allclose(result.sum(axis=1), 50.0 * np.exp(0.5))
 
+    @pytest.mark.parametrize("pi_e", [-0.01, 0.0, 0.02])
+    def test_current_income_rule_nominal_consumption_over_income_equals_rule_ratio(self, pi_e):
+        """Real income at CPI_{t-1}(1 + Pi^e): nominal C/Y is the rule's c/y for any Pi^e."""
+        rule = CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.5,
+            liquid_wealth_propensity=0.1,
+            illiquid_wealth_propensity=0.2,
+            housing_wealth_propensity=0.3,
+            house_price_propensity=0.0,
+        )
+        income = np.array([100.0, 250.0])
+        rule.compute_target_consumption(
+            expected_inflation=pi_e,
+            current_cpi=2.0,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([[80.0, 200.0]]),
+            saving_rates=np.zeros(2),
+            income=income,
+            household_benefits=np.zeros(2),
+            consumption_weights=np.array([1.0]),
+            consumption_weights_by_income=np.zeros((1, 1)),
+            exogenous_total_consumption=np.zeros(2),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([60.0, 10.0]),
+            illiquid_wealth=np.array([30.0, 5.0]),
+            housing_wealth=np.array([120.0, 0.0]),
+            lagged_real_consumption_budget=np.array([40.0, 100.0]),
+            lagged_income=np.array([90.0, 240.0]),
+            lagged_cpi=2.0,
+        )
+        c = rule.last_target_consumption_components
+        nominalizer = 2.0 * (1 + pi_e)
+        np.testing.assert_allclose(c["target_consumption_real_income"], income / nominalizer, rtol=1e-12)
+        np.testing.assert_allclose(
+            c["target_consumption_long_run"] / income, np.exp(c["target_consumption_log_long_run"]), rtol=1e-12
+        )
+        # Debt-service denominator is the same nominal income; stocks stay at CPI_{t-1}.
+        np.testing.assert_allclose(c["target_consumption_debt_service_income_nominal"], income, rtol=1e-12)
+        np.testing.assert_allclose(
+            c["target_consumption_raw_net_liquid_assets_ratio"],
+            np.array([60.0, 10.0]) / 2.0 / (income / nominalizer),  # time_unit=12: annual = period
+            rtol=1e-12,
+        )
+
+    @staticmethod
+    def _price_basis_rule():
+        return CreditAugmentedConsumption(
+            consumption_smoothing_fraction=0.0,
+            consumption_smoothing_window=1,
+            minimum_consumption_fraction=0.0,
+            partial_adjustment_speed=0.5,
+            liquid_wealth_propensity=0.1,
+            illiquid_wealth_propensity=0.2,
+            housing_wealth_propensity=0.3,
+            house_price_propensity=0.0,
+        )
+
+    @staticmethod
+    def _price_basis_call(rule, pi_e, *, cpi=2.0, real_income=(50.0, 125.0), **overrides):
+        """Real inputs fixed: period-t income at CPI_{t-1}(1+Pi^e), end-of-(t-1) stocks at CPI_{t-1}."""
+        income = np.asarray(real_income) * cpi * (1 + pi_e)
+        args = dict(
+            expected_inflation=pi_e,
+            current_cpi=cpi,
+            initial_cpi=1.0,
+            historic_consumption_sum=np.array([[80.0, 200.0]]),
+            saving_rates=np.zeros(2),
+            income=income,
+            household_benefits=np.zeros(2),
+            consumption_weights=np.array([1.0]),
+            consumption_weights_by_income=np.zeros((1, 1)),
+            exogenous_total_consumption=np.zeros(2),
+            current_time=0,
+            take_consumption_weights_by_income_quantile=False,
+            tau_vat=0.0,
+            liquid_wealth=np.array([30.0, 5.0]) * cpi,
+            illiquid_wealth=np.array([15.0, 2.5]) * cpi,
+            housing_wealth=np.array([60.0, 0.0]) * cpi,
+            lagged_real_consumption_budget=np.array([40.0, 100.0]),
+            lagged_income=np.array([90.0, 240.0]),
+            lagged_cpi=cpi,
+        )
+        args.update(overrides)
+        return rule.compute_target_consumption(**args)
+
+    def test_formula_mpc_is_invariant_to_expected_inflation_at_fixed_real_inputs(self):
+        """A real income step is valued at the nominalization price, so dC/dY is a real MPC."""
+        mpcs = []
+        for pi_e in (-0.01, 0.0, 0.02, -0.5):
+            rule = self._price_basis_rule()
+            self._price_basis_call(rule, pi_e)
+            mpcs.append(np.asarray(rule.last_formula_implied_mpc).copy())
+            np.testing.assert_allclose(
+                rule.last_target_consumption_components["target_consumption_real_budget"],
+                self._price_basis_rule_budget(),
+                rtol=1e-12,
+            )
+        assert np.all(np.isfinite(mpcs[0])) and np.all(mpcs[0] > 0)
+        for mpc in mpcs[1:]:
+            np.testing.assert_allclose(mpc, mpcs[0], rtol=1e-9)
+
+    def _price_basis_rule_budget(self):
+        rule = self._price_basis_rule()
+        self._price_basis_call(rule, 0.0)
+        return rule.last_target_consumption_components["target_consumption_real_budget"]
+
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -1.0, -1.5])
+    def test_non_prepared_path_rejects_invalid_expected_inflation(self, bad):
+        with pytest.raises(ValueError, match="expected_inflation"):
+            self._price_basis_call(self._price_basis_rule(), 0.0, expected_inflation=bad)
+        geometric = CreditAugmentedConsumption(income_denominator="geometric_average", income_denominator_window=2)
+        with pytest.raises(ValueError, match="expected_inflation"):
+            geometric._geometric_average_income(np.ones((2, 1)), 1.0, np.ones(2), expected_inflation=bad)
+
     def test_compute_target_consumption_excludes_benefits_rent_and_scheduled_mortgage_from_calibrated_target(self):
         consumption_obj = CreditAugmentedConsumption(
             consumption_smoothing_fraction=0.0,
@@ -739,7 +858,8 @@ class TestCreditAugmentedHouseholdConsumption:
             low_cost_components["target_consumption_calibrated_total"],
             components["target_consumption_calibrated_total"],
         )
-        np.testing.assert_allclose(components["target_consumption_real_income"], 50.0)
+        # Current income is real at the nominalization price CPI_{t-1}(1 + Pi^e) = 2.0 * 1.1.
+        np.testing.assert_allclose(components["target_consumption_real_income"], 100.0 / 2.2)
         np.testing.assert_allclose(components["target_consumption_permanent_income"], 0.0)
         np.testing.assert_allclose(components["target_consumption_rent"], 0.0)
         np.testing.assert_allclose(components["target_consumption_mortgage_payment"], 0.0)

@@ -23,8 +23,22 @@ EXPECTED_BENEFITS = {
 }
 
 
-def _run_instrumented(simulation, periods):
-    """Run the periods and record the last period's benefit vectors used for planning and for payment."""
+def _has_job_flows(record):
+    before, after = record.get("status_before"), record.get("status_after")
+    if before is None or after is None:
+        return False
+    employed, unemployed = ActivityStatus.EMPLOYED, ActivityStatus.UNEMPLOYED
+    return bool(
+        ((before == unemployed) & (after == employed)).any() and ((before == employed) & (after == unemployed)).any()
+    )
+
+
+def _run_instrumented(simulation, periods, max_periods=12):
+    """Run at least ``periods`` periods, continuing until a period has both job finders and job losers.
+
+    Records that period's benefit vectors used for planning and for payment. The stopping rule does not
+    depend on the exact simulated path, so the fixture stays valid when model changes shift job flows.
+    """
     country = simulation.countries["FRA"]
     record = {}
     clear, refresh, components, expectations = (
@@ -79,14 +93,16 @@ def _run_instrumented(simulation, periods):
     country._set_household_income_expectations = set_household_income_expectations
     country.refresh_known_household_receipts = refresh_known_household_receipts
     country.compute_realised_household_social_income_components = compute_components
-    for period in range(periods):
+    for period in range(max_periods):
         simulation.iterate(t=period)
-    return country, record
+        if period + 1 >= periods and _has_job_flows(record):
+            return country, record
+    raise RuntimeError(f"No period with both job finders and job losers within {max_periods} periods.")
 
 
 @pytest.fixture(scope="module")
 def instrumented_period(datawrapper):
-    """Legacy mode. In this fixture the first period with both job finders and job losers is the fourth."""
+    """Legacy mode: from period 4, the first period with both job finders and job losers."""
     simulation = Simulation.from_datawrapper(
         datawrapper=datawrapper,
         simulation_configuration=SimulationConfiguration(

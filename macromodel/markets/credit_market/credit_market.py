@@ -350,7 +350,7 @@ def _compute_credit_supply_caps_by_type(
     """Compute CAR-based bank credit supply caps (total + split by type).
 
     Total cap is lending headroom implied by the capital adequacy requirement:
-        max_car = max(0, equity / capital_adequacy_ratio - total_outstanding_loans)
+        max_car = max(0, equity / capital_adequacy_ratio - (total_outstanding_loans + overdrafts))
 
     Type caps follow the same preference-weighted split as credit clearing:
     initial `new_loans_fraction_*` shares adjusted by `credit_supply_temperature`
@@ -361,10 +361,11 @@ def _compute_credit_supply_caps_by_type(
     of total short-term borrower demand, but it is excluded from this cap split so
     old overdraft repair cannot mechanically starve long-term investment capacity.
     """
+    from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
+
     max_car = np.maximum(
         0.0,
-        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-        - banks.ts.current("total_outstanding_loans"),
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
     )
 
     # Import locally to keep CreditMarket module lightweight and avoid circular-import risk.

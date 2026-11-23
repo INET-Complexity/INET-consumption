@@ -27,12 +27,16 @@ def _make_banks_stub(
     hh_cons_fraction: np.ndarray,
     mortgage_fraction: np.ndarray,
     capital_adequacy_ratio: float = 0.1,
+    overdrafts_to_households: np.ndarray | None = None,
+    overdrafts_to_firms: np.ndarray | None = None,
 ) -> _BanksStub:
     n_banks = int(equity.size)
     ts = TimeSeries(
         n_banks=n_banks,
         equity=equity,
         total_outstanding_loans=total_outstanding_loans,
+        overdrafts_to_households=np.zeros(n_banks) if overdrafts_to_households is None else overdrafts_to_households,
+        overdrafts_to_firms=np.zeros(n_banks) if overdrafts_to_firms is None else overdrafts_to_firms,
         new_loans_fraction_firms=firms_fraction,
         new_loans_fraction_hh_cons=hh_cons_fraction,
         new_loans_fraction_mortgages=mortgage_fraction,
@@ -211,3 +215,29 @@ def test_compute_credit_supply_caps_by_type_returns_zero_when_car_is_fully_bindi
 
     # Bank 0 has exactly exhausted CAR headroom; bank 1 retains 100 units.
     assert np.allclose(caps["total"], np.array([0.0, 100.0]))
+
+
+def test_compute_credit_supply_caps_by_type_counts_overdrafts_in_car_headroom():
+    banks = _make_banks_stub(
+        equity=np.array([10.0, 20.0]),
+        total_outstanding_loans=np.array([60.0, 100.0]),
+        firms_fraction=np.array([0.5, 0.5]),
+        hh_cons_fraction=np.array([0.3, 0.3]),
+        mortgage_fraction=np.array([0.2, 0.2]),
+        capital_adequacy_ratio=0.1,
+        overdrafts_to_households=np.array([25.0, 0.0]),
+        overdrafts_to_firms=np.array([5.0, 50.0]),
+    )
+
+    caps = _compute_credit_supply_caps_by_type(
+        banks=banks,
+        current_npl_firm_loans=0.0,
+        current_npl_hh_cons_loans=0.0,
+        current_npl_mortgages=0.0,
+        credit_supply_temperature=0.0,
+        total_target_short_term_credit=100.0,
+        total_target_long_term_credit=0.0,
+    )
+
+    # Headroom = equity / CAR - (loans + household overdrafts + firm overdrafts).
+    assert np.allclose(caps["total"], np.array([10.0, 50.0]))

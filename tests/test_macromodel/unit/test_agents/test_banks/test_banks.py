@@ -363,3 +363,31 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
         rtol=1e-14,
     )
 
+
+def test__overdrafts_are_capital_requirement_exposure_and_count_in_insolvency(test_banks):
+    from types import SimpleNamespace
+
+    from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
+    from macromodel.agents.banks.func.demography import DefaultBankDemography
+
+    n_banks = test_banks.ts.current("n_banks")
+    loans, household_overdrafts, firm_overdrafts = (
+        np.full(n_banks, 100.0),
+        np.full(n_banks, 30.0),
+        np.full(n_banks, 20.0),
+    )
+    test_banks.ts.override_current("total_outstanding_loans", loans)
+    test_banks.ts.override_current("overdrafts_to_households", household_overdrafts)
+    test_banks.ts.override_current("overdrafts_to_firms", firm_overdrafts)
+    np.testing.assert_array_equal(capital_requirement_exposure(test_banks), np.full(n_banks, 150.0))
+    # Loans stay loans only: the overdrafts are a separate exposure.
+    np.testing.assert_array_equal(test_banks.ts.current("total_outstanding_loans"), loans)
+
+    # Equity 6 covers 5% of the loans (5) but not of loans plus overdrafts (7.5).
+    test_banks.functions["demography"] = DefaultBankDemography(solvency_ratio=0.05, reserve_weight=0.0)
+    test_banks.ts.override_current("equity", np.full(n_banks, 6.0))
+    test_banks.ts.override_current("deposits", np.zeros(n_banks))
+    test_banks.states["is_insolvent"] = np.zeros(n_banks, dtype=bool)
+    removed = []
+    test_banks.handle_insolvency(credit_market=SimpleNamespace(remove_loans_by_bank=removed.append))
+    assert removed == list(range(n_banks))

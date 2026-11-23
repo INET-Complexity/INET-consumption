@@ -24,6 +24,7 @@ import numpy as np
 from macro_data import SyntheticBanks
 from macromodel.agents.agent import Agent
 from macromodel.agents.banks.banks_ts import create_banks_timeseries
+from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
 from macromodel.configurations import BankParameters, BanksConfiguration
 from macromodel.markets.credit_market.credit_market import CreditMarket
 from macromodel.timeseries import TimeSeries
@@ -624,7 +625,7 @@ class Banks(Agent):
         """
         equity_injection, average_equity = self.functions["demography"].handle_bank_insolvency(
             current_bank_equity=self.ts.current("equity"),
-            current_bank_loans=self.ts.current("total_outstanding_loans"),
+            current_bank_loans=capital_requirement_exposure(self),
             current_bank_deposits=self.ts.current("deposits"),
             is_insolvent=self.states["is_insolvent"],
         )

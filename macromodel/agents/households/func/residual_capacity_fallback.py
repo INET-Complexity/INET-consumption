@@ -69,7 +69,11 @@ def compute_residual_capacity_fallback(
     income left after the period's uses does not repay. The overdraft is a
     senior obligation, so it is financed by selling illiquid assets left after
     the branch plan, whatever the preferred margin, and never by new consumer
-    credit. The sale is forced (``forced_liquidation_amount``).
+    credit. The sale is forced (``forced_liquidation_amount``). It settles in
+    Stage 5 against the opening IFA, before the Stage 4 portfolio trade: a
+    Stage 4 sale while overdrawn (``settle_portfolio_reallocation``) starts
+    from the post-liquidation LFA and IFA, so the two never sell the same
+    assets, and its fixed cost is waived once a Stage 5 sale has paid it.
     """
     preferred_margin_after_lfa = np.asarray(preferred_margin_after_lfa, dtype=float)
     preferred_margin_amount = np.asarray(preferred_margin_amount, dtype=float)

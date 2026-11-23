@@ -4352,7 +4352,6 @@ class Households(Agent):
             settles = getattr(self.functions["wealth"], "settles_portfolio_choice", False)
             portfolio_base_lfa = wealth_base_lfa
             portfolio_base_ifa = wealth_base_ifa
-            forced_liquidation_active = np.zeros(wealth_base_lfa.shape, dtype=bool)
             if settles:
                 if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
                     raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
@@ -4363,13 +4362,19 @@ class Households(Agent):
                 if self.uses_feasibility_resolver and self.post_grant_feasible_plan is not None
                 else None
             )
+            # A Stage 5 seller may not buy illiquid assets in the same period's Stage 4.
+            forced_liquidation_active = (
+                np.zeros(wealth_base_lfa.shape, dtype=bool)
+                if settled_sale is None
+                else np.asarray(settled_sale, dtype=float) > 0.0
+            )
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
                 rebalancing=diagnostics.rebalancing,
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,
-                waive_fixed_cost=None if settled_sale is None else np.asarray(settled_sale, dtype=float) > 0.0,
+                waive_fixed_cost=None if settled_sale is None else forced_liquidation_active,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa

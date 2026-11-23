@@ -1962,6 +1962,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         def capture(**kwargs):
             seen["waive"] = kwargs.get("waive_fixed_cost")
+            seen["forced"] = kwargs.get("forced_liquidation_active")
             return original(**kwargs)
 
         monkeypatch.setattr(households_module, "settle_portfolio_reallocation", capture)
@@ -1970,6 +1971,8 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         # The configured plan settled a Stage 5 sale of 8 for every household.
         assert seen["waive"] is not None and np.all(seen["waive"])
+        # The same indicator blocks illiquid purchases of a Stage 5 seller in Stage 4.
+        assert np.all(seen["forced"])
 
     def test__resolver_books_deposit_interest_once_as_a_direct_liquid_return(self, test_households, monkeypatch):
         n_households, _ = self._configure_update_wealth(

@@ -99,9 +99,33 @@ def test_negative_lfa_blocks_purchase():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_forced_liquidation_takes_precedence_over_a_rebalancing_trade():
+def test_forced_liquidation_blocks_an_illiquid_purchase():
     result = _settle(forced=True)
     assert result.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+
+
+def test_forced_liquidation_still_allows_an_illiquid_sale():
+    result = _settle(forced=True, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [127.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [1.0])
+
+
+def test_forced_liquidation_flag_only_affects_flagged_households():
+    rebalancing = _rebalancing(lfa_flow=[-8.0, -8.0], ifa_flow=[8.0, 8.0], cost=[0.0, 0.0])
+    result = settle_portfolio_reallocation(
+        base_lfa=np.array([120.0, 120.0]),
+        base_ifa=np.array([50.0, 50.0]),
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([True, False]),
+    )
+    np.testing.assert_array_equal(result.settlement_status, [SETTLEMENT_FORCED_LIQUIDATION, SETTLEMENT_SETTLED])
+    np.testing.assert_allclose(result.closing_ifa, [50.0, 58.0])
 
 
 def test_forced_liquidation_uses_post_liquidation_base_without_reapplying_sale():

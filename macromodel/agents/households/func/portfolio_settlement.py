@@ -64,6 +64,10 @@ def settle_portfolio_reallocation(
     cost this period on a Stage 5 sale. Their trade settles without the fixed
     cost: only ``committed_cost`` is zeroed, so the LFA flow stays the pure
     transfer ``-committed_ifa`` and no money is created or destroyed.
+
+    ``forced_liquidation_active`` marks households with a settled Stage 5 sale this
+    period. Their illiquid purchases are blocked (``SETTLEMENT_FORCED_LIQUIDATION``,
+    flows zero, no cost); their sales settle as for any other household.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
@@ -113,13 +117,15 @@ def settle_portfolio_reallocation(
         invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
         conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid
 
-        # Fixed precedence: invalid, forced liquidation, negative LFA, then
+        # Fixed precedence: invalid, forced-liquidation purchase block, negative LFA, then
         # ordinary valid settlement.
         status[invalid & ~conservation_failure] = SETTLEMENT_INVALID_INPUT
         status[conservation_failure] = SETTLEMENT_CONSERVATION_FAILURE
         valid[invalid] = False
 
-        forced = ~invalid & forced_liquidation_active
+        # A household that sold illiquid assets for liquidity in Stage 5 of this period may not buy
+        # illiquid assets in Stage 4. Its voluntary sales stay allowed (fixed cost waived by the caller).
+        forced = ~invalid & forced_liquidation_active & (counterfactual_ifa_flow > 0.0)
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.

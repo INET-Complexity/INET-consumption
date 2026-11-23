@@ -917,3 +917,21 @@ def test_macro_facility_diagnostics_sum_agents_preserve_t0_and_missing_history(h
             plot_output(output[columns], no_rows=2, no_cols=3, country_code="FRA")
         assert len(show.call_args.args) == 0
         show.assert_called_once()
+
+
+def test_bank_credit_supply_caps_subtract_overdrafts_from_capital_headroom():
+    from src.visual_helpers import _compute_bank_credit_supply_caps
+
+    banks = SimpleNamespace(
+        ts=_ts(
+            {
+                "equity": [np.array([10.0, 20.0])],
+                "total_outstanding_loans": [np.array([50.0, 100.0])],
+                "overdrafts_to_households": [np.array([5.0, 0.0])],
+                "overdrafts_to_firms": [np.array([5.0, 50.0])],
+            }
+        ),
+        parameters=SimpleNamespace(capital_adequacy_ratio=0.1),
+    )
+    caps = _compute_bank_credit_supply_caps(SimpleNamespace(banks=banks, economy=None, credit_market=None))
+    np.testing.assert_allclose(caps["total"], [[40.0, 50.0]])

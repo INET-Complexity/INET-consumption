@@ -3,7 +3,10 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
+from macromodel.agents.households.func.portfolio_rebalancing import (
+    PortfolioRebalancingResult,
+    compute_portfolio_rebalancing,
+)
 from macromodel.agents.households.func.portfolio_settlement import (
     SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY,
     SETTLEMENT_CONSERVATION_FAILURE,
@@ -233,12 +236,38 @@ def test_non_overdrawn_behaviour_is_unchanged():
         assert result.settlement_status[0] == status
 
 
-def test_sale_that_clears_overdraft_does_not_close_in_float_noise_below_zero():
-    base = -4877935.56913224
-    result = _settle(base_lfa=base, base_ifa=1e8, lfa_flow=-base, ifa_flow=base, cost=0.0)
-    assert result.closing_lfa[0] >= 0.0
-    np.testing.assert_allclose(result.closing_lfa, [0.0], atol=1e-6)
-    np.testing.assert_allclose(result.committed_lfa_flow + result.committed_ifa_flow, [0.0], atol=1e-8)
+def test_upper_bound_sale_that_clears_overdraft_does_not_close_in_float_noise_below_zero():
+    rng = np.random.default_rng(0)
+    n = 20000
+    scale = 10 ** rng.uniform(3, 8, n)
+    lfa = -scale * rng.uniform(0.001, 0.5, n)
+    ifa = scale * rng.uniform(0.6, 3.0, n)
+    rebalancing = compute_portfolio_rebalancing(
+        opening_tfa_scale=scale,
+        post_return_lfa=lfa,
+        post_return_ifa=ifa,
+        target_illiquid_assets=np.zeros(n),
+        target_tfa_base=lfa + ifa,
+        portfolio_participates=np.ones(n, dtype=bool),
+        phi_1=1.0,
+        lambda_kappa=0.05,
+        fixed_cost_share=0.002,
+    )
+    result = settle_portfolio_reallocation(
+        base_lfa=lfa,
+        base_ifa=ifa,
+        investable_surplus=np.ones(n),
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.zeros(n, dtype=bool),
+    )
+    sellers = (result.settlement_status == SETTLEMENT_SETTLED) & rebalancing.upper_bound_flag
+    assert sellers.sum() > 1000
+    raw_closing = lfa + rebalancing.counterfactual_lfa_flow + rebalancing.adjustment_cost - rebalancing.adjustment_cost
+    # Without the guard a large share of these households closes at float noise below zero.
+    assert ((raw_closing < 0.0) & sellers).sum() > 100
+    assert np.all(result.closing_lfa[sellers] >= 0.0)
+    np.testing.assert_allclose(result.committed_lfa_flow + result.committed_ifa_flow, 0.0, atol=1e-8)
 
 
 def test_overdrawn_sale_with_non_positive_net_proceeds_is_blocked():

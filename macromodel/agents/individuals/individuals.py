@@ -273,7 +273,6 @@ class Individuals(Agent):
         expected_firm_profits: np.ndarray,
         expected_bank_profits: np.ndarray,
         cpi: float,
-        expected_inflation: float,
         income_taxes: float,
         tau_firm: float,
         wage_price_factor: float | None = None,
@@ -293,7 +292,6 @@ class Individuals(Agent):
             expected_firm_profits (np.ndarray): Expected profits by firm
             expected_bank_profits (np.ndarray): Expected profits by bank
             cpi (float): Current price index
-            expected_inflation (float): Expected inflation rate
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
 
@@ -311,7 +309,6 @@ class Individuals(Agent):
                 expected_bank_profits=expected_bank_profits,
                 corr_invested_banks=self.states["Corresponding Invested Bank"],
                 cpi=cpi,
-                expected_inflation=expected_inflation,
                 dividend_payout_ratio=self.states["Dividend Payout Ratio"],
                 income_taxes=income_taxes,
                 tau_firm=tau_firm,

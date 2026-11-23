@@ -2178,7 +2178,6 @@ class Country:
             expected_firm_profits=self.firms.ts.current("expected_profits"),
             expected_bank_profits=self.banks.ts.current("expected_profits"),
             cpi=self.benefit_price_level(),
-            expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             income_taxes=self.central_government.states["Income Tax"],
             tau_firm=self.central_government.states["Profit Tax"],
             wage_price_factor=wage_price_factor(
@@ -2193,14 +2192,14 @@ class Country:
             self.individuals.ts.expected_income.append(expected_individual_income)
 
         # Household income
-        expected_income_employee = (
-            1 + self.economy.current_expected_consumer_period_inflation()
-        ) * self.households.compute_employee_income(
+        # Period-t wages are known at planning: nominal_employee_income() is the amount paid (locked wage price
+        # level), so the expectation is that amount with no expected-inflation uplift.
+        expected_income_employee = self.households.compute_employee_income(
             individual_income=self.nominal_employee_income(),
             corr_households=self.individuals.states["Corresponding Household ID"],
         )
         # Benefits are known at planning: the amounts paid this period, priced at benefit_price_level() with no
-        # expected-inflation uplift (the wage term keeps its uplift). Pass 1 uses the pre-clearing UB vector.
+        # expected-inflation uplift. Pass 1 uses the pre-clearing UB vector.
         expected_income_public_pension, expected_unemployment_benefits, expected_income_other_social_transfers = (
             self.compute_realised_household_social_income_components()[:3]
         )

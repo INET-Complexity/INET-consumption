@@ -49,7 +49,6 @@ class IncomeSetter(ABC):
         expected_bank_profits: np.ndarray,
         corr_invested_banks: np.ndarray,
         cpi: float,
-        expected_inflation: float,
         dividend_payout_ratio: float,
         income_taxes: float,
         tau_firm: float,
@@ -64,8 +63,7 @@ class IncomeSetter(ABC):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Benefit price level (CPI_{t-1}); benefits are known at planning
-            expected_inflation (float): Expected inflation rate, applied to wages only
+            cpi (float): Price level of the period's known receipts (wage and benefits); no expected inflation
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -136,7 +134,6 @@ class DefaultIncomeSetter(IncomeSetter):
         expected_bank_profits: np.ndarray,
         corr_invested_banks: np.ndarray,
         cpi: float,
-        expected_inflation: float,
         dividend_payout_ratio: float,
         income_taxes: float,
         tau_firm: float,
@@ -148,7 +145,6 @@ class DefaultIncomeSetter(IncomeSetter):
         - Investment positions (dividends)
         - Social benefits
         Adjusted for:
-        - Expected inflation
         - Tax rates
         - Price levels
 
@@ -160,8 +156,7 @@ class DefaultIncomeSetter(IncomeSetter):
             corr_invested_firms (np.ndarray): Individual-firm investment links
             expected_bank_profits (np.ndarray): Expected profits by bank
             corr_invested_banks (np.ndarray): Individual-bank investment links
-            cpi (float): Benefit price level (CPI_{t-1}); benefits are known at planning
-            expected_inflation (float): Expected inflation rate, applied to wages only
+            cpi (float): Price level of the period's known receipts (wage and benefits); no expected inflation
             dividend_payout_ratio (float): Share of profits paid as dividends
             income_taxes (float): Personal income tax rate
             tau_firm (float): Corporate tax rate
@@ -173,7 +168,8 @@ class DefaultIncomeSetter(IncomeSetter):
 
         # Employed individuals
         emp_ind = current_individual_activity_status == ActivityStatus.EMPLOYED
-        income[emp_ind] = (1 + expected_inflation) * cpi * current_wage[emp_ind]
+        # Period-t wages are known at planning (cpi is their locked price level): no expected-inflation uplift.
+        income[emp_ind] = cpi * current_wage[emp_ind]
 
         # Unemployed individuals
         unemp_ind = current_individual_activity_status == ActivityStatus.UNEMPLOYED

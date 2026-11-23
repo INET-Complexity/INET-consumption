@@ -56,6 +56,15 @@ def _run_instrumented(simulation, periods):
         expectations(replace_current=replace_current)
         ts = country.households.ts
         record[2 if replace_current else 1] = {name: ts.current(name).copy() for name in EXPECTED_BENEFITS}
+        record[("wage", 2 if replace_current else 1)] = {
+            "expected": ts.current("expected_income_employee").copy(),
+            "locked_wages": country.households.aggregate_individual_amount(
+                country.nominal_employee_income(), country.individuals.states["Corresponding Household ID"]
+            ),
+            "expected_individual": country.individuals.ts.current("expected_income").copy(),
+            "employed": country.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED,
+            "nominal_individual": country.nominal_employee_income().copy(),
+        }
         record["expected_inflation"] = country.economy.current_expected_consumer_period_inflation()
 
     country.clear_labour_market = clear_labour_market
@@ -208,3 +217,43 @@ def test_expected_benefit_terms_equal_paid_benefit_terms(fixture_name, request):
     for expected, paid in EXPECTED_BENEFITS.items():
         keep = ~changed if paid == "income_unemployment_benefits" else slice(None)
         np.testing.assert_allclose(record[1][expected][keep], hh.ts.current(paid)[keep], rtol=1e-12, atol=0.0)
+
+
+@pytest.mark.parametrize("fixture_name", ["instrumented_period", "instrumented_minimum_income_period"])
+def test_expected_period_wage_equals_paid_wage_in_both_passes(fixture_name, request):
+    country, record = request.getfixturevalue(fixture_name)
+    hh = country.households
+    assert record["expected_inflation"] != 0.0
+    paid = hh.ts.current("income_employee")
+    assert paid.sum() > 0.0
+    # Pass 2 runs after labour clearing: the expected wage is the wage paid, with no expected-inflation uplift.
+    np.testing.assert_allclose(record[("wage", 2)]["expected"], paid, rtol=1e-12, atol=0.0)
+    # Pass 1 runs before clearing: the locked wage price level on the pre-clearing wages, again with no uplift.
+    # Contract wages are set after pass 1, so pass 1 can differ from the wage paid, but not by the inflation uplift.
+    pass_1 = record[("wage", 1)]
+    np.testing.assert_array_equal(pass_1["expected"], pass_1["locked_wages"])
+
+
+@pytest.mark.parametrize("fixture_name", ["instrumented_period", "instrumented_minimum_income_period"])
+def test_known_receipts_and_individual_expected_wage_use_the_paid_wage(fixture_name, request):
+    country, record = request.getfixturevalue(fixture_name)
+    hh = country.households
+    # Known receipts: the wage inside financing income is the wage paid.
+    pass_2 = record[("wage", 2)]
+    paid_benefits = sum(hh.ts.current(paid) for paid in EXPECTED_BENEFITS.values()) + hh.ts.current(
+        "income_minimum_income"
+    )
+    other_expected = (
+        hh.ts.current("expected_income") - pass_2["expected"] - hh.ts.current("expected_income_social_transfers")
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("financing_income"),
+        other_expected + hh.ts.current("income_employee") + paid_benefits,
+        rtol=1e-12,
+        atol=1e-6,
+    )
+    # Individual expected income of the employed is the locked-price wage (benefits aside: employed get none).
+    employed = pass_2["employed"]
+    np.testing.assert_allclose(
+        pass_2["expected_individual"][employed], pass_2["nominal_individual"][employed], rtol=1e-12, atol=0.0
+    )

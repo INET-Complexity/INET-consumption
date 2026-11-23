@@ -18,6 +18,11 @@ SETTLEMENT_CONSERVATION_FAILURE = 6.0
 SETTLEMENT_SETTLED = 7.0
 
 _CLEARING_NOISE_TOL = 1e-6
+# Conservation check: |lfa_flow + ifa_flow + cost| <= atol + rtol * (|lfa_flow| + |ifa_flow| + |cost|).
+# rtol = 1e-12 is about 4500 double-precision ulps of the flow size, ample for the rounding of a three-term
+# sum; a genuine imbalance of 1e-12 of the flow (1e-4 on a 1e8 flow) is still flagged.
+_CONSERVATION_RTOL = 1e-12
+_CONSERVATION_ATOL = 1e-8
 
 
 @dataclass(frozen=True)
@@ -97,11 +102,13 @@ def settle_portfolio_reallocation(
             & np.isfinite(counterfactual_ifa_flow)
             & np.isfinite(adjustment_cost)
         )
-        conservation_valid = np.isclose(
-            counterfactual_lfa_flow + counterfactual_ifa_flow + adjustment_cost,
-            0.0,
-            rtol=1e-10,
-            atol=1e-8,
+        # The flows are population-expanded (~1e8), so the float rounding of their sum scales with their
+        # size. Compare the residual with a tolerance relative to the flow magnitude, plus a small absolute
+        # floor for tiny flows. np.isclose against 0 has no relative part, so it cannot be used here.
+        flow_scale = np.abs(counterfactual_lfa_flow) + np.abs(counterfactual_ifa_flow) + np.abs(adjustment_cost)
+        conservation_valid = (
+            np.abs(counterfactual_lfa_flow + counterfactual_ifa_flow + adjustment_cost)
+            <= _CONSERVATION_ATOL + _CONSERVATION_RTOL * flow_scale
         )
         invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
         conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid

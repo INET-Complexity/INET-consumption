@@ -287,6 +287,23 @@ class TestDeflatorAlignment:
         got = rule._geometric_average_income(history, float(cpi[-1]), cpi)
         np.testing.assert_allclose(got, [30_000.0], rtol=1e-12)
 
+    @pytest.mark.parametrize("pi_e", [-0.01, 0.0, 0.02])
+    def test_current_row_is_deflated_at_the_expected_price(self, pi_e):
+        """Past rows use their own price; the planning row uses CPI_{t-1}(1 + Pi^e)."""
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=3)
+        cpi = np.array([1.0, 1.1, 1.2])
+        history = np.array([[100.0], [110.0], [120.0 * (1 + pi_e)]])
+        got = rule._geometric_average_income(history, 1.2, cpi, expected_inflation=pi_e)
+        np.testing.assert_allclose(got, [100.0], rtol=1e-12)
+
+    def test_subsistence_floor_is_deflated_like_the_current_row(self):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=2)
+        history = np.array([[0.0], [0.0]])
+        got = rule._geometric_average_income(
+            history, 2.0, np.array([1.5, 2.0]), subsistence_income=np.array([210.0]), expected_inflation=0.05
+        )
+        np.testing.assert_allclose(got, [100.0], rtol=1e-12)
+
     def test_multi_period_window_requires_the_history(self):
         rule = _rule(income_denominator="geometric_average", income_denominator_window=4)
         with pytest.raises(ValueError, match="requires historic_deflator"):

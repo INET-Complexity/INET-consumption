@@ -2545,6 +2545,8 @@ class Country:
                 household_layout_key=input_layout,
                 current_consumer_price=self.economy.current_consumer_price_level(),
                 price_history_layout="aligned" if price_rows == income_rows else "missing_current",
+                # Current real income is valued at the nominalization price CPI_{t-1}(1 + Pi^e).
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             )
 
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver

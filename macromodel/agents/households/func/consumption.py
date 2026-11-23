@@ -1215,6 +1215,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         deflator: float,
         historic_deflator: np.ndarray | None = None,
         subsistence_income: np.ndarray | float | None = None,
+        expected_inflation: float = 0.0,
     ) -> np.ndarray:
         """Trailing geometric mean of real income over the configured window.
 
@@ -1236,6 +1237,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         over the window, so the bias GROWS with the price level, inflating every
         wealth ratio and driving the wealth-drag clip. ``historic_deflator`` is
         therefore required whenever the window reaches back more than one period.
+
+        The final row is the planning period t, whose price is not yet realised. It is
+        deflated at the nominalization price ``deflator_t * (1 + expected_inflation)``, the
+        expected price level at which the real budget is converted to nominal demand, so the
+        rule's C/y holds for nominal C over same-price nominal y. Earlier rows keep their own
+        realised price levels.
 
         A household with NO positive income anywhere in the window floors at
         ``subsistence_income`` (the behavioural-income lower bound ``income_guard``:
@@ -1266,6 +1273,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     f"{window_nominal.shape[0]}; they must align period-for-period."
                 )
             deflators = np.maximum(deflators, self.price_floor)
+        deflators = deflators.copy()
+        deflators[-1] *= 1.0 + float(expected_inflation)
         window = window_nominal / deflators[:, None]
         usable = np.isfinite(window) & (window > 0.0)
         n_usable = usable.sum(axis=0)
@@ -1287,8 +1296,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     "Flooring at income_floor here would reintroduce the near-zero-denominator blow-up "
                     "(issue #90) this method exists to prevent; pass subsistence_income explicitly."
                 )
+            # The guard is a nominal period-t flow: deflate it like the current observation.
             floor = np.maximum(
-                np.broadcast_to(np.asarray(subsistence_income, dtype=float), geometric.shape),
+                np.broadcast_to(np.asarray(subsistence_income, dtype=float), geometric.shape) / deflators[-1],
                 self.income_floor,
             )
             geometric = np.where(insufficient, floor, geometric)
@@ -1318,7 +1328,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         return clipped, clipped_flag
 
     @staticmethod
-    def _validate_prepared_inputs(prepared, shape, current_cpi, initial_cpi, time_unit):
+    def _validate_prepared_inputs(prepared, shape, current_cpi, initial_cpi, time_unit, expected_inflation):
         if not isinstance(prepared, ConsumptionInputs):
             raise ValueError("consumption_inputs must be a validated ConsumptionInputs record.")
         if prepared.income_base_real.shape != shape or prepared.histories.months_per_period != time_unit:
@@ -1340,6 +1350,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         for name, actual in (("current_consumer_price", current_cpi), ("initial_consumer_price", initial_cpi)):
             if not np.isclose(getattr(prepared.histories, name), actual, rtol=1e-12, atol=0):
                 raise ValueError(f"Prepared {name} does not match target price.")
+        # Current real income was deflated at CPI_{t-1}(1 + Pi^e); nominalization must use the same Pi^e.
+        if not np.isclose(prepared.histories.expected_inflation, expected_inflation, rtol=1e-12, atol=1e-15):
+            raise ValueError("Prepared expected_inflation does not match the nominalization expected inflation.")
         for record in (prepared.opening_snapshot, prepared.pi_payload):
             if (record.period_id, record.household_layout_key) != (prepared.period_id, prepared.household_layout_key):
                 raise ValueError("Prepared period/layout identity does not match snapshot/PI payload.")
@@ -1358,17 +1371,20 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         consumer_debt_rate_delta=0.0,
         debt_service_payments: DebtServicePayments | None = None,
         uncertainty_delta=0.0,
-        expected_inflation=0.0,
+        expected_inflation=None,
         _probe=None,
     ):
         """Pure target/budget evaluation: no residual initialization, learning or RNG.
 
         The supplied rate input is already principal-weighted and income-normalized.
         epsilon=None denotes a zero fixed effect for explicit equation/probe replays.
+        expected_inflation=None uses the Pi^e at which the prepared current income was deflated.
         """
         if not isinstance(consumption_inputs, ConsumptionInputs):
             raise ValueError("consumption_inputs must be a validated ConsumptionInputs record.")
         prepared = consumption_inputs
+        if expected_inflation is None:
+            expected_inflation = prepared.histories.expected_inflation
         nominal = prepared.opening_snapshot.nominal
         income = prepared.histories.behavioural_income_nominal_history[-1]
         zero = np.zeros_like(income)
@@ -1563,7 +1579,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
         if consumption_inputs is not None:
-            self._validate_prepared_inputs(consumption_inputs, income.shape, current_cpi, initial_cpi, time_unit)
+            self._validate_prepared_inputs(
+                consumption_inputs, income.shape, current_cpi, initial_cpi, time_unit, expected_inflation
+            )
         elif _probe is not None:
             raise ValueError("A probe requires prepared consumption inputs.")
         lagged_income = np.asarray(lagged_income, dtype=float)
@@ -1621,9 +1639,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             permanent_income_log_ratio_arr = (
                 consumption_inputs.pi_log_ratio_rebased if _probe is None else _probe.pi_log_ratio
             )
+        # Expected period-t price level CPI_{t-1}(1 + Pi^e_t). It converts the real budget to
+        # nominal demand AND deflates current-period income, so nominal C over nominal y equals
+        # the rule's c/y for any Pi^e. Stocks (end of t-1) keep current_deflator, their own date.
         nominalizer = current_deflator * (1.0 + expected_inflation)
 
-        real_spendable_income = np.maximum(income / current_deflator, self.income_floor)
+        real_spendable_income = np.maximum(income / nominalizer, self.income_floor)
         if consumption_inputs is not None:
             real_spendable_income = consumption_inputs.income_base_real if _probe is None else _probe.income_base_real
         real_lagged_income = np.maximum(lagged_income / lagged_deflator, self.income_floor)
@@ -1687,12 +1708,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # The wealth stocks above (real_net_liquid_assets, real_illiquid_financial_assets,
         # real_lagged_housing_wealth) are deliberately lagged_deflator-based -- that is
         # their own correct real value as of t-1, and other call sites/diagnostics rely
-        # on that. Dividing them directly by annual_spendable_income (current_deflator-
-        # based) would bake the realised one-period inflation rate (current_deflator /
-        # lagged_deflator) into the ratio. Re-deflate the same nominal stocks with
-        # current_deflator here, just for ratio formation, so the ratio's deflator
-        # cancels against annual_spendable_income's, consistent with pairing these
-        # ratios against current-period income.
+        # on that. For ratio formation the same end-of-(t-1) nominal stocks are deflated
+        # by current_deflator = CPI_{t-1}, the latest realised price, as in the prepared
+        # path. Current income is real at the expected price CPI_{t-1}(1 + Pi^e), so the
+        # paper's ratio (real stock at its own date over real income at expected P_t)
+        # equals the nominal stock/income ratio times (1 + Pi^e).
         current_period_net_liquid_assets = (
             lagged_liquid_wealth - lagged_mortgage_debt - lagged_consumption_loan_debt
         ) / current_deflator
@@ -1851,9 +1871,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # Behavioural response only: schedules, income and cash resources are
         # not reduced here. Financing/accounting reserve and pay service once.
         # Flow/flow ratio: use the same behavioural-income base as the other
-        # ratios, at period frequency and valued at current CPI. No separate
-        # gross-cash-income denominator is constructed for debt service.
-        debt_service_income_nominal = (ratio_denominator_arr / annualization_factor) * current_deflator
+        # ratios, at period frequency and valued at the expected period-t price
+        # (the price at which it was deflated). No separate gross-cash-income
+        # denominator is constructed for debt service.
+        debt_service_income_nominal = (ratio_denominator_arr / annualization_factor) * nominalizer
         interest_rate_cashflow_index = np.zeros_like(real_spendable_income)
         if debt_service_payments is not None:
             if not isinstance(debt_service_payments, DebtServicePayments):
@@ -2072,7 +2093,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             raise ValueError("Aligned monetary learning consumption requires consumption_inputs.")
         if consumption_inputs is not None:
             self._validate_prepared_inputs(
-                consumption_inputs, np.asarray(income).shape, current_cpi, initial_cpi, time_unit
+                consumption_inputs, np.asarray(income).shape, current_cpi, initial_cpi, time_unit, expected_inflation
             )
             previous_layout = getattr(self, "_prepared_residual_layout", None)
             if previous_layout is not None and previous_layout != consumption_inputs.household_layout_key:
@@ -2141,7 +2162,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     "(periods x households); none was supplied by the caller."
                 )
             ratio_denominator = self._geometric_average_income(
-                historic_income, current_cpi, historic_deflator, subsistence_income
+                historic_income, current_cpi, historic_deflator, subsistence_income, expected_inflation
             )
         else:
             ratio_denominator = None
@@ -2187,14 +2208,16 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         if consumption_inputs is not None:
             self._prepared_residual_layout = consumption_inputs.household_layout_key
 
-        current_deflator = max(
+        # Real income is valued at the expected period-t price, so a real step maps to
+        # nominal income at that same price and the reported MPC is dC/dY at one price.
+        nominalizer = max(
             float(current_cpi) / (float(initial_cpi) if initial_cpi != 0.0 else 1.0), self.price_floor
-        )
+        ) * (1.0 + expected_inflation)
         formula_income_real = (
-            income / current_deflator if consumption_inputs is None else consumption_inputs.income_base_real
+            income / nominalizer if consumption_inputs is None else consumption_inputs.income_base_real
         )
         real_income_perturbation = np.maximum(1.0, np.abs(formula_income_real) * 1e-4)
-        nominal_income_perturbation = real_income_perturbation * current_deflator
+        nominal_income_perturbation = real_income_perturbation * nominalizer
         if consumption_inputs is None:
             _, perturbed_target = self._evaluate_target(
                 income=income + nominal_income_perturbation, epsilon=epsilon, **target_inputs

@@ -193,6 +193,9 @@ class MinimumIncomeParameters(NamedTuple):
     base_year: int = 2014
     notional_asset_return_annual: float = 0.03
     guard_share_of_m: float = 0.01
+    # Minimum size of an illiquid sale (Stage 4 voluntary and Stage 5 liquidity sale) as a share of the household's
+    # quarterly minimum income level M. 0.20 approximates French gross saving over GDP. Defined in both support modes.
+    minimum_sale_share_of_m: float = 0.20
 
 
 class HouseholdSupportParameters(NamedTuple):
@@ -240,6 +243,9 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
     guard_share = positive("guard_share_of_m")
     if not guard_share < 1.0:
         raise ValueError("household_support.minimum_income.guard_share_of_m must lie in (0, 1).")
+    minimum_sale_share = positive("minimum_sale_share_of_m")
+    if not minimum_sale_share < 1.0:
+        raise ValueError("household_support.minimum_income.minimum_sale_share_of_m must lie in (0, 1).")
     return HouseholdSupportParameters(
         mode,
         goods_floor,
@@ -248,6 +254,7 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
             base_year=int(base_year),
             notional_asset_return_annual=positive("notional_asset_return_annual"),
             guard_share_of_m=guard_share,
+            minimum_sale_share_of_m=minimum_sale_share,
         ),
     )
 
@@ -1946,10 +1953,29 @@ class Country:
         else:
             n_households = hh.ts.current("n_households")
             level, assessed, entitlement = (np.zeros(n_households) for _ in range(3))
+        self._minimum_sale_size = self._compute_minimum_sale_size(minimum_income_mode_level=level)
         hh.ts.minimum_income_level.append(level)
         hh.ts.minimum_income_assessed.append(assessed)
         hh.ts.minimum_income_entitlement.append(entitlement)
         self._minimum_income_status = "assessed"
+
+    def _compute_minimum_sale_size(self, *, minimum_income_mode_level: np.ndarray) -> np.ndarray:
+        """Smallest illiquid sale executed this period: ``minimum_sale_share_of_m`` x M per household.
+
+        M is the minimum income level of PLAN.md section 3.1, evaluated from the household_support parameters
+        and the same inputs as the entitlement, in both support modes (the stored ``minimum_income_level`` series
+        is zero in legacy mode). In minimum_income mode the level just computed is reused.
+        """
+        if self.household_support.mode == "minimum_income":
+            level = minimum_income_mode_level
+        else:
+            government_ts = self.central_government.ts
+            level = self._compute_minimum_income_level(
+                transfer_index=government_ts.current("total_other_benefits")[0]
+                / government_ts.initial("total_other_benefits")[0],
+                cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
+            )
+        return self.household_support.minimum_income.minimum_sale_share_of_m * level
 
     def _compute_minimum_income_level(self, *, transfer_index: float, cpi_ratio: float) -> np.ndarray:
         """Guaranteed level M per household from the current consumption units (PLAN.md section 3.1)."""
@@ -3348,6 +3374,7 @@ class Country:
             available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
             net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
+            minimum_sale_size=getattr(self, "_minimum_sale_size", None),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:
@@ -5079,6 +5106,7 @@ class Country:
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             unpaid_rent=unpaid_rent,
             debt_arrears_active=self._household_debt_arrears_active(),
+            minimum_sale_size=getattr(self, "_minimum_sale_size", None),
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))

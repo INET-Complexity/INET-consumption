@@ -1102,6 +1102,7 @@ class Households(Agent):
         available_pre_stage4_ifa: np.ndarray,
         purchase_liquidation: np.ndarray | None = None,
         net_housing_cash_need: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> None:
         """Reserve executable Stage 5 liquidation before floor and goods planning.
 
@@ -1118,6 +1119,7 @@ class Households(Agent):
             sale_cost=self.current_illiquid_trade_cost(),
             purchase_liquidation=purchase_liquidation,
             own_sale_surplus=None if net_housing_cash_need is None else np.maximum(-net_housing_cash_need, 0.0),
+            minimum_sale_size=minimum_sale_size,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:
@@ -4099,6 +4101,7 @@ class Households(Agent):
         tau_vat: float = 0.0,
         unpaid_rent: np.ndarray | None = None,
         debt_arrears_active: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -4384,6 +4387,7 @@ class Households(Agent):
                 forced_liquidation_active=forced_liquidation_active,
                 waive_fixed_cost=None if settled_sale is None else forced_liquidation_active,
                 debt_arrears_active=debt_arrears_active,
+                minimum_sale_size=minimum_sale_size,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa

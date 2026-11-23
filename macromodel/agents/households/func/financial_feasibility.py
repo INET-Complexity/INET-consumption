@@ -211,6 +211,7 @@ class HouseholdFinancialFeasibility:
         sale_cost: np.ndarray | None = None,
         purchase_liquidation: np.ndarray | None = None,
         own_sale_surplus: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Reserve the Stage 5 liquidation before floors and goods demand are fixed.
 
@@ -256,7 +257,15 @@ class HouseholdFinancialFeasibility:
         # stays in residual_shortfall_after_granted_credit and is handled as an unpaid obligation or
         # overdraft, like any shortfall the illiquid assets cannot cover. A sale that pays for a completed
         # property purchase is never skipped here: the completion rule has already sized it.
-        dust_sale = (purchase <= 0.0) & (reserved > 0.0) & ((net <= cost) | (reserved - cost_paid <= 0.0))
+        # Absolute minimum: a gross sale below ``minimum_sale_size`` is not executed either.
+        minimum = np.zeros_like(available) if minimum_sale_size is None else self._non_negative(minimum_sale_size)
+        if minimum.shape != available.shape:
+            raise ValueError("Stage 5 minimum sale size must be a household vector.")
+        dust_sale = (
+            (purchase <= 0.0)
+            & (reserved > 0.0)
+            & ((net <= cost) | (reserved - cost_paid <= 0.0) | (reserved < minimum))
+        )
         net = np.where(dust_sale, 0.0, net)
         reserved = np.where(dust_sale, 0.0, reserved)
         cost_paid = np.where(dust_sale, 0.0, cost_paid)

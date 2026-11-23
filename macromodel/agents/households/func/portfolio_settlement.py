@@ -22,6 +22,8 @@ SETTLEMENT_SETTLED = 7.0
 # Stage 4 illiquid purchase blocked because the household has unpaid or suspended debt service this period,
 # or outstanding consumer or mortgage arrears: debt is serviced before resources go to investment.
 SETTLEMENT_BLOCKED_DEBT_ARREARS = 8.0
+# Stage 4 illiquid sale not executed because its gross amount is below the minimum sale size.
+SETTLEMENT_BELOW_MINIMUM_SALE = 9.0
 
 _CLEARING_NOISE_TOL = 1e-6
 # Conservation check: |lfa_flow + ifa_flow + cost| <= atol + rtol * (|lfa_flow| + |ifa_flow| + |cost|).
@@ -57,6 +59,7 @@ def settle_portfolio_reallocation(
     forced_liquidation_active: np.ndarray,
     waive_fixed_cost: np.ndarray | None = None,
     debt_arrears_active: np.ndarray | None = None,
+    minimum_sale_size: np.ndarray | None = None,
 ) -> PortfolioSettlement:
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
@@ -80,6 +83,10 @@ def settle_portfolio_reallocation(
     period or outstanding arrears. Their illiquid purchases are blocked
     (``SETTLEMENT_BLOCKED_DEBT_ARREARS``); sales stay allowed. Forced-liquidation
     status takes precedence when both apply.
+
+    ``minimum_sale_size`` is the smallest gross illiquid sale executed. A Stage 4 sale
+    (counterfactual IFA flow < 0) with ``-flow < minimum_sale_size`` is not executed
+    (``SETTLEMENT_BELOW_MINIMUM_SALE``, flows zero, no cost), also for Stage 5 sellers.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
@@ -88,6 +95,11 @@ def settle_portfolio_reallocation(
         np.zeros(base_lfa.shape, dtype=bool)
         if debt_arrears_active is None
         else np.asarray(debt_arrears_active, dtype=bool)
+    )
+    minimum_sale_size = (
+        np.zeros(base_lfa.shape, dtype=float)
+        if minimum_sale_size is None
+        else np.asarray(minimum_sale_size, dtype=float)
     )
     portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
     counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
@@ -99,6 +111,7 @@ def settle_portfolio_reallocation(
         base_ifa,
         forced_liquidation_active,
         debt_arrears_active,
+        minimum_sale_size,
         portfolio_valid_flag,
         counterfactual_lfa_flow,
         counterfactual_ifa_flow,
@@ -150,6 +163,11 @@ def settle_portfolio_reallocation(
         arrears_blocked = ~invalid & ~forced & debt_arrears_active & (counterfactual_ifa_flow > 0.0)
         status[arrears_blocked] = SETTLEMENT_BLOCKED_DEBT_ARREARS
         forced = forced | arrears_blocked
+        # A sale below the minimum size is not executed (sales that repay an overdraft included: the
+        # overdraft is then served by the Stage 5 overdraft sale or stays).
+        too_small = ~invalid & (counterfactual_ifa_flow < 0.0) & (-counterfactual_ifa_flow < minimum_sale_size)
+        status[too_small] = SETTLEMENT_BELOW_MINIMUM_SALE
+        forced = forced | too_small
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.

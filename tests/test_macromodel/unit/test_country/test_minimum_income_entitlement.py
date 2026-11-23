@@ -458,3 +458,36 @@ def test_reset_reparses_household_support(datawrapper):
     }
     with pytest.raises(ValueError, match="base_year"):
         simulation.reset(configuration)
+
+
+@pytest.mark.parametrize("mode", ["legacy_stage5", "minimum_income"])
+def test_minimum_sale_size_is_a_share_of_m_in_both_support_modes(test_country, monkeypatch, mode):
+    if mode == "minimum_income":
+        _use_minimum_income(test_country, minimum_sale_share_of_m=0.25)
+    else:
+        test_country.household_support = _read_household_support_parameters(
+            {"minimum_income": {"minimum_sale_share_of_m": 0.25}}
+        )
+    _fix_benefit_setter(test_country, monkeypatch, index=1.5)
+    test_country.scale = 2
+    initial_cpi = test_country.economy.initial_consumer_price_level()
+    monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 1.2 * initial_cpi)
+
+    _start_period(test_country)
+
+    level = (
+        RSA
+        * test_country.scale
+        * test_country.economy.time_unit
+        * test_country.households._current_consumption_units()
+        * 1.5
+        * 1.2
+    )
+    np.testing.assert_allclose(test_country._minimum_sale_size, 0.25 * level, rtol=1e-12)
+
+
+def test_minimum_sale_share_default_and_validation():
+    assert _read_household_support_parameters({}).minimum_income.minimum_sale_share_of_m == 0.20
+    for bad in (0.0, 1.0, -0.1, True):
+        with pytest.raises(ValueError):
+            _read_household_support_parameters({"minimum_income": {"minimum_sale_share_of_m": bad}})

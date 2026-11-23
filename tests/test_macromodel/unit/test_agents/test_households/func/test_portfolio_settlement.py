@@ -8,6 +8,7 @@ from macromodel.agents.households.func.portfolio_rebalancing import (
     compute_portfolio_rebalancing,
 )
 from macromodel.agents.households.func.portfolio_settlement import (
+    SETTLEMENT_BELOW_MINIMUM_SALE,
     SETTLEMENT_BLOCKED_DEBT_ARREARS,
     SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY,
     SETTLEMENT_CONSERVATION_FAILURE,
@@ -449,3 +450,37 @@ def test_forced_liquidation_status_precedes_arrears_status_and_default_is_no_arr
     assert _settle_with_arrears(arrears=True, forced=True).settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
     assert _settle_with_arrears(arrears=False).settlement_status[0] == SETTLEMENT_SETTLED
     assert _settle().settlement_status[0] == SETTLEMENT_SETTLED
+
+
+def _settle_minimum(*, minimum, lfa_flow, ifa_flow, cost=0.0, base_lfa=120.0, forced=False):
+    return settle_portfolio_reallocation(
+        base_lfa=np.array([base_lfa]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[lfa_flow], ifa_flow=[ifa_flow], cost=[cost]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([forced]),
+        minimum_sale_size=np.array([minimum]),
+    )
+
+
+def test_sale_below_the_minimum_size_is_not_executed():
+    result = _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_BELOW_MINIMUM_SALE
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+    # Also for a household that sold in Stage 5 and for an overdrawn household.
+    assert _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0, forced=True).settlement_status[0] == (
+        SETTLEMENT_BELOW_MINIMUM_SALE
+    )
+    overdrawn = _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0, base_lfa=-5.0)
+    assert overdrawn.settlement_status[0] == SETTLEMENT_BELOW_MINIMUM_SALE
+    np.testing.assert_allclose(overdrawn.closing_lfa, [-5.0])
+
+
+def test_sale_at_or_above_the_minimum_size_and_purchases_are_unaffected():
+    sale = _settle_minimum(minimum=8.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert sale.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(sale.closing_ifa, [42.0])
+    buy = _settle_minimum(minimum=100.0, lfa_flow=-8.0, ifa_flow=8.0)
+    assert buy.settlement_status[0] == SETTLEMENT_SETTLED

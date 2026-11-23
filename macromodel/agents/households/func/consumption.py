@@ -1011,6 +1011,16 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.last_real_consumption_budget: np.ndarray | None = None
 
     @staticmethod
+    def _expected_inflation(value) -> float:
+        """Pi^e deflates current income and nominalizes the budget: a finite scalar above -1."""
+        if np.ndim(value) != 0 or isinstance(value, (bool, np.bool_)):
+            raise ValueError("expected_inflation must be finite and greater than -1.")
+        value = float(value)
+        if not np.isfinite(value) or value <= -1:
+            raise ValueError("expected_inflation must be finite and greater than -1.")
+        return value
+
+    @staticmethod
     def _as_array(reference: np.ndarray, value: np.ndarray | float | None, default: float = 0.0) -> np.ndarray:
         if value is None:
             return np.full_like(reference, default, dtype=float)
@@ -1274,7 +1284,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 )
             deflators = np.maximum(deflators, self.price_floor)
         deflators = deflators.copy()
-        deflators[-1] *= 1.0 + float(expected_inflation)
+        deflators[-1] *= 1.0 + self._expected_inflation(expected_inflation)
         window = window_nominal / deflators[:, None]
         usable = np.isfinite(window) & (window > 0.0)
         n_usable = usable.sum(axis=0)
@@ -1578,6 +1588,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         _probe: _ConsumptionProbe | None = None,
     ) -> tuple[dict[str, np.ndarray], np.ndarray]:
         income = np.asarray(income, dtype=float)
+        expected_inflation = self._expected_inflation(expected_inflation)
         if consumption_inputs is not None:
             self._validate_prepared_inputs(
                 consumption_inputs, income.shape, current_cpi, initial_cpi, time_unit, expected_inflation
@@ -1632,8 +1643,6 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             ):
                 if values.shape != income.shape or not np.all(np.isfinite(values)):
                     raise ValueError(f"{name} must be finite with one value per prepared household.")
-            if not np.isfinite(expected_inflation) or expected_inflation <= -1:
-                raise ValueError("expected_inflation must be finite and greater than -1.")
             current_deflator = consumption_inputs.current_deflator
             lagged_deflator = current_deflator
             permanent_income_log_ratio_arr = (
@@ -2091,6 +2100,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
     ) -> np.ndarray:
         if self.uses_aligned_behavioural_income and self.uses_income_belief_learning and consumption_inputs is None:
             raise ValueError("Aligned monetary learning consumption requires consumption_inputs.")
+        expected_inflation = self._expected_inflation(expected_inflation)
         if consumption_inputs is not None:
             self._validate_prepared_inputs(
                 consumption_inputs, np.asarray(income).shape, current_cpi, initial_cpi, time_unit, expected_inflation

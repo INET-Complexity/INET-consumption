@@ -3574,6 +3574,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         # The expected capacity of 40 assumes no cash rent and no investment, so set both
         # explicitly instead of relying on the sample household's initial state.
@@ -3605,6 +3613,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_reduces_an_overdraft_and_planned_overdraft_interest_first(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         test_households.ts.override_current("rent", np.zeros(n_households))
         test_households.ts.override_current("target_investment", np.zeros(n_households))

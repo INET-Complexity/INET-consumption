@@ -1360,6 +1360,26 @@ class CreditMarket:
             raise RuntimeError("No unbooked consumer-credit settlement is available for this period.")
         return self._pending_consumer_loans_this_period[0].copy()
 
+    def book_unpaid_household_overdraft_interest(self, unpaid: np.ndarray, corresponding_bank: np.ndarray) -> None:
+        """Hold overdraft interest a household left unpaid as consumer interest arrears at its own bank.
+
+        This is the unpaid-service path of consumer credit: the arrears bear no
+        interest, are due first in next period's consumer service, and are
+        written off with the household's consumer cells on FICP forgiveness or
+        default. They do not enter the overdraft, so unpaid interest does not
+        compound.
+        """
+        unpaid = np.asarray(unpaid, dtype=float)
+        bank = np.asarray(corresponding_bank, dtype=int)
+        n_banks, n_households = self._consumer_interest_arrears_by_cell.shape
+        if unpaid.shape != (n_households,) or bank.shape != (n_households,):
+            raise ValueError("Unpaid overdraft interest and corresponding banks must be household vectors.")
+        if not np.all(np.isfinite(unpaid)) or np.any(unpaid < 0.0):
+            raise ValueError("Unpaid overdraft interest must be finite and non-negative.")
+        if np.any((bank < 0) | (bank >= n_banks)):
+            raise ValueError("Every household needs a valid corresponding bank.")
+        self._consumer_interest_arrears_by_cell[bank, np.arange(n_households)] += unpaid
+
     def current_consumer_debt_components_by_household(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return contractual principal and committed arrears by household."""
         principal_arrears = self._consumer_principal_arrears_by_cell.sum(axis=0).copy()

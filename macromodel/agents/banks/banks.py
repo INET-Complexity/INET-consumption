@@ -364,13 +364,14 @@ class Banks(Agent):
         deposit_interest_received: np.ndarray,
         overdraft_interest_paid: np.ndarray,
         households_corresponding_bank: np.ndarray,
-        overdraft_interest_capitalised: np.ndarray | None = None,
+        overdraft_interest_accrued: np.ndarray | None = None,
     ) -> None:
         """Book, at each household's own bank, the deposit and overdraft interest it settled this period.
 
-        ``overdraft_interest_capitalised`` is the part of the overdraft interest the household's plan left
-        unpaid: it is income accrued on the overdraft asset, not cash, so it is excluded from distributable
-        and taxable profit.
+        ``overdraft_interest_paid`` is the cash the households paid. ``overdraft_interest_accrued`` is the part
+        of the interest due that the household's plan left unpaid: it is held as consumer interest arrears at
+        this bank, and, like accrued consumer interest, it is profit but not cash, so it is excluded from
+        distributable and taxable profit. Collected later, it is opening consumer arrears collected.
         """
         self.ts.household_deposit_interest_paid.append(
             np.bincount(
@@ -382,12 +383,12 @@ class Banks(Agent):
                 households_corresponding_bank, weights=overdraft_interest_paid, minlength=self.ts.current("n_banks")
             )
         )
-        if overdraft_interest_capitalised is None:
-            overdraft_interest_capitalised = np.zeros_like(np.asarray(overdraft_interest_paid, dtype=float))
-        self.ts.household_overdraft_interest_capitalised.append(
+        if overdraft_interest_accrued is None:
+            overdraft_interest_accrued = np.zeros_like(np.asarray(overdraft_interest_paid, dtype=float))
+        self.ts.household_overdraft_interest_accrued.append(
             np.bincount(
                 households_corresponding_bank,
-                weights=overdraft_interest_capitalised,
+                weights=overdraft_interest_accrued,
                 minlength=self.ts.current("n_banks"),
             )
         )
@@ -426,6 +427,7 @@ class Banks(Agent):
             - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("consumer_interest_accrued")
             + self.ts.current("mortgage_interest_accrued")
+            + self.ts.current("household_overdraft_interest_accrued")
             + self.ts.current("interest_received_on_deposits")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
@@ -437,15 +439,14 @@ class Banks(Agent):
     def compute_cash_distributable_profits(self) -> np.ndarray:
         """Return current cash-backed profit excluding prior income collection.
 
-        Overdraft interest capitalised into the overdraft is accrued, not cash, and is excluded, like accrued
-        consumer and mortgage interest.
+        Unpaid overdraft interest is accrued, not cash, and is excluded, like accrued consumer and mortgage
+        interest: ``interest_received_on_deposits`` holds only the overdraft interest households paid.
         """
         return (
             self.ts.current("interest_received_on_loans")
             - self.ts.current("consumer_opening_interest_arrears_collected")
             - self.ts.current("mortgage_opening_interest_arrears_collected")
             + self.ts.current("interest_received_on_deposits")
-            - self.ts.current("household_overdraft_interest_capitalised")
             - self.ts.current("firm_default_credit_loss")
             - self.ts.current("consumer_default_credit_loss")
             - self.ts.current("mortgage_default_credit_loss")

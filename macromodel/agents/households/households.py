@@ -192,9 +192,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "unmet_floor": 0.0,
     "resource_deficit": 0.0,
     # Overdraft interest due on the opening negative LFA (planned as debt service) and the part left unpaid,
-    # which capitalises into the overdraft.
+    # which becomes consumer interest arrears at the household's bank.
     "scheduled_overdraft_interest": 0.0,
     "unpaid_overdraft_interest": 0.0,
+    # Opening overdraft max(D - LFA, 0) the plan repays as a senior use, after debt service.
+    "overdraft_repayment": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -1183,8 +1185,10 @@ class Households(Agent):
         Income, a seller's housing surplus max(-X, 0), liquid assets left after
         the housing draw D floored at zero, granted consumer credit K and the
         forced liquidation net of its cost and of the purchase sale. The floor
-        on max(LFA - D, 0) matches the resolver: an overdraft is not a claim on
-        support.
+        on max(LFA - D, 0) keeps the overdraft out of the support test: the
+        overdraft is not a claim on support. The allocator repays it as a
+        senior use instead (``current_opening_overdraft``), so the household's
+        own resources are LFA - D without the floor.
         """
         plan = self.post_grant_feasible_plan
         if plan is None:
@@ -1199,6 +1203,13 @@ class Households(Agent):
             + liquid_assets_after_housing
             + np.asarray(plan.credit_granted, dtype=float)
             + forced_liquidation_cash(plan)
+        )
+
+    def current_opening_overdraft(self) -> np.ndarray:
+        """B = max(D - LFA, 0): the opening overdraft, net of the housing draw, that the plan repays."""
+        return np.maximum(
+            self.current_housing_lfa_draw() - np.asarray(self.ts.current("liquid_financial_assets"), dtype=float),
+            0.0,
         )
 
     def current_early_consumer_repayment_capacity(self) -> np.ndarray:
@@ -1250,10 +1261,9 @@ class Households(Agent):
             - self.target_investment_cash()
             - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
-        # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
-        # planned uses, is negative. Rounded down like the allocator so it cannot leave a negative residue.
-        opening_lfa = np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
-        overdraft = np.minimum(opening_lfa, 0.0)
+        # The surplus repays the opening overdraft B = max(D - LFA, 0) first, as the allocator does: no early
+        # repayment while it is not repaid. Rounded down like the allocator so it cannot leave a negative residue.
+        overdraft = -self.current_opening_overdraft()
         surplus = surplus + overdraft - PLAN_ROUND_DOWN * (np.abs(income) - overdraft)
         capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
@@ -1541,6 +1551,7 @@ class Households(Agent):
             "resource_deficit",
             "scheduled_overdraft_interest",
             "unpaid_overdraft_interest",
+            "overdraft_repayment",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1563,6 +1574,7 @@ class Households(Agent):
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
         scheduled_overdraft_interest: np.ndarray | None = None,
+        opening_overdraft: np.ndarray | None = None,
     ) -> None:
         """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
@@ -1603,6 +1615,7 @@ class Households(Agent):
             support_exempt_resources=support_exempt_resources,
             support_enabled=support_enabled,
             scheduled_overdraft_interest=scheduled_overdraft_interest,
+            opening_overdraft=opening_overdraft,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -2628,6 +2641,7 @@ class Households(Agent):
         replace_current: bool = False,
         existing_consumer_balance: np.ndarray | float = 0.0,
         other_debt_service: np.ndarray | float = 0.0,
+        overdraft_repayment_need: np.ndarray | float = 0.0,
     ) -> ResidualCapacityFallbackResult:
         """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
 
@@ -2663,6 +2677,7 @@ class Households(Agent):
             current_ifa=np.asarray(current_ifa, dtype=float),
             existing_consumer_balance=existing_consumer_balance,
             other_debt_service=other_debt_service,
+            overdraft_repayment_need=overdraft_repayment_need,
         )
         if replace_current:
             self.ts.override_current("dsti_headroom", result.dsti_headroom)

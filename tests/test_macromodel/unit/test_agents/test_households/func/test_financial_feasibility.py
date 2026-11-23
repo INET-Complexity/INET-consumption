@@ -462,3 +462,57 @@ def test__a_plan_that_spends_everything_is_rounded_down_and_never_overspends(sup
     )
     for name in ("floor_support", "unpaid_rent", "unmet_floor", "unpaid_consumer_service", "unpaid_mortgage_service"):
         np.testing.assert_allclose(getattr(settled, name), getattr(plain, name), rtol=0.0, atol=2 * margin.max())
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__opening_overdraft_is_repaid_after_debt_service_before_goods_above_the_floor(support_enabled):
+    # F + R = 100, service 40, overdraft interest 5, opening overdraft B = 30, goods above floor 40, V = 15.
+    resources = np.array([100.0, 145.0, 160.0, 175.0, 200.0, 230.0, 500.0])
+    settled = _settle_floor(
+        resources=resources, scheduled_overdraft_interest=5.0, opening_overdraft=30.0, support_enabled=support_enabled
+    )
+    without = _settle_floor(resources=resources, scheduled_overdraft_interest=5.0, support_enabled=support_enabled)
+
+    np.testing.assert_allclose(settled.overdraft_repayment, [0, 0, 15, 30, 30, 30, 30], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, [80, 80, 80, 80, 105, 120, 120], rtol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, [0, 0, 0, 0, 0, 15, 15], atol=1e-9)
+    # Rent, floor, debt service and overdraft interest come first: the overdraft does not change them.
+    for name in (
+        "floor_support",
+        "unpaid_rent",
+        "unmet_floor",
+        "unpaid_consumer_service",
+        "unpaid_mortgage_service",
+        "unpaid_overdraft_interest",
+        "remaining_subsistence_shortfall",
+    ):
+        np.testing.assert_array_equal(getattr(settled, name), getattr(without, name), err_msg=name)
+    np.testing.assert_array_equal(without.overdraft_repayment, 0.0)
+
+
+def test__support_never_covers_the_opening_overdraft():
+    # No own resources: support pays the floor and rent, and nothing of the overdraft.
+    settled = _settle_floor(resources=np.array([0.0, 50.0]), opening_overdraft=1000.0)
+    np.testing.assert_allclose(settled.floor_support, [100.0, 50.0], rtol=1e-9)
+    np.testing.assert_allclose(settled.overdraft_repayment, [0.0, 0.0], atol=1e-9)
+
+
+def test__cash_need_refresh_counts_the_overdraft_as_a_use():
+    resolver = HouseholdFinancialFeasibility()
+    plan = PostGrantFeasiblePlan(
+        credit_granted=np.zeros(4),
+        credit_rationing_gap=np.zeros(4),
+        planned_liquidation_total=np.zeros(4),
+        residual_shortfall_after_granted_credit=np.zeros(4),
+        reserved_liquidation_total=np.zeros(4),
+    )
+    available_lfa = np.array([50.0, -30.0, -30.0, -30.0])
+    refreshed = resolver.refresh_cash_needs(
+        plan,
+        cash_uses=np.full(4, 100.0),
+        cash_income=np.array([80.0, 80.0, 120.0, 140.0]),
+        available_lfa=available_lfa,
+    )
+    # residual = max(uses - income - (LFA - D), 0): LFA - D without the zero floor.
+    np.testing.assert_allclose(refreshed.residual_shortfall_after_lfa, [0.0, 50.0, 10.0, 0.0])
+    np.testing.assert_allclose(refreshed.funded_from_liquid_assets, [20.0, 0.0, 0.0, 0.0])

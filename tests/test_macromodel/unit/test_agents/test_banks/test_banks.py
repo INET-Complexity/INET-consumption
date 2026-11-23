@@ -247,7 +247,7 @@ def _two_bank_toy():
             "overdrafts_to_households",
             "household_overdraft_interest_received",
             "household_deposit_interest_paid",
-            "household_overdraft_interest_capitalised",
+            "household_overdraft_interest_accrued",
             "firm_overdraft_interest_received",
             "firm_deposit_interest_paid",
             "interest_received_on_loans",
@@ -317,12 +317,14 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
     household_overdraft_interest = overdraft_rate[household_bank] * np.maximum(-lfa, 0.0)
     firm_deposit_interest = deposit_rate[firm_bank] * np.maximum(firm_deposits, 0.0)
     firm_overdraft_interest = overdraft_rate[firm_bank] * np.maximum(-firm_deposits, 0.0)
-    capitalised = np.array([0.0, 0.5, 0.0, 0.0, 2.0, 0.0])
+    # Interest left unpaid is accrued (held as consumer interest arrears), not received.
+    accrued = np.array([0.0, 0.5, 0.0, 0.0, 2.0, 0.0])
+    household_overdraft_interest = household_overdraft_interest - accrued
     banks.record_household_deposit_interest(
         deposit_interest_received=household_deposit_interest,
         overdraft_interest_paid=household_overdraft_interest,
         households_corresponding_bank=household_bank,
-        overdraft_interest_capitalised=capitalised,
+        overdraft_interest_accrued=accrued,
     )
     banks.record_firm_deposit_interest(
         deposit_interest_received=firm_deposit_interest,
@@ -349,7 +351,7 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
         + np.bincount(firm_bank, firm_overdraft_interest - firm_deposit_interest, minlength=2)
     )
     np.testing.assert_allclose(received, expected, rtol=1e-14)
-    # Capitalised overdraft interest is accounting profit but not distributable (or taxable) cash profit.
+    # Accrued overdraft interest is accounting profit but not distributable (or taxable) cash profit.
     banks.ts.override_current("interest_received_on_deposits", received)
     np.testing.assert_allclose(
         banks.compute_profits() - banks.compute_cash_distributable_profits(), [0.5, 2.0], rtol=1e-14
@@ -360,3 +362,4 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
         np.array([120.0 + 25.0 + 50.0 - 100.0 - 35.0, 50.0 + 12.0 + 60.0 - 30.0 - 70.0 - 8.0]),
         rtol=1e-14,
     )
+

@@ -881,7 +881,8 @@ class Country:
         # mortgage, own sale proceeds, the purchase sale and the liquid assets
         # D, so support never finances it. A seller's surplus is a resource.
         resources = income_without_support + forced_liquidation_cash(hh.post_grant_feasible_plan)
-        # max(LFA - D, 0), as in the settlement: an overdraft is not a claim on support.
+        # max(LFA - D, 0), as in the settlement: an overdraft is not a claim on support (the plan repays it as a
+        # senior use from the household's own resources, never from support).
         resources += np.maximum(hh.ts.current("liquid_financial_assets") - hh.current_housing_lfa_draw(), 0.0)
         resources += hh.ts.current("received_consumption_loans")
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
@@ -2866,6 +2867,9 @@ class Country:
             replace_current=replace_current,
             existing_consumer_balance=existing_balance + current_cons_interest,
             other_debt_service=np.maximum(deposit_service, 0.0),
+            overdraft_repayment_need=self._planned_overdraft_repayment_need(liquidity_shortfall)
+            if uses_feasibility_resolver
+            else 0.0,
         )
         # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
         # with the DSTI-capped shadow_credit_requested value just computed
@@ -2895,6 +2899,18 @@ class Country:
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
                 current_ifa=self.households.ts.current("illiquid_financial_assets"),
             )
+
+    def _planned_overdraft_repayment_need(self, liquidity_shortfall: np.ndarray) -> np.ndarray:
+        """Opening overdraft B that income left after this period's uses does not repay.
+
+        With L = uses - income and B = max(-LFA, 0), the cash need counting the
+        overdraft is max(L + B, 0); the need for the uses alone is max(L, 0) and
+        is financed by the borrow-or-sell plan. Before the housing market the
+        housing draw is unknown, so B is the opening overdraft.
+        """
+        overdraft = np.maximum(-np.asarray(self.households.ts.current("liquid_financial_assets"), dtype=float), 0.0)
+        shortfall = np.where(np.isfinite(liquidity_shortfall), liquidity_shortfall, 0.0)
+        return np.maximum(shortfall + overdraft, 0.0) - np.maximum(shortfall, 0.0)
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""
@@ -3236,23 +3252,31 @@ class Country:
         """Settle interest on household accounts and book it at each household's own bank.
 
         The bank receives exactly the overdraft interest the households pay and
-        pays exactly the deposit interest they receive.
+        pays exactly the deposit interest they receive. Interest the plan left
+        unpaid is neither charged to the account nor received: the bank accrues
+        it, held as consumer interest arrears (``book_unpaid_household_overdraft_interest``).
         """
         rates = {
             "bank_interest_rate_on_household_deposits": self.banks.ts.current("interest_rate_on_household_deposits"),
             "bank_overdraft_rate_on_household_deposits": self.banks.ts.current("overdraft_rate_on_household_deposits"),
         }
         deposit_interest, overdraft_interest = self.households.compute_deposit_interest_components(**rates)
-        self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
-        self.households.ts.overdraft_interest_paid.append(overdraft_interest)
-        self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
         plan = self.households.post_grant_feasible_plan
-        unpaid = None if plan is None else plan.unpaid_overdraft_interest
+        # The plan's unpaid overdraft interest is held as consumer interest arrears, not charged to the account.
+        unpaid = (
+            np.zeros_like(overdraft_interest)
+            if plan is None or plan.unpaid_overdraft_interest is None
+            else np.asarray(plan.unpaid_overdraft_interest, dtype=float)
+        )
+        paid = overdraft_interest - unpaid
+        self.households.ts.interest_paid_on_deposits.append(paid - deposit_interest)
+        self.households.ts.overdraft_interest_paid.append(paid)
+        self.households.ts.total_overdraft_interest_paid.append([paid.sum()])
         self.banks.record_household_deposit_interest(
             deposit_interest_received=deposit_interest,
-            overdraft_interest_paid=overdraft_interest,
+            overdraft_interest_paid=paid,
             households_corresponding_bank=self.households.states["Corresponding Bank ID"],
-            overdraft_interest_capitalised=np.zeros_like(overdraft_interest) if unpaid is None else unpaid,
+            overdraft_interest_accrued=unpaid,
         )
 
     def reconcile_post_grant_feasible_plan(self) -> None:
@@ -3316,6 +3340,7 @@ class Country:
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
             support_enabled=self._stage5_support_enabled(),
             scheduled_overdraft_interest=self.household_overdraft_interest_due(),
+            opening_overdraft=self.households.current_opening_overdraft(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -3410,6 +3435,14 @@ class Country:
             remaining_periods=self.households.ts.current("ficp_exclusion_remaining_periods"),
         )
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
+        # Unpaid overdraft interest follows the consumer unpaid-service path (after this period's consumer
+        # settlement, so it is due first next period); it is not charged to the account.
+        unpaid_overdraft_interest = self.households.post_grant_feasible_plan.unpaid_overdraft_interest
+        if unpaid_overdraft_interest is not None:
+            self.credit_market.book_unpaid_household_overdraft_interest(
+                unpaid=unpaid_overdraft_interest,
+                corresponding_bank=self.households.states["Corresponding Bank ID"],
+            )
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
         )

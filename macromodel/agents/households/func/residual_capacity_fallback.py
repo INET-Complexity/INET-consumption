@@ -58,11 +58,18 @@ def compute_residual_capacity_fallback(
     current_ifa: np.ndarray,
     existing_consumer_balance: np.ndarray | float = 0.0,
     other_debt_service: np.ndarray | float = 0.0,
+    overdraft_repayment_need: np.ndarray | float = 0.0,
 ) -> ResidualCapacityFallbackResult:
     """Apply the shadow DSTI and liquidation caps to the preferred Stage 5 branch.
 
     Invalid or non-finite inputs collapse to a conservative zero-capacity
     fallback. Positive residuals are never driven negative by this helper.
+
+    ``overdraft_repayment_need`` is the part of the opening overdraft that
+    income left after the period's uses does not repay. The overdraft is a
+    senior obligation, so it is financed by selling illiquid assets left after
+    the branch plan, whatever the preferred margin, and never by new consumer
+    credit. The sale is forced (``forced_liquidation_amount``).
     """
     preferred_margin_after_lfa = np.asarray(preferred_margin_after_lfa, dtype=float)
     preferred_margin_amount = np.asarray(preferred_margin_amount, dtype=float)
@@ -167,6 +174,13 @@ def compute_residual_capacity_fallback(
     sell_shortfall = np.maximum(sell_request - sell_liquidation, 0.0)
     sell_borrow = np.where(sell_branch, np.minimum(sell_shortfall, dsti_maximum_loan_size), 0.0)
     borrow_planned = np.where(sell_branch, sell_borrow, borrow_planned)
+
+    overdraft_need = np.asarray(overdraft_repayment_need, dtype=float)
+    overdraft_need = np.where(np.isfinite(overdraft_need), np.maximum(overdraft_need, 0.0), 0.0)
+    unsold_ifa = np.maximum(np.where(np.isfinite(current_ifa), current_ifa, 0.0) - liquidation_planned, 0.0)
+    overdraft_liquidation = np.minimum(overdraft_need, unsold_ifa)
+    liquidation_planned = liquidation_planned + overdraft_liquidation
+    forced_liquidation_amount = forced_liquidation_amount + overdraft_liquidation
 
     shadow_credit_requested = borrow_planned.copy()
 

@@ -29,6 +29,8 @@ class ResidualCapacityFallbackResult:
     shadow_credit_requested: np.ndarray
     forced_liquidation_amount: np.ndarray
     residual_shortfall_after_caps: np.ndarray
+    # Part of liquidation_planned that repays the opening overdraft (zero without one).
+    overdraft_liquidation_planned: np.ndarray
 
 
 def _annuity_payment_factor(period_rate: np.ndarray, loan_maturity: np.ndarray) -> np.ndarray:
@@ -218,4 +220,5 @@ def compute_residual_capacity_fallback(
         shadow_credit_requested=shadow_credit_requested,
         forced_liquidation_amount=forced_liquidation_amount,
         residual_shortfall_after_caps=residual_shortfall_after_caps,
+        overdraft_liquidation_planned=overdraft_liquidation,
     )

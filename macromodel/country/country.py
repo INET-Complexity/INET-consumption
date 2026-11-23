@@ -1568,11 +1568,17 @@ class Country:
     stage_household_expected_income_shock = stage_household_income_shock
 
     def _household_resources_exempt_from_support_test(self) -> np.ndarray:
-        """Per-household resources that the support test ignores: the positive part of an exempt staged shock."""
+        """Per-household resources that the support test ignores.
+
+        The positive part of an exempt staged shock, and the cash of the forced sale that repays the opening
+        overdraft: support is set as if there were no overdraft, so it neither covers the overdraft nor shrinks
+        because of the sale that repays it.
+        """
+        exempt = self.households.current_overdraft_sale_cash()
         shock = getattr(self, "_staged_household_income_shock", None)
         if shock is None or not getattr(self, "_household_income_shock_exempt_from_support", False):
-            return np.zeros(self.households.ts.current("stage5_subsistence_support").shape)
-        return np.maximum(shock, 0.0)
+            return exempt
+        return exempt + np.maximum(shock, 0.0)
 
     def _apply_household_income_shock(self, income: np.ndarray) -> np.ndarray:
         """Add the staged MPC income shock when one is active."""
@@ -2872,7 +2878,7 @@ class Country:
             replace_current=replace_current,
             existing_consumer_balance=existing_balance + current_cons_interest,
             other_debt_service=np.maximum(deposit_service, 0.0),
-            overdraft_repayment_need=self._planned_overdraft_repayment_need(liquidity_shortfall)
+            overdraft_repayment_need=self._planned_overdraft_repayment_need(liquidity_shortfall, scheduled_debt_service)
             if uses_feasibility_resolver
             else 0.0,
         )
@@ -2903,19 +2909,46 @@ class Country:
             self.households.populate_pre_grant_feasible_plan_planned_liquidation(
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
                 current_ifa=self.households.ts.current("illiquid_financial_assets"),
+                overdraft_liquidation_total=self.households.ts.current("overdraft_liquidation_planned"),
             )
 
-    def _planned_overdraft_repayment_need(self, liquidity_shortfall: np.ndarray) -> np.ndarray:
-        """Opening overdraft B that income left after this period's uses does not repay.
+    def _planned_overdraft_repayment_need(
+        self, liquidity_shortfall: np.ndarray, scheduled_debt_service: np.ndarray
+    ) -> np.ndarray:
+        """Forced sale that repays the opening overdraft B after the uses senior to it.
 
-        With L = uses - income and B = max(-LFA, 0), the cash need counting the
-        overdraft is max(L + B, 0); the need for the uses alone is max(L, 0) and
-        is financed by the borrow-or-sell plan. Before the housing market the
-        housing draw is unknown, so B is the opening overdraft.
+        The allocator pays rent R, the goods floor F and scheduled service O
+        (including overdraft interest) before B; goods above the floor and
+        investment come after it. The household's own resources are income y
+        plus the borrow-or-sell finance max(L, 0) of the recorded shortfall L;
+        in legacy_stage5 mode support S = max(F + R - (y + max(L, 0)), 0) tops
+        them up to F + R, and the overdraft sale is exempt from that test. So
+
+            sale = max(F + R + O + B - (y + max(L, 0)) - S, 0),
+
+        with S = 0 in minimum_income mode, where the sale also covers the floor
+        top-up so that it is not spent on the floor instead of the overdraft.
+        In legacy mode this is max(O + B - max(y + max(L, 0) - F - R, 0), 0):
+        support still covers F + R. Before the housing market the housing draw
+        is unknown, so B is the opening overdraft max(-LFA, 0); without one the
+        need is zero.
         """
-        overdraft = np.maximum(-np.asarray(self.households.ts.current("liquid_financial_assets"), dtype=float), 0.0)
+        hh = self.households
+        overdraft = np.maximum(-np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float), 0.0)
         shortfall = np.where(np.isfinite(liquidity_shortfall), liquidity_shortfall, 0.0)
-        return np.maximum(shortfall + overdraft, 0.0) - np.maximum(shortfall, 0.0)
+        own_resources = np.asarray(hh.current_financing_income(), dtype=float) + np.maximum(shortfall, 0.0)
+        senior_uses = (
+            self._effective_goods_floor()
+            + np.asarray(hh.current_consumption_cash_rent(), dtype=float)
+            + np.asarray(scheduled_debt_service, dtype=float)
+        )
+        support = (
+            np.maximum(senior_uses - np.asarray(scheduled_debt_service, dtype=float) - own_resources, 0.0)
+            if self._stage5_support_enabled()
+            else 0.0
+        )
+        need = np.maximum(senior_uses + overdraft - own_resources - support, 0.0)
+        return np.where(overdraft > 0.0, need, 0.0)
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""

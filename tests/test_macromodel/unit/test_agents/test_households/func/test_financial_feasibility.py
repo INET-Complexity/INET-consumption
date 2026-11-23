@@ -516,3 +516,33 @@ def test__cash_need_refresh_counts_the_overdraft_as_a_use():
     # residual = max(uses - income - (LFA - D), 0): LFA - D without the zero floor.
     np.testing.assert_allclose(refreshed.residual_shortfall_after_lfa, [0.0, 50.0, 10.0, 0.0])
     np.testing.assert_allclose(refreshed.funded_from_liquid_assets, [20.0, 0.0, 0.0, 0.0])
+
+
+@pytest.mark.parametrize("own_resources", [0.0, 60.0, 100.0, 150.0])
+def test__overdraft_sale_is_exempt_from_support_and_repays_the_overdraft(own_resources):
+    # Overdraft B = 30 repaid by a sale of Q = 30 + service 40 + overdraft interest 5: support is the support
+    # of the same household without overdraft and without sale, and the whole sale reaches the overdraft.
+    sale = 75.0
+    with_overdraft = _settle_floor(
+        resources=own_resources + sale,
+        support_exempt_resources=sale,
+        opening_overdraft=30.0,
+        scheduled_overdraft_interest=5.0,
+        consumption_before_floor=80.0,
+    )
+    without = _settle_floor(resources=own_resources, consumption_before_floor=80.0)
+    np.testing.assert_allclose(with_overdraft.floor_support, without.floor_support, atol=1e-9)
+    np.testing.assert_allclose(with_overdraft.overdraft_repayment, [30.0], atol=1e-9)
+
+
+def test__without_support_an_overdraft_sale_sized_on_the_floor_repays_the_overdraft():
+    # Own resources 40 < F + R = 100; the sale covers the floor gap 60, service 40, interest 5 and B = 30.
+    settled = _settle_floor(
+        resources=40.0 + 135.0,
+        opening_overdraft=30.0,
+        scheduled_overdraft_interest=5.0,
+        consumption_before_floor=50.0,
+        support_enabled=False,
+    )
+    np.testing.assert_allclose(settled.unmet_floor, [0.0], atol=1e-9)
+    np.testing.assert_allclose(settled.overdraft_repayment, [30.0], atol=1e-9)

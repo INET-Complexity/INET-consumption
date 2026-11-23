@@ -35,8 +35,8 @@ def _run(simulation):
     needs = []
     need = country._planned_overdraft_repayment_need
 
-    def need_and_record(liquidity_shortfall):
-        needs.append(need(liquidity_shortfall))
+    def need_and_record(liquidity_shortfall, scheduled_debt_service):
+        needs.append(need(liquidity_shortfall, scheduled_debt_service))
         return needs[-1]
 
     country._planned_overdraft_repayment_need = need_and_record
@@ -76,6 +76,11 @@ def _run(simulation):
                 "arrears_added": booked.pop("arrears_added"),
                 "bank_overdraft_interest_accrued": banks.ts.current("household_overdraft_interest_accrued").copy(),
                 "floor_support": hh.post_grant_feasible_plan.floor_support.copy(),
+                "overdraft_sale_cash": hh.current_overdraft_sale_cash().copy(),
+                "credit_rationing_gap": hh.post_grant_feasible_plan.credit_rationing_gap.copy(),
+                "scheduled_service": hh.ts.current("scheduled_consumer_payment")
+                + hh.ts.current("actual_mortgage_payment")
+                + hh.ts.current("unpaid_mortgage_payment"),
                 "overdraft_repayment_need": needs[0],
                 "planned_rental": planned_rent["income_rental"],
                 "rental": hh.ts.current("income_rental").copy(),
@@ -128,9 +133,27 @@ def test_plan_repays_the_overdraft_when_resources_allow(run):
 def test_support_never_finances_overdraft_repayment(run):
     _, _, records = run
     for record in records:
-        # Support tops resources up to the floor and rent only, so a supported household repays nothing.
+        # Support tops own resources, net of the overdraft sale, up to the floor and rent only: a supported
+        # household repays the overdraft from that sale and nothing else.
         supported = record["floor_support"] > 0.0
-        np.testing.assert_array_equal(record["overdraft_repayment"][supported], 0.0)
+        assert np.all(
+            record["overdraft_repayment"][supported] <= record["overdraft_sale_cash"][supported] * (1.0 + 1e-12) + 1e-6
+        )
+
+
+def test_overdraft_sale_repays_the_overdraft_after_the_floor_including_supported_households(run):
+    _, overdrawn, records = run
+    record = records[OVERDRAWN_FROM]
+    # The sale is sized to repay the overdraft after rent, the floor, debt service and overdraft interest.
+    covered = (
+        overdrawn
+        & (record["overdraft_repayment_need"] > 0.0)
+        & (record["overdraft_sale_cash"] >= record["overdraft_repayment_need"] * (1.0 - 1e-12))
+        & (record["credit_rationing_gap"] == 0.0)
+        & (record["financing_income_error"] >= 0.0)
+    )
+    assert covered.sum() >= 5
+    assert np.all(record["closing"][covered] >= -1e-6)
 
 
 def test_overdraft_repayment_is_financed_by_liquidation(run):

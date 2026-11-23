@@ -55,6 +55,8 @@ class PreGrantFeasiblePlan:
     residual_shortfall_after_lfa: np.ndarray
     credit_requested: np.ndarray | None = None
     planned_liquidation_total: np.ndarray | None = None
+    # Part of planned_liquidation_total that repays the opening overdraft.
+    overdraft_liquidation_total: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -103,6 +105,8 @@ class PostGrantFeasiblePlan:
     unpaid_overdraft_interest: np.ndarray | None = None
     # Opening overdraft max(D - LFA, 0) the allocation repays as a senior use; the rest stays overdrawn.
     overdraft_repayment: np.ndarray | None = None
+    # Part of planned_liquidation_total (net) that repays the opening overdraft.
+    overdraft_liquidation_total: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _freeze_plan_arrays(self)
@@ -138,12 +142,21 @@ class HouseholdFinancialFeasibility:
         *,
         planned_liquidation_total: np.ndarray,
         available_illiquid_assets: np.ndarray,
+        overdraft_liquidation_total: np.ndarray | None = None,
     ) -> PreGrantFeasiblePlan:
         liquidation = self._non_negative(planned_liquidation_total)
         available = self._non_negative(available_illiquid_assets)
         if liquidation.shape != available.shape:
             raise ValueError("planned liquidation and available illiquid assets must have the same shape")
-        return replace(plan, planned_liquidation_total=np.minimum(liquidation, available).copy())
+        planned = np.minimum(liquidation, available)
+        overdraft = (
+            np.zeros_like(planned)
+            if overdraft_liquidation_total is None
+            else np.minimum(self._non_negative(overdraft_liquidation_total), planned)
+        )
+        if overdraft.shape != planned.shape:
+            raise ValueError("overdraft liquidation must be a household vector")
+        return replace(plan, planned_liquidation_total=planned.copy(), overdraft_liquidation_total=overdraft.copy())
 
     def build_post_grant_plan(
         self,
@@ -179,6 +192,9 @@ class HouseholdFinancialFeasibility:
             credit_granted=granted.copy(),
             credit_rationing_gap=np.maximum(requested - granted, 0.0).copy(),
             planned_liquidation_total=liquidation.copy(),
+            overdraft_liquidation_total=(
+                None if plan.overdraft_liquidation_total is None else plan.overdraft_liquidation_total.copy()
+            ),
             residual_shortfall_after_granted_credit=np.maximum(residual - granted - liquidation, 0.0).copy(),
             funded_from_liquid_assets=plan.funded_from_liquid_assets.copy(),
             granted_consumer_credit_by_bank_and_household=None if matrix is None else matrix.copy(),
@@ -231,9 +247,13 @@ class HouseholdFinancialFeasibility:
         if np.any((purchase > 0.0) & (reserved - cost_paid - net < purchase - (1e-6 + 1e-9 * purchase))):
             raise RuntimeError("Illiquid assets cannot fund the sale reserved for a completed property purchase.")
         cash = np.maximum(reserved - cost_paid - purchase, 0.0)
+        overdraft = (
+            None if plan.overdraft_liquidation_total is None else np.minimum(plan.overdraft_liquidation_total, net)
+        )
         return replace(
             plan,
             planned_liquidation_total=net.copy(),
+            overdraft_liquidation_total=overdraft,
             reserved_liquidation_total=reserved.copy(),
             liquidation_sale_cost=cost_paid.copy(),
             purchase_liquidation_total=purchase.copy(),

@@ -171,6 +171,8 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "shadow_credit_requested": 0.0,
     "forced_liquidation_amount": 0.0,
     "residual_shortfall_after_caps": 0.0,
+    # Part of liquidation_planned that repays the opening overdraft.
+    "overdraft_liquidation_planned": 0.0,
     "realised_cash_flow_adjustment": 0.0,
     # Final Stage 5 cash-ledger control.  A resolver-path period may persist
     # only when this is numerically zero: it is the difference between closing
@@ -927,8 +929,12 @@ class Households(Agent):
         *,
         planned_liquidation_total: np.ndarray,
         current_ifa: np.ndarray,
+        overdraft_liquidation_total: np.ndarray | None = None,
     ) -> None:
         """Extend the live Stage 5 carrier with planned illiquid liquidation.
+
+        ``overdraft_liquidation_total`` is the part of the sale that repays the
+        opening overdraft; the settlement exempts its cash from the support test.
 
         Increment 6 promotes the already-sanctioned Increment 3 liquidation
         amount into the live carrier. It does not re-run borrow-vs-sell or
@@ -962,6 +968,7 @@ class Households(Agent):
             self.pre_grant_feasible_plan,
             planned_liquidation_total=cleaned_liquidation,
             available_illiquid_assets=feasible_ifa,
+            overdraft_liquidation_total=overdraft_liquidation_total,
         )
 
     def current_live_planned_liquidation_total(self) -> np.ndarray:
@@ -1204,6 +1211,15 @@ class Households(Agent):
             + np.asarray(plan.credit_granted, dtype=float)
             + forced_liquidation_cash(plan)
         )
+
+    def current_overdraft_sale_cash(self) -> np.ndarray:
+        """Cash of the forced sale that repays the opening overdraft, net of the trade cost (zero without one)."""
+        plan = self.post_grant_feasible_plan
+        n_households = self.ts.current("n_households")
+        overdraft_sale = None if plan is None else getattr(plan, "overdraft_liquidation_total", None)
+        if overdraft_sale is None or plan.reserved_liquidation_total is None:
+            return np.zeros(n_households)
+        return np.minimum(np.asarray(overdraft_sale, dtype=float), forced_liquidation_cash(plan))
 
     def current_opening_overdraft(self) -> np.ndarray:
         """B = max(D - LFA, 0): the opening overdraft, net of the housing draw, that the plan repays."""
@@ -2688,6 +2704,7 @@ class Households(Agent):
             self.ts.override_current("shadow_credit_requested", result.shadow_credit_requested)
             self.ts.override_current("forced_liquidation_amount", result.forced_liquidation_amount)
             self.ts.override_current("residual_shortfall_after_caps", result.residual_shortfall_after_caps)
+            self.ts.override_current("overdraft_liquidation_planned", result.overdraft_liquidation_planned)
         else:
             self.ts.dsti_headroom.append(result.dsti_headroom)
             self.ts.dsti_maximum_loan_size.append(result.dsti_maximum_loan_size)
@@ -2697,6 +2714,7 @@ class Households(Agent):
             self.ts.shadow_credit_requested.append(result.shadow_credit_requested)
             self.ts.forced_liquidation_amount.append(result.forced_liquidation_amount)
             self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
+            self.ts.overdraft_liquidation_planned.append(result.overdraft_liquidation_planned)
         return result
 
     def build_borrow_vs_sell_inputs(

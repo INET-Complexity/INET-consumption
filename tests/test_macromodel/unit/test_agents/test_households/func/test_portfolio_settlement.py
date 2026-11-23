@@ -115,6 +115,67 @@ def test_forced_liquidation_still_allows_an_illiquid_sale():
     np.testing.assert_allclose(result.committed_adjustment_cost, [1.0])
 
 
+def test_forced_liquidation_household_without_trade_is_inaction_not_blocked():
+    result = _settle(forced=True, lfa_flow=0.0, ifa_flow=0.0, inaction=True)
+    assert result.settlement_status[0] == SETTLEMENT_INACTION
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+
+
+def test_forced_liquidation_household_sells_while_overdrawn():
+    result = _settle(forced=True, base_lfa=-5.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [2.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    # An overdrawn flagged household still cannot buy.
+    blocked = _settle(forced=True, base_lfa=-5.0)
+    assert blocked.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+
+
+def test_forced_liquidation_sale_with_waived_fixed_cost_is_a_pure_transfer():
+    result = settle_portfolio_reallocation(
+        base_lfa=np.array([120.0]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[7.0], ifa_flow=[-8.0], cost=[1.0]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([True]),
+        waive_fixed_cost=np.array([True]),
+    )
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+    np.testing.assert_allclose(result.closing_lfa, [128.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.closing_tfa, [170.0])
+
+
+def test_forced_liquidation_overdraft_clearing_sale_does_not_close_in_float_noise():
+    rng = np.random.default_rng(1)
+    n = 5000
+    scale = 10 ** rng.uniform(3, 8, n)
+    lfa = -scale * rng.uniform(0.001, 0.5, n)
+    ifa = scale * rng.uniform(0.6, 3.0, n)
+    rebalancing = compute_portfolio_rebalancing(
+        opening_tfa_scale=scale,
+        post_return_lfa=lfa,
+        post_return_ifa=ifa,
+        target_illiquid_assets=np.zeros(n),
+        target_tfa_base=lfa + ifa,
+        portfolio_participates=np.ones(n, dtype=bool),
+        phi_1=1.0,
+        lambda_kappa=0.05,
+        fixed_cost_share=0.002,
+    )
+    result = settle_portfolio_reallocation(
+        base_lfa=lfa,
+        base_ifa=ifa,
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.ones(n, dtype=bool),
+    )
+    sellers = (result.settlement_status == SETTLEMENT_SETTLED) & rebalancing.upper_bound_flag
+    assert sellers.sum() > 100
+    assert np.all(result.closing_lfa[sellers] >= 0.0)
+
+
 def test_forced_liquidation_flag_only_affects_flagged_households():
     rebalancing = _rebalancing(lfa_flow=[-8.0, -8.0], ifa_flow=[8.0, 8.0], cost=[0.0, 0.0])
     result = settle_portfolio_reallocation(

@@ -12,6 +12,9 @@ SETTLEMENT_DISABLED = 0.0
 SETTLEMENT_NO_SURPLUS = 1.0
 SETTLEMENT_INACTION = 2.0
 SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY = 3.0
+# Stage 4 illiquid purchase blocked because the household sold illiquid assets in Stage 5 of the same
+# period (any settled Stage 5 sale: forced liquidity sale, purchase-funding sale, or a negligible one).
+# Before this rule the code was unreachable; the numeric value is kept.
 SETTLEMENT_FORCED_LIQUIDATION = 4.0
 SETTLEMENT_INVALID_INPUT = 5.0
 SETTLEMENT_CONSERVATION_FAILURE = 6.0
@@ -123,8 +126,9 @@ def settle_portfolio_reallocation(
         status[conservation_failure] = SETTLEMENT_CONSERVATION_FAILURE
         valid[invalid] = False
 
-        # A household that sold illiquid assets for liquidity in Stage 5 of this period may not buy
-        # illiquid assets in Stage 4. Its voluntary sales stay allowed (fixed cost waived by the caller).
+        # A household with any settled Stage 5 sale this period (forced liquidity sale, purchase-funding
+        # sale, or a negligible one) may not buy illiquid assets in Stage 4. Its sales stay allowed
+        # (fixed cost waived by the caller); a zero flow is not blocked here and keeps its normal status.
         forced = ~invalid & forced_liquidation_active & (counterfactual_ifa_flow > 0.0)
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
 

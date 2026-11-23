@@ -164,3 +164,25 @@ def test_bank_profits_include_sale_fee_income(test_banks):
     test_banks.ts.override_current("household_sale_fee_income", np.full(n, 7.0))
     np.testing.assert_allclose(test_banks.compute_profits(), profits + 7.0)
     np.testing.assert_allclose(test_banks.compute_cash_distributable_profits(), cash_profits + 7.0)
+
+
+@pytest.mark.parametrize(
+    "planned,surplus,net,gross,cost_paid",
+    [
+        (50.0, 80.0, 0.0, 0.0, 0.0),  # own property proceeds cover the shortfall: no IFA sale, no fixed cost
+        (50.0, 50.0, 0.0, 0.0, 0.0),  # exactly covered
+        (50.0, 20.0, 30.0, 35.0, 5.0),  # partial: only the residual gap is sold, cost paid once
+        (50.0, 0.0, 50.0, 55.0, 5.0),  # no own sale: unchanged
+    ],
+)
+def test_reservation_nets_the_planned_sale_by_the_own_property_sale_surplus(planned, surplus, net, gross, cost_paid):
+    plan = HouseholdFinancialFeasibility().reserve_executable_liquidation(
+        _plan(planned=[planned], residual_after_lfa=[planned]),
+        available_pre_stage4_ifa=np.array([100.0]),
+        sale_cost=np.array([5.0]),
+        own_sale_surplus=np.array([surplus]),
+    )
+    assert plan.planned_liquidation_total[0] == pytest.approx(net)
+    assert plan.reserved_liquidation_total[0] == pytest.approx(gross)
+    assert plan.liquidation_sale_cost[0] == pytest.approx(cost_paid)
+    assert plan.residual_shortfall_after_granted_credit[0] == pytest.approx(0.0)

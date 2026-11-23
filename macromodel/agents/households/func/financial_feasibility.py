@@ -210,10 +210,15 @@ class HouseholdFinancialFeasibility:
         available_pre_stage4_ifa: np.ndarray,
         sale_cost: np.ndarray | None = None,
         purchase_liquidation: np.ndarray | None = None,
+        own_sale_surplus: np.ndarray | None = None,
     ) -> PostGrantFeasiblePlan:
         """Reserve the Stage 5 liquidation before floors and goods demand are fixed.
 
-        ``planned_liquidation_total`` stays the net forced need (capped by IFA).
+        The forced need was planned before housing clearing. ``own_sale_surplus`` is
+        the household's own property-sale surplus max(-X, 0), cash of this period
+        that covers the shortfall first: the planned sale is netted by it, so
+        illiquid assets are sold only for the residual gap (paper financing order).
+        ``planned_liquidation_total`` becomes that net forced need (capped by IFA).
         ``purchase_liquidation_total`` is the net sale that pays for a completed
         property purchase. ``reserved_liquidation_total`` is the gross sale of
         both, which also pays the illiquid-trade cost once;
@@ -239,7 +244,10 @@ class HouseholdFinancialFeasibility:
         )
         if purchase.shape != available.shape:
             raise ValueError("Stage 5 purchase liquidation must be a household vector.")
-        net = np.minimum(planned, available)
+        surplus = np.zeros_like(available) if own_sale_surplus is None else self._non_negative(own_sale_surplus)
+        if surplus.shape != available.shape:
+            raise ValueError("Stage 5 own-sale surplus must be a household vector.")
+        net = np.minimum(np.maximum(planned - surplus, 0.0), available)
         reserved = gross_liquidation_sale(net + purchase, cost, available)
         cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
         # The completion rule only lets a purchase through if the illiquid
@@ -258,7 +266,7 @@ class HouseholdFinancialFeasibility:
             liquidation_sale_cost=cost_paid.copy(),
             purchase_liquidation_total=purchase.copy(),
             liquidation_reservation_ifa=available.copy(),
-            residual_shortfall_after_granted_credit=np.maximum(residual - granted - cash, 0.0).copy(),
+            residual_shortfall_after_granted_credit=np.maximum(residual - granted - cash - surplus, 0.0).copy(),
         )
 
     def refresh_cash_needs(

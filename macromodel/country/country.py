@@ -3347,6 +3347,7 @@ class Country:
         self.households.reserve_post_grant_executable_liquidation(
             available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
+            net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:

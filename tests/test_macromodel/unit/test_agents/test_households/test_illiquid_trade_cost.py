@@ -213,17 +213,42 @@ def test_forced_sale_that_delivers_no_cash_after_the_cost_is_not_executed(planne
 
 
 @pytest.mark.parametrize(
-    "planned,minimum,gross,purchase", [(30.0, 40.0, 0.0, 0.0), (30.0, 30.0, 35.0, 0.0), (30.0, 100.0, 35.0, 20.0)]
+    "planned,ifa,minimum,gross",
+    [
+        (30.0, 1000.0, 40.0, 40.0),  # small need, large holding: rounded up to the minimum, excess stays liquid
+        (30.0, 1000.0, 20.0, 35.0),  # need above the minimum: unchanged (need + cost)
+        (30.0, 25.0, 40.0, 25.0),  # holding below the need: the whole holding is sold
+        (30.0, 36.0, 40.0, 36.0),  # holding below the minimum: the whole holding is sold, never stranded
+        (30.0, 1000.0, 0.0, 35.0),  # minimum switched off
+    ],
 )
-def test_forced_sale_below_the_absolute_minimum_is_not_executed_but_purchase_sales_are(
-    planned, minimum, gross, purchase
-):
+def test_forced_sale_below_the_minimum_is_rounded_up_never_skipped(planned, ifa, minimum, gross):
     plan = HouseholdFinancialFeasibility().reserve_executable_liquidation(
         _plan(planned=[planned], residual_after_lfa=[planned]),
-        available_pre_stage4_ifa=np.array([100.0]),
+        available_pre_stage4_ifa=np.array([ifa]),
         sale_cost=np.array([5.0]),
-        purchase_liquidation=np.array([purchase]),
         minimum_sale_size=np.array([minimum]),
     )
-    expected = gross if purchase == 0.0 else 35.0 + purchase
-    assert plan.reserved_liquidation_total[0] == pytest.approx(expected)
+    assert plan.reserved_liquidation_total[0] == pytest.approx(gross)
+    # The settlement check arithmetic reproduces the reservation exactly.
+    from macromodel.agents.households.func.financial_feasibility import gross_liquidation_sale
+
+    assert (
+        gross_liquidation_sale(plan.planned_liquidation_total, np.array([5.0]), np.array([ifa]))[0]
+        == (plan.reserved_liquidation_total[0])
+    )
+    if gross > 0.0:
+        assert plan.planned_liquidation_total[0] >= min(planned, ifa) - 1e-12
+        cash = plan.reserved_liquidation_total[0] - plan.liquidation_sale_cost[0]
+        assert plan.residual_shortfall_after_granted_credit[0] == pytest.approx(max(planned - cash, 0.0))
+
+
+def test_purchase_funding_sale_is_not_rounded_up_to_the_minimum():
+    plan = HouseholdFinancialFeasibility().reserve_executable_liquidation(
+        _plan(planned=[0.0], residual_after_lfa=[0.0]),
+        available_pre_stage4_ifa=np.array([100.0]),
+        sale_cost=np.array([5.0]),
+        purchase_liquidation=np.array([20.0]),
+        minimum_sale_size=np.array([90.0]),
+    )
+    assert plan.reserved_liquidation_total[0] == pytest.approx(25.0)

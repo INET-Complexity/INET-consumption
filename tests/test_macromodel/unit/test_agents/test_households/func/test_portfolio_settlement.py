@@ -484,3 +484,9 @@ def test_sale_at_or_above_the_minimum_size_and_purchases_are_unaffected():
     np.testing.assert_allclose(sale.closing_ifa, [42.0])
     buy = _settle_minimum(minimum=100.0, lfa_flow=-8.0, ifa_flow=8.0)
     assert buy.settlement_status[0] == SETTLEMENT_SETTLED
+
+
+def test_stage4_sale_of_the_whole_holding_is_exempt_from_the_minimum():
+    result = _settle_minimum(minimum=100.0, lfa_flow=49.0, ifa_flow=-50.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_ifa, [0.0])

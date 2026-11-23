@@ -488,6 +488,39 @@ def test_minimum_sale_size_is_a_share_of_m_in_both_support_modes(test_country, m
 
 def test_minimum_sale_share_default_and_validation():
     assert _read_household_support_parameters({}).minimum_income.minimum_sale_share_of_m == 0.20
-    for bad in (0.0, 1.0, -0.1, True):
+    assert (
+        _read_household_support_parameters(
+            {"minimum_income": {"minimum_sale_share_of_m": 0}}
+        ).minimum_income.minimum_sale_share_of_m
+        == 0.0
+    )
+    for bad in (1.0, -0.1, True):
         with pytest.raises(ValueError):
             _read_household_support_parameters({"minimum_income": {"minimum_sale_share_of_m": bad}})
+
+
+def test_minimum_sale_size_is_persisted_each_period_and_required_under_the_resolver(test_country, monkeypatch):
+    _fix_benefit_setter(test_country, monkeypatch)
+    test_country.configuration.households.parameters.uses_feasibility_resolver = True
+    with pytest.raises(RuntimeError, match="minimum sale size"):
+        test_country._current_minimum_sale_size()
+    _start_period(test_country)
+    np.testing.assert_array_equal(
+        test_country.households.ts.current("minimum_sale_size"), test_country._minimum_sale_size
+    )
+
+
+def test_debt_arrears_flag_ignores_float_residue(test_country, monkeypatch):
+    test_country.configuration.households.parameters.uses_feasibility_resolver = True
+    n = test_country.households.ts.current("n_households")
+    zeros = np.zeros(n)
+    monkeypatch.setattr(test_country.households, "current_unpaid_consumer_service", lambda: zeros)
+    unpaid_mortgage = zeros.copy()
+    unpaid_mortgage[0] = 5.0
+    monkeypatch.setattr(test_country.households, "current_unpaid_mortgage_service", lambda: unpaid_mortgage)
+    arrears = zeros.copy()
+    arrears[1] = 4.7e-10
+    arrears[2] = 10.0 * test_country.scale
+    monkeypatch.setattr(test_country.credit_market, "household_arrears_outstanding", lambda: arrears)
+    flag = test_country._household_debt_arrears_active()
+    assert flag[0] and not flag[1] and flag[2]

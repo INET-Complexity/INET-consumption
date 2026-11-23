@@ -86,7 +86,8 @@ def settle_portfolio_reallocation(
 
     ``minimum_sale_size`` is the smallest gross illiquid sale executed. A Stage 4 sale
     (counterfactual IFA flow < 0) with ``-flow < minimum_sale_size`` is not executed
-    (``SETTLEMENT_BELOW_MINIMUM_SALE``, flows zero, no cost), also for Stage 5 sellers.
+    (``SETTLEMENT_BELOW_MINIMUM_SALE``, flows zero, no cost), also for Stage 5 sellers. A sale of the
+    whole illiquid holding is exempt.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
@@ -165,7 +166,14 @@ def settle_portfolio_reallocation(
         forced = forced | arrears_blocked
         # A sale below the minimum size is not executed (sales that repay an overdraft included: the
         # overdraft is then served by the Stage 5 overdraft sale or stays).
-        too_small = ~invalid & (counterfactual_ifa_flow < 0.0) & (-counterfactual_ifa_flow < minimum_sale_size)
+        # A sale of the whole illiquid holding is exempt: otherwise a holding below the minimum is frozen.
+        sells_everything = -counterfactual_ifa_flow >= base_ifa * (1.0 - _CONSERVATION_RTOL)
+        too_small = (
+            ~invalid
+            & (counterfactual_ifa_flow < 0.0)
+            & (-counterfactual_ifa_flow < minimum_sale_size)
+            & ~sells_everything
+        )
         status[too_small] = SETTLEMENT_BELOW_MINIMUM_SALE
         forced = forced | too_small
 

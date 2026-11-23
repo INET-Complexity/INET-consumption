@@ -2722,6 +2722,15 @@ class CreditMarket:
         """Calculate scheduled consumer-loan service for each household."""
         return self.states["cons_loans"][2].sum(axis=0)
 
+    def household_arrears_outstanding(self) -> np.ndarray:
+        """Closing consumer and mortgage arrears (interest and principal) per household."""
+        return (
+            self._consumer_interest_arrears_by_cell
+            + self._consumer_principal_arrears_by_cell
+            + self._mortgage_interest_arrears_by_cell
+            + self._mortgage_principal_arrears_by_cell
+        ).sum(axis=0)
+
     def compute_opening_consumer_arrears_by_household(self) -> np.ndarray:
         """Return carried consumer arrears due before current-period originations."""
         return (self._consumer_interest_arrears_by_cell + self._consumer_principal_arrears_by_cell).sum(axis=0)

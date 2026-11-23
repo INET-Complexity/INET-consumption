@@ -168,13 +168,12 @@ def test_overdraft_repayment_is_financed_by_liquidation(run):
     assert np.all(need[~overdrawn & (record["opening"] >= 0.0)] == 0.0)
     selling = overdrawn & (need > 0.0) & (record["opening_ifa"] > 0.0)
     assert selling.sum() >= 10
-    # The overdraft sale comes on top of the borrow-or-sell plan: total planned sale >= min(need, IFA).
-    # Exception: a sale at or below the fixed trade cost or the minimum sale size is not executed at all (planned 0);
-    # the overdraft then stays. No sale is ever executed partially.
+    # The overdraft sale comes on top of the borrow-or-sell plan: total planned sale >= min(need, IFA), except a
+    # sale that does not exceed the fixed trade cost, which is not executed (planned 0).
     bound = np.minimum(need, record["opening_ifa"]) * (1.0 - 1e-12) - 1e-6
     planned = record["liquidation_planned"]
     assert np.all((planned >= bound) | (planned == 0.0))
-    assert (selling & (planned >= bound)).sum() >= 10
+    assert (selling & (planned >= bound) & (planned > 0.0)).sum() >= 10
 
 
 def test_unpaid_overdraft_interest_is_consumer_interest_arrears_not_overdraft(run):

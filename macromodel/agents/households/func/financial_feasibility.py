@@ -251,24 +251,27 @@ class HouseholdFinancialFeasibility:
         net = np.minimum(np.maximum(planned - surplus, 0.0), available)
         reserved = gross_liquidation_sale(net + purchase, cost, available)
         cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
-        # Minimum sale size (paper fixed-cost logic): a forced sale is not executed when the cash it
-        # must raise does not exceed the fixed trade cost (paying the cost to raise less than the cost is
-        # a dust sale), nor when its gross amount delivers no cash after the cost. The shortfall then
-        # stays in residual_shortfall_after_granted_credit and is handled as an unpaid obligation or
-        # overdraft, like any shortfall the illiquid assets cannot cover. A sale that pays for a completed
-        # property purchase is never skipped here: the completion rule has already sized it.
-        # Absolute minimum: a gross sale below ``minimum_sale_size`` is not executed either.
+        # A forced sale is not executed when the cash it must raise does not exceed the fixed trade cost
+        # (paying the cost to raise less than the cost), nor when its gross amount delivers no cash after the
+        # cost. The shortfall then stays in residual_shortfall_after_granted_credit and is handled as an
+        # unpaid obligation or overdraft. A sale that pays for a completed property purchase is never touched
+        # here: the completion rule has already sized it.
+        skipped = (purchase <= 0.0) & (reserved > 0.0) & ((net <= cost) | (reserved - cost_paid <= 0.0))
+        net = np.where(skipped, 0.0, net)
+        # Minimum sale size: a forced sale smaller than ``minimum_sale_size`` is rounded UP to it (capped by the
+        # holding, so a sale of the whole illiquid holding is exempt) and the excess stays as liquid assets.
+        # Skipping it instead would freeze the holding while debt goes unpaid.
         minimum = np.zeros_like(available) if minimum_sale_size is None else self._non_negative(minimum_sale_size)
         if minimum.shape != available.shape:
             raise ValueError("Stage 5 minimum sale size must be a household vector.")
-        dust_sale = (
-            (purchase <= 0.0)
-            & (reserved > 0.0)
-            & ((net <= cost) | (reserved - cost_paid <= 0.0) | (reserved < minimum))
-        )
-        net = np.where(dust_sale, 0.0, net)
-        reserved = np.where(dust_sale, 0.0, reserved)
-        cost_paid = np.where(dust_sale, 0.0, cost_paid)
+        rounded_up = (purchase <= 0.0) & (net > 0.0) & (reserved < np.minimum(minimum, available))
+        if np.any(rounded_up):
+            cash_raised = np.minimum(minimum, available) - np.minimum(cost, np.minimum(minimum, available))
+            net = np.where(rounded_up, cash_raised, net)
+        # Recompute the gross sale from the net amount with the shared arithmetic, so the settlement check
+        # (planned + purchase sales plus the cost) reproduces the reservation exactly.
+        reserved = gross_liquidation_sale(net + purchase, cost, available)
+        cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
         # The completion rule only lets a purchase through if the illiquid
         # assets cover the forced sale, the purchase sale and the cost.
         if np.any((purchase > 0.0) & (reserved - cost_paid - net < purchase - (1e-6 + 1e-9 * purchase))):

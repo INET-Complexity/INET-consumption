@@ -3,7 +3,7 @@
 Used by the "Validation" section of `run_model.ipynb`. See module-level
 docstrings on each function for the alignment/deflation/rate-convention
 assumptions; the notebook only supplies `data`, `df_scenario`, `cfg`, and
-`COUNTRY`, plus the two user-facing lag settings.
+`COUNTRY`, plus the user-facing transient and lag settings.
 """
 
 from __future__ import annotations
@@ -166,31 +166,6 @@ def _actual_series(
     return series
 
 
-def _aligned_pair(
-    label: str,
-    df_scenario: pd.DataFrame,
-    data,
-    country_code: str,
-    calibration_columns: pd.Index,
-    actual_policy_rate: pd.Series | None,
-    period_index: pd.Index,
-    period_dates: pd.DatetimeIndex,
-) -> pd.DataFrame | None:
-    """Simulated and actual series on the model's period axis, actuals-limited."""
-    sim = _simulated_series(label, df_scenario)
-    act_dated = _actual_series(label, data, country_code, calibration_columns, actual_policy_rate)
-    if sim is None or act_dated is None:
-        return None
-    aligned = pd.DataFrame(
-        {
-            "simulated": sim.reindex(period_index).to_numpy(),
-            "actual": act_dated.reindex(period_dates).to_numpy(),
-        },
-        index=period_index,
-    )
-    return aligned.dropna()
-
-
 def _two_sided_ccf(x: np.ndarray, y: np.ndarray, max_lag: int) -> pd.Series:
     """Cross-correlation of x against y at lags -max_lag..max_lag.
 
@@ -205,6 +180,15 @@ def _two_sided_ccf(x: np.ndarray, y: np.ndarray, max_lag: int) -> pd.Series:
     return pd.Series(values, index=lags)
 
 
+def _validation_ccf(series: pd.Series, gdp: pd.Series, max_lag: int, label: str, sample: str) -> pd.Series:
+    """Cross-correlate a series and GDP on their common periods within one sample."""
+    aligned = pd.concat([series, gdp], axis=1, join="inner").dropna()
+    if len(aligned) <= 2:
+        print(f"{label}: only {len(aligned)} {sample} periods overlap with real GDP; cross-correlation skipped.")
+        return pd.Series(dtype=float)
+    return _two_sided_ccf(aligned.iloc[:, 0].to_numpy(), aligned.iloc[:, 1].to_numpy(), min(max_lag, len(aligned) - 1))
+
+
 def compute_validation_results(
     data,
     df_scenario: pd.DataFrame,
@@ -213,17 +197,15 @@ def compute_validation_results(
     max_acf_lags: int = 12,
     max_ccf_lags: int = 8,
 ) -> tuple[dict, pd.Series]:
-    """Build aligned simulated/actual series, then compute autocorrelation and
-    cross-correlation (vs. real GDP) for each variable in `VALIDATION_SERIES`.
+    """Compute statistics independently for simulated and actual samples.
 
-    Alignment: `df_scenario` is indexed by integer model period (t=0 at
-    `data.configuration.year`/`quarter`, +1 quarter per period since
-    `data.time_unit == 3`). Actual series are date-indexed. Both are put on the
-    model's period axis, keeping only periods where an actual quarter exists
-    (no extrapolation beyond the historical actuals).
+    The caller may exclude initial model periods from `df_scenario`. Actual
+    data are not trimmed to the model's dates. Cross-correlations use common
+    periods with GDP within each sample, not across the two samples.
 
     Returns (validation_results, period_to_date): `period_to_date` maps each
-    model period to its calendar quarter-start date, for calendar x-labels.
+    model period to its calendar quarter-start date, using the configured
+    starting quarter and the original model-period index.
     """
     calibration_columns = (
         data.calibration_data[country_code].columns
@@ -236,66 +218,53 @@ def compute_validation_results(
     period_dates = pd.DatetimeIndex([period_start_date + pd.DateOffset(months=3 * int(t)) for t in period_index])
     period_to_date = pd.Series(period_dates, index=period_index)
 
-    def aligned_pair(label: str) -> pd.DataFrame | None:
-        return _aligned_pair(
-            label, df_scenario, data, country_code, calibration_columns, actual_policy_rate, period_index, period_dates
+    gdp_simulated = _simulated_series("real_gdp", df_scenario)
+    gdp_actual = _actual_series("real_gdp", data, country_code, calibration_columns, actual_policy_rate)
+    if gdp_simulated is None or gdp_simulated.dropna().empty or gdp_actual is None or gdp_actual.dropna().empty:
+        raise ValueError(
+            "real_gdp simulated or actual series is unavailable or empty; cannot compute cross-correlations."
         )
-
-    gdp_pair = aligned_pair("real_gdp")
-    if gdp_pair is None or gdp_pair.empty:
-        raise ValueError("real_gdp actual/simulated pair is unavailable or empty; cannot compute cross-correlations.")
 
     validation_results: dict = {}
     for label in VALIDATION_SERIES:
-        pair = aligned_pair(label)
-        if pair is None or pair.empty:
-            print(f"{label}: actual series unavailable or no overlapping periods with df_scenario; skipping.")
+        simulated = _simulated_series(label, df_scenario)
+        actual = _actual_series(label, data, country_code, calibration_columns, actual_policy_rate)
+        if simulated is None or actual is None:
+            print(f"{label}: simulated or actual series unavailable; skipping.")
+            continue
+        simulated = simulated.dropna()
+        actual = actual.dropna()
+        if simulated.empty or actual.empty:
+            print(f"{label}: simulated or actual series empty; skipping.")
             continue
 
-        n = len(pair)
-        if n < len(period_index):
-            print(f"{label}: actuals cover {n}/{len(period_index)} model periods; statistics use the overlap only.")
-
-        acf_lags = min(max_acf_lags, n - 1)
-        acf_simulated = acf(pair["simulated"], nlags=acf_lags, fft=True)
-        acf_actual = acf(pair["actual"], nlags=acf_lags, fft=True)
-
-        # Cross-correlation against real GDP, on this variable's own valid periods.
-        ccf_valid = pair.assign(
-            gdp_simulated=gdp_pair["simulated"].reindex(pair.index).to_numpy(),
-            gdp_actual=gdp_pair["actual"].reindex(pair.index).to_numpy(),
-        ).dropna()
-
-        if len(ccf_valid) > 2:
-            ccf_lags_eff = min(max_ccf_lags, len(ccf_valid) - 1)
-            ccf_simulated = _two_sided_ccf(
-                ccf_valid["simulated"].to_numpy(), ccf_valid["gdp_simulated"].to_numpy(), ccf_lags_eff
-            )
-            ccf_actual = _two_sided_ccf(
-                ccf_valid["actual"].to_numpy(), ccf_valid["gdp_actual"].to_numpy(), ccf_lags_eff
-            )
-        else:
-            print(f"{label}: only {len(ccf_valid)} overlapping periods with real GDP; cross-correlation skipped.")
-            ccf_simulated = pd.Series(dtype=float)
-            ccf_actual = pd.Series(dtype=float)
+        def sample_acf(series: pd.Series, sample: str) -> pd.Series:
+            if len(series) < 2:
+                print(f"{label}: only {len(series)} {sample} period; autocorrelation skipped.")
+                return pd.Series(dtype=float)
+            return pd.Series(acf(series, nlags=min(max_acf_lags, len(series) - 1), fft=True))
 
         validation_results[label] = {
-            "pair": pair,
-            "n_periods": n,
-            "acf_simulated": pd.Series(acf_simulated, index=range(acf_lags + 1)),
-            "acf_actual": pd.Series(acf_actual, index=range(acf_lags + 1)),
-            "ccf_simulated": ccf_simulated,
-            "ccf_actual": ccf_actual,
+            "simulated": simulated,
+            "actual": actual,
+            "acf_simulated": sample_acf(simulated, "model"),
+            "acf_actual": sample_acf(actual, "data"),
+            "ccf_simulated": _validation_ccf(simulated, gdp_simulated, max_ccf_lags, label, "model"),
+            "ccf_actual": _validation_ccf(actual, gdp_actual, max_ccf_lags, label, "data"),
         }
 
     return validation_results, period_to_date
 
 
 def build_validation_coverage_table(validation_results: dict, n_total_periods: int) -> pd.DataFrame:
-    """Model periods covered by actuals, per validation series."""
+    """Available model and data periods per validation series."""
     return pd.DataFrame(
         {
-            label: {"n_periods": r["n_periods"], "n_total_periods": n_total_periods}
+            label: {
+                "n_model_periods": len(r["simulated"]),
+                "n_data_periods": len(r["actual"]),
+                "n_total_model_periods": n_total_periods,
+            }
             for label, r in validation_results.items()
         }
     ).T
@@ -304,8 +273,8 @@ def build_validation_coverage_table(validation_results: dict, n_total_periods: i
 def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, country_code: str) -> go.Figure:
     """One row per validation variable, three panels each: level (simulated vs.
     actual, shared y-axis), autocorrelation, and cross-correlation against real
-    GDP. Column 1's x-axis is labelled with calendar years (via
-    `period_to_date`) rather than raw model periods.
+    GDP. The model's period index is mapped to dates via `period_to_date`;
+    actual values retain their own dates.
     """
     available_labels = [label for label in VALIDATION_SERIES if label in validation_results]
 
@@ -331,15 +300,14 @@ def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, 
 
     for row, label in enumerate(available_labels, start=1):
         result = validation_results[label]
-        pair = result["pair"]
+        simulated, actual = result["simulated"], result["actual"]
         first = row == 1
-        pair_dates = period_to_date.reindex(pair.index)
 
         # Panel 1: levels over calendar time, shared y-axis.
         fig.add_trace(
             go.Scatter(
-                x=pair_dates,
-                y=pair["simulated"],
+                x=period_to_date.reindex(simulated.index),
+                y=simulated,
                 name="simulated",
                 line={"color": SIM_COLOR},
                 legendgroup="simulated",
@@ -350,8 +318,8 @@ def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, 
         )
         fig.add_trace(
             go.Scatter(
-                x=pair_dates,
-                y=pair["actual"],
+                x=actual.index,
+                y=actual,
                 name="actual",
                 line={"color": ACT_COLOR},
                 legendgroup="actual",
@@ -404,6 +372,7 @@ def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, 
                 row=row,
                 col=3,
             )
+        if not ccf_act.empty:
             fig.add_trace(
                 go.Scatter(
                     x=ccf_act.index,
@@ -416,6 +385,7 @@ def plot_validation_charts(validation_results: dict, period_to_date: pd.Series, 
                 row=row,
                 col=3,
             )
+        if not ccf_sim.empty or not ccf_act.empty:
             fig.add_hline(y=0.0, line={"color": "rgba(0,0,0,0.35)", "width": 1}, row=row, col=3)
             fig.add_vline(x=0, line={"color": "rgba(0,0,0,0.2)", "width": 1, "dash": "dot"}, row=row, col=3)
 

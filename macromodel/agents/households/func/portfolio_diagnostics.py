@@ -67,6 +67,7 @@ def compute_stage4_household_diagnostics(
     frm_magnitude_coefficients: dict[str, float] | None = None,
     population_scale_factor: float | None = None,
     net_wealth_scale_divisor: float | None = None,
+    frm_target: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Stage4HouseholdDiagnostics:
     """Compute the full Stage 4 shadow diagnostics set for one household-period.
 
@@ -121,6 +122,10 @@ def compute_stage4_household_diagnostics(
         net_wealth_scale_divisor (float | None): Forwarded to
             ``compute_target_illiquid_share``; required only when
             ``target_share_source="frm_magnitude"``.
+        frm_target (tuple[np.ndarray, np.ndarray] | None): Forwarded to
+            ``compute_target_illiquid_share``; the per-household FRM target
+            fixed at initialisation. When given, the covariate arguments are
+            not required.
 
     Returns:
         Stage4HouseholdDiagnostics: The full diagnostics set for this period.
@@ -139,6 +144,7 @@ def compute_stage4_household_diagnostics(
         frm_magnitude_coefficients=frm_magnitude_coefficients,
         population_scale_factor=population_scale_factor,
         net_wealth_scale_divisor=net_wealth_scale_divisor,
+        frm_target=frm_target,
     )
     target_illiquid_assets = target_illiquid_share * target_tfa_base
 

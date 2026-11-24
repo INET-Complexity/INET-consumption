@@ -4297,3 +4297,88 @@ def test_uncertainty_change_keeps_previous_period_fixed_during_replanning(test_h
         households.current_income_belief_learning_inputs(common_forecast_variance=0.0)["uncertainty_delta"],
         decreased_common["uncertainty_delta"],
     )
+
+
+def _frm_ready_households(households):
+    """Give the households known FRM covariates and coefficients (net wealth is the only varying input)."""
+    n = households.ts.current("n_households")
+    households.states["household_head_age"] = np.full(n, 50.0)
+    households.states["household_members_in_employment"] = np.ones(n)
+    households.states["Investment Attitudes"] = np.full(n, 2)
+    households.states["Tenure Status of the Main Residence"] = np.full(n, 3)
+    households.states["portfolio_participates"] = np.ones(n, dtype=bool)
+    households.states["population_scale_factor"] = 1.0
+    households.states["frm_coefficients"] = SimpleNamespace(
+        magnitude_coefficients={
+            "constant": 0.0,
+            "age": 0.0,
+            "household_members_in_employment": 0.0,
+            "investment_attitudes": 0.0,
+            "mortgagor": 0.5,
+            "owner": 0.3,
+            "net_wealth": 0.2,
+        },
+        net_wealth_scale_divisor=1e5,
+    )
+    households.ts.override_current("wealth", np.full(n, 1e5))
+    households.ts.override_current("debt", np.zeros(n))
+    households.ts.override_current("mortgage_debt", np.zeros(n))
+    households.states.pop("frm_target_share", None)
+    return n
+
+
+def _target(households):
+    return households.frm_target_share()[0].copy()
+
+
+def test_frm_target_share_responds_to_each_current_covariate(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    households.states["frm_coefficients"].magnitude_coefficients.update(
+        {"age": 0.01, "household_members_in_employment": 0.1, "investment_attitudes": 0.05}
+    )
+    households.states["Tenure Status of the Main Residence"][:] = 1
+    base = _target(households)
+
+    def changed(mutate):
+        mutate()
+        out = _target(households)
+        assert out[0] != base[0]
+        np.testing.assert_array_equal(out[1:], base[1:])
+        return out
+
+    mortgage = households.ts.current("mortgage_debt")
+    changed(lambda: mortgage.__setitem__(0, 10.0))  # owner -> mortgagor
+    mortgage[0] = 0.0
+    changed(lambda: households.states["household_members_in_employment"].__setitem__(0, 3.0))
+    households.states["household_members_in_employment"][0] = 1.0
+    changed(lambda: households.states["household_head_age"].__setitem__(0, 70.0))
+    households.states["household_head_age"][0] = 50.0
+    households.ts.override_current("wealth", households.ts.current("wealth") + np.eye(n)[0] * 2e5)
+    out = _target(households)
+    assert out[0] != base[0]
+    np.testing.assert_array_equal(out[1:], base[1:])
+
+
+def test_frm_target_share_follows_net_wealth_each_period(test_households):
+    households = test_households
+    _frm_ready_households(households)
+    first = _target(households)
+    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e5)
+    assert not np.array_equal(_target(households), first)
+
+
+def test_frm_owner_and_mortgagor_dummies_follow_mortgage_not_tenure_code(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    households.states["frm_coefficients"].magnitude_coefficients["net_wealth"] = 0.0  # isolate the dummies
+    tenure = households.states["Tenure Status of the Main Residence"]
+    tenure[:] = np.array([1, 1, 2, 3, -1] + [3] * (n - 5))
+    mortgage = np.zeros(n)
+    mortgage[[1, 3]] = 5.0  # a buyer coded 1 with a mortgage is a mortgagor; a renter stays 0/0
+    households.ts.override_current("mortgage_debt", mortgage)
+    target = _target(households)
+    renter, owner, mortgagor = target[4], target[0], target[1]
+    assert renter < owner < mortgagor
+    assert target[2] == owner  # tenure 2 without a mortgage is an owner
+    assert target[3] == target[4] == renter  # a renter with a mortgage and a social tenant are 0/0

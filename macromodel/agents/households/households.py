@@ -1179,10 +1179,22 @@ class Households(Agent):
         return settlement.post_liquidation_lfa, settlement.post_liquidation_ifa
 
     def persist_post_grant_planned_liquidation_total(self) -> None:
-        """Pin the household-panel liquidation series to the settled post-grant source."""
+        """Pin the household-panel liquidation series to the settled post-grant source.
+
+        ``liquidation_planned`` and its overdraft part ``overdraft_liquidation_planned`` record the reserved
+        (executed) net sale. The post-labour planning pass recomputes both as shadow values; this pin, run
+        again after it, keeps the recorded series on the sale actually reserved.
+        """
         self.ts.override_current(
             "liquidation_planned",
             self.current_post_grant_planned_liquidation_total().copy(),
+        )
+        overdraft_sale = self.post_grant_feasible_plan.overdraft_liquidation_total
+        self.ts.override_current(
+            "overdraft_liquidation_planned",
+            np.zeros(self.ts.current("n_households"))
+            if overdraft_sale is None
+            else np.asarray(overdraft_sale, dtype=float).copy(),
         )
 
     def current_post_grant_residual_shortfall(self) -> np.ndarray:

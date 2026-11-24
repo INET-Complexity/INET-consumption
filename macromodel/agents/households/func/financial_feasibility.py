@@ -159,7 +159,8 @@ class PostGrantFeasiblePlan:
     unpaid_overdraft_interest: np.ndarray | None = None
     # Opening overdraft max(D - LFA, 0) the allocation repays as a senior use; the rest stays overdrawn.
     overdraft_repayment: np.ndarray | None = None
-    # Part of planned_liquidation_total (net) that repays the opening overdraft.
+    # Part of planned_liquidation_total that repays the opening overdraft; after the reservation, the cash it
+    # raises net of the trade cost (the regular part has priority in the cash).
     overdraft_liquidation_total: np.ndarray | None = None
 
     def __post_init__(self) -> None:

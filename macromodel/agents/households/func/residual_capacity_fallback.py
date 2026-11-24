@@ -70,7 +70,7 @@ def compute_residual_capacity_fallback(
     ``overdraft_repayment_need`` is the net sale that repays the opening
     overdraft B while the household keeps its planned uses
     (``financial_feasibility.overdraft_sale_need``): B net of any planned
-    positive saving, plus a floor top-up support does not cover. The planned
+    positive saving, never more than B. The planned
     deficit max(L, 0) is financed by this branch plan, so the overdraft sale
     comes on top of ``liquidation_planned`` and the two never count the same
     use. The overdraft is a senior obligation, so it is financed by selling

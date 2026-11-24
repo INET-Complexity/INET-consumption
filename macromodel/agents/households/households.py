@@ -1179,8 +1179,8 @@ class Households(Agent):
     def persist_post_grant_planned_liquidation_total(self) -> None:
         """Pin the household-panel liquidation series to the settled post-grant source.
 
-        ``liquidation_planned`` and its overdraft part ``overdraft_liquidation_planned`` record the reserved
-        (executed) net sale. The post-labour planning pass recomputes both as shadow values; this pin, run
+        ``liquidation_planned`` records the reserved (executed) net sale and ``overdraft_liquidation_planned``
+        the cash its overdraft part raises after the trade cost. The post-labour planning pass recomputes both as shadow values; this pin, run
         again after it, keeps the recorded series on the sale actually reserved.
         """
         self.ts.override_current(

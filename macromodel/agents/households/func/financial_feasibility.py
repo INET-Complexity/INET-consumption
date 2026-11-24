@@ -292,8 +292,10 @@ class HouseholdFinancialFeasibility:
         ``replace_rationed_credit`` (paper: if the preferred margin is not
         sufficient because of the borrowing limit, households finance the residual
         with the other margin): a household whose credit request was not fully
-        granted adds min(credit_rationing_gap, IFA - planned - purchase - cost) to
-        its forced sale, before goods are cut. The top-up replaces credit, so it is
+        granted adds min(credit_rationing_gap, unfunded deficit, IFA - planned - purchase - cost) to
+        its forced sale, before goods are cut. The unfunded deficit is
+        max(residual after LFA - credit granted - regular planned sale, 0), so the
+        top-up never sells more than the deficit left open. The top-up replaces credit, so it is
         a regular sale, counted in the support test like the credit.
 
         ``overdraft_liquidation_total`` becomes the cash the overdraft part raises:
@@ -337,7 +339,16 @@ class HouseholdFinancialFeasibility:
         )
         if replace_rationed_credit:
             unsold = np.maximum(available - planned - purchase - cost, 0.0)
-            planned = planned + np.minimum(self._non_negative(plan.credit_rationing_gap), unsold)
+            # Unfunded deficit after granted credit and the regular planned sale; the
+            # overdraft part repays B and does not finance the deficit.
+            unfunded = np.maximum(
+                self._non_negative(plan.residual_shortfall_after_lfa)
+                - self._non_negative(plan.credit_granted)
+                - (planned - planned_overdraft),
+                0.0,
+            )
+            gap = np.minimum(self._non_negative(plan.credit_rationing_gap), unfunded)
+            planned = planned + np.minimum(gap, unsold)
         regular = planned - planned_overdraft
         excess_surplus = np.maximum(surplus - regular, 0.0)
         if support_floor_gap is None:

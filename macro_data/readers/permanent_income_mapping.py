@@ -8,6 +8,8 @@ from typing import Sequence
 
 import numpy as np
 import pandas as pd
+from scipy import sparse
+from scipy.sparse.linalg import spsolve
 
 from macro_data.readers.permanent_income_forecast import (
     RAW_VARIABLE_ORDER,
@@ -26,7 +28,7 @@ FORECAST_READER_VARIABLE_ORDER = [
 
 FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
     "constant": "frozen_design_matrix_initial_period",
-    "time_trend": "simulation_period_index",
+    "time_trend": "simulation_period_index",  # endogenous slow trend when trend_growth_per_quarter is given
     "split_trend_from_2009q4_discounted_present_value": "frozen_design_matrix_initial_period",
     "covid19": "excluded_stage_3_dummy",
     "log_real_pc_income": "real_pc_income",
@@ -188,6 +190,48 @@ def _unemployment_percent_history_from_share(unemployment_rate: np.ndarray) -> n
     return unemployment_rate * 100.0
 
 
+HP_LAMBDA_QUARTERLY = 1600.0
+
+
+def one_sided_hp_trend(series: np.ndarray, lamb: float = HP_LAMBDA_QUARTERLY) -> float:
+    """Last point of the HP trend of ``series``: the one-sided (real-time) HP trend at its final date."""
+    x = np.asarray(series, dtype=float)
+    if x.ndim != 1 or x.size == 0 or not np.isfinite(x).all():
+        raise ValueError("HP filter input must be a finite non-empty 1D series.")
+    if x.size < 3:
+        return float(x[-1])
+    n = x.size
+    second_difference = sparse.diags([1.0, -2.0, 1.0], [0, 1, 2], shape=(n - 2, n))
+    trend = spsolve((sparse.eye(n) + lamb * (second_difference.T @ second_difference)).tocsc(), x)
+    return float(trend[-1])
+
+
+def endogenous_time_trend(
+    *,
+    historical_log_income: np.ndarray,
+    simulated_log_income: np.ndarray,
+    trend_at_initial_period: float,
+    trend_growth_per_quarter: float,
+) -> float:
+    """Time-trend regressor that advances with the long-run trend of income, in estimated units.
+
+    The forecast regression pairs ``time_trend`` with ``log_real_pc_income`` (error correction); the
+    calendar trend would impose the estimation sample's trend growth on a simulated economy that has
+    its own. Here the one-sided HP trend tau of historical log income spliced with simulated log income
+    sets trend_t = trend_t0 + (tau_t - tau_t0) / g*, with g* the regression's implied trend growth.
+    At the initial period it equals the calendar index, so there is no jump.
+    """
+    if not trend_growth_per_quarter > 0.0:
+        raise ValueError("trend_growth_per_quarter must be positive.")
+    history = np.asarray(historical_log_income, dtype=float)
+    simulated = np.asarray(simulated_log_income, dtype=float)
+    if history.size == 0 or simulated.size == 0:
+        raise ValueError("Endogenous trend needs historical and simulated log income.")
+    tau_initial = one_sided_hp_trend(np.concatenate([history, simulated[:1]]))
+    tau_current = one_sided_hp_trend(np.concatenate([history, simulated]))
+    return float(trend_at_initial_period + (tau_current - tau_initial) / trend_growth_per_quarter)
+
+
 def build_permanent_income_forecast_regressors(
     *,
     sources: PermanentIncomeSimulationSources,
@@ -195,6 +239,7 @@ def build_permanent_income_forecast_regressors(
     start_period: str | int | pd.Period | pd.Timestamp,
     estimation_epoch: str | pd.Period | pd.Timestamp | None = None,
     policy_rate_periods_per_year: int = 4,
+    trend_growth_per_quarter: float | None = None,
 ) -> pd.Series:
     """Build canonical forecast-reader regressors from simulation-source values.
 
@@ -239,6 +284,19 @@ def build_permanent_income_forecast_regressors(
     values["covid19"] = 0.0
 
     values["log_real_pc_income"] = float(log_income_history[-1])
+    if trend_growth_per_quarter is not None:
+        # Splice simulated income onto the data at the initial period, then use the endogenous trend.
+        simulated_log_income = float(initial_design["log_real_pc_income"]) + (
+            log_income_history - log_income_history[0]
+        )
+        historical = design.loc[design.index < initial_period, "log_real_pc_income"].to_numpy(dtype=float)
+        values["log_real_pc_income"] = float(simulated_log_income[-1])
+        values["time_trend"] = endogenous_time_trend(
+            historical_log_income=historical,
+            simulated_log_income=simulated_log_income,
+            trend_at_initial_period=float(_quarter_index(initial_period, epoch)),
+            trend_growth_per_quarter=trend_growth_per_quarter,
+        )
     if history_length >= 5:
         values["d4_log_real_pc_income"] = float(log_income_history[-1] - log_income_history[-5])
 

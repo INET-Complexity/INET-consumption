@@ -67,19 +67,22 @@ def compute_residual_capacity_fallback(
     Invalid or non-finite inputs collapse to a conservative zero-capacity
     fallback. Positive residuals are never driven negative by this helper.
 
-    ``overdraft_repayment_need`` is the part of the opening overdraft that
-    income left after the period's uses does not repay. The overdraft is a
-    senior obligation, so it is financed by selling illiquid assets left after
-    the branch plan, whatever the preferred margin, and never by new consumer
-    credit. The sale is forced (``forced_liquidation_amount``). It settles in
-    Stage 5 against the opening IFA, before the Stage 4 portfolio trade: a
-    Stage 4 sale while overdrawn (``settle_portfolio_reallocation``) starts
-    from the post-liquidation LFA and IFA, so the two never sell the same
-    assets, and its fixed cost is waived once a Stage 5 sale has paid it.
-    Since Stage 4 rebalances without a new-saving gate, a household that sold
-    here may also trade in Stage 4 in the same period (sell more, or buy back
-    once the overdraft is repaid); whether a Stage 5 seller should sit out
-    Stage 4 is an open decision.
+    ``overdraft_repayment_need`` is the net sale that repays the opening
+    overdraft B while the household keeps its planned uses
+    (``financial_feasibility.overdraft_sale_need``): B net of any planned
+    positive saving, plus a floor top-up support does not cover. The planned
+    deficit max(L, 0) is financed by this branch plan, so the overdraft sale
+    comes on top of ``liquidation_planned`` and the two never count the same
+    use. The overdraft is a senior obligation, so it is financed by selling
+    illiquid assets left after the branch plan, whatever the preferred margin,
+    and never by new consumer credit. The sale is forced
+    (``forced_liquidation_amount``). It settles in Stage 5 against the opening
+    IFA, before the Stage 4 portfolio trade: a Stage 4 sale while overdrawn
+    (``settle_portfolio_reallocation``) starts from the post-liquidation LFA
+    and IFA, so the two never sell the same assets, and its fixed cost is
+    waived once a Stage 5 sale has paid it. A household that sold here may
+    still sell more in Stage 4, but may not buy illiquid assets in the same
+    period (forced-liquidation purchase block).
     """
     preferred_margin_after_lfa = np.asarray(preferred_margin_after_lfa, dtype=float)
     preferred_margin_amount = np.asarray(preferred_margin_amount, dtype=float)

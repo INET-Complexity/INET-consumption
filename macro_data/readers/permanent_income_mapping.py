@@ -28,7 +28,7 @@ FORECAST_READER_VARIABLE_ORDER = [
 
 FORECAST_READER_TO_SIMULATION_SOURCE_NAME = {
     "constant": "frozen_design_matrix_initial_period",
-    "time_trend": "simulation_period_index",  # endogenous slow trend when trend_growth_per_quarter is given
+    "time_trend": "simulation_period_index_or_endogenous_hp_trend",
     "split_trend_from_2009q4_discounted_present_value": "frozen_design_matrix_initial_period",
     "covid19": "excluded_stage_3_dummy",
     "log_real_pc_income": "real_pc_income",
@@ -232,6 +232,15 @@ def endogenous_time_trend(
     return float(trend_at_initial_period + (tau_current - tau_initial) / trend_growth_per_quarter)
 
 
+def permanent_income_trend_growth(coefficient_table: pd.DataFrame) -> float:
+    """Trend growth implied by the forecast regression, -beta_trend / beta_log_y, per quarter."""
+    coefficients = coefficient_table["coefficient"]
+    growth = float(-coefficients["time_trend"] / coefficients["log_real_pc_income"])
+    if not np.isfinite(growth) or growth <= 0.0:
+        raise RuntimeError(f"Implied permanent-income trend growth must be positive and finite, got {growth}.")
+    return growth
+
+
 def build_permanent_income_forecast_regressors(
     *,
     sources: PermanentIncomeSimulationSources,
@@ -254,6 +263,13 @@ def build_permanent_income_forecast_regressors(
     than the simulation's start.  Defaults to ``None``, in which case
     ``start_period`` is used as the anchor (preserving the prior behaviour for
     all existing call sites and tests).
+
+    ``trend_growth_per_quarter`` (g*, see ``permanent_income_trend_growth``) switches
+    ``time_trend`` to the endogenous slow trend (``endogenous_time_trend``) and splices
+    simulated log income onto the design-matrix level at the initial period. ``None``
+    keeps the calendar trend. The endogenous trend needs design rows before the
+    initial period and an initial period inside the design matrix; otherwise it raises
+    ``RuntimeError`` (a configuration error, not a transient data error).
     """
     current_period = _quarter_period(sources.current_period)
     real_pc_income = _as_1d_float_history(sources.real_pc_income, "real_pc_income")
@@ -289,7 +305,14 @@ def build_permanent_income_forecast_regressors(
         simulated_log_income = float(initial_design["log_real_pc_income"]) + (
             log_income_history - log_income_history[0]
         )
+        if initial_period not in design.index:
+            raise RuntimeError(
+                f"Endogenous trend: initial period {initial_period} is outside the design matrix "
+                f"({design.index.min()}-{design.index.max()})."
+            )
         historical = design.loc[design.index < initial_period, "log_real_pc_income"].to_numpy(dtype=float)
+        if historical.size == 0:
+            raise RuntimeError(f"Endogenous trend: no design-matrix history before {initial_period}.")
         values["log_real_pc_income"] = float(simulated_log_income[-1])
         values["time_trend"] = endogenous_time_trend(
             historical_log_income=historical,

@@ -749,6 +749,19 @@ FRA:
     paper_parameter_file: consumption_paper_parameters.yaml
     paper_parameter_ref: subsistence_consumption
 
+  # Household support regime. minimum_income: RSA-style top-up T = max(M - Y, 0), paid as income;
+  # Stage 5 support is off. legacy_stage5: Stage 5 tops households up to the subsistence goods floor.
+  # goods_floor: consumption cuts stop at the subsistence floor (paper: feasible level C_underline).
+  household_support:
+    mode: minimum_income
+    goods_floor: true
+    minimum_income:
+      rsa_base_monthly: 499.31  # EUR, 2014 RSA single-person amount; scaled by consumption units
+      base_year: 2014  # must equal the model's initial year
+      notional_asset_return_annual: 0.03  # notional return on gross financial assets in assessed income
+      guard_share_of_m: 0.01
+      minimum_sale_share_of_m: 0.20  # minimum illiquid sale, share of quarterly M (FR gross saving / GDP)
+
 
 
   forecasting_window: 60

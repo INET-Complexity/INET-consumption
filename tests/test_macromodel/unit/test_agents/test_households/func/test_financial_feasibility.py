@@ -546,3 +546,41 @@ def test__without_support_an_overdraft_sale_sized_on_the_floor_repays_the_overdr
     )
     np.testing.assert_allclose(settled.unmet_floor, [0.0], atol=1e-9)
     np.testing.assert_allclose(settled.overdraft_repayment, [30.0], atol=1e-9)
+
+
+def _overdraft_sale(**inputs):
+    """overdraft_sale_need with F=80, R=20, O=45, B=30, y=100 unless overridden; L defaults to 0."""
+    from macromodel.agents.households.func.financial_feasibility import overdraft_sale_need
+
+    values = {
+        "opening_overdraft": 30.0,
+        "income": 100.0,
+        "liquidity_shortfall": 0.0,
+        "goods_floor": 80.0,
+        "cash_rent": 20.0,
+        "scheduled_service": 45.0,
+        **inputs,
+    }
+    support_enabled = values.pop("support_enabled", True)
+    arrays = {name: np.atleast_1d(np.asarray(value, dtype=float)) for name, value in values.items()}
+    shape = np.broadcast_shapes(*(array.shape for array in arrays.values()))
+    return overdraft_sale_need(
+        support_enabled=support_enabled, **{name: np.broadcast_to(a, shape) for name, a in arrays.items()}
+    )
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__overdraft_sale_is_zero_without_an_opening_overdraft(support_enabled):
+    np.testing.assert_array_equal(
+        _overdraft_sale(opening_overdraft=[0.0, 0.0], income=[0.0, 500.0], support_enabled=support_enabled), 0.0
+    )
+
+
+def test__overdraft_sale_without_desired_goods_above_the_floor_or_investment_characterisation():
+    # Floor and rent 100, service 45, B = 30. Own resources y + max(L, 0):
+    #   legacy: sale = max(O + B - max(own - F - R, 0), 0); minimum income: max(F + R + O + B - own, 0).
+    own = np.array([0.0, 60.0, 100.0, 145.0, 160.0, 175.0, 300.0])
+    np.testing.assert_allclose(_overdraft_sale(income=own), [75, 75, 75, 30, 15, 0, 0])
+    np.testing.assert_allclose(_overdraft_sale(income=own, support_enabled=False), [175, 115, 75, 30, 15, 0, 0])
+    # A positive shortfall is financed by borrow-or-sell and counts as own resources; a negative one does not.
+    np.testing.assert_allclose(_overdraft_sale(income=[100.0, 100.0], liquidity_shortfall=[45.0, -45.0]), [30.0, 75.0])

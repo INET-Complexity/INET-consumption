@@ -20,6 +20,42 @@ def gross_liquidation_sale(net_sale: np.ndarray, sale_cost: np.ndarray, availabl
     return np.minimum(net_sale + np.where(net_sale > 0.0, sale_cost, 0.0), available_ifa)
 
 
+def overdraft_sale_need(
+    *,
+    opening_overdraft: np.ndarray,
+    income: np.ndarray,
+    liquidity_shortfall: np.ndarray,
+    goods_floor: np.ndarray,
+    cash_rent: np.ndarray,
+    scheduled_service: np.ndarray,
+    support_enabled: bool,
+) -> np.ndarray:
+    """Net forced sale that repays the opening overdraft B after the uses senior to it.
+
+    The allocator pays rent R, the goods floor F and scheduled service O
+    (including overdraft interest) before B; goods above the floor and
+    investment come after it. The household's own resources are income y
+    plus the borrow-or-sell finance max(L, 0) of the recorded shortfall L;
+    with support S = max(F + R - (y + max(L, 0)), 0) tops them up to F + R,
+    and the overdraft sale is exempt from that test. So
+
+        sale = max(F + R + O + B - (y + max(L, 0)) - S, 0),
+
+    with S = 0 in minimum_income mode, where the sale also covers the floor
+    top-up so that it is not spent on the floor instead of the overdraft.
+    Zero for a household without an opening overdraft.
+    """
+    overdraft = np.maximum(np.asarray(opening_overdraft, dtype=float), 0.0)
+    shortfall = np.asarray(liquidity_shortfall, dtype=float)
+    shortfall = np.where(np.isfinite(shortfall), shortfall, 0.0)
+    own_resources = np.asarray(income, dtype=float) + np.maximum(shortfall, 0.0)
+    floor_and_rent = np.asarray(goods_floor, dtype=float) + np.asarray(cash_rent, dtype=float)
+    senior_uses = floor_and_rent + np.asarray(scheduled_service, dtype=float)
+    support = np.maximum(floor_and_rent - own_resources, 0.0) if support_enabled else 0.0
+    need = np.maximum(senior_uses + overdraft - own_resources - support, 0.0)
+    return np.where(overdraft > 0.0, need, 0.0)
+
+
 def forced_liquidation_cash(plan: "PostGrantFeasiblePlan") -> np.ndarray:
     """Cash the reserved illiquid sale adds to this period's ordinary cash needs.
 

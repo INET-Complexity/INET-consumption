@@ -193,6 +193,9 @@ class MinimumIncomeParameters(NamedTuple):
     base_year: int = 2014
     notional_asset_return_annual: float = 0.03
     guard_share_of_m: float = 0.01
+    # Minimum size of an illiquid sale (Stage 4 voluntary and Stage 5 liquidity sale) as a share of the household's
+    # quarterly minimum income level M. 0.20 approximates French gross saving over GDP. Defined in both support modes.
+    minimum_sale_share_of_m: float = 0.20
 
 
 class HouseholdSupportParameters(NamedTuple):
@@ -240,6 +243,15 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
     guard_share = positive("guard_share_of_m")
     if not guard_share < 1.0:
         raise ValueError("household_support.minimum_income.guard_share_of_m must lie in (0, 1).")
+    # 0 switches the minimum sale size off.
+    minimum_sale_share = minimum_income.get("minimum_sale_share_of_m", defaults.minimum_income.minimum_sale_share_of_m)
+    if (
+        isinstance(minimum_sale_share, bool)
+        or not isinstance(minimum_sale_share, (int, float))
+        or not 0.0 <= minimum_sale_share < 1.0
+    ):
+        raise ValueError("household_support.minimum_income.minimum_sale_share_of_m must lie in [0, 1).")
+    minimum_sale_share = float(minimum_sale_share)
     return HouseholdSupportParameters(
         mode,
         goods_floor,
@@ -248,6 +260,7 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
             base_year=int(base_year),
             notional_asset_return_annual=positive("notional_asset_return_annual"),
             guard_share_of_m=guard_share,
+            minimum_sale_share_of_m=minimum_sale_share,
         ),
     )
 
@@ -577,6 +590,8 @@ class Country:
         _validate_minimum_income_base_year(self.household_support, initial_year)
         # None (no entitlement computed yet), "assessed" (T fixed for the period) or "booked" (T settled).
         self._minimum_income_status: Optional[str] = None
+        # Smallest illiquid sale of the period per household; set at each period start (None before the first).
+        self._minimum_sale_size: Optional[np.ndarray] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
         _validate_minimum_income_resolver(
@@ -1532,6 +1547,7 @@ class Country:
         self._consumption_run_id += 1
         self._clear_household_income_shock()
         self._minimum_income_status = None
+        self._minimum_sale_size = None
 
     def _clear_household_income_shock(self) -> None:
         """Clear any staged household income shock used by MPC experiments."""
@@ -1946,10 +1962,30 @@ class Country:
         else:
             n_households = hh.ts.current("n_households")
             level, assessed, entitlement = (np.zeros(n_households) for _ in range(3))
+        self._minimum_sale_size = self._compute_minimum_sale_size(minimum_income_mode_level=level)
+        hh.ts.minimum_sale_size.append(self._minimum_sale_size.copy())
         hh.ts.minimum_income_level.append(level)
         hh.ts.minimum_income_assessed.append(assessed)
         hh.ts.minimum_income_entitlement.append(entitlement)
         self._minimum_income_status = "assessed"
+
+    def _compute_minimum_sale_size(self, *, minimum_income_mode_level: np.ndarray) -> np.ndarray:
+        """Smallest illiquid sale executed this period: ``minimum_sale_share_of_m`` x M per household.
+
+        M is the minimum income level of PLAN.md section 3.1, evaluated from the household_support parameters
+        and the same inputs as the entitlement, in both support modes (the stored ``minimum_income_level`` series
+        is zero in legacy mode). In minimum_income mode the level just computed is reused.
+        """
+        if self.household_support.mode == "minimum_income":
+            level = minimum_income_mode_level
+        else:
+            government_ts = self.central_government.ts
+            level = self._compute_minimum_income_level(
+                transfer_index=government_ts.current("total_other_benefits")[0]
+                / government_ts.initial("total_other_benefits")[0],
+                cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
+            )
+        return self.household_support.minimum_income.minimum_sale_share_of_m * level
 
     def _compute_minimum_income_level(self, *, transfer_index: float, cpi_ratio: float) -> np.ndarray:
         """Guaranteed level M per household from the current consumption units (PLAN.md section 3.1)."""
@@ -3357,6 +3393,8 @@ class Country:
         self.households.reserve_post_grant_executable_liquidation(
             available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
+            net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
+            minimum_sale_size=self._current_minimum_sale_size(),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:
@@ -3368,6 +3406,29 @@ class Country:
         )
         self.credit_market.prepare_household_service_snapshot()
         self.households.persist_post_grant_planned_liquidation_total()
+
+    def _current_minimum_sale_size(self) -> np.ndarray | None:
+        """This period's minimum illiquid sale; required under the feasibility resolver."""
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        if self._minimum_sale_size is None:
+            raise RuntimeError("The minimum sale size is set at period start; it has not been computed.")
+        return self._minimum_sale_size
+
+    def _household_debt_arrears_active(self) -> np.ndarray | None:
+        """Households with unpaid or suspended debt service this period, or consumer or mortgage arrears.
+
+        They may not buy illiquid assets in Stage 4: debt is serviced before investment.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        owed = (
+            np.asarray(self.households.current_unpaid_consumer_service(), dtype=float)
+            + np.asarray(self.households.current_unpaid_mortgage_service(), dtype=float)
+            + self.credit_market.household_arrears_outstanding()
+        )
+        # Population-expanded currency units: ignore float residue far below one unit of the scale.
+        return owed > 1e-6 * self.scale
 
     def settle_authoritative_household_payments(self) -> None:
         """Apply the floor, settle consumer service, and commit household debt once."""
@@ -5070,6 +5131,8 @@ class Country:
             tau_vat=self.central_government.states["Value-added Tax"],
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             unpaid_rent=unpaid_rent,
+            debt_arrears_active=self._household_debt_arrears_active(),
+            minimum_sale_size=self._current_minimum_sale_size(),
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))

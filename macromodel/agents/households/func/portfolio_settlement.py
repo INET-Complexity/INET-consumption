@@ -12,10 +12,18 @@ SETTLEMENT_DISABLED = 0.0
 SETTLEMENT_NO_SURPLUS = 1.0
 SETTLEMENT_INACTION = 2.0
 SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY = 3.0
+# Stage 4 illiquid purchase blocked because the household sold illiquid assets in Stage 5 of the same
+# period (any settled Stage 5 sale: forced liquidity sale, purchase-funding sale, or a negligible one).
+# Before this rule the code was unreachable; the numeric value is kept.
 SETTLEMENT_FORCED_LIQUIDATION = 4.0
 SETTLEMENT_INVALID_INPUT = 5.0
 SETTLEMENT_CONSERVATION_FAILURE = 6.0
 SETTLEMENT_SETTLED = 7.0
+# Stage 4 illiquid purchase blocked because the household has unpaid or suspended debt service this period,
+# or outstanding consumer or mortgage arrears: debt is serviced before resources go to investment.
+SETTLEMENT_BLOCKED_DEBT_ARREARS = 8.0
+# Stage 4 illiquid sale not executed because its gross amount is below the minimum sale size.
+SETTLEMENT_BELOW_MINIMUM_SALE = 9.0
 
 _CLEARING_NOISE_TOL = 1e-6
 # Conservation check: |lfa_flow + ifa_flow + cost| <= atol + rtol * (|lfa_flow| + |ifa_flow| + |cost|).
@@ -50,6 +58,8 @@ def settle_portfolio_reallocation(
     settlement_enabled: bool,
     forced_liquidation_active: np.ndarray,
     waive_fixed_cost: np.ndarray | None = None,
+    debt_arrears_active: np.ndarray | None = None,
+    minimum_sale_size: np.ndarray | None = None,
 ) -> PortfolioSettlement:
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
@@ -64,10 +74,34 @@ def settle_portfolio_reallocation(
     cost this period on a Stage 5 sale. Their trade settles without the fixed
     cost: only ``committed_cost`` is zeroed, so the LFA flow stays the pure
     transfer ``-committed_ifa`` and no money is created or destroyed.
+
+    ``forced_liquidation_active`` marks households with a settled Stage 5 sale this
+    period. Their illiquid purchases are blocked (``SETTLEMENT_FORCED_LIQUIDATION``,
+    flows zero, no cost); their sales settle as for any other household.
+
+    ``debt_arrears_active`` marks households with unpaid or suspended debt service this
+    period or outstanding arrears. Their illiquid purchases are blocked
+    (``SETTLEMENT_BLOCKED_DEBT_ARREARS``); sales stay allowed. Forced-liquidation
+    status takes precedence when both apply.
+
+    ``minimum_sale_size`` is the smallest gross illiquid sale executed. A Stage 4 sale
+    (counterfactual IFA flow < 0) with ``-flow < minimum_sale_size`` is not executed
+    (``SETTLEMENT_BELOW_MINIMUM_SALE``, flows zero, no cost), also for Stage 5 sellers. A sale of the
+    whole illiquid holding is exempt.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
     forced_liquidation_active = np.asarray(forced_liquidation_active, dtype=bool)
+    debt_arrears_active = (
+        np.zeros(base_lfa.shape, dtype=bool)
+        if debt_arrears_active is None
+        else np.asarray(debt_arrears_active, dtype=bool)
+    )
+    minimum_sale_size = (
+        np.zeros(base_lfa.shape, dtype=float)
+        if minimum_sale_size is None
+        else np.asarray(minimum_sale_size, dtype=float)
+    )
     portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
     counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
     counterfactual_ifa_flow = np.asarray(rebalancing.counterfactual_ifa_flow, dtype=float)
@@ -77,6 +111,8 @@ def settle_portfolio_reallocation(
         base_lfa,
         base_ifa,
         forced_liquidation_active,
+        debt_arrears_active,
+        minimum_sale_size,
         portfolio_valid_flag,
         counterfactual_lfa_flow,
         counterfactual_ifa_flow,
@@ -113,14 +149,33 @@ def settle_portfolio_reallocation(
         invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
         conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid
 
-        # Fixed precedence: invalid, forced liquidation, negative LFA, then
+        # Fixed precedence: invalid, forced-liquidation purchase block, negative LFA, then
         # ordinary valid settlement.
         status[invalid & ~conservation_failure] = SETTLEMENT_INVALID_INPUT
         status[conservation_failure] = SETTLEMENT_CONSERVATION_FAILURE
         valid[invalid] = False
 
-        forced = ~invalid & forced_liquidation_active
+        # A household with any settled Stage 5 sale this period (forced liquidity sale, purchase-funding
+        # sale, or a negligible one) may not buy illiquid assets in Stage 4. Its sales stay allowed
+        # (fixed cost waived by the caller); a zero flow is not blocked here and keeps its normal status.
+        forced = ~invalid & forced_liquidation_active & (counterfactual_ifa_flow > 0.0)
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
+        # Unpaid or suspended debt service, or arrears: no illiquid purchase until debt is serviced.
+        arrears_blocked = ~invalid & ~forced & debt_arrears_active & (counterfactual_ifa_flow > 0.0)
+        status[arrears_blocked] = SETTLEMENT_BLOCKED_DEBT_ARREARS
+        forced = forced | arrears_blocked
+        # A sale below the minimum size is not executed (sales that repay an overdraft included: the
+        # overdraft is then served by the Stage 5 overdraft sale or stays).
+        # A sale of the whole illiquid holding is exempt: otherwise a holding below the minimum is frozen.
+        sells_everything = -counterfactual_ifa_flow >= base_ifa * (1.0 - _CONSERVATION_RTOL)
+        too_small = (
+            ~invalid
+            & (counterfactual_ifa_flow < 0.0)
+            & (-counterfactual_ifa_flow < minimum_sale_size)
+            & ~sells_everything
+        )
+        status[too_small] = SETTLEMENT_BELOW_MINIMUM_SALE
+        forced = forced | too_small
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.

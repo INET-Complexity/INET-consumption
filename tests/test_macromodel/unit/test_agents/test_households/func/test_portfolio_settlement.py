@@ -8,6 +8,8 @@ from macromodel.agents.households.func.portfolio_rebalancing import (
     compute_portfolio_rebalancing,
 )
 from macromodel.agents.households.func.portfolio_settlement import (
+    SETTLEMENT_BELOW_MINIMUM_SALE,
+    SETTLEMENT_BLOCKED_DEBT_ARREARS,
     SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY,
     SETTLEMENT_CONSERVATION_FAILURE,
     SETTLEMENT_FORCED_LIQUIDATION,
@@ -99,9 +101,94 @@ def test_negative_lfa_blocks_purchase():
     assert result.settlement_status[0] == SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
 
-def test_forced_liquidation_takes_precedence_over_a_rebalancing_trade():
+def test_forced_liquidation_blocks_an_illiquid_purchase():
     result = _settle(forced=True)
     assert result.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+
+
+def test_forced_liquidation_still_allows_an_illiquid_sale():
+    result = _settle(forced=True, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [127.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [1.0])
+
+
+def test_forced_liquidation_household_without_trade_is_inaction_not_blocked():
+    result = _settle(forced=True, lfa_flow=0.0, ifa_flow=0.0, inaction=True)
+    assert result.settlement_status[0] == SETTLEMENT_INACTION
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+
+
+def test_forced_liquidation_household_sells_while_overdrawn():
+    result = _settle(forced=True, base_lfa=-5.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [2.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    # An overdrawn flagged household still cannot buy.
+    blocked = _settle(forced=True, base_lfa=-5.0)
+    assert blocked.settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+
+
+def test_forced_liquidation_sale_with_waived_fixed_cost_is_a_pure_transfer():
+    result = settle_portfolio_reallocation(
+        base_lfa=np.array([120.0]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[7.0], ifa_flow=[-8.0], cost=[1.0]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([True]),
+        waive_fixed_cost=np.array([True]),
+    )
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+    np.testing.assert_allclose(result.closing_lfa, [128.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+    np.testing.assert_allclose(result.closing_tfa, [170.0])
+
+
+def test_forced_liquidation_overdraft_clearing_sale_does_not_close_in_float_noise():
+    rng = np.random.default_rng(1)
+    n = 5000
+    scale = 10 ** rng.uniform(3, 8, n)
+    lfa = -scale * rng.uniform(0.001, 0.5, n)
+    ifa = scale * rng.uniform(0.6, 3.0, n)
+    rebalancing = compute_portfolio_rebalancing(
+        opening_tfa_scale=scale,
+        post_return_lfa=lfa,
+        post_return_ifa=ifa,
+        target_illiquid_assets=np.zeros(n),
+        target_tfa_base=lfa + ifa,
+        portfolio_participates=np.ones(n, dtype=bool),
+        phi_1=1.0,
+        lambda_kappa=0.05,
+        fixed_cost_share=0.002,
+    )
+    result = settle_portfolio_reallocation(
+        base_lfa=lfa,
+        base_ifa=ifa,
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.ones(n, dtype=bool),
+    )
+    sellers = (result.settlement_status == SETTLEMENT_SETTLED) & rebalancing.upper_bound_flag
+    assert sellers.sum() > 100
+    assert np.all(result.closing_lfa[sellers] >= 0.0)
+
+
+def test_forced_liquidation_flag_only_affects_flagged_households():
+    rebalancing = _rebalancing(lfa_flow=[-8.0, -8.0], ifa_flow=[8.0, 8.0], cost=[0.0, 0.0])
+    result = settle_portfolio_reallocation(
+        base_lfa=np.array([120.0, 120.0]),
+        base_ifa=np.array([50.0, 50.0]),
+        rebalancing=rebalancing,
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([True, False]),
+    )
+    np.testing.assert_array_equal(result.settlement_status, [SETTLEMENT_FORCED_LIQUIDATION, SETTLEMENT_SETTLED])
+    np.testing.assert_allclose(result.closing_ifa, [50.0, 58.0])
 
 
 def test_forced_liquidation_uses_post_liquidation_base_without_reapplying_sale():
@@ -331,3 +418,75 @@ def test_conservation_check_does_not_cancel_rule_outputs_on_population_expanded_
     )
     assert not np.any(result.settlement_status == SETTLEMENT_CONSERVATION_FAILURE)
     assert (result.committed_ifa_flow != 0.0).sum() > 1000
+
+
+def _settle_with_arrears(*, arrears, forced=False, lfa_flow=-8.0, ifa_flow=8.0, cost=0.0, base_lfa=120.0):
+    return settle_portfolio_reallocation(
+        base_lfa=np.array([base_lfa]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[lfa_flow], ifa_flow=[ifa_flow], cost=[cost]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([forced]),
+        debt_arrears_active=np.array([arrears]),
+    )
+
+
+def test_household_in_debt_arrears_cannot_buy_illiquid_assets():
+    result = _settle_with_arrears(arrears=True)
+    assert result.settlement_status[0] == SETTLEMENT_BLOCKED_DEBT_ARREARS
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+
+
+def test_household_in_debt_arrears_can_still_sell_illiquid_assets():
+    result = _settle_with_arrears(arrears=True, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_lfa, [127.0])
+    np.testing.assert_allclose(result.closing_ifa, [42.0])
+
+
+def test_forced_liquidation_status_precedes_arrears_status_and_default_is_no_arrears():
+    assert _settle_with_arrears(arrears=True, forced=True).settlement_status[0] == SETTLEMENT_FORCED_LIQUIDATION
+    assert _settle_with_arrears(arrears=False).settlement_status[0] == SETTLEMENT_SETTLED
+    assert _settle().settlement_status[0] == SETTLEMENT_SETTLED
+
+
+def _settle_minimum(*, minimum, lfa_flow, ifa_flow, cost=0.0, base_lfa=120.0, forced=False):
+    return settle_portfolio_reallocation(
+        base_lfa=np.array([base_lfa]),
+        base_ifa=np.array([50.0]),
+        rebalancing=_rebalancing(lfa_flow=[lfa_flow], ifa_flow=[ifa_flow], cost=[cost]),
+        settlement_enabled=True,
+        forced_liquidation_active=np.array([forced]),
+        minimum_sale_size=np.array([minimum]),
+    )
+
+
+def test_sale_below_the_minimum_size_is_not_executed():
+    result = _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_BELOW_MINIMUM_SALE
+    np.testing.assert_allclose(result.closing_lfa, [120.0])
+    np.testing.assert_allclose(result.closing_ifa, [50.0])
+    np.testing.assert_allclose(result.committed_adjustment_cost, [0.0])
+    # Also for a household that sold in Stage 5 and for an overdrawn household.
+    assert _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0, forced=True).settlement_status[0] == (
+        SETTLEMENT_BELOW_MINIMUM_SALE
+    )
+    overdrawn = _settle_minimum(minimum=10.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0, base_lfa=-5.0)
+    assert overdrawn.settlement_status[0] == SETTLEMENT_BELOW_MINIMUM_SALE
+    np.testing.assert_allclose(overdrawn.closing_lfa, [-5.0])
+
+
+def test_sale_at_or_above_the_minimum_size_and_purchases_are_unaffected():
+    sale = _settle_minimum(minimum=8.0, lfa_flow=7.0, ifa_flow=-8.0, cost=1.0)
+    assert sale.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(sale.closing_ifa, [42.0])
+    buy = _settle_minimum(minimum=100.0, lfa_flow=-8.0, ifa_flow=8.0)
+    assert buy.settlement_status[0] == SETTLEMENT_SETTLED
+
+
+def test_stage4_sale_of_the_whole_holding_is_exempt_from_the_minimum():
+    result = _settle_minimum(minimum=100.0, lfa_flow=49.0, ifa_flow=-50.0, cost=1.0)
+    assert result.settlement_status[0] == SETTLEMENT_SETTLED
+    np.testing.assert_allclose(result.closing_ifa, [0.0])

@@ -275,8 +275,10 @@ def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(
     )
 
     assert np.isclose(long_term[0, :, 0].sum(), 80.0)
-    assert np.isclose(short_term[0, :, 0].sum(), 20.0)
-    assert np.isclose(clearer._last_received_overdraft_refinance_credit_by_firm[0], 20.0)
+    # The residual room 20 is lent first; the firm's own bank terms out the rest of the 1,000 overdraft,
+    # which the loan replaces at that bank without new capital-requirement exposure.
+    assert np.isclose(short_term[0, :, 0].sum(), 1_000.0)
+    assert np.isclose(clearer._last_received_overdraft_refinance_credit_by_firm[0], 1_000.0)
 
 
 def test_waterbucket_clears_debt_rollover_from_residual_capacity_after_lt(test_banks, test_firms, test_households):

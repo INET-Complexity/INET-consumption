@@ -70,6 +70,48 @@ def compute_zeta(rho: float, delta: float, S: int) -> float:
     return numerator / denominator
 
 
+def steady_state_posterior_variance(rho: float, sigma2_v: float, sigma2_xi: float, n_iter: int = 10_000) -> float:
+    """Fixed point of the posterior-variance Riccati recursion with constant noise variances.
+
+    Iterates ``P <- (rho^2 P + sigma2_v) * sigma2_xi / (rho^2 P + sigma2_v + sigma2_xi)``
+    from ``P = 0``; the map is a contraction for ``|rho| <= 1`` and positive noise.
+    """
+    P = 0.0
+    for _ in range(n_iter):
+        predicted = rho**2 * P + sigma2_v
+        P = predicted * sigma2_xi / (predicted + sigma2_xi)
+    return P
+
+
+def implied_uncertainty_propensity(
+    priors_table,
+    age_group: str,
+    zeta: float,
+    beta_ref: float,
+    horizon: int = 4,
+    unemployment_change: float = 0.01,
+) -> float:
+    """beta3 implied by a reference short-run coefficient on the change in the unemployment rate.
+
+    A job loser starts at the employed steady-state ``P_E`` and runs ``horizon`` filter
+    steps with the unemployed noise variances; ``dtheta = zeta^2 (P_horizon - P_E)``.
+    A rise of ``unemployment_change`` in the unemployment rate (0.01 = 1pp) raises mean
+    uncertainty by ``unemployment_change * dtheta``, so
+    ``beta3 = beta_ref / (unemployment_change * dtheta)``. ``priors_table`` is indexed by
+    ``(employment_status, age_group)`` as returned by ``load_income_belief_priors_table``.
+    """
+    employed = priors_table.loc[("employed", age_group)]
+    unemployed = priors_table.loc[("unemployed", age_group)]
+    rho = float(employed["rho"])
+    P_employed = steady_state_posterior_variance(rho, float(employed["sigma2_v"]), float(employed["sigma2_xi"]))
+    P = P_employed
+    for _ in range(horizon):
+        predicted = rho**2 * P + float(unemployed["sigma2_v"])
+        P = predicted * float(unemployed["sigma2_xi"]) / (predicted + float(unemployed["sigma2_xi"]))
+    dtheta = float(zeta) ** 2 * (P - P_employed)
+    return float(beta_ref) / (unemployment_change * dtheta)
+
+
 def compute_permanent_income_log_ratio(
     income_belief_mu: np.ndarray,
     zeta: float,

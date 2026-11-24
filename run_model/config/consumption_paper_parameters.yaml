@@ -130,6 +130,9 @@ desired_consumption:
     consumption_floor: 1.0e-12
     house_price_floor: 1.0e-12
     uses_income_belief_learning: true
+    # Kalman noise variances (sigma2_v, sigma2_xi) follow members' current employment
+    # status each quarter (paper friction l.985-993); posterior mean/variance carry over.
+    uses_state_dependent_income_belief_noise: true
     income_belief_learning_horizon:
       paper_parameter_file: consumption_paper_parameters.yaml
       paper_parameter_ref: income_belief_learning.permanent_income_log_ratio

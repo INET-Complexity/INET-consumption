@@ -1,6 +1,8 @@
 import pandas as pd
 import pytest
 
+from macro_data.readers.economic_data.eurostat_reader import HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS
+
 
 class TestEuroStatReader:
     def test__nonfin_firm_debt_ratios(self, readers):
@@ -49,8 +51,17 @@ class TestEuroStatReader:
         assert set(rentals) == {"FRA"}
 
     def test__household_non_deposit_financial_assets(self, readers):
-        # S14 assets, France 2014: F3 77,073 + F4 30,539 + F5 1,215,856 + F6 1,711,897 mio EUR
-        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 2014) == pytest.approx(3035365e6)
+        # S14 assets, France 2014: F3 77,073 + F4 30,539 + F511 188,443 + F52 289,903 + F62 1,603,088 mio EUR
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 2014) == pytest.approx(2189046e6)
+
+    def test__household_non_deposit_financial_assets_exclude_business_equity_and_non_life_insurance(self, readers):
+        # Unlisted shares (F512 393,395) and other equity (F519 344,115) are the counterpart of the business
+        # equity already in real wealth (HFCS DA1140). Non-life insurance reserves (F61 108,808) are not savings.
+        # The previous anchor was F3 + F4 + F5 + F6 = 3,035,365 mio EUR.
+        assert readers.eurostat.household_non_deposit_financial_assets("FRA", 2014) == pytest.approx(
+            (3035365 - 393395 - 344115 - 108808) * 1e6
+        )
+        assert HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS == ("F3", "F4", "F511", "F52", "F62")
 
     def test__household_non_deposit_financial_assets_has_no_fallback(self, readers):
         assert readers.eurostat.household_non_deposit_financial_assets("USA", 2014) is None

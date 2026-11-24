@@ -744,37 +744,62 @@ def _post_grant_with_overdraft_sale(planned, overdraft_part, requested, granted,
     return resolver, resolver.build_post_grant_plan(pre, credit_granted=np.full(n, granted))
 
 
-def test__property_surplus_nets_the_regular_sale_first_and_the_overdraft_sale_only_without_support():
-    # Planned sale 100 = regular 60 + overdraft 40; property-sale surplus 0, 30 or 70.
-    resolver, post = _post_grant_with_overdraft_sale(100.0, 40.0, 0.0, 0.0, n=3)
-    surplus = np.array([0.0, 30.0, 70.0])
-    without_support = resolver.reserve_executable_liquidation(
-        post, available_pre_stage4_ifa=np.full(3, 1e9), own_sale_surplus=surplus
-    )
-    np.testing.assert_allclose(without_support.planned_liquidation_total, [100.0, 70.0, 30.0])
-    np.testing.assert_allclose(without_support.overdraft_liquidation_total, [40.0, 40.0, 30.0])
-    with_support = resolver.reserve_executable_liquidation(
-        post, available_pre_stage4_ifa=np.full(3, 1e9), own_sale_surplus=surplus, surplus_nets_overdraft_sale=False
-    )
-    np.testing.assert_allclose(with_support.planned_liquidation_total, [100.0, 70.0, 40.0])
-    np.testing.assert_allclose(with_support.overdraft_liquidation_total, [40.0, 40.0, 40.0])
+def test__property_surplus_nets_the_regular_sale_then_the_overdraft_sale_where_it_does_not_lower_support():
+    # Planned sale 100 = regular 60 + overdraft 40; surplus 0, 30, 70, 120; no credit.
+    resolver, post = _post_grant_with_overdraft_sale(100.0, 40.0, 0.0, 0.0, n=4)
+    surplus = np.array([0.0, 30.0, 70.0, 120.0])
+    kwargs = {"available_pre_stage4_ifa": np.full(4, 1e9), "own_sale_surplus": surplus}
+    # Without support the excess over the regular part nets the overdraft sale one for one.
+    plain = resolver.reserve_executable_liquidation(post, **kwargs)
+    np.testing.assert_allclose(plain.planned_liquidation_total, [100.0, 70.0, 30.0, 0.0])
+    np.testing.assert_allclose(plain.overdraft_liquidation_total, [40.0, 40.0, 30.0, 0.0])
+    # With support and F + R - y = 75: S0 = max(75 - 60, 0) = 15 of the excess only lowers support.
+    supported = resolver.reserve_executable_liquidation(post, support_floor_gap=np.full(4, 75.0), **kwargs)
+    np.testing.assert_allclose(supported.planned_liquidation_total, [100.0, 70.0, 40.0, 0.0])
+    np.testing.assert_allclose(supported.overdraft_liquidation_total, [40.0, 40.0, 40.0, 0.0])
+    # Support not binding (F + R - y <= 60): both modes agree.
+    loose = resolver.reserve_executable_liquidation(post, support_floor_gap=np.full(4, 60.0), **kwargs)
+    np.testing.assert_allclose(loose.planned_liquidation_total, plain.planned_liquidation_total)
 
 
-@pytest.mark.parametrize("surplus_nets_overdraft_sale", [False, True])
-def test__with_support_a_property_surplus_does_not_eat_the_overdraft_sale(surplus_nets_overdraft_sale):
-    # y = 20, regular need 60, property surplus 70, B = 30 with an overdraft sale of 30; F + R = 100, no service.
-    # Without the overdraft, support is max(100 - (20 + 70), 0) = 10. The overdraft sale must keep that support
-    # and still repay B: it does only if the surplus does not net the overdraft part.
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__review_probe_surplus_covers_the_overdraft_without_any_sale_in_both_modes(support_enabled):
+    # y = 120, G = 100, F = 80, R = 20, B = 30, cost 1, surplus 70: L = 0, so the plan sells B = 30 for the
+    # overdraft only, and the surplus repays it instead: no illiquid sale in either mode.
+    sale = _overdraft_sale(
+        income=120.0,
+        desired_goods=100.0,
+        scheduled_service=0.0,
+        liquidity_shortfall=0.0,
+        support_enabled=support_enabled,
+    )
+    np.testing.assert_allclose(sale, [30.0])
+    resolver, post = _post_grant_with_overdraft_sale(30.0, 30.0, 0.0, 0.0)
+    reserved = resolver.reserve_executable_liquidation(
+        post,
+        available_pre_stage4_ifa=np.array([1e9]),
+        sale_cost=np.array([1.0]),
+        own_sale_surplus=np.array([70.0]),
+        support_floor_gap=np.array([80.0 + 20.0 - 120.0]) if support_enabled else None,
+    )
+    np.testing.assert_allclose(reserved.reserved_liquidation_total, [0.0])
+    np.testing.assert_allclose(reserved.overdraft_liquidation_total, [0.0])
+
+
+def test__with_support_a_property_surplus_does_not_eat_the_overdraft_sale():
+    # y = 20, regular need 60, surplus 70, B = 30, overdraft sale 30; F + R = 100, no service. Without the
+    # overdraft, support is max(100 - (20 + 70), 0) = 10: the 10 of surplus above the regular part lowers
+    # support, so it cannot also replace overdraft-sale cash. B is repaid in full with the same support.
     resolver, post = _post_grant_with_overdraft_sale(90.0, 30.0, 0.0, 0.0)
     reserved = resolver.reserve_executable_liquidation(
         post,
         available_pre_stage4_ifa=np.array([1e9]),
         own_sale_surplus=np.array([70.0]),
-        surplus_nets_overdraft_sale=surplus_nets_overdraft_sale,
+        support_floor_gap=np.array([100.0 - 20.0]),
     )
-    sale_cash = reserved.planned_liquidation_total
+    np.testing.assert_allclose(reserved.planned_liquidation_total, [30.0])
     settled = _settle_floor(
-        resources=20.0 + 70.0 + sale_cash,
+        resources=20.0 + 70.0 + reserved.planned_liquidation_total,
         support_exempt_resources=reserved.overdraft_liquidation_total,
         opening_overdraft=30.0,
         consumption_before_floor=80.0,
@@ -783,22 +808,92 @@ def test__with_support_a_property_surplus_does_not_eat_the_overdraft_sale(surplu
         investment=0.0,
     )
     np.testing.assert_allclose(settled.floor_support, [10.0], rtol=1e-9)
-    expected = 20.0 if surplus_nets_overdraft_sale else 30.0
-    np.testing.assert_allclose(settled.overdraft_repayment, [expected], rtol=1e-9)
+    np.testing.assert_allclose(settled.overdraft_repayment, [30.0], rtol=1e-9)
 
 
-def test__rationed_credit_of_an_overdrawn_household_is_replaced_by_a_forced_sale():
-    # Requested 50, granted 20: an overdrawn household sells the gap 30 on top of its planned sale 30, capped by
-    # IFA left after the planned sale and the trade cost 5; a household not marked keeps its planned sale.
-    resolver, post = _post_grant_with_overdraft_sale(30.0, 30.0, 50.0, 20.0, n=4)
+def test__support_never_pays_the_trade_cost_of_the_overdraft_sale_when_illiquid_assets_bind():
+    # Review probe (legacy): y = 0, G = F = 100, R = 0, B = 50, IFA = 120, cost 10, regular sale 100. The
+    # overdraft part can only be 20 of IFA; the cost falls on it, so the exempt overdraft cash is 10 and support
+    # stays 0, as without an overdraft (regular sale 100: gross 110, cash 100, support 0).
+    resolver, post = _post_grant_with_overdraft_sale(120.0, 20.0, 0.0, 0.0)
+    reserved = resolver.reserve_executable_liquidation(
+        post, available_pre_stage4_ifa=np.array([120.0]), sale_cost=np.array([10.0])
+    )
+    np.testing.assert_allclose(reserved.reserved_liquidation_total, [120.0])
+    np.testing.assert_allclose(reserved.overdraft_liquidation_total, [10.0])
+    common = {
+        "consumption_before_floor": 100.0,
+        "subsistence_floor": 100.0,
+        "cash_rent": 0.0,
+        "scheduled_consumer_service": 0.0,
+        "scheduled_mortgage_service": 0.0,
+        "investment": 0.0,
+    }
+    overdrawn = _settle_floor(
+        resources=110.0, support_exempt_resources=reserved.overdraft_liquidation_total, opening_overdraft=50.0, **common
+    )
+    without_overdraft = _settle_floor(resources=100.0, **common)
+    np.testing.assert_allclose(overdrawn.floor_support, [0.0], atol=1e-9)
+    np.testing.assert_allclose(without_overdraft.floor_support, [0.0], atol=1e-9)
+    np.testing.assert_allclose(overdrawn.overdraft_repayment, [10.0], rtol=1e-9)
+
+
+def test__rationed_credit_is_replaced_by_a_forced_sale_for_every_household():
+    # Requested 50, granted 20: the gap 30 is sold on top of the planned sale 30 (overdraft part 30), capped by
+    # IFA left after the planned sale and the trade cost 5. Without replace_rationed_credit nothing is added.
+    resolver, post = _post_grant_with_overdraft_sale(30.0, 30.0, 50.0, 20.0, n=3)
+    kwargs = {"available_pre_stage4_ifa": np.array([1e9, 70.0, 50.0]), "sale_cost": np.full(3, 5.0)}
+    reserved = resolver.reserve_executable_liquidation(post, replace_rationed_credit=True, **kwargs)
+    np.testing.assert_allclose(reserved.planned_liquidation_total, [60.0, 60.0, 45.0])
+    np.testing.assert_allclose(reserved.reserved_liquidation_total, [65.0, 65.0, 50.0])
+    # The top-up replaces credit: it is a regular sale, not part of the support-exempt overdraft sale.
+    np.testing.assert_allclose(reserved.overdraft_liquidation_total, [30.0, 30.0, 30.0])
+    np.testing.assert_allclose(reserved.residual_shortfall_after_granted_credit, [20.0, 20.0, 35.0])
+    unchanged = resolver.reserve_executable_liquidation(post, **kwargs)
+    np.testing.assert_allclose(unchanged.planned_liquidation_total, [30.0, 30.0, 30.0])
+
+
+def _rationed_household(available_ifa):
+    """Not overdrawn: y = 90, G = 120, F = 80, R = 20, no service or investment; requests credit L = 50, gets 20."""
+    resolver = HouseholdFinancialFeasibility()
+    n = len(available_ifa)
+    pre = resolver.build_pre_grant_plan(
+        liquidity_shortfall_before_repair=np.full(n, 50.0),
+        funded_from_liquid_assets=np.zeros(n),
+        residual_shortfall_after_lfa=np.full(n, 50.0),
+    )
+    pre = resolver.with_credit_requested(pre, np.full(n, 50.0))
+    pre = resolver.with_planned_liquidation(
+        pre, planned_liquidation_total=np.zeros(n), available_illiquid_assets=np.asarray(available_ifa)
+    )
+    post = resolver.build_post_grant_plan(pre, credit_granted=np.full(n, 20.0))
     reserved = resolver.reserve_executable_liquidation(
         post,
-        available_pre_stage4_ifa=np.array([1e9, 70.0, 50.0, 1e9]),
-        sale_cost=np.full(4, 5.0),
-        rationing_top_up=np.array([True, True, True, False]),
+        available_pre_stage4_ifa=np.asarray(available_ifa, dtype=float),
+        sale_cost=np.full(n, 5.0),
+        replace_rationed_credit=True,
     )
-    np.testing.assert_allclose(reserved.planned_liquidation_total, [60.0, 60.0, 45.0, 30.0])
-    np.testing.assert_allclose(reserved.reserved_liquidation_total, [65.0, 65.0, 50.0, 35.0])
-    # The top-up replaces credit: it is a regular sale, not part of the support-exempt overdraft sale.
-    np.testing.assert_allclose(reserved.overdraft_liquidation_total, [30.0, 30.0, 30.0, 30.0])
-    np.testing.assert_allclose(reserved.residual_shortfall_after_granted_credit, [20.0, 20.0, 35.0, 50.0])
+    from macromodel.agents.households.func.financial_feasibility import forced_liquidation_cash
+
+    settled = _settle_floor(
+        resources=90.0 + 20.0 + forced_liquidation_cash(reserved),
+        consumption_before_floor=120.0,
+        scheduled_consumer_service=0.0,
+        scheduled_mortgage_service=0.0,
+        investment=0.0,
+    )
+    return reserved, settled
+
+
+def test__non_overdrawn_rationed_household_with_ample_illiquid_assets_sells_and_does_not_cut():
+    reserved, settled = _rationed_household([1e9])
+    np.testing.assert_allclose(reserved.planned_liquidation_total, [30.0])
+    np.testing.assert_allclose(settled.consumption_cut_amount, [0.0], atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, [120.0], rtol=1e-9)
+
+
+def test__non_overdrawn_rationed_household_with_insufficient_illiquid_assets_cuts_only_the_uncovered_part():
+    # IFA 20, cost 5: the sale raises 15 of the gap 30, so goods above the floor fall by the other 15.
+    reserved, settled = _rationed_household([20.0])
+    np.testing.assert_allclose(reserved.reserved_liquidation_total, [20.0])
+    np.testing.assert_allclose(settled.consumption_cut_amount, [15.0], rtol=1e-9)

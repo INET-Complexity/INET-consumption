@@ -1105,17 +1105,17 @@ class Households(Agent):
         purchase_liquidation: np.ndarray | None = None,
         net_housing_cash_need: np.ndarray | None = None,
         minimum_sale_size: np.ndarray | None = None,
-        support_enabled: bool = True,
+        support_floor_gap: np.ndarray | None = None,
     ) -> None:
         """Reserve executable Stage 5 liquidation before floor and goods planning.
 
         ``purchase_liquidation`` is the illiquid sale that pays for a completed
         property purchase; it shares the single trade cost with the forced sale.
         ``net_housing_cash_need`` is X of the completion rule: a seller's surplus
-        max(-X, 0) is cash that reduces the forced sale; with support it does not
-        reduce the overdraft part of the sale. An overdrawn household (LFA < 0)
-        replaces rationed consumer credit by a forced sale where its illiquid
-        assets allow (sell first).
+        max(-X, 0) is cash that reduces the forced sale; ``support_floor_gap``
+        (F + R - y with support, else None) keeps the part of it that lowers
+        support from replacing the overdraft sale. Every household replaces
+        rationed consumer credit by a forced sale where its illiquid assets allow.
         """
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
@@ -1126,10 +1126,8 @@ class Households(Agent):
             purchase_liquidation=purchase_liquidation,
             own_sale_surplus=None if net_housing_cash_need is None else np.maximum(-net_housing_cash_need, 0.0),
             minimum_sale_size=minimum_sale_size,
-            surplus_nets_overdraft_sale=not support_enabled,
-            # The opening overdraft max(-LFA, 0) the plan sized the overdraft sale on; the housing draw D is
-            # only final once this reservation has fixed the purchase sale.
-            rationing_top_up=np.asarray(self.ts.current("liquid_financial_assets"), dtype=float) < 0.0,
+            support_floor_gap=support_floor_gap,
+            replace_rationed_credit=True,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:

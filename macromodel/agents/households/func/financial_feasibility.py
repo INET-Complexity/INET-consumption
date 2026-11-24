@@ -266,8 +266,8 @@ class HouseholdFinancialFeasibility:
         purchase_liquidation: np.ndarray | None = None,
         own_sale_surplus: np.ndarray | None = None,
         minimum_sale_size: np.ndarray | None = None,
-        surplus_nets_overdraft_sale: bool = True,
-        rationing_top_up: np.ndarray | None = None,
+        support_floor_gap: np.ndarray | None = None,
+        replace_rationed_credit: bool = False,
     ) -> PostGrantFeasiblePlan:
         """Reserve the Stage 5 liquidation before floors and goods demand are fixed.
 
@@ -275,21 +275,31 @@ class HouseholdFinancialFeasibility:
         the household's own property-sale surplus max(-X, 0), cash of this period
         that covers the shortfall first: the planned sale is netted by it, so
         illiquid assets are sold only for the residual gap (paper financing order).
-        The surplus nets the regular part of the sale first. It nets the part that
-        repays the opening overdraft (``overdraft_liquidation_total``) only when
-        ``surplus_nets_overdraft_sale`` (minimum_income mode, no support). With
-        support the overdraft sale is exempt from the support test while the
-        surplus is not, so a surplus that replaced overdraft-sale cash would lower
-        support instead of repaying the overdraft: the overdraft part is then kept
-        whole, and a surplus above the regular part stays a resource (it lowers
-        support or is saved), as for the same household without an overdraft.
+        The surplus nets the regular part RG of the sale first; the excess
+        x = max(surplus - RG, 0) nets the part that repays the opening overdraft
+        (``overdraft_liquidation_total``, OD) only where it does not lower support:
 
-        ``rationing_top_up`` (boolean household vector, default none) marks the
-        households whose rationed consumer credit is replaced by a forced sale:
-        the sale grows by min(credit_rationing_gap, IFA - planned - purchase -
-        cost). The caller marks overdrawn households (sell first: the planned
-        overdraft sale assumed the requested credit). The top-up replaces credit,
-        so it is a regular sale, counted by the support test like the credit.
+            S0 = max(F + R - (y + K + RG), 0),     d = min(OD, max(x - S0, 0)).
+
+        ``support_floor_gap`` is F + R - y with support (legacy_stage5) and None
+        without (S0 = 0, so d = min(OD, x)). The surplus counts in the support
+        test and the overdraft sale does not, so the part of x that reduces
+        support (min(x, S0), as for the same household without an overdraft)
+        cannot also replace overdraft-sale cash; the rest repays B before any
+        illiquid asset is sold, in both modes (paper financing order).
+
+        ``replace_rationed_credit`` (paper: if the preferred margin is not
+        sufficient because of the borrowing limit, households finance the residual
+        with the other margin): a household whose credit request was not fully
+        granted adds min(credit_rationing_gap, IFA - planned - purchase - cost) to
+        its forced sale, before goods are cut. The top-up replaces credit, so it is
+        a regular sale, counted in the support test like the credit.
+
+        ``overdraft_liquidation_total`` becomes the cash the overdraft part raises:
+        the regular part has priority in the sale's cash net of the trade cost,
+        E = min(OD, max(cash - RG, 0)), so when illiquid assets bind the trade cost
+        falls on the overdraft part and support never pays it (support is set as
+        if there were no overdraft, and E is exempt from the support test).
         ``planned_liquidation_total`` becomes that net forced need (capped by IFA).
         ``purchase_liquidation_total`` is the net sale that pays for a completed
         property purchase. ``reserved_liquidation_total`` is the gross sale of
@@ -324,18 +334,22 @@ class HouseholdFinancialFeasibility:
             if plan.overdraft_liquidation_total is None
             else np.minimum(self._non_negative(plan.overdraft_liquidation_total), planned)
         )
-        if rationing_top_up is not None:
-            eligible = np.asarray(rationing_top_up, dtype=bool)
-            if eligible.shape != available.shape:
-                raise ValueError("Stage 5 rationing top-up must be a household vector.")
+        if replace_rationed_credit:
             unsold = np.maximum(available - planned - purchase - cost, 0.0)
-            gap = self._non_negative(plan.credit_rationing_gap)
-            planned = planned + np.where(eligible, np.minimum(gap, unsold), 0.0)
-        if surplus_nets_overdraft_sale:
-            net = np.maximum(planned - surplus, 0.0)
+            planned = planned + np.minimum(self._non_negative(plan.credit_rationing_gap), unsold)
+        regular = planned - planned_overdraft
+        excess_surplus = np.maximum(surplus - regular, 0.0)
+        if support_floor_gap is None:
+            support_before_sale = np.zeros_like(available)
         else:
-            net = np.maximum(planned - planned_overdraft - surplus, 0.0) + planned_overdraft
-        net = np.minimum(net, available)
+            gap = np.asarray(support_floor_gap, dtype=float)
+            if gap.shape != available.shape or not np.all(np.isfinite(gap)):
+                raise ValueError("Stage 5 support floor gap must be a finite household vector.")
+            support_before_sale = np.maximum(gap - granted - regular, 0.0)
+        planned_overdraft = planned_overdraft - np.minimum(
+            planned_overdraft, np.maximum(excess_surplus - support_before_sale, 0.0)
+        )
+        net = np.minimum(np.maximum(regular - surplus, 0.0) + planned_overdraft, available)
         reserved = gross_liquidation_sale(net + purchase, cost, available)
         cost_paid = np.minimum(np.where(reserved > 0.0, cost, 0.0), reserved)
         # A forced sale is not executed when the cash it must raise does not exceed the fixed trade cost
@@ -364,7 +378,12 @@ class HouseholdFinancialFeasibility:
         if np.any((purchase > 0.0) & (reserved - cost_paid - net < purchase - (1e-6 + 1e-9 * purchase))):
             raise RuntimeError("Illiquid assets cannot fund the sale reserved for a completed property purchase.")
         cash = np.maximum(reserved - cost_paid - purchase, 0.0)
-        overdraft = None if plan.overdraft_liquidation_total is None else np.minimum(planned_overdraft, net)
+        overdraft_net = np.minimum(planned_overdraft, net)
+        overdraft = (
+            None
+            if plan.overdraft_liquidation_total is None
+            else np.minimum(overdraft_net, np.maximum(cash - (net - overdraft_net), 0.0))
+        )
         return replace(
             plan,
             planned_liquidation_total=net.copy(),

@@ -3384,7 +3384,13 @@ class Country:
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
             net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
             minimum_sale_size=self._current_minimum_sale_size(),
-            support_enabled=self._stage5_support_enabled(),
+            support_floor_gap=(
+                self._effective_goods_floor()
+                + np.asarray(self.households.current_consumption_cash_rent(), dtype=float)
+                - np.asarray(self.households.current_financing_income(), dtype=float)
+                if self._stage5_support_enabled()
+                else None
+            ),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:

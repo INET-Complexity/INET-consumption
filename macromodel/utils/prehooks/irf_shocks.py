@@ -88,6 +88,9 @@ class _GovernmentConsumptionShockProxy:
         exogenous_total_consumption,
         forecasting_window,
         assume_zero_noise=False,
+        historic_real_gdp_growth=None,
+        historic_productivity_growth=None,
+        posted_price_index_by_industry=None,
     ):
         target = self.wrapped.compute_target_consumption(
             previous_desired_government_consumption=previous_desired_government_consumption,
@@ -101,6 +104,9 @@ class _GovernmentConsumptionShockProxy:
             exogenous_total_consumption=exogenous_total_consumption,
             forecasting_window=forecasting_window,
             assume_zero_noise=assume_zero_noise,
+            historic_real_gdp_growth=historic_real_gdp_growth,
+            historic_productivity_growth=historic_productivity_growth,
+            posted_price_index_by_industry=posted_price_index_by_industry,
         )
         if not self.active:
             return target

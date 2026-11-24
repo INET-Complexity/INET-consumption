@@ -4,7 +4,10 @@ import numpy as np
 import pytest
 
 from macromodel.agents.central_bank.func.policy_rate import SmoothTaylorRule
-from macromodel.agents.government_entities.func.consumption import ExpectedGrowthGovernmentConsumptionSetter
+from macromodel.agents.government_entities.func.consumption import (
+    ARDLGovernmentConsumptionSetter,
+    ExpectedGrowthGovernmentConsumptionSetter,
+)
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.configurations import CountryConfiguration, SimulationConfiguration
 from macromodel.simulation import Simulation
@@ -343,6 +346,36 @@ def test_government_consumption_shock_adds_to_default_target_setter():
 
     np.testing.assert_allclose(shocked.sum() - baseline.sum(), 10.0)
     np.testing.assert_allclose(shocked / shocked.sum(), baseline / baseline.sum())
+
+
+@pytest.mark.parametrize(("month", "shock_amount"), [(1, 0.0), (4, 10.0)])
+def test_government_consumption_shock_forwards_ardl_inputs(month, shock_amount):
+    kwargs = {
+        "previous_desired_government_consumption": np.array([20.0, 30.0, 50.0]),
+        "model": None,
+        "historic_total_consumption": np.array([90.0, 95.0, 100.0]),
+        "initial_good_prices": np.ones(3),
+        "current_good_prices": np.ones(3),
+        "expected_growth": 0.02,
+        "expected_inflation": 0.05,
+        "current_time": 1,
+        "exogenous_total_consumption": None,
+        "forecasting_window": 1,
+        "historic_real_gdp_growth": np.full(12, 0.01),
+        "historic_productivity_growth": np.array([0.03, 0.04]),
+        "posted_price_index_by_industry": np.array([1.1, 1.2, 1.3]),
+    }
+    baseline = ARDLGovernmentConsumptionSetter(consistency=1.0).compute_target_consumption(**kwargs)
+    setter = ARDLGovernmentConsumptionSetter(consistency=1.0)
+    government_entities = SimpleNamespace(functions={"consumption": setter})
+    simulation = SimpleNamespace(countries={"FRA": SimpleNamespace(government_entities=government_entities)})
+    spec = ShockSpec(name="gov", kind="government_consumption", period=1, magnitude=10.0)
+    hook = create_government_consumption_shock_hook(country_code="FRA", initial_year=2020, time_unit=3, spec=spec)
+
+    hook(simulation, 2020, month)
+    result = government_entities.functions["consumption"].compute_target_consumption(**kwargs)
+
+    np.testing.assert_allclose(result, baseline * (1.0 + shock_amount / baseline.sum()))
 
 
 def test_government_consumption_additive_shock_supports_public_setter_contract_only():

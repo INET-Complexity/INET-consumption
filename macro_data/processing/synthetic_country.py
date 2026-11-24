@@ -102,6 +102,11 @@ from macro_data.processing.synthetic_matching.matching_households_with_houses im
 from macro_data.processing.synthetic_matching.matching_individuals_with_firms import (
     match_individuals_with_firms_country,
 )
+from macro_data.processing.synthetic_population.balance_sheet_scaling import (
+    apply_financial_asset_yield,
+    is_scaled,
+    scale_household_balance_sheet,
+)
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     SyntheticHFCSPopulation,
 )
@@ -367,6 +372,7 @@ class SyntheticCountry:
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
             household_property_income=household_property_income,
+            housing_market=housing_market,
         )
 
         if readers.emission_fractions is not None:
@@ -619,6 +625,7 @@ class SyntheticCountry:
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
             household_property_income=household_property_income,
+            housing_market=housing_market,
         )
 
         if readers.emission_fractions is not None:
@@ -689,6 +696,7 @@ class SyntheticCountry:
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_indices: Optional[np.ndarray] = None,
         household_property_income: Optional[float] = None,
+        housing_market: Optional[SyntheticHousingMarket] = None,
     ) -> SyntheticCreditMarket:
         """
         This function takes care of matching the different agents together and initialising the Credit
@@ -735,6 +743,8 @@ class SyntheticCountry:
             emission_factors_array=emission_factors_array,
             emitting_industry_indices=emitting_indices,
             household_property_income=household_property_income,
+            consumption_initialisation=country_configuration.household_consumption_initialisation,
+            housing_market=housing_market,
         )
 
         credit_market = cls.init_credit_market(
@@ -906,6 +916,8 @@ class SyntheticCountry:
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_industry_indices: Optional[np.ndarray] = None,
         household_property_income: Optional[float] = None,
+        consumption_initialisation=None,
+        housing_market: Optional[SyntheticHousingMarket] = None,
     ):
         """
         Initialize population wealth, income, and consumption patterns.
@@ -940,6 +952,26 @@ class SyntheticCountry:
             financial_income_tax=tax_data.income_tax,
             total_property_income=household_property_income,
         )
+        if consumption_initialisation is not None and consumption_initialisation.balance_sheet_scaling:
+            if is_scaled(population):
+                # Cached population being reset: stocks are already scaled; only re-apply the yield.
+                apply_financial_asset_yield(
+                    population,
+                    consumption_initialisation.financial_asset_yield,
+                    financial_income_tax=tax_data.income_tax,
+                )
+            else:
+                housing_df = None if housing_market is None else housing_market.housing_market_data
+                scaled_housing, diagnostics = scale_household_balance_sheet(
+                    population,
+                    housing_df,
+                    concept=consumption_initialisation.scaling_income_concept,
+                    financial_asset_yield=consumption_initialisation.financial_asset_yield,
+                    financial_income_tax=tax_data.income_tax,
+                )
+                if housing_market is not None:
+                    housing_market.housing_market_data = scaled_housing
+                population.balance_sheet_scaling_diagnostics = diagnostics
         public_pensions = population.household_data["Allocated Public Pension Benefits"].sum()
         other_transfers = population.household_data["Allocated Other Social Transfers"].sum()
         central_government.central_gov_data["Public Pension Benefits"] = [public_pensions]

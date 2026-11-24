@@ -483,7 +483,12 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
 
     def restrict(self) -> None:
-        diagnostics = [c for c in ("HFCS Source ID", "HFCS Consumption Ratio") if c in self.household_data]
+        diagnostics = [
+            c
+            for c in self.household_data.columns
+            if c in ("HFCS Source ID", "HFCS Consumption Ratio", "Balance Sheet Scaling Factor")
+            or str(c).startswith("HFCS Income ")
+        ]
         self.household_data = self.household_data[RESTRICT_COLS + diagnostics]
 
     def compute_household_wealth(self, independents: Optional[list[str]] = None) -> None:
@@ -613,7 +618,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.household_data["Wealth in Other Financial Assets"] = positive_total_ifa
         self.household_data.loc[:, "Wealth in Other Financial Assets"] *= self.scale
         survey_total = self.household_data["Wealth in Other Financial Assets"].sum()
+        self.ifa_anchor_factor = 1.0
         if self.total_other_financial_assets is not None and survey_total > 0.0:
+            self.ifa_anchor_factor = self.total_other_financial_assets / survey_total
             # Anchor the stock to the national accounts, so that it is consistent with the income
             # from financial assets, which is anchored to the same accounts.
             self.household_data.loc[:, "Wealth in Other Financial Assets"] *= (
@@ -1233,6 +1240,8 @@ def eligible_hfcs_consumption_households(
     if not np.allclose(weights, expected_weights, rtol=1e-12, atol=1e-8):
         raise ValueError("HFCS reader weights differ from the registered source survey weights.")
     eligible["HFCS Consumption Ratio"] = source.ratios_for(eligible["HFCS Source ID"].to_numpy())
+    for concept in source.incomes:
+        eligible[f"HFCS Income {concept}"] = source.incomes_for(eligible["HFCS Source ID"].to_numpy(), concept)
     return eligible
 
 

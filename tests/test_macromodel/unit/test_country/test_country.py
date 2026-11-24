@@ -197,6 +197,11 @@ def _make_ficp_test_country():
 
 
 class TestCountry:
+    @pytest.fixture(autouse=True)
+    def _minimum_sale_size_is_set_at_period_start(self, test_country):
+        # The period-start step is not run by these tests; the minimum sale size is required under the resolver.
+        test_country._minimum_sale_size = np.zeros(test_country.households.ts.current("n_households"))
+
     def test__legacy_compatibility_portfolio_settlement_configuration_matrix(self):
         class Wealth:
             uses_portfolio_choice = False

@@ -18,6 +18,7 @@ from macromodel.agents.households.func.financial_feasibility import PostGrantFea
 from macromodel.agents.households.func.investment import NoHouseholdInvestment
 from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
+from macromodel.agents.households.func.portfolio_settlement import SETTLEMENT_FORCED_LIQUIDATION, SETTLEMENT_SETTLED
 from macromodel.agents.households.func.target_credit import DefaultHouseholdTargetCredit
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
@@ -1962,6 +1963,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         def capture(**kwargs):
             seen["waive"] = kwargs.get("waive_fixed_cost")
+            seen["forced"] = kwargs.get("forced_liquidation_active")
             return original(**kwargs)
 
         monkeypatch.setattr(households_module, "settle_portfolio_reallocation", capture)
@@ -1970,6 +1972,49 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         # The configured plan settled a Stage 5 sale of 8 for every household.
         assert seen["waive"] is not None and np.all(seen["waive"])
+        # The same indicator blocks illiquid purchases of a Stage 5 seller in Stage 4.
+        assert np.all(seen["forced"])
+
+    def test__stage5_seller_cannot_buy_illiquid_assets_in_stage4_but_others_can(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(test_households, monkeypatch, resolver=True, settles=True)
+        seller = np.arange(n_households) % 2 == 0
+        sale = np.where(seller, 8.0, 0.0)
+        test_households.post_grant_feasible_plan = SimpleNamespace(
+            funded_from_liquid_assets=np.zeros(n_households),
+            credit_granted=np.zeros(n_households),
+            settled_liquidation_total=sale,
+            reserved_liquidation_total=sale,
+            liquidation_sale_cost=np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_households,
+            "settle_post_grant_liquidation",
+            lambda *, base_lfa, base_ifa: (base_lfa + sale, base_ifa - sale),
+        )
+        ones = np.ones(n_households)
+        diagnostics = replace(
+            test_households.compute_stage4_portfolio_diagnostics(),
+            rebalancing=replace(
+                self._zero_rebalancing(n_households),
+                counterfactual_lfa_flow=-10.0 * ones,
+                counterfactual_ifa_flow=10.0 * ones,
+                inaction_flag=np.zeros(n_households, dtype=bool),
+            ),
+        )
+        monkeypatch.setattr(test_households, "compute_stage4_portfolio_diagnostics", lambda **_kwargs: diagnostics)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        status = test_households.ts.current("portfolio_settlement_status")
+        np.testing.assert_array_equal(status[seller], SETTLEMENT_FORCED_LIQUIDATION)
+        np.testing.assert_array_equal(status[~seller], SETTLEMENT_SETTLED)
+        # Blocked buyer keeps the post-sale stocks; the others buy 10.
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets")[seller], 108.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets")[seller], 42.0)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets")[~seller], 90.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets")[~seller], 60.0)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
+        np.testing.assert_allclose(test_households.ts.current("illiquid_trade_cost_paid"), np.zeros(n_households))
 
     def test__resolver_books_deposit_interest_once_as_a_direct_liquid_return(self, test_households, monkeypatch):
         n_households, _ = self._configure_update_wealth(

@@ -1097,12 +1097,19 @@ class Households(Agent):
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
 
     def reserve_post_grant_executable_liquidation(
-        self, *, available_pre_stage4_ifa: np.ndarray, purchase_liquidation: np.ndarray | None = None
+        self,
+        *,
+        available_pre_stage4_ifa: np.ndarray,
+        purchase_liquidation: np.ndarray | None = None,
+        net_housing_cash_need: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> None:
         """Reserve executable Stage 5 liquidation before floor and goods planning.
 
         ``purchase_liquidation`` is the illiquid sale that pays for a completed
         property purchase; it shares the single trade cost with the forced sale.
+        ``net_housing_cash_need`` is X of the completion rule: a seller's surplus
+        max(-X, 0) is cash that reduces the forced sale.
         """
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
@@ -1111,6 +1118,8 @@ class Households(Agent):
             available_pre_stage4_ifa=available_pre_stage4_ifa,
             sale_cost=self.current_illiquid_trade_cost(),
             purchase_liquidation=purchase_liquidation,
+            own_sale_surplus=None if net_housing_cash_need is None else np.maximum(-net_housing_cash_need, 0.0),
+            minimum_sale_size=minimum_sale_size,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:
@@ -4091,6 +4100,8 @@ class Households(Agent):
         tau_vat_on_investment: float = 0.0,
         tau_vat: float = 0.0,
         unpaid_rent: np.ndarray | None = None,
+        debt_arrears_active: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -4352,7 +4363,6 @@ class Households(Agent):
             settles = getattr(self.functions["wealth"], "settles_portfolio_choice", False)
             portfolio_base_lfa = wealth_base_lfa
             portfolio_base_ifa = wealth_base_ifa
-            forced_liquidation_active = np.zeros(wealth_base_lfa.shape, dtype=bool)
             if settles:
                 if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
                     raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
@@ -4363,13 +4373,21 @@ class Households(Agent):
                 if self.uses_feasibility_resolver and self.post_grant_feasible_plan is not None
                 else None
             )
+            # A Stage 5 seller may not buy illiquid assets in the same period's Stage 4.
+            forced_liquidation_active = (
+                np.zeros(wealth_base_lfa.shape, dtype=bool)
+                if settled_sale is None
+                else np.asarray(settled_sale, dtype=float) > 0.0
+            )
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
                 rebalancing=diagnostics.rebalancing,
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,
-                waive_fixed_cost=None if settled_sale is None else np.asarray(settled_sale, dtype=float) > 0.0,
+                waive_fixed_cost=None if settled_sale is None else forced_liquidation_active,
+                debt_arrears_active=debt_arrears_active,
+                minimum_sale_size=minimum_sale_size,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa

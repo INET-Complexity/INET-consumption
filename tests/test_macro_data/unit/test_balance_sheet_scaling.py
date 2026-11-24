@@ -6,8 +6,10 @@ import pytest
 
 from macro_data.configuration.dataconfiguration import HouseholdConsumptionInitialisationConfiguration
 from macro_data.processing.synthetic_population.balance_sheet_scaling import (
+    HFCS_GROSS_COLUMNS,
     HOUSEHOLD_STOCK_COLUMNS,
     apply_financial_asset_yield,
+    hfcs_net_income,
     household_income_factors,
     is_scaled,
     model_income,
@@ -15,12 +17,13 @@ from macro_data.processing.synthetic_population.balance_sheet_scaling import (
     scale_housing_market,
 )
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import SyntheticHFCSPopulation
-from tests.test_macro_data.unit.test_hfcs_consumption_source import save_read, source_frame
 
 SCALE = 10
 YEARLY = 4.0
 TAX = 0.2
+SIW = 0.1
 ANCHOR = 3.0
+TAXES = dict(financial_income_tax=TAX, employee_social_insurance_tax=SIW)
 
 
 def toy_population():
@@ -52,10 +55,13 @@ def toy_population():
     return pop
 
 
-def hfcs_income(pop, k):
-    """HFCS per-household annual income such that model/HFCS = k on the geometric-average concept."""
-    model = model_income(pop.household_data, "disp_geom_avg_income", YEARLY)
-    return model / (np.asarray(k) * SCALE)
+def set_hfcs_gross(pop, k):
+    """Survey gross employee income such that model/HFCS = k on the geometric-average concept."""
+    target = model_income(pop.household_data, "disp_geom_avg_income", YEARLY) / (np.asarray(k) * SCALE)
+    for column in HFCS_GROSS_COLUMNS:
+        pop.household_data[column] = 0.0
+    pop.household_data["HFCS Gross Employee Income"] = np.nan_to_num(target) / ((1 - SIW) * (1 - TAX))
+    return target
 
 
 def housing_table():
@@ -92,11 +98,11 @@ def test_factors_fall_back_to_common_factor_for_nonpositive_income():
 def test_stocks_scale_by_household_factor_so_ratios_match_hfcs():
     pop = toy_population()
     k = np.array([1.3, 0.9, 1.0])
-    pop.household_data["HFCS Income disp_geom_avg_income"] = hfcs_income(pop, k)
+    hfcs_y = set_hfcs_gross(pop, k)
     before = pop.household_data.copy()
 
     scaled_housing, diag = scale_household_balance_sheet(
-        pop, housing_table(), concept="disp_geom_avg_income", financial_asset_yield=0.0293, financial_income_tax=TAX
+        pop, housing_table(), concept="disp_geom_avg_income", financial_asset_yield=0.0293, **TAXES
     )
     after = pop.household_data
     k_used = after["Balance Sheet Scaling Factor"].to_numpy()
@@ -109,11 +115,10 @@ def test_stocks_scale_by_household_factor_so_ratios_match_hfcs():
             expected = expected / ANCHOR  # restarts from the survey level
         np.testing.assert_allclose(after[name].to_numpy(), expected, err_msg=name)
     # Stock / HFCS-scaled income equals survey stock / survey income for every household.
-    hfcs_scaled = after["HFCS Income disp_geom_avg_income"].to_numpy() * SCALE
-    model_y = hfcs_scaled[:2] * k[:2]
+    hfcs_scaled = hfcs_y[:2] * SCALE
+    model_y = hfcs_scaled * k[:2]
     np.testing.assert_allclose(
-        after["Wealth in Deposits"].to_numpy()[:2] / model_y,
-        before["Wealth in Deposits"].to_numpy()[:2] / hfcs_scaled[:2],
+        after["Wealth in Deposits"].to_numpy()[:2] / model_y, before["Wealth in Deposits"].to_numpy()[:2] / hfcs_scaled
     )
     # Totals recomputed; rent paid unchanged.
     np.testing.assert_allclose(after["Net Wealth"], after["Wealth"] - after["Debt"])
@@ -125,10 +130,8 @@ def test_stocks_scale_by_household_factor_so_ratios_match_hfcs():
 
 def test_financial_income_follows_yield_and_enters_income_net_of_tax():
     pop = toy_population()
-    pop.household_data["HFCS Income disp_geom_avg_income"] = hfcs_income(pop, [1.3, 0.9, 1.0])
-    scale_household_balance_sheet(
-        pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.0293, financial_income_tax=TAX
-    )
+    set_hfcs_gross(pop, [1.3, 0.9, 1.0])
+    scale_household_balance_sheet(pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.0293, **TAXES)
     data = pop.household_data
     np.testing.assert_allclose(
         data["Income from Financial Assets"], 0.0293 / YEARLY * data["Wealth in Other Financial Assets"]
@@ -145,8 +148,8 @@ def test_financial_income_follows_yield_and_enters_income_net_of_tax():
 
 def test_scaling_twice_is_refused_and_yield_can_be_reapplied():
     pop = toy_population()
-    pop.household_data["HFCS Income disp_geom_avg_income"] = hfcs_income(pop, [1.3, 0.9, 1.0])
-    kwargs = dict(concept="disp_geom_avg_income", financial_asset_yield=0.0293, financial_income_tax=TAX)
+    set_hfcs_gross(pop, [1.3, 0.9, 1.0])
+    kwargs = dict(concept="disp_geom_avg_income", financial_asset_yield=0.0293, **TAXES)
     scale_household_balance_sheet(pop, None, **kwargs)
     assert is_scaled(pop)
     deposits = pop.household_data["Wealth in Deposits"].copy()
@@ -158,17 +161,26 @@ def test_scaling_twice_is_refused_and_yield_can_be_reapplied():
     assert pop.household_data["Income from Financial Assets"].iloc[0] > 0
 
 
-def test_missing_hfcs_income_or_yield_is_an_error():
+def test_missing_hfcs_gross_income_or_yield_is_an_error():
     pop = toy_population()
-    with pytest.raises(ValueError, match="HFCS Income"):
-        scale_household_balance_sheet(
-            pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.03, financial_income_tax=TAX
-        )
-    pop.household_data["HFCS Income disp_geom_avg_income"] = 1.0
+    with pytest.raises(ValueError, match="HFCS gross income"):
+        scale_household_balance_sheet(pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.03, **TAXES)
+    set_hfcs_gross(pop, [1.0, 1.0, 1.0])
     with pytest.raises(ValueError, match="yield"):
-        scale_household_balance_sheet(
-            pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.0, financial_income_tax=TAX
-        )
+        scale_household_balance_sheet(pop, None, concept="disp_geom_avg_income", financial_asset_yield=0.0, **TAXES)
+
+
+def test_hfcs_net_income_uses_runtime_taxes_and_leaves_transfers_untaxed():
+    data = pd.DataFrame({c: [0.0] for c in HFCS_GROSS_COLUMNS})
+    data.loc[0, ["HFCS Gross Employee Income", "HFCS Gross Self-Employment Income"]] = [800.0, 200.0]
+    data.loc[0, ["HFCS Gross Pension Income", "HFCS Gross Social Transfers"]] = [300.0, 100.0]
+    data.loc[0, ["HFCS Gross Rental Income", "HFCS Gross Financial Income"]] = [50.0, 50.0]
+    taxes = dict(income_tax=0.2, employee_social_insurance_tax=0.1)
+    non_property = 1000.0 * 0.9 * 0.8 + 400.0
+    total = non_property + 100.0 * 0.8
+    np.testing.assert_allclose(hfcs_net_income(data, "disp_non_property_income", **taxes), [non_property])
+    np.testing.assert_allclose(hfcs_net_income(data, "disposable_income", **taxes), [total])
+    np.testing.assert_allclose(hfcs_net_income(data, "disp_geom_avg_income", **taxes), [np.sqrt(total * non_property)])
 
 
 def test_housing_rows_without_household_owner_are_unchanged():
@@ -177,32 +189,11 @@ def test_housing_rows_without_household_owner_are_unchanged():
     np.testing.assert_allclose(out["Rent"], [600.0, 200.0, 100.0])
 
 
-def test_configuration_requires_hfcs_source_and_positive_yield():
-    with pytest.raises(ValueError, match="hfcs_cy"):
-        HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True, financial_asset_yield=0.03)
-    source = dict(
-        method="hfcs_cy",
-        source_file="s.parquet",
-        registration_file="r.json",
-        source_sha256="a" * 64,
-        registration_sha256="b" * 64,
-    )
+def test_configuration_defaults_and_validation():
+    default = HouseholdConsumptionInitialisationConfiguration()
+    assert default.balance_sheet_scaling is False
+    assert default.financial_asset_yield == pytest.approx(0.0293)
+    assert default.scaling_income_concept == "disp_geom_avg_income"
+    assert HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True).balance_sheet_scaling
     with pytest.raises(ValueError, match="financial_asset_yield"):
-        HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True, **source)
-    config = HouseholdConsumptionInitialisationConfiguration(
-        balance_sheet_scaling=True, financial_asset_yield=0.0293, scaling_income_concept="disposable_income", **source
-    )
-    assert config.scaling_income_concept == "disposable_income"
-    assert HouseholdConsumptionInitialisationConfiguration().balance_sheet_scaling is False
-
-
-def test_source_reader_exposes_optional_income_columns(tmp_path):
-    frame = source_frame()
-    frame["disp_geom_avg_income"] = [10.0, 20.0, 30.0, np.nan]
-    source = save_read(tmp_path, frame)
-    np.testing.assert_allclose(
-        source.incomes_for(np.array(["003", "001", "003"]), "disp_geom_avg_income"), [30.0, 10.0, 30.0]
-    )
-    with pytest.raises(ValueError, match="no income column"):
-        source.incomes_for(np.array(["001"]), "disposable_income")
-    assert save_read(tmp_path, source_frame()).incomes == {}
+        HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True, financial_asset_yield=0.0)

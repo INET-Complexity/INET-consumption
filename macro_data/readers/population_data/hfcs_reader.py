@@ -72,6 +72,9 @@ var_mapping = {
     "PG0210": "Self-Employment Income",  # Income from self-employment
     "PG0310": "Individual Public Pension Income",  # Observed gross annual receipts
     "PG0410": "Individual Occupational and Private Pension Income",
+    "DI1100": "HFCS Gross Employee Income",  # Household employee income (balance-sheet scaling)
+    "DI1200": "HFCS Gross Self-Employment Income",  # Household self-employment income (balance-sheet scaling)
+    "DI1600": "HFCS Gross Social Transfers",  # All regular social transfers (balance-sheet scaling)
     "DI1300": "Rental Income from Real Estate",  # Income from property
     "DI1400": "Income from Financial Assets",  # Investment income
     "DI1500": "Income from Pensions",  # Legacy aggregate pension income
@@ -140,6 +143,9 @@ var_mapping = {
 # List of variables containing monetary values that need currency conversion
 var_numerical = [
     "Income",  # Total income
+    "HFCS Gross Employee Income",
+    "HFCS Gross Self-Employment Income",
+    "HFCS Gross Social Transfers",
     "Employee Income",  # Employment earnings
     "Weekly Hours",  # Hours per week in main job
     "Self-Employment Income",  # Business income

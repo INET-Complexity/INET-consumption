@@ -367,6 +367,14 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             output_shares=output_shares,
             consumption_source=consumption_source,
         )
+        # Survey gross income before the model rebuilds these columns (used by balance-sheet scaling).
+        for source_column, gross_column in (
+            ("Rental Income from Real Estate", "HFCS Gross Rental Income"),
+            ("Income from Financial Assets", "HFCS Gross Financial Income"),
+            ("Income from Pensions", "HFCS Gross Pension Income"),
+        ):
+            if source_column in household_data:
+                household_data[gross_column] = household_data[source_column]
 
         unemployment_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Unemployment Rate (Value)"].iloc[0]
         participation_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Participation Rate (Value)"].iloc[0]
@@ -487,7 +495,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             c
             for c in self.household_data.columns
             if c in ("HFCS Source ID", "HFCS Consumption Ratio", "Balance Sheet Scaling Factor")
-            or str(c).startswith("HFCS Income ")
+            or str(c).startswith("HFCS Gross ")
         ]
         self.household_data = self.household_data[RESTRICT_COLS + diagnostics]
 
@@ -1240,8 +1248,6 @@ def eligible_hfcs_consumption_households(
     if not np.allclose(weights, expected_weights, rtol=1e-12, atol=1e-8):
         raise ValueError("HFCS reader weights differ from the registered source survey weights.")
     eligible["HFCS Consumption Ratio"] = source.ratios_for(eligible["HFCS Source ID"].to_numpy())
-    for concept in source.incomes:
-        eligible[f"HFCS Income {concept}"] = source.incomes_for(eligible["HFCS Source ID"].to_numpy(), concept)
     return eligible
 
 

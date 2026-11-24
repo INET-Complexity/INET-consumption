@@ -24,6 +24,8 @@ country_configs:
       source_sha256: edf089b68d517f4a303127b458bb91c2ab167c3894036b6343af51b19339bc45
       registration_file: hfcs/consumption_initialisation/FRA_2014.registration.json
       registration_sha256: 4cc18938b7076f9a00276d3a51712a0967cb6fc9283a10d54c02186331a84053
+      # Scale stocks by k_i = model / HFCS net income (vault spec 2026-11-24-balance-sheet-scaling).
+      balance_sheet_scaling: true
     firms_configuration:
       constructor: Default
       zero_initial_deposits: false

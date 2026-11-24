@@ -5,7 +5,8 @@ same income concept, so every stock/income ratio equals its HFCS value at t0.
 National-accounts stock levels are then no longer matched; their gaps are reported.
 
 Steps (spec: vault ``experiments/specs/2026-11-24-balance-sheet-scaling``):
-1. k_i from t0 income, computed once.
+1. k_i from t0 income, computed once. HFCS net income = survey gross income netted with
+   the model's runtime tax rates (no external tax simulator, no extra data file).
 2. Deposits, IFA (survey level, without the national-accounts anchor), debt, other
    real assets, house values and imputed rents are multiplied by k_i. Rented dwellings:
    value by the landlord's k_i, rent unchanged (it stays anchored to actual rent).
@@ -18,7 +19,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-# Income concepts: name of the HFCS calibration column -> model-side construction.
+# Income concepts, named as in the consumption calibration.
 SCALING_INCOME_CONCEPTS = ("disp_geom_avg_income", "disposable_income", "disp_non_property_income")
 
 HOUSEHOLD_STOCK_COLUMNS = (
@@ -34,27 +35,62 @@ HOUSEHOLD_STOCK_COLUMNS = (
 )
 
 
-def hfcs_income_column(concept: str) -> str:
-    """Household-data column holding the HFCS source income for ``concept`` (annual, per household)."""
-    return f"HFCS Income {concept}"
+HFCS_GROSS_COLUMNS = (
+    "HFCS Gross Employee Income",
+    "HFCS Gross Self-Employment Income",
+    "HFCS Gross Pension Income",
+    "HFCS Gross Social Transfers",
+    "HFCS Gross Rental Income",
+    "HFCS Gross Financial Income",
+)
+
+
+def hfcs_net_income(
+    household_data: pd.DataFrame, concept: str, *, income_tax: float, employee_social_insurance_tax: float
+) -> np.ndarray:
+    """Annual HFCS income per survey household on ``concept``, netted with the model's runtime tax rates.
+
+    Labour income x (1 - employee SI)(1 - income tax); rental and financial income x (1 - income tax);
+    pensions and social transfers untaxed, as in model income. Matches the calibration's
+    ``disp_geom_avg_income`` to 1.008 on aggregate (household p10/p90 0.91/1.15; vault, 2026-11-24).
+    """
+    missing = [c for c in HFCS_GROSS_COLUMNS if c not in household_data]
+    if missing:
+        raise ValueError(f"Balance-sheet scaling needs HFCS gross income columns: {missing}")
+    gross = {
+        c: pd.to_numeric(household_data[c], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        for c in HFCS_GROSS_COLUMNS
+    }
+    labour = (
+        (gross["HFCS Gross Employee Income"] + gross["HFCS Gross Self-Employment Income"])
+        * (1.0 - employee_social_insurance_tax)
+        * (1.0 - income_tax)
+    )
+    non_property = labour + gross["HFCS Gross Pension Income"] + gross["HFCS Gross Social Transfers"]
+    total = non_property + (gross["HFCS Gross Rental Income"] + gross["HFCS Gross Financial Income"]) * (
+        1.0 - income_tax
+    )
+    return _concept(concept, total, non_property)
+
+
+def _concept(concept: str, total: np.ndarray, non_property: np.ndarray) -> np.ndarray:
+    if concept == "disposable_income":
+        return total
+    if concept == "disp_non_property_income":
+        return non_property
+    if concept == "disp_geom_avg_income":
+        both_nonnegative = (total >= 0.0) & (non_property >= 0.0)
+        return np.where(both_nonnegative, np.sqrt(np.clip(total * non_property, 0.0, None)), np.nan)
+    raise ValueError(f"Unknown scaling income concept {concept!r}.")
 
 
 def model_income(household_data: pd.DataFrame, concept: str, yearly_factor: float) -> np.ndarray:
     """Annual model income on ``concept``. Non-property income = employee income + social transfers."""
-    if concept not in SCALING_INCOME_CONCEPTS:
-        raise ValueError(f"Unknown scaling income concept {concept!r}.")
     total = household_data["Income"].to_numpy(dtype=float)
     non_property = (household_data["Employee Income"] + household_data["Regular Social Transfers"]).to_numpy(
         dtype=float
     )
-    if concept == "disposable_income":
-        income = total
-    elif concept == "disp_non_property_income":
-        income = non_property
-    else:
-        both_nonnegative = (total >= 0.0) & (non_property >= 0.0)
-        income = np.where(both_nonnegative, np.sqrt(np.clip(total * non_property, 0.0, None)), np.nan)
-    return income * yearly_factor
+    return _concept(concept, total, non_property) * yearly_factor
 
 
 def household_income_factors(model_annual: np.ndarray, hfcs_annual_scaled: np.ndarray) -> tuple[np.ndarray, int]:
@@ -107,20 +143,26 @@ def scale_household_balance_sheet(
     concept: str,
     financial_asset_yield: float,
     financial_income_tax: float,
+    employee_social_insurance_tax: float,
 ) -> tuple[Optional[pd.DataFrame], dict]:
     """Apply steps 1-3 in place on ``population.household_data``; return the scaled housing table and diagnostics."""
     if is_scaled(population):
         raise ValueError("Household balance sheet is already scaled; re-apply only the financial-asset yield.")
     data = population.household_data
-    column = hfcs_income_column(concept)
-    if column not in data:
-        raise ValueError(f"Balance-sheet scaling needs {column!r}; export it in the HFCS source table.")
     if not financial_asset_yield > 0.0:
         raise ValueError("Balance-sheet scaling needs a positive annual financial_asset_yield.")
 
     # Step 1. HFCS income is per survey household; model stocks and flows represent `scale` households.
     model_annual = model_income(data, concept, population.yearly_factor)
-    hfcs_annual = pd.to_numeric(data[column], errors="coerce").to_numpy(dtype=float) * population.scale
+    hfcs_annual = (
+        hfcs_net_income(
+            data,
+            concept,
+            income_tax=financial_income_tax,
+            employee_social_insurance_tax=employee_social_insurance_tax,
+        )
+        * population.scale
+    )
     factors, n_fallback = household_income_factors(model_annual, hfcs_annual)
 
     # Step 2. IFA restarts from the survey level, i.e. without the national-accounts anchor.

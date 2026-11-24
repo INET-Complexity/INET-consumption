@@ -7,7 +7,7 @@ masks, not its trimmed output. No INET-side income/tax re-estimation is done.
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -19,8 +19,6 @@ from macro_data.util.consumption_initialisation import (
 )
 
 SOURCE_COLUMNS = ("source_id", "wave", "c_y", "survey_weight", "hard_valid", "threshold_pool")
-# Optional annual HFCS income columns (calibration names), used for balance-sheet scaling.
-INCOME_COLUMNS = ("disp_geom_avg_income", "disposable_income", "disp_non_property_income")
 
 
 @dataclass(frozen=True)
@@ -57,7 +55,6 @@ class HFCSConsumptionSource:
     winsorised: WinsorisedConsumptionRatios
     sha256: str
     survey_weights: np.ndarray
-    incomes: dict = field(default_factory=dict)
 
     def ratios_for(self, source_ids: np.ndarray) -> np.ndarray:
         """Link in draw order, allowing replacement draws but never fallback.
@@ -73,15 +70,6 @@ class HFCSConsumptionSource:
         if np.any(~self.winsorised.valid[indexer]):
             raise ValueError("Household draws include hard-invalid HFCS records; choose their treatment explicitly.")
         return self.winsorised.ratios[indexer].copy()
-
-    def incomes_for(self, source_ids: np.ndarray, concept: str) -> np.ndarray:
-        """Annual HFCS income on ``concept`` in draw order (NaN where the source value is missing)."""
-        if concept not in self.incomes:
-            raise ValueError(f"HFCS source has no income column {concept!r}.")
-        indexer = pd.Index(self.source_ids).get_indexer(_identifiers(source_ids))
-        if np.any(indexer < 0):
-            raise ValueError(f"{np.count_nonzero(indexer < 0)} household draws have no HFCS source match.")
-        return self.incomes[concept][indexer].copy()
 
 
 def _identifiers(values: np.ndarray) -> np.ndarray:
@@ -175,11 +163,6 @@ def read_hfcs_consumption_source(
         lower_quantile=registration.lower_quantile,
         upper_quantile=registration.upper_quantile,
     )
-    incomes = {
-        name: pd.to_numeric(frame[name], errors="coerce").to_numpy(dtype=float, copy=True)
-        for name in INCOME_COLUMNS
-        if name in frame.columns
-    }
     return HFCSConsumptionSource(
-        ids, int(wave), winsorised, digest, frame["survey_weight"].to_numpy(dtype=float, copy=True), incomes
+        ids, int(wave), winsorised, digest, frame["survey_weight"].to_numpy(dtype=float, copy=True)
     )

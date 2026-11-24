@@ -968,6 +968,7 @@ class SyntheticCountry:
                     concept=consumption_initialisation.scaling_income_concept,
                     financial_asset_yield=consumption_initialisation.financial_asset_yield,
                     financial_income_tax=tax_data.income_tax,
+                    employee_social_insurance_tax=tax_data.employee_social_insurance_tax,
                 )
                 if housing_market is not None:
                     housing_market.housing_market_data = scaled_housing

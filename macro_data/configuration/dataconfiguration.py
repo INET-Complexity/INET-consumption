@@ -188,15 +188,14 @@ class HouseholdConsumptionInitialisationConfiguration(BaseModel):
     scaling_income_concept: Literal["disp_geom_avg_income", "disposable_income", "disp_non_property_income"] = (
         "disp_geom_avg_income"
     )
-    financial_asset_yield: Optional[float] = None  # annual; replaces the D4 anchor when scaling is on
+    # Annual yield on IFA replacing the D4 anchor when scaling is on: Eurostat nasa_10_nf_tr S14 FR,
+    # D4 sub-items matched to F3+F4+F511+F52+F62, mean 2010-19 (vault, 2026-11-24).
+    financial_asset_yield: float = 0.0293
 
     @model_validator(mode="after")
     def validate_source(self):
-        if self.balance_sheet_scaling:
-            if self.method != "hfcs_cy":
-                raise ValueError("balance_sheet_scaling requires method hfcs_cy (it needs the HFCS source income).")
-            if self.financial_asset_yield is None or not self.financial_asset_yield > 0.0:
-                raise ValueError("balance_sheet_scaling requires a positive annual financial_asset_yield.")
+        if self.balance_sheet_scaling and not self.financial_asset_yield > 0.0:
+            raise ValueError("balance_sheet_scaling requires a positive annual financial_asset_yield.")
         if self.method == "hfcs_cy":
             if self.source_file is None or self.registration_file is None:
                 raise ValueError("hfcs_cy requires source_file and registration_file (relative to raw_data_path).")

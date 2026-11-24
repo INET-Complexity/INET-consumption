@@ -48,6 +48,15 @@ def _run(simulation):
         return realise(*args, **kwargs)
 
     country.update_realised_metrics = realise_and_record
+    settle = country.settle_authoritative_household_payments
+    settlement = {}
+
+    def settle_and_record():
+        settlement["opening_overdraft"] = hh.current_opening_overdraft().copy()
+        settlement["goods_floor"] = np.asarray(country._effective_goods_floor(), dtype=float).copy()
+        return settle()
+
+    country.settle_authoritative_household_payments = settle_and_record
     for period in range(PERIODS):
         if period == OVERDRAWN_FROM:
             overdrawn[::40] = True
@@ -83,6 +92,11 @@ def _run(simulation):
                 "unpaid_consumer_payment": hh.ts.current("unpaid_consumer_payment").copy(),
                 "missed_payment_count_consumer": hh.ts.current("missed_payment_count_consumer").copy(),
                 "credit_rationing_gap": hh.post_grant_feasible_plan.credit_rationing_gap.copy(),
+                "consumption_cut_amount": hh.post_grant_feasible_plan.consumption_cut_amount.copy(),
+                "consumption_before_floor": hh.post_grant_feasible_plan.consumption_before_floor.copy(),
+                "residual_after_credit": hh.post_grant_feasible_plan.residual_shortfall_before_floor.copy(),
+                "settlement_overdraft": settlement["opening_overdraft"],
+                "settlement_goods_floor": settlement["goods_floor"],
                 "scheduled_service": hh.ts.current("scheduled_consumer_payment")
                 + hh.ts.current("actual_mortgage_payment")
                 + hh.ts.current("unpaid_mortgage_payment"),
@@ -149,7 +163,8 @@ def test_support_never_finances_overdraft_repayment(run):
 def test_overdraft_sale_repays_the_overdraft_after_the_floor_including_supported_households(run):
     _, overdrawn, records = run
     record = records[OVERDRAWN_FROM]
-    # The sale is sized to repay the overdraft after rent, the floor, debt service and overdraft interest.
+    # The sale is sized to repay the overdraft after the planned uses: rent, goods, debt service, overdraft
+    # interest and investment.
     covered = (
         overdrawn
         & (record["overdraft_repayment_need"] > 0.0)
@@ -230,3 +245,26 @@ def test_overdraft_interest_arrears_are_collected_next_period_or_counted_as_a_co
     # Not paid: a consumer miss, as for unpaid consumer service.
     assert missed.sum() >= 1
     assert np.all(following["missed_payment_count_consumer"][missed] >= 1)
+
+
+def test_overdrawn_household_with_ample_illiquid_assets_sells_and_keeps_planned_consumption(run):
+    _, overdrawn, records = run
+    record = records[OVERDRAWN_FROM]
+    overdraft = record["settlement_overdraft"]
+    # Sell first: the forced sale covers the overdraft, so goods are not cut to repay it. Households whose
+    # credit was rationed or whose refreshed plan is still unfunded after credit and the sale are excluded, and
+    # so are floor top-ups (goods below the floor): the refreshed cash need counts desired goods, not the floor.
+    ample = (
+        overdrawn
+        & (overdraft > 0.0)
+        & (record["overdraft_repayment_need"] > 0.0)
+        & (record["opening_ifa"] > 2.0 * (record["liquidation_planned"] + overdraft))
+        & (record["overdraft_sale_cash"] >= record["overdraft_repayment_need"] * (1.0 - 1e-12))
+        & (record["credit_rationing_gap"] == 0.0)
+        & (record["residual_after_credit"] <= 1e-9 * (1.0 + overdraft))
+        & (record["consumption_before_floor"] >= record["settlement_goods_floor"])
+    )
+    assert ample.sum() >= 5
+    np.testing.assert_allclose(record["overdraft_repayment"][ample], overdraft[ample], rtol=1e-9)
+    cut = record["consumption_cut_amount"][ample]
+    assert np.all(cut <= 1e-9 * (1.0 + record["consumption_before_floor"][ample]))

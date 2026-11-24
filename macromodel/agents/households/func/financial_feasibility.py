@@ -25,34 +25,51 @@ def overdraft_sale_need(
     opening_overdraft: np.ndarray,
     income: np.ndarray,
     liquidity_shortfall: np.ndarray,
+    desired_goods: np.ndarray,
     goods_floor: np.ndarray,
     cash_rent: np.ndarray,
     scheduled_service: np.ndarray,
+    investment: np.ndarray,
     support_enabled: bool,
 ) -> np.ndarray:
-    """Net forced sale that repays the opening overdraft B after the uses senior to it.
+    """Net forced sale that repays the opening overdraft B while the household keeps its planned uses.
 
-    The allocator pays rent R, the goods floor F and scheduled service O
-    (including overdraft interest) before B; goods above the floor and
-    investment come after it. The household's own resources are income y
-    plus the borrow-or-sell finance max(L, 0) of the recorded shortfall L;
-    with support S = max(F + R - (y + max(L, 0)), 0) tops them up to F + R,
-    and the overdraft sale is exempt from that test. So
+    Sell first: an overdrawn household with illiquid assets repays B by selling them (paper financing order:
+    liquid assets, then illiquid sales, then credit) and keeps its planned goods G and investment V. With
+    rent R, goods floor F and scheduled service O (including overdraft interest) the planned uses are
 
-        sale = max(F + R + O + B - (y + max(L, 0)) - S, 0),
+        U = max(G, F) + R + O + V,        L = G + R + O + V - y  (the recorded shortfall).
 
-    with S = 0 in minimum_income mode, where the sale also covers the floor
-    top-up so that it is not spent on the floor instead of the overdraft.
-    Zero for a household without an opening overdraft.
+    The household's own resources are income y plus the borrow-or-sell finance max(L, 0) of a planned deficit
+    (credit and the regular sale ``liquidation_planned``, which this sale comes on top of). With support
+    (legacy_stage5) S = max(F + R - (y + max(L, 0)), 0) tops them up to F + R, and the overdraft sale is
+    exempt from that test, so support is never spent on B; S = 0 in minimum_income mode. The sale is
+
+        sale_B = max(U + B - (y + max(L, 0)) - S, 0) = max(B - (y + max(L, 0) + S - U), 0).
+
+    So a planned positive saving y - (G + R + O + V) reduces B before anything is sold, and a planned deficit
+    L > 0 does not reduce the sale: it is financed separately by the regular borrow-or-sell plan. The term
+    U - (y + max(L, 0)) - S > 0 when goods are below the floor and support does not cover the top-up (always
+    in minimum_income mode): the sale then also covers that top-up, so it is not spent on the floor instead
+    of B. The allocator pays B before goods above the floor and investment, so if executable illiquid assets
+    (after the trade cost and the minimum sale size, applied at the reservation) cannot cover the sale,
+    only the uncovered part is cut, from investment (ranked last) first, then from goods above the floor.
+    Zero without an overdraft.
     """
     overdraft = np.maximum(np.asarray(opening_overdraft, dtype=float), 0.0)
     shortfall = np.asarray(liquidity_shortfall, dtype=float)
     shortfall = np.where(np.isfinite(shortfall), shortfall, 0.0)
     own_resources = np.asarray(income, dtype=float) + np.maximum(shortfall, 0.0)
-    floor_and_rent = np.asarray(goods_floor, dtype=float) + np.asarray(cash_rent, dtype=float)
-    senior_uses = floor_and_rent + np.asarray(scheduled_service, dtype=float)
+    floor = np.asarray(goods_floor, dtype=float)
+    floor_and_rent = floor + np.asarray(cash_rent, dtype=float)
+    planned_uses = (
+        np.maximum(np.asarray(desired_goods, dtype=float), floor)
+        + np.asarray(cash_rent, dtype=float)
+        + np.asarray(scheduled_service, dtype=float)
+        + np.asarray(investment, dtype=float)
+    )
     support = np.maximum(floor_and_rent - own_resources, 0.0) if support_enabled else 0.0
-    need = np.maximum(senior_uses + overdraft - own_resources - support, 0.0)
+    need = np.maximum(planned_uses + overdraft - own_resources - support, 0.0)
     return np.where(overdraft > 0.0, need, 0.0)
 
 

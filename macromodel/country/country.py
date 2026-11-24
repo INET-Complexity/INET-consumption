@@ -2967,9 +2967,10 @@ class Country:
     def _planned_overdraft_repayment_need(
         self, liquidity_shortfall: np.ndarray, scheduled_debt_service: np.ndarray
     ) -> np.ndarray:
-        """Forced sale that repays the opening overdraft B (``overdraft_sale_need``).
+        """Forced sale that repays the opening overdraft B before cutting planned uses (``overdraft_sale_need``).
 
-        Support S is the legacy_stage5 support, zero in minimum_income mode.
+        G is the VAT-inclusive target consumption and V the target investment cash, the same planned uses
+        as the liquidity shortfall L. Support S is the legacy_stage5 support, zero in minimum_income mode.
         Before the housing market the housing draw is unknown, so B is the
         opening overdraft max(-LFA, 0).
         """
@@ -2978,9 +2979,11 @@ class Country:
             opening_overdraft=np.maximum(-np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float), 0.0),
             income=hh.current_financing_income(),
             liquidity_shortfall=liquidity_shortfall,
+            desired_goods=hh.consumption_cash_factor() * np.asarray(hh.ts.current("target_consumption")).sum(axis=1),
             goods_floor=self._effective_goods_floor(),
             cash_rent=hh.current_consumption_cash_rent(),
             scheduled_service=scheduled_debt_service,
+            investment=hh.target_investment_cash(),
             support_enabled=self._stage5_support_enabled(),
         )
 

@@ -549,16 +549,18 @@ def test__without_support_an_overdraft_sale_sized_on_the_floor_repays_the_overdr
 
 
 def _overdraft_sale(**inputs):
-    """overdraft_sale_need with F=80, R=20, O=45, B=30, y=100 unless overridden; L defaults to 0."""
+    """overdraft_sale_need with G=F=80, R=20, O=45, V=0, B=30, y=100 unless overridden; L defaults to 0."""
     from macromodel.agents.households.func.financial_feasibility import overdraft_sale_need
 
     values = {
         "opening_overdraft": 30.0,
         "income": 100.0,
         "liquidity_shortfall": 0.0,
+        "desired_goods": 80.0,
         "goods_floor": 80.0,
         "cash_rent": 20.0,
         "scheduled_service": 45.0,
+        "investment": 0.0,
         **inputs,
     }
     support_enabled = values.pop("support_enabled", True)
@@ -576,7 +578,7 @@ def test__overdraft_sale_is_zero_without_an_opening_overdraft(support_enabled):
     )
 
 
-def test__overdraft_sale_without_desired_goods_above_the_floor_or_investment_characterisation():
+def test__overdraft_sale_without_goods_above_the_floor_or_investment_is_unchanged_characterisation():
     # Floor and rent 100, service 45, B = 30. Own resources y + max(L, 0):
     #   legacy: sale = max(O + B - max(own - F - R, 0), 0); minimum income: max(F + R + O + B - own, 0).
     own = np.array([0.0, 60.0, 100.0, 145.0, 160.0, 175.0, 300.0])
@@ -584,3 +586,103 @@ def test__overdraft_sale_without_desired_goods_above_the_floor_or_investment_cha
     np.testing.assert_allclose(_overdraft_sale(income=own, support_enabled=False), [175, 115, 75, 30, 15, 0, 0])
     # A positive shortfall is financed by borrow-or-sell and counts as own resources; a negative one does not.
     np.testing.assert_allclose(_overdraft_sale(income=[100.0, 100.0], liquidity_shortfall=[45.0, -45.0]), [30.0, 75.0])
+
+
+def _sell_first_household(income, ifa_cash, support_enabled=True):
+    """G=120 > F=80, R=20, O=45 (incl. overdraft interest), V=15, B=30; returns (sale need, settled plan).
+
+    The planned deficit L = G + R + O + V - y is financed by the regular borrow-or-sell plan (here a regular
+    sale of max(L, 0)); the overdraft sale comes on top, capped at ``ifa_cash`` (executable illiquid cash).
+    """
+    goods, rent, service, investment, overdraft = 120.0, 20.0, 45.0, 15.0, 30.0
+    income = np.atleast_1d(np.asarray(income, dtype=float))
+    shortfall = goods + rent + service + investment - income
+    need = _overdraft_sale(
+        opening_overdraft=overdraft,
+        income=income,
+        liquidity_shortfall=shortfall,
+        desired_goods=goods,
+        investment=investment,
+        support_enabled=support_enabled,
+    )
+    sale_cash = np.minimum(need, ifa_cash)
+    resources = income + np.maximum(shortfall, 0.0) + sale_cash
+    settled = _settle_floor(
+        resources=resources,
+        consumption_before_floor=goods,
+        scheduled_consumer_service=10.0,
+        scheduled_mortgage_service=30.0,
+        scheduled_overdraft_interest=5.0,
+        investment=investment,
+        opening_overdraft=overdraft,
+        support_exempt_resources=sale_cash,
+        support_enabled=support_enabled,
+    )
+    return need, sale_cash, resources, settled
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__overdrawn_household_with_ample_illiquid_assets_sells_the_overdraft_and_keeps_planned_uses(support_enabled):
+    # Planned deficit L = 200 - y >= 0: the sale is exactly B = 30, whatever the deficit.
+    need, _, _, settled = _sell_first_household([0.0, 100.0, 200.0], ifa_cash=1e9, support_enabled=support_enabled)
+    np.testing.assert_allclose(need, 30.0)
+    np.testing.assert_allclose(settled.overdraft_repayment, 30.0, rtol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, 120.0, rtol=1e-9)
+    np.testing.assert_allclose(settled.investment_after_floor, 15.0, rtol=1e-9)
+    np.testing.assert_allclose(settled.consumption_cut_amount, 0.0, atol=1e-9)
+    np.testing.assert_allclose(settled.floor_support, 0.0, atol=1e-9)
+
+
+def test__planned_positive_saving_reduces_the_overdraft_before_any_sale():
+    # Saving s = y - 200: 10 -> sale 20; 30 or more -> no sale, B repaid from income.
+    need, _, _, settled = _sell_first_household([210.0, 230.0, 260.0], ifa_cash=1e9)
+    np.testing.assert_allclose(need, [20.0, 0.0, 0.0])
+    np.testing.assert_allclose(settled.overdraft_repayment, 30.0, rtol=1e-9)
+    np.testing.assert_allclose(settled.consumption_cut_amount, 0.0, atol=1e-9)
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__insufficient_illiquid_assets_cut_junior_uses_only_for_the_uncovered_part(support_enabled):
+    # Sale need 30 but only 0, 10 or 25 executable: B is still senior, so the uncovered part 30 - X is cut from
+    # the uses junior to B, investment (ranked last, V = 15) first, then goods above the floor.
+    need, sale_cash, _, settled = _sell_first_household(
+        np.full(3, 100.0), ifa_cash=np.array([0.0, 10.0, 25.0]), support_enabled=support_enabled
+    )
+    np.testing.assert_allclose(need, 30.0)
+    np.testing.assert_allclose(settled.overdraft_repayment, 30.0, rtol=1e-9)
+    uncovered = 30.0 - sale_cash
+    np.testing.assert_allclose(settled.investment_after_floor, np.maximum(15.0 - uncovered, 0.0), atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_cut_amount, np.maximum(uncovered - 15.0, 0.0), atol=1e-9)
+    np.testing.assert_allclose(settled.consumption_after_floor, 120.0 - np.maximum(uncovered - 15.0, 0.0))
+
+
+@pytest.mark.parametrize("support_enabled", [True, False])
+def test__overdraft_sale_and_regular_sale_do_not_double_count_and_the_plan_closes(support_enabled):
+    # Resources = y + regular finance max(L, 0) + overdraft sale: the plan spends exactly G + R + O + V + B,
+    # so nothing is sold twice and nothing is left over (stock-flow: A + S - uses - B = 0 up to the round-down).
+    income = np.array([0.0, 100.0, 200.0, 210.0])
+    need, _, resources, settled = _sell_first_household(income, ifa_cash=1e9, support_enabled=support_enabled)
+    spent = (
+        settled.consumption_after_floor
+        + 20.0
+        + 45.0
+        - settled.unpaid_consumer_service
+        - settled.unpaid_mortgage_service
+        - settled.unpaid_overdraft_interest
+        + settled.investment_after_floor
+        + settled.overdraft_repayment
+    )
+    np.testing.assert_allclose(resources + settled.floor_support - spent, 0.0, atol=1e-9)
+    np.testing.assert_allclose(resources - income - np.maximum(200.0 - income, 0.0), need)
+
+
+def test__floor_top_up_stays_in_the_sale_without_support_and_with_support_is_support():
+    # G = 50 < F = 80, y + max(L, 0) = 130 (L = 50 + 20 + 45 + 15 - y <= 0 at y = 130):
+    #   minimum income: the sale covers B and the top-up F - G = 30 crowding out O + V; legacy: support covers it.
+    common = {"income": 130.0, "desired_goods": 50.0, "investment": 15.0, "liquidity_shortfall": 0.0}
+    np.testing.assert_allclose(_overdraft_sale(support_enabled=False, **common), [60.0])
+    np.testing.assert_allclose(_overdraft_sale(support_enabled=True, **common), [60.0])
+    # Own resources 90 < F + R = 100: legacy support 10 covers part of the top-up; minimum income sells it.
+    common["income"] = 90.0
+    np.testing.assert_allclose(_overdraft_sale(support_enabled=False, **common), [100.0])
+    np.testing.assert_allclose(_overdraft_sale(support_enabled=True, **common), [90.0])

@@ -264,7 +264,7 @@ def test_available_tranche_supply_counts_firm_overdrafts_in_the_exposure():
     np.testing.assert_allclose(supply, [0.0, 5.0])
 
 
-def _term_out_case(equity, rates):
+def _term_out_case(equity, rates, booked=(100.0, 100.0)):
     """Two banks; firm 0 (bank 0) and firm 1 (bank 1) each overdrawn by 100; firm 1 cannot borrow."""
     from types import SimpleNamespace
 
@@ -291,7 +291,7 @@ def _term_out_case(equity, rates):
             equity=np.asarray(equity, dtype=float),
             total_outstanding_loans=np.zeros(2),
             overdrafts_to_households=np.zeros(2),
-            overdrafts_to_firms=np.array([100.0, 100.0]),
+            overdrafts_to_firms=np.asarray(booked, dtype=float),
             interest_rates_on_short_term_firm_loans=np.asarray(rates, dtype=float),
         ),
     )
@@ -319,7 +319,7 @@ def _term_out_case(equity, rates):
     )
     from macromodel.markets.credit_market.types_of_loans import LoanTypes
 
-    return clearer.clear_loans(
+    return clearer, clearer.clear_loans(
         banks=banks,
         firms=firms,
         households=None,
@@ -340,7 +340,8 @@ def test_overdraft_refinance_relief_applies_only_at_the_bank_holding_the_overdra
     # borrow (collateral 100 - overdraft 100 = 0), so its overdraft at bank 1 is not retired: bank 1 must not
     # lend against it. Firm 0's refinance is termed out by bank 0, which holds that overdraft, even though
     # bank 1 is the cheaper lender.
-    loans = _term_out_case(equity=[10.0, 10.0], rates=[0.08, 0.02])
+    clearer, loans = _term_out_case(equity=[10.0, 10.0], rates=[0.08, 0.02])
+    np.testing.assert_allclose(clearer._last_term_out_by_bank, [100.0, 0.0])
     np.testing.assert_allclose(loans[0], [[100.0, 0.0], [0.0, 0.0]])
     np.testing.assert_allclose(loans[1], [[0.08, 0.0], [0.0, 0.0]])
     assert loans[2, 0, 0] > 0.0
@@ -348,5 +349,14 @@ def test_overdraft_refinance_relief_applies_only_at_the_bank_holding_the_overdra
 
 def test_overdraft_refinance_uses_free_room_first_and_terms_out_the_rest_at_the_own_bank():
     # Bank 1 has 30 of free room (equity / CAR = 130): it lends 30 to firm 0; bank 0 terms out the other 70.
-    loans = _term_out_case(equity=[10.0, 13.0], rates=[0.08, 0.02])
+    clearer, loans = _term_out_case(equity=[10.0, 13.0], rates=[0.08, 0.02])
     np.testing.assert_allclose(loans[0], [[70.0, 0.0], [30.0, 0.0]])
+    np.testing.assert_allclose(clearer._last_term_out_by_bank, [70.0, 0.0])
+
+
+def test_overdraft_term_out_is_capped_by_the_overdrafts_the_bank_books():
+    # Bank 0 books only 50 of overdrafts (inconsistent with firm 0's 100): it terms out at most 50, net of the
+    # 30 bank 1 already lent to firm 0 from free room, so 20.
+    clearer, loans = _term_out_case(equity=[5.0, 13.0], rates=[0.08, 0.02], booked=(50.0, 100.0))
+    np.testing.assert_allclose(loans[0], [[20.0, 0.0], [30.0, 0.0]])
+    np.testing.assert_allclose(clearer._last_term_out_by_bank, [20.0, 0.0])

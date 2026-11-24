@@ -1504,6 +1504,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
 
         self._last_received_debt_rollover_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
         self._last_received_overdraft_refinance_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
+        self._last_overdraft_term_out_by_bank = np.zeros(banks.ts.current("n_banks"))
         initial_new_credit_by_firm = new_credit_by_firm.copy()
 
         # Ordinary firm loans clear before rollover/refinance so legacy-liability repair cannot
@@ -1605,10 +1606,11 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_bank += new_debt_rollover_st_loans[0].sum(axis=1)
 
         # Overdraft refinance: any bank lends from its free capital room; the demand left within the firm's
-        # borrowing capacity is then termed out by the firm's own bank, which holds the overdraft. That loan
-        # replaces the overdraft it repays at the same bank one for one (target <= overdraft), so it leaves
-        # the bank's capital-requirement exposure unchanged and needs no room. Relief for a retired overdraft
-        # thus applies only at the bank holding it, never to loans another bank's overdraft would repay.
+        # borrowing capacity is then termed out by the firm's own bank, which holds the overdraft, up to the
+        # firm overdrafts that bank books net of those the first loans repay. That loan replaces the overdraft
+        # it repays at the same bank one for one (target <= overdraft), so it leaves the bank's
+        # capital-requirement exposure unchanged and needs no room. Relief for a retired overdraft thus applies
+        # only at the bank holding it, never to loans another bank's overdraft would repay.
         residual_car_room = np.maximum(
             0.0,
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
@@ -1641,7 +1643,10 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         )
         self._last_received_overdraft_refinance_credit_by_firm = new_refinance_st_loans[0].sum(axis=0)
         new_credit_by_firm += new_refinance_st_loans[0].sum(axis=0)
-        new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1)
+        # The term-out replaces booked overdrafts at the same bank: it uses no capital room, so it is neither
+        # counted against later tranches nor in credit_market_car_room_used.
+        self._last_overdraft_term_out_by_bank = self._last_term_out_by_bank.copy()
+        new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1) - self._last_overdraft_term_out_by_bank
         new_st_loans = np.zeros_like(new_ordinary_st_loans)
         new_st_loans[0] = new_ordinary_st_loans[0] + new_debt_rollover_st_loans[0] + new_refinance_st_loans[0]
         new_st_loans[1] = np.divide(
@@ -1830,8 +1835,10 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 refinance demand. The recorded target series is left unchanged.
             own_bank_term_out (np.ndarray | None): Bank ID per borrower. When
                 given, the borrower capacity the bank supply leaves unfilled is
-                lent by the borrower's own bank without capital room: used for
-                overdraft refinance, which replaces the overdraft at that bank.
+                lent by the borrower's own bank without capital room, up to the
+                firm overdrafts that bank books net of those already refinanced
+                in this tranche: used for overdraft refinance, which replaces the
+                overdraft at that bank. The amount is ``_last_term_out_by_bank``.
             append_firm_diagnostics (bool): Whether this call appends firm-level
                 binding diagnostics. Split short-term tranches disable this and
                 append one aggregate short-term diagnostic after the tranches are
@@ -1843,6 +1850,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 - Index 1: Period interest rate
                 - Index 2: Scheduled annuity payment
         """
+        self._last_term_out_by_bank = np.zeros(banks.ts.current("n_banks"))
         # Get bank interest rates
         if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
             loan_maturity = banks.parameters.short_term_firm_loan_maturity
@@ -2113,9 +2121,18 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 banks_ir=banks_ir,
             )
         if own_bank_term_out is not None:
+            n_banks = banks.ts.current("n_banks")
             granted = new_loans[0][:, agents_with_demand].sum(axis=0)
             own_bank = np.asarray(own_bank_term_out, dtype=int)[agents_with_demand]
-            new_loans[0, own_bank, agents_with_demand] += np.maximum(capacities - granted, 0.0)
+            term_out = np.maximum(capacities - granted, 0.0)
+            # A bank can only term out the overdrafts it books, net of those the loans above already repay.
+            booked = np.asarray(banks.ts.current("overdrafts_to_firms"), dtype=float)
+            left = np.maximum(booked - np.bincount(own_bank, weights=granted, minlength=n_banks), 0.0)
+            wanted = np.bincount(own_bank, weights=term_out, minlength=n_banks)
+            scale = np.divide(left, wanted, out=np.ones(n_banks), where=wanted > left)
+            term_out = term_out * scale[own_bank]
+            new_loans[0, own_bank, agents_with_demand] += term_out
+            self._last_term_out_by_bank = np.bincount(own_bank, weights=term_out, minlength=n_banks)
         new_loans[1, :, agents_with_demand] = np.where(
             new_loans[0, :, agents_with_demand] > 0.0,
             banks_ir[:, np.newaxis],

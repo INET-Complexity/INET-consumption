@@ -239,7 +239,10 @@ def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(
     test_banks, test_firms, test_households
 ):
     clearer = _waterbucket_clearer(consider_loan_type_fractions=False)
-    _set_bank_lending_room(test_banks, max_car=100.0)
+    # The bank books the firm's overdraft of 1,000, which counts in its capital-requirement exposure: free room
+    # is 1,100 - 1,000 = 100.
+    _set_bank_lending_room(test_banks, max_car=1_100.0)
+    test_banks.ts.override_current("overdrafts_to_firms", np.array([1_000.0]))
 
     n_banks = test_banks.ts.current("n_banks")
     n_firms = test_firms.ts.current("n_firms")
@@ -279,6 +282,9 @@ def test_waterbucket_clears_overdraft_refinance_from_residual_capacity_after_lt(
     # which the loan replaces at that bank without new capital-requirement exposure.
     assert np.isclose(short_term[0, :, 0].sum(), 1_000.0)
     assert np.isclose(clearer._last_received_overdraft_refinance_credit_by_firm[0], 1_000.0)
+    np.testing.assert_allclose(clearer._last_overdraft_term_out_by_bank, [980.0])
+    # The term-out uses no capital room: only the long-term 80 and the refinance 20 from free room count.
+    assert np.isclose(test_banks.ts.current("credit_market_car_room_used")[0], 100.0)
 
 
 def test_waterbucket_clears_debt_rollover_from_residual_capacity_after_lt(test_banks, test_firms, test_households):

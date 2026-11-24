@@ -2756,6 +2756,7 @@ class TestCountry:
             design_matrix=design_matrix,
             start_period=test_country.start_period,
             estimation_epoch=design_matrix.index.min(),
+            trend_growth_per_quarter=country_module.permanent_income_trend_growth(forecast_inputs.coefficient_table),
         )
         expected = pure_forecast_common_permanent_income(x_t, forecast_inputs)
 

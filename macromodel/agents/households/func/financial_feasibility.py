@@ -42,19 +42,20 @@ def overdraft_sale_need(
 
     The household's own resources are income y plus the borrow-or-sell finance max(L, 0) of a planned deficit
     (credit and the regular sale ``liquidation_planned``, which this sale comes on top of). With support
-    (legacy_stage5) S = max(F + R - (y + max(L, 0)), 0) tops them up to F + R, and the overdraft sale is
-    exempt from that test, so support is never spent on B; S = 0 in minimum_income mode. The sale is
+    (legacy_stage5) S = max(F + R - (y + max(L, 0)), 0) tops them up to F + R; S = 0 in minimum_income mode.
+    The sale repays B net of what own resources and support leave after the planned uses, and never more:
 
-        sale_B = max(U + B - (y + max(L, 0)) - S, 0) = max(B - (y + max(L, 0) + S - U), 0).
+        sale_B = max(B - max(y + max(L, 0) + S - U, 0), 0) <= B.
 
-    So a planned positive saving y - (G + R + O + V) reduces B before anything is sold, and a planned deficit
-    L > 0 does not reduce the sale: it is financed separately by the regular borrow-or-sell plan. The term
-    U - (y + max(L, 0)) - S > 0 when goods are below the floor and support does not cover the top-up (always
-    in minimum_income mode): the sale then also covers that top-up, so it is not spent on the floor instead
-    of B. The allocator pays B before goods above the floor and investment, so if executable illiquid assets
-    (after the trade cost and the minimum sale size, applied at the reservation) cannot cover the sale,
-    only the uncovered part is cut, from investment (ranked last) first, then from goods above the floor.
-    Zero without an overdraft.
+    So a planned positive saving y + max(L, 0) + S - U reduces B before anything is sold, and a planned deficit
+    L > 0 does not reduce the sale: it is financed separately by the regular plan. The cap at B makes the
+    sale continuous in B (it is zero at B = 0) and sizes the support-exempt sale on B only: a floor top-up
+    (G < F) that own resources and support leave unfunded is not added to the sale, as for a household without
+    an overdraft. Sale cash is fungible, so where that top-up leaves debt service unpaid the allocator pays the
+    service from the sale first (it is senior to B) and B is repaid in part. The allocator pays B before goods
+    above the floor and investment, so if executable illiquid assets (after the trade cost and the minimum sale
+    size, applied at the reservation) cannot cover the sale, only the uncovered part is cut, from investment
+    (ranked last) first, then from goods above the floor. Zero without an overdraft.
     """
     overdraft = np.maximum(np.asarray(opening_overdraft, dtype=float), 0.0)
     shortfall = np.asarray(liquidity_shortfall, dtype=float)
@@ -69,8 +70,8 @@ def overdraft_sale_need(
         + np.asarray(investment, dtype=float)
     )
     support = np.maximum(floor_and_rent - own_resources, 0.0) if support_enabled else 0.0
-    need = np.maximum(planned_uses + overdraft - own_resources - support, 0.0)
-    return np.where(overdraft > 0.0, need, 0.0)
+    saving = np.maximum(own_resources + support - planned_uses, 0.0)
+    return np.maximum(overdraft - saving, 0.0)
 
 
 def forced_liquidation_cash(plan: "PostGrantFeasiblePlan") -> np.ndarray:

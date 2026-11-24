@@ -164,13 +164,14 @@ def test_overdraft_sale_repays_the_overdraft_after_the_floor_including_supported
     _, overdrawn, records = run
     record = records[OVERDRAWN_FROM]
     # The sale is sized to repay the overdraft after the planned uses: rent, goods, debt service, overdraft
-    # interest and investment.
+    # interest and investment. A floor top-up (goods below the floor) is not in the sale, so it is excluded.
     covered = (
         overdrawn
         & (record["overdraft_repayment_need"] > 0.0)
         & (record["overdraft_sale_cash"] >= record["overdraft_repayment_need"] * (1.0 - 1e-12))
         & (record["credit_rationing_gap"] == 0.0)
         & (record["financing_income_error"] >= 0.0)
+        & (record["consumption_before_floor"] >= record["settlement_goods_floor"])
     )
     assert covered.sum() >= 5
     assert np.all(record["closing"][covered] >= -1e-6)
@@ -251,20 +252,16 @@ def test_overdrawn_household_with_ample_illiquid_assets_sells_and_keeps_planned_
     _, overdrawn, records = run
     record = records[OVERDRAWN_FROM]
     overdraft = record["settlement_overdraft"]
-    # Sell first: the forced sale covers the overdraft, so goods are not cut to repay it. Households whose
-    # credit was rationed or whose refreshed plan is still unfunded after credit and the sale are excluded, and
-    # so are floor top-ups (goods below the floor): the refreshed cash need counts desired goods, not the floor.
+    # Sell first: an overdrawn household with ample illiquid assets, no credit rationing and goods at or above
+    # the floor repays the overdraft by a forced sale and cuts nothing. On main such households cut goods.
     ample = (
         overdrawn
         & (overdraft > 0.0)
-        & (record["overdraft_repayment_need"] > 0.0)
         & (record["opening_ifa"] > 2.0 * (record["liquidation_planned"] + overdraft))
-        & (record["overdraft_sale_cash"] >= record["overdraft_repayment_need"] * (1.0 - 1e-12))
         & (record["credit_rationing_gap"] == 0.0)
-        & (record["residual_after_credit"] <= 1e-9 * (1.0 + overdraft))
         & (record["consumption_before_floor"] >= record["settlement_goods_floor"])
     )
     assert ample.sum() >= 5
-    np.testing.assert_allclose(record["overdraft_repayment"][ample], overdraft[ample], rtol=1e-9)
     cut = record["consumption_cut_amount"][ample]
     assert np.all(cut <= 1e-9 * (1.0 + record["consumption_before_floor"][ample]))
+    np.testing.assert_allclose(record["overdraft_repayment"][ample], overdraft[ample], rtol=1e-9)

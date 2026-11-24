@@ -4262,7 +4262,7 @@ def _frm_ready_households(households):
     households.states["Investment Attitudes"] = np.full(n, 2)
     households.states["Tenure Status of the Main Residence"] = np.full(n, 3)
     households.states["portfolio_participates"] = np.ones(n, dtype=bool)
-    households.states["population_scale_factor"] = 1e12
+    households.states["population_scale_factor"] = 1.0
     households.states["frm_coefficients"] = SimpleNamespace(
         magnitude_coefficients={
             "constant": 0.0,
@@ -4273,8 +4273,10 @@ def _frm_ready_households(households):
             "owner": 0.3,
             "net_wealth": 0.2,
         },
-        net_wealth_scale_divisor=1.0,
+        net_wealth_scale_divisor=1e5,
     )
+    households.ts.override_current("wealth", np.full(n, 1e5))
+    households.ts.override_current("debt", np.zeros(n))
     households.ts.override_current("mortgage_debt", np.zeros(n))
     households.states.pop("frm_target_share", None)
     return n
@@ -4307,26 +4309,24 @@ def test_frm_target_share_responds_to_each_current_covariate(test_households):
     households.states["household_members_in_employment"][0] = 1.0
     changed(lambda: households.states["household_head_age"].__setitem__(0, 70.0))
     households.states["household_head_age"][0] = 50.0
-    wealth = households.ts.current("net_wealth")
-    households.ts.override_current("wealth", households.ts.current("wealth") + np.eye(n)[0] * 1e13)
+    households.ts.override_current("wealth", households.ts.current("wealth") + np.eye(n)[0] * 2e5)
     out = _target(households)
     assert out[0] != base[0]
     np.testing.assert_array_equal(out[1:], base[1:])
-    del wealth
 
 
 def test_frm_target_share_follows_net_wealth_each_period(test_households):
     households = test_households
     _frm_ready_households(households)
     first = _target(households)
-    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e13)
+    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e5)
     assert not np.array_equal(_target(households), first)
 
 
 def test_frm_owner_and_mortgagor_dummies_follow_mortgage_not_tenure_code(test_households):
     households = test_households
     n = _frm_ready_households(households)
-    households.states["frm_coefficients"].magnitude_coefficients["net_wealth"] = 0.0
+    households.states["frm_coefficients"].magnitude_coefficients["net_wealth"] = 0.0  # isolate the dummies
     tenure = households.states["Tenure Status of the Main Residence"]
     tenure[:] = np.array([1, 1, 2, 3, -1] + [3] * (n - 5))
     mortgage = np.zeros(n)

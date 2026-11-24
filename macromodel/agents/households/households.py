@@ -4702,7 +4702,7 @@ class Households(Agent):
 
         Evaluated each period on the household's current characteristics:
         owner and mortgagor dummies, employed household members, head age,
-        investment attitude and net wealth (``compute_net_wealth()``, scaled as in
+        investment attitude and net wealth (last closed period's wealth minus debt, scaled as in
         ``compute_frm_magnitude_target_share``). Which of these move in the model:
         owner/mortgagor (housing market purchases and sales, mortgage origination and
         repayment), employed members (live: ``Country`` refreshes
@@ -4726,8 +4726,15 @@ class Households(Agent):
         Returns:
             ``(target_illiquid_share, target_share_clipped_flag)``, each ``(n_households,)``.
         """
+        # Balance-sheet inputs come from the last CLOSED period: wealth is appended only at the end of
+        # update_wealth, after Stage 4, while period-t debt rows are appended during the Stage 5
+        # settlement. Reading the closed row k makes the borrow-versus-sell call (before settlement)
+        # and Stage 4 (after it) see identical inputs. Tenure is the current state (the housing market
+        # clears before both calls), so a new buyer is an owner without a mortgage until the next
+        # period's closed row shows the loan.
+        k = len(self.ts.dicts["wealth"]) - 1
         owns_residence = np.isin(self.states["Tenure Status of the Main Residence"], [1, 2, 4])
-        has_mortgage = self.ts.current("mortgage_debt") > 0.0
+        has_mortgage = self.ts.dicts["mortgage_debt"][k] > 0.0
         frm_coefficients = self.states["frm_coefficients"]
         return compute_frm_magnitude_target_share(
             age=self.states["household_head_age"],
@@ -4735,7 +4742,7 @@ class Households(Agent):
             investment_attitudes=self.states["Investment Attitudes"],
             mortgagor=(owns_residence & has_mortgage).astype(float),
             owner=(owns_residence & ~has_mortgage).astype(float),
-            net_wealth=self.compute_net_wealth(),
+            net_wealth=self.ts.dicts["wealth"][k] - self.ts.dicts["debt"][k],
             portfolio_participates=self.states["portfolio_participates"],
             magnitude_coefficients=frm_coefficients.magnitude_coefficients,
             population_scale_factor=self.states["population_scale_factor"],

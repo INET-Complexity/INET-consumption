@@ -468,3 +468,38 @@ def test_frm_coefficients_survive_reset_under_frm_magnitude(datawrapper):
     simulation.reset(deepcopy(simulation.configuration))
     after = simulation.countries["FRA"].households.states["frm_coefficients"]
     assert after.magnitude_coefficients == before.magnitude_coefficients
+
+
+def test_frm_target_is_identical_in_borrow_versus_sell_and_stage4_within_a_period(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    households = simulation.countries["FRA"].households
+    log = []
+    stage = {"name": None}
+    original_target = households.frm_target_share
+
+    def logged_target():
+        out = original_target()
+        log.append((stage["name"], out[0].copy()))
+        return out
+
+    def tagged(name, method):
+        def wrapper(*args, **kwargs):
+            stage["name"] = name
+            try:
+                return method(*args, **kwargs)
+            finally:
+                stage["name"] = None
+
+        return wrapper
+
+    households.frm_target_share = logged_target
+    households.build_borrow_vs_sell_inputs = tagged("borrow_vs_sell", households.build_borrow_vs_sell_inputs)
+    households.compute_stage4_portfolio_diagnostics = tagged("stage4", households.compute_stage4_portfolio_diagnostics)
+
+    for t in (0, 1):
+        log.clear()
+        simulation.iterate(t=t)
+        borrow_vs_sell = [target for name, target in log if name == "borrow_vs_sell"]
+        stage4 = [target for name, target in log if name == "stage4"]
+        assert borrow_vs_sell and stage4
+        np.testing.assert_array_equal(borrow_vs_sell[-1], stage4[-1])

@@ -1137,6 +1137,23 @@ def test_remove_repaid_consumer_loans_keeps_small_interest_arrears_until_paid():
     np.testing.assert_allclose(market.compute_outstanding_consumption_loans_by_household(), [0.005])
 
 
+def test_remove_repaid_mortgages_keeps_small_interest_arrears_until_paid():
+    # Mortgage interest arrears below the principal rounding tolerance, on a repaid cell, are a claim.
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(1, 1),
+        lt_loans=_empty_loan_state(1, 1),
+        cons_loans=_empty_loan_state(1, 1),
+        mort_loans=_empty_loan_state(1, 1),
+    )
+    market._mortgage_interest_arrears_by_cell[0, 0] = 0.005
+
+    market.remove_repaid_loans(("mort_loans",))
+
+    np.testing.assert_allclose(market._mortgage_interest_arrears_by_cell, [[0.005]])
+    np.testing.assert_allclose(market.compute_outstanding_mortgages_by_household(), [0.005])
+
+
 def test_household_service_snapshot_has_one_writer_per_period():
     market = CreditMarket.from_data(
         country_name="TST",

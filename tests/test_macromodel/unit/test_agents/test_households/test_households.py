@@ -3047,6 +3047,29 @@ class TestPopulatePostGrantFeasiblePlan:
             np.full(n_households, 2.0),
         )
 
+    def test__persist_keeps_the_reserved_overdraft_sale_after_the_second_planning_pass(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+        test_households.pre_grant_feasible_plan = replace(
+            test_households.pre_grant_feasible_plan, overdraft_liquidation_total=np.full(n_households, 1.5)
+        )
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 6.0),
+        )
+        # The post-labour pass overwrites both shadow series; the pin restores the reserved sale.
+        test_households.ts.override_current("liquidation_planned", np.full(n_households, 99.0))
+        test_households.ts.override_current("overdraft_liquidation_planned", np.full(n_households, 99.0))
+
+        test_households.persist_post_grant_planned_liquidation_total()
+
+        np.testing.assert_allclose(test_households.ts.current("liquidation_planned"), 2.0)
+        np.testing.assert_allclose(test_households.ts.current("overdraft_liquidation_planned"), 1.5)
+
     def test__post_grant_liquidation_exposes_authoritative_bases_once(self, test_households):
         n_households = test_households.ts.current("n_households")
         self._populate_pre_grant_plan(

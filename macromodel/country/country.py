@@ -78,7 +78,11 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
-from macromodel.agents.households.func.financial_feasibility import PLAN_ROUND_DOWN, forced_liquidation_cash
+from macromodel.agents.households.func.financial_feasibility import (
+    PLAN_ROUND_DOWN,
+    forced_liquidation_cash,
+    overdraft_sale_need,
+)
 from macromodel.agents.households.func.minimum_income import (
     assessed_income,
     assessment_flow,
@@ -2963,40 +2967,25 @@ class Country:
     def _planned_overdraft_repayment_need(
         self, liquidity_shortfall: np.ndarray, scheduled_debt_service: np.ndarray
     ) -> np.ndarray:
-        """Forced sale that repays the opening overdraft B after the uses senior to it.
+        """Forced sale that repays the opening overdraft B before cutting planned uses (``overdraft_sale_need``).
 
-        The allocator pays rent R, the goods floor F and scheduled service O
-        (including overdraft interest) before B; goods above the floor and
-        investment come after it. The household's own resources are income y
-        plus the borrow-or-sell finance max(L, 0) of the recorded shortfall L;
-        in legacy_stage5 mode support S = max(F + R - (y + max(L, 0)), 0) tops
-        them up to F + R, and the overdraft sale is exempt from that test. So
-
-            sale = max(F + R + O + B - (y + max(L, 0)) - S, 0),
-
-        with S = 0 in minimum_income mode, where the sale also covers the floor
-        top-up so that it is not spent on the floor instead of the overdraft.
-        In legacy mode this is max(O + B - max(y + max(L, 0) - F - R, 0), 0):
-        support still covers F + R. Before the housing market the housing draw
-        is unknown, so B is the opening overdraft max(-LFA, 0); without one the
-        need is zero.
+        G is the VAT-inclusive target consumption and V the target investment cash, the same planned uses
+        as the liquidity shortfall L. Support S is the legacy_stage5 support, zero in minimum_income mode.
+        Before the housing market the housing draw is unknown, so B is the
+        opening overdraft max(-LFA, 0).
         """
         hh = self.households
-        overdraft = np.maximum(-np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float), 0.0)
-        shortfall = np.where(np.isfinite(liquidity_shortfall), liquidity_shortfall, 0.0)
-        own_resources = np.asarray(hh.current_financing_income(), dtype=float) + np.maximum(shortfall, 0.0)
-        senior_uses = (
-            self._effective_goods_floor()
-            + np.asarray(hh.current_consumption_cash_rent(), dtype=float)
-            + np.asarray(scheduled_debt_service, dtype=float)
+        return overdraft_sale_need(
+            opening_overdraft=np.maximum(-np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float), 0.0),
+            income=hh.current_financing_income(),
+            liquidity_shortfall=liquidity_shortfall,
+            desired_goods=hh.consumption_cash_factor() * np.asarray(hh.ts.current("target_consumption")).sum(axis=1),
+            goods_floor=self._effective_goods_floor(),
+            cash_rent=hh.current_consumption_cash_rent(),
+            scheduled_service=scheduled_debt_service,
+            investment=hh.target_investment_cash(),
+            support_enabled=self._stage5_support_enabled(),
         )
-        support = (
-            np.maximum(senior_uses - np.asarray(scheduled_debt_service, dtype=float) - own_resources, 0.0)
-            if self._stage5_support_enabled()
-            else 0.0
-        )
-        need = np.maximum(senior_uses + overdraft - own_resources - support, 0.0)
-        return np.where(overdraft > 0.0, need, 0.0)
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""
@@ -3395,6 +3384,13 @@ class Country:
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
             net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
             minimum_sale_size=self._current_minimum_sale_size(),
+            support_floor_gap=(
+                self._effective_goods_floor()
+                + np.asarray(self.households.current_consumption_cash_rent(), dtype=float)
+                - np.asarray(self.households.current_financing_income(), dtype=float)
+                if self._stage5_support_enabled()
+                else None
+            ),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:

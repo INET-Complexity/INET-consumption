@@ -2650,7 +2650,8 @@ class CreditMarket:
                 # interest can sit on a cell without principal) until they are paid or written off.
                 ind &= self._consumer_interest_arrears_by_cell == 0.0
             if key == "mort_loans":
-                ind &= np.isclose(self._mortgage_interest_arrears_by_cell, 0.0, atol=1e-2)
+                # As for consumer credit: interest arrears are a claim until paid or written off, at any size.
+                ind &= self._mortgage_interest_arrears_by_cell == 0.0
                 self._mortgage_interest_arrears_by_cell[ind] = 0.0
                 self._mortgage_principal_arrears_by_cell[ind] = 0.0
             loans[:, ind] = 0.0

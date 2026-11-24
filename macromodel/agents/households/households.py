@@ -1105,13 +1105,17 @@ class Households(Agent):
         purchase_liquidation: np.ndarray | None = None,
         net_housing_cash_need: np.ndarray | None = None,
         minimum_sale_size: np.ndarray | None = None,
+        support_floor_gap: np.ndarray | None = None,
     ) -> None:
         """Reserve executable Stage 5 liquidation before floor and goods planning.
 
         ``purchase_liquidation`` is the illiquid sale that pays for a completed
         property purchase; it shares the single trade cost with the forced sale.
         ``net_housing_cash_need`` is X of the completion rule: a seller's surplus
-        max(-X, 0) is cash that reduces the forced sale.
+        max(-X, 0) is cash that reduces the forced sale; ``support_floor_gap``
+        (F + R - y with support, else None) keeps the part of it that lowers
+        support from replacing the overdraft sale. Every household replaces
+        rationed consumer credit by a forced sale where its illiquid assets allow.
         """
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
@@ -1122,6 +1126,8 @@ class Households(Agent):
             purchase_liquidation=purchase_liquidation,
             own_sale_surplus=None if net_housing_cash_need is None else np.maximum(-net_housing_cash_need, 0.0),
             minimum_sale_size=minimum_sale_size,
+            support_floor_gap=support_floor_gap,
+            replace_rationed_credit=True,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:
@@ -1171,10 +1177,22 @@ class Households(Agent):
         return settlement.post_liquidation_lfa, settlement.post_liquidation_ifa
 
     def persist_post_grant_planned_liquidation_total(self) -> None:
-        """Pin the household-panel liquidation series to the settled post-grant source."""
+        """Pin the household-panel liquidation series to the settled post-grant source.
+
+        ``liquidation_planned`` records the reserved (executed) net sale and ``overdraft_liquidation_planned``
+        the cash its overdraft part raises after the trade cost. The post-labour planning pass recomputes both as shadow values; this pin, run
+        again after it, keeps the recorded series on the sale actually reserved.
+        """
         self.ts.override_current(
             "liquidation_planned",
             self.current_post_grant_planned_liquidation_total().copy(),
+        )
+        overdraft_sale = self.post_grant_feasible_plan.overdraft_liquidation_total
+        self.ts.override_current(
+            "overdraft_liquidation_planned",
+            np.zeros(self.ts.current("n_households"))
+            if overdraft_sale is None
+            else np.asarray(overdraft_sale, dtype=float).copy(),
         )
 
     def current_post_grant_residual_shortfall(self) -> np.ndarray:

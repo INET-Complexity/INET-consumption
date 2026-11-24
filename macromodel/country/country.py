@@ -3384,6 +3384,7 @@ class Country:
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
             net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
             minimum_sale_size=self._current_minimum_sale_size(),
+            support_enabled=self._stage5_support_enabled(),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:

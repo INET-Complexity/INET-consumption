@@ -163,3 +163,15 @@ def test__implied_uncertainty_propensity_matches_hand_calculation():
     assert beta3 == pytest.approx(-28.6, abs=0.1)
     # Linear in the reference coefficient.
     assert implied_uncertainty_propensity(TABLE, "35-49", zeta, beta_ref=-0.0086) == pytest.approx(2 * beta3)
+
+
+def test_steady_state_variance_is_vectorised_for_household_initialisation():
+    import numpy as np
+
+    from macromodel.agents.households.income_belief_learning import steady_state_posterior_variance
+
+    rho, v, xi = np.array([0.952, 0.952]), np.array([0.000345, 0.00126]), np.array([0.0111, 0.0445])
+    P = steady_state_posterior_variance(rho, v, xi)
+    np.testing.assert_allclose(P, [steady_state_posterior_variance(0.952, a, b) for a, b in zip(v, xi)])
+    predicted = rho**2 * P + v
+    np.testing.assert_allclose(P, predicted * xi / (predicted + xi))

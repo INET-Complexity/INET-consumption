@@ -94,6 +94,7 @@ from macromodel.agents.households.func.minimum_income import (
 )
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
+from macromodel.agents.households.income_belief_learning import steady_state_posterior_variance
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
 from macromodel.configurations import CountryConfiguration
@@ -1308,6 +1309,14 @@ class Country:
                 priors_table=income_belief_priors_table,
             )
             if getattr(households.functions["consumption"], "uses_state_dependent_income_belief_noise", False):
+                # P starts at the steady state of its own noise variances, so theta has no
+                # start-up drift from the survey P prior (vault 2026-11-24, option a).
+                priors = households.states["income_belief_priors"]
+                priors["income_belief_p"] = steady_state_posterior_variance(
+                    np.asarray(priors["income_belief_rho"], dtype=float),
+                    np.asarray(priors["sigma2_v"], dtype=float),
+                    np.asarray(priors["sigma2_xi"], dtype=float),
+                )
                 # Member weights stay at their initial employee income so a job loser keeps
                 # their weight in the household average when their status switches.
                 households.states["income_belief_noise_inputs"] = {

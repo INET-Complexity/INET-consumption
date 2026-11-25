@@ -645,6 +645,7 @@ FRA:
       requires_household_underwriting_snapshot: true
       household_consumption_loan_maturity: 12  # shared capacity/contract maturity in model periods
       household_consumption_loans_loan_to_income_ratio: 0.36  # 0.05
+      enable_household_consumption_loans_loan_to_income_restriction: false  # paper: DSTI cap only
       long_term_firm_loan_maturity: 60 # 60
       short_term_firm_loan_maturity: 12 # 20
       mortgage_debt_service_to_income_ratio: 0.35  # 0.05

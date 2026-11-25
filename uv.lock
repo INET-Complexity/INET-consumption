@@ -1451,6 +1451,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "nbformat" },
     { name = "plotly" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -1488,6 +1489,7 @@ requires-dist = [
     { name = "mkdocstrings", marker = "extra == 'docs'" },
     { name = "mkdocstrings-python", marker = "extra == 'docs'" },
     { name = "nbconvert", marker = "extra == 'docs'" },
+    { name = "nbformat", marker = "extra == 'dev'" },
     { name = "notebook", marker = "extra == 'docs'" },
     { name = "numba" },
     { name = "numpy" },

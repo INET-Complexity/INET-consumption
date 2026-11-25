@@ -42,6 +42,7 @@ dev = [
     "pytest-cov",
     "ruff",
     "plotly==6.3.1",
+    "nbformat",
 ]
 docs = [
     "mkdocs",

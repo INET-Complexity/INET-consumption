@@ -3550,6 +3550,10 @@ class Country:
                 unpaid=unpaid_overdraft_interest,
                 corresponding_bank=self.households.states["Corresponding Bank ID"],
             )
+            # The booking follows the Stage 6 event snapshot; keep new events equal to the live arrears.
+            self.households.refresh_new_ficp_event_interest_arrears(
+                self.credit_market.current_consumer_debt_components_by_household()[2]
+            )
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
         )

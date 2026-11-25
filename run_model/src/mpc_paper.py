@@ -92,4 +92,7 @@ def write_negative_mpc_diagnostics(panel, output_dir, *, sample):
                 median_difference=diff[valid].median(),
             )
         )
-    pd.DataFrame(rows).to_csv(Path(output_dir) / f"negative_mpc_channels_{sample}.csv", index=False)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    columns = ["field", "negative_n", "observed_n", "higher_n", "lower_n", "mean_difference", "median_difference"]
+    pd.DataFrame(rows, columns=columns).to_csv(output_dir / f"negative_mpc_channels_{sample}.csv", index=False)

@@ -149,6 +149,7 @@ def _run_one(
     cpi_source: str = "cpi_fixed_basket",
     keep_full_h5: bool = False,
     output_variables: list[str] | None = None,
+    capture_diagnostics: bool = False,
 ) -> pd.DataFrame:
     """Run one baseline or shock simulation and return pre-shock metadata.
 
@@ -220,6 +221,8 @@ def _run_one(
         if offset == 0:
             metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=pre_shock_row))
         capture_household_labor_state(country, offset=offset)
+        if not capture_diagnostics:
+            return
         households = getattr(country, "households", None)
         if households is None:
             return
@@ -243,9 +246,7 @@ def _run_one(
             window_state_columns.setdefault(f"diagnostic_{field}", {})[f"diagnostic_{field}_t{offset}"] = values
 
     if shock_period == 0:
-        country = model.countries[country_code]
-        metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=0))
-        capture_household_labor_state(country, offset=0)
+        capture_window_metadata(model, -1, 0, 0)
         if horizon_periods > 0:
             model.posthooks.append(capture_window_metadata)
     else:
@@ -275,10 +276,8 @@ def _run_one(
                 f"captured {len(state_columns)}. Check shock_period, horizon_periods, and t_max."
             )
 
-    result = metadata[0]
-    for state_columns in window_state_columns.values():
-        for column, values in state_columns.items():
-            result[column] = values
+    snapshots = {column: values for columns in window_state_columns.values() for column, values in columns.items()}
+    result = pd.concat([metadata[0], pd.DataFrame(snapshots, index=metadata[0].index)], axis=1)
 
     seed_dir = output_dir / f"seed-{int(seed)}"
     seed_dir.mkdir(parents=True, exist_ok=True)
@@ -341,6 +340,7 @@ def _run_seed_pair(
     cpi_source: str = "cpi_fixed_basket",
     keep_full_h5: bool = False,
     output_variables: list[str] | None = None,
+    capture_diagnostics: bool = False,
 ) -> pd.DataFrame:
     """Run the baseline and shock simulations for one seed.
 
@@ -365,6 +365,7 @@ def _run_seed_pair(
         cpi_source=cpi_source,
         keep_full_h5=keep_full_h5,
         output_variables=output_variables,
+        capture_diagnostics=capture_diagnostics,
     )
     shock_metadata = _run_one(
         data=data,
@@ -382,6 +383,7 @@ def _run_seed_pair(
         cpi_source=cpi_source,
         keep_full_h5=keep_full_h5,
         output_variables=output_variables,
+        capture_diagnostics=capture_diagnostics,
     )
     shock_state_columns = [
         column
@@ -552,6 +554,7 @@ def run_mpc_experiment(
     keep_full_h5: bool = False,
     output_variables: list[str] | None = None,
     paper_outputs: bool = False,
+    capture_diagnostics: bool | None = None,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
 
@@ -638,6 +641,7 @@ def run_mpc_experiment(
             cpi_source=cpi_source,
             keep_full_h5=keep_full_h5,
             output_variables=output_variables,
+            capture_diagnostics=paper_outputs if capture_diagnostics is None else capture_diagnostics,
         )
         for seed in seed_list
     )

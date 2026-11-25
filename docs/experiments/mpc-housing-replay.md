@@ -6,7 +6,7 @@ The control window is explicit: `control_periods=1` addresses impact; cumulative
 
 Seed 3, transfer period 60, 10% median positive income, current minimum-income regime: replayed completed transactions match but the strict cash/funding check fails (maximum difference about 3.63 million model units). A successful replay of matches is therefore insufficient to claim that housing resources are held fixed. No controlled MPC is reported from this failed smoke run.
 
-Two estimands remain possible: fix transactions while allowing endogenous financing, or fix transactions and financing. The latter requires intervention before mortgage origination/purchase funding and matching counterpart entries, not a post-settlement cash overwrite. This choice is pending user input. The previously verified unrestricted 30-seed results remain valid.
+Two estimands remain possible: fix transactions while allowing endogenous financing, or fix transactions and financing. The latter requires intervention before mortgage origination/purchase funding and matching counterpart entries, not a post-settlement cash overwrite. The user selected transaction control with endogenous financing, as described below. The previously verified unrestricted 30-seed results remain valid.
 
 ## Selected specification
 
@@ -18,4 +18,6 @@ The comparison controls period 60 only and reports impact MPCs. It uses the orig
 
 The first campaign verified 28 seed pairs, failed on seed 15 and did not run seed 16. Replaying only completed baseline transactions instead of all proposals still fails in seed 15. The affected purchase passes DSTI but the provisional mortgage hits the 80% LTV ceiling, and the own-funds completion test cancels it. The mortgage is then zeroed. Thus no all-seed controlled estimate is available.
 
-Completing this counterfactual requires deciding whether a fixed purchase reserves its baseline downpayment before discretionary spending. Such a reservation changes financing priority and must be explicit. Existing lending limits and accounting remain enforced. No selected-seed paper result is substituted.
+The downpayment-reservation question is an open issue; the user deferred further intervention work. Such a reservation would change financing priority and is not implemented. Existing lending limits and accounting remain enforced. No selected-seed paper result is substituted.
+
+RNG stream redesign is also deferred. The PR adds diagnostic tooling, not an endorsed all-seed housing-controlled estimate or a change to financing priority.

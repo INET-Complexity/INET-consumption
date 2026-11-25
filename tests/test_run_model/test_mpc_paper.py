@@ -54,3 +54,43 @@ def test_channel_counts_overlap_and_ignore_missing(tmp_path):
     assert r.observed_n == 1
     assert r.lower_n == 1
     assert r.higher_n == 0
+
+
+def test_missing_channel_data_still_writes_readable_csv(tmp_path):
+    from src.mpc_paper import write_negative_mpc_diagnostics
+
+    write_negative_mpc_diagnostics(pd.DataFrame({"real_mpc_impact": [-1.0]}), tmp_path, sample="old")
+    result = pd.read_csv(tmp_path / "negative_mpc_channels_old.csv")
+    assert result.empty
+    assert "observed_n" in result.columns
+
+
+def test_figure_preserves_constant_groups_and_readable_borrowing_label(tmp_path):
+    from src.mpc_paper_figures import write_paper_figures
+
+    panel = pd.DataFrame(
+        {
+            "income": [1.0, 1.0],
+            "labor_income": [0.0, 0.0],
+            "non_property_income": [1.0, 1.0],
+            "property_income": [0.0, 0.0],
+            "liquid_financial_assets": [2.0, 2.0],
+            "net_liquid_financial_assets_all_debt": [2.0, 2.0],
+            "illiquid_financial_assets": [3.0, 3.0],
+            "housing_wealth": [4.0, 4.0],
+            "housing_tenure": [None, None],
+            "activity_bracket_t0": [1, 1],
+            "consumption_loan_debt": [0.0, 0.0],
+            "mortgage_debt": [0.0, 0.0],
+            "mpc_regime": ["unconstrained", "unconstrained"],
+            "real_mpc_impact": [0.2, 0.8],
+            "real_shock_amount": [1.0, 3.0],
+        }
+    )
+    write_paper_figures(panel, tmp_path)
+    groups = pd.read_csv(tmp_path / "paper_figure_group_means.csv")
+    assert groups.loc[groups.variable.eq("income_paper_group"), "n"].sum() == 2
+    assert groups.loc[groups.variable.eq("illiquid_financial_assets_paper_group"), "n"].sum() == 2
+    assert groups.loc[groups.variable.eq("borrowing"), "group"].tolist() == ["No borrowing"]
+    assert groups.loc[groups.variable.eq("tenure"), "group"].tolist() == ["Unknown"]
+    assert (tmp_path / "paper_impact_mpc.pdf").stat().st_size > 0

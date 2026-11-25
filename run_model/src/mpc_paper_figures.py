@@ -25,14 +25,20 @@ def write_paper_figures(panel, output_dir):
     ]:
         group = field + "_paper_group"
         panel[group] = pd.Series(pd.NA, index=panel.index, dtype="string")
-        if field in ("illiquid_financial_assets", "housing_wealth", "labor_income", "property_income"):
+        if field in (
+            "illiquid_financial_assets",
+            "housing_wealth",
+            "labor_income",
+            "non_property_income",
+            "property_income",
+        ):
             positive = panel[field] > 0
             panel.loc[panel[field] == 0, group] = "Zero"
             panel.loc[panel[field] < 0, group] = "Negative"
             panel.loc[positive, group] = assign_quantile_bin(panel.loc[positive, field]).astype("string")
         else:
             panel[group] = assign_quantile_bin(panel[field]).astype("string")
-        specs.append((group, title, ["Negative", "Zero", "Q1", "Q2", "Q3", "Q4", "Q5"]))
+        specs.append((group, title, ["Negative", "Zero", "Q1", "Q2", "Q3", "Q4", "Q5", "all"]))
     panel["tenure"] = panel.housing_tenure.map(
         {
             "renter": "Renters",
@@ -42,11 +48,12 @@ def write_paper_figures(panel, output_dir):
             "unknown": "Unknown",
         }
     )
+    panel["tenure"] = panel["tenure"].fillna("Unknown")
     panel["labour"] = panel.activity_bracket_t0.map({1: "Employed", 2: "Unemployed", 3: "Inactive", 4: "Retired"})
     consumer = panel.consumption_loan_debt > 1e-8
     mortgage = panel.mortgage_debt > 1e-8
     panel["borrowing"] = np.select(
-        [consumer & mortgage, consumer, mortgage], ["Both", "Consumer\ncredit", "Mortgage"], default="None"
+        [consumer & mortgage, consumer, mortgage], ["Both", "Consumer\ncredit", "Mortgage"], default="No borrowing"
     )
     panel["constraint"] = panel.mpc_regime.map(
         {"liquidity_constrained": "Constrained", "unconstrained": "Unconstrained"}
@@ -54,7 +61,7 @@ def write_paper_figures(panel, output_dir):
     specs += [
         ("tenure", "Housing tenure", ["Renters", "Mortgagors", "Outright\nowners", "Other tenure", "Unknown"]),
         ("labour", "Reference person", ["Employed", "Unemployed", "Inactive", "Retired"]),
-        ("borrowing", "Borrowing", ["None", "Consumer\ncredit", "Mortgage", "Both"]),
+        ("borrowing", "Borrowing", ["No borrowing", "Consumer\ncredit", "Mortgage", "Both"]),
         ("constraint", "Liquidity constraint", ["Constrained", "Unconstrained"]),
     ]
     output_dir = Path(output_dir)

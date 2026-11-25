@@ -26,6 +26,7 @@ from macro_data.readers.permanent_income_mapping import (
     FORECAST_READER_TO_SIMULATION_SOURCE_NAME,
     PermanentIncomeSimulationSources,
     build_permanent_income_forecast_regressors,
+    permanent_income_trend_growth,
     rebase_real_pc_income_index,
 )
 from macro_data.util.consumption_source_config import (
@@ -349,6 +350,7 @@ def build_permanent_income_forecast_contribution_table(
             design_matrix=design_matrix,
             start_period=country.start_period,
             estimation_epoch=estimation_epoch,
+            trend_growth_per_quarter=permanent_income_trend_growth(forecast_inputs.coefficient_table),
         )
         forecast = forecast_common_permanent_income(x_t, forecast_inputs)
         contributions = x_t.astype(float) * coefficients

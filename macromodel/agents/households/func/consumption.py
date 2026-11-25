@@ -699,6 +699,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         uses_income_belief_learning: bool = False,
         income_belief_learning_horizon: dict | None = None,
         income_belief_growth_clip_bound: float = 1.0,
+        uses_state_dependent_income_belief_noise: bool = False,
         long_run_mpc_lower_bound: float = 0.0,
         long_run_mpc_upper_bound: float = 1.0,
         uses_continuous_wealth_calibration: bool = False,
@@ -728,6 +729,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # Income-belief learning is implemented by this rule only.
         self.uses_income_belief_learning = uses_income_belief_learning
         self.income_belief_growth_clip_bound = income_belief_growth_clip_bound
+        # Re-select sigma2_v/sigma2_xi each quarter from members' current employment status.
+        self.uses_state_dependent_income_belief_noise = uses_state_dependent_income_belief_noise
         if long_run_mpc_upper_bound < long_run_mpc_lower_bound:
             raise ValueError(
                 "long_run_mpc_upper_bound must be greater than or equal to "

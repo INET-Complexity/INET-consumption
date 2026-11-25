@@ -1947,17 +1947,21 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 )
             )
         elif loan_type == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN:
-            loan_to_income_restrictions = (
-                banks.parameters.household_consumption_loans_loan_to_income_ratio
-                * 0.5
-                * (
-                    households.ts.prev("income")[agents_with_demand]
-                    + households.ts.current("income")[agents_with_demand]
+            if not banks.parameters.enable_household_consumption_loans_loan_to_income_restriction:
+                # Off: only the paper's DSTI cap on gross income applies, at origination
+                # (CreditMarket.enforce_household_origination_dsti).
+                credit_restrictions = np.full(agents_with_demand.shape, np.inf)
+            else:
+                credit_restrictions = (
+                    banks.parameters.household_consumption_loans_loan_to_income_ratio
+                    * 0.5
+                    * (
+                        households.ts.prev("income")[agents_with_demand]
+                        + households.ts.current("income")[agents_with_demand]
+                    )
+                    - households.ts.current("debt")[agents_with_demand]
+                    - new_credit_by_household[agents_with_demand]
                 )
-                - households.ts.current("debt")[agents_with_demand]
-                - new_credit_by_household[agents_with_demand]
-            )
-            credit_restrictions = loan_to_income_restrictions
         elif loan_type == LoanTypes.MORTGAGE:
             loan_to_income_restrictions = (
                 banks.parameters.mortgage_loan_to_income_ratio

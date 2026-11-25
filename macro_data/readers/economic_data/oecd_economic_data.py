@@ -1122,7 +1122,7 @@ class OECDEconData:
         na_data = data.pivot(index="TIME", columns="SUBJECT", values="Value")
         fields = {
             "GDP": "B1_GE",
-            "HH Cons": "P31S14_S15",
+            "HH Cons": "P31S14_S15",  # includes NPISH (S15); fallback only, IMF HH Cons wins (default_readers.py:772)
             "Gov Cons": "P3S13",
             "Gross Fixed Capital Formation": "P51",
             "Changes in Inventories": "P52",

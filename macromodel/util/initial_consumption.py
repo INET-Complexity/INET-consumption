@@ -3,12 +3,15 @@
 import numpy as np
 
 from macro_data.util.consumption_initialisation import (
+    allocate_dna_quintile_consumption,
     allocate_hfcs_ratio_consumption,
     allocate_hfcs_with_legacy_reserve,
 )
 
 
-def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True):
+def initialise_hfcs_consumption(
+    country, source_ratios, *, legacy_fallback=True, dna_quintile_c_y=None, household_size=None
+):
     """Replace opening expenditure without changing income, assets or transfers.
 
     The raw aligned income includes the model's net-interest/imputed-rent
@@ -18,6 +21,9 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
     Feasible households absorb the remaining aggregate goods budget. This is an
     opening-state fallback, not an income floor or a new support payment.
     legacy_fallback=False retains strict validation for explicit diagnostics.
+    dna_quintile_c_y (optional): quintile C/Y (income / sqrt(household_size)) is set to lambda * DNA_q,
+    total consumption including housing; lambda is fixed by the aggregate goods anchor
+    (allocate_dna_quintile_consumption). Requires household_size aligned with households.
     """
     hh = country.households
     if "expected_behavioural_income_raw" not in hh.ts.dicts:
@@ -32,17 +38,33 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
         raise ValueError("Opening sector goods must be a finite nonnegative vector.")
     if not np.isfinite(price) or price <= 0:
         raise ValueError("Opening consumer price level must be finite and positive.")
-    allocator = allocate_hfcs_with_legacy_reserve if legacy_fallback else allocate_hfcs_ratio_consumption
-    fallback_inputs = {"legacy_goods": hh.ts.current("consumption")} if legacy_fallback else {}
-    result = allocator(
-        hfcs_c_y=source_ratios,
-        model_income=income,
-        cash_rent=hh.ts.current("rent"),
-        imputed_rent=hh.ts.current("rent_imputed"),
-        vat=vat,
-        aggregate_net_goods=float(sectors.sum()),
-        **fallback_inputs,
-    )
+    rents = {"cash_rent": hh.ts.current("rent"), "imputed_rent": hh.ts.current("rent_imputed")}
+    if dna_quintile_c_y is not None:
+        if household_size is None:
+            raise ValueError("dna_quintile_c_y requires household_size.")
+        if not legacy_fallback:
+            raise ValueError("dna_quintile_c_y requires legacy_fallback=True.")
+        result = allocate_dna_quintile_consumption(
+            hfcs_c_y=source_ratios,
+            model_income=income,
+            household_size=household_size,
+            vat=vat,
+            aggregate_net_goods=float(sectors.sum()),
+            legacy_goods=hh.ts.current("consumption"),
+            target_c_y=dna_quintile_c_y,
+            **rents,
+        )
+    else:
+        allocator = allocate_hfcs_with_legacy_reserve if legacy_fallback else allocate_hfcs_ratio_consumption
+        fallback_inputs = {"legacy_goods": hh.ts.current("consumption")} if legacy_fallback else {}
+        result = allocator(
+            hfcs_c_y=source_ratios,
+            model_income=income,
+            vat=vat,
+            aggregate_net_goods=float(sectors.sum()),
+            **rents,
+            **fallback_inputs,
+        )
     # A common opening sector basket preserves both the aggregate sector totals
     # and the new household totals. Dynamic household preferences are unchanged.
     weights = sectors / sectors.sum() if sectors.sum() > 0 else np.zeros_like(sectors)
@@ -66,6 +88,13 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
         "initial_hfcs_candidate_total": result.candidate_total,
         "initial_hfcs_final_c_y": final_ratios,
         "initial_hfcs_goods_scale": np.where(fallback, 1.0, result.goods_scale),
+        # DNA mode: total / HFCS-ratio total per feasible household (1 on fallback / off).
+        "initial_hfcs_dna_quintile_factor": np.divide(
+            result.total,
+            result.candidate_total,
+            out=np.ones_like(result.total),
+            where=(dna_quintile_c_y is not None) & ~fallback & (result.candidate_total > 0),
+        ),
     }.items():
         hh.ts[name] = values
     # National-accounts goods and VAT aggregates are unchanged by redistribution.

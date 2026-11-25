@@ -533,20 +533,22 @@ def check_country_initial_state_anchors(country: SyntheticCountry):
     household_data = country.population.household_data
     individual_data = country.population.individual_data
 
-    # Other financial assets are scaled to the household stock of F3 to F6 (3,035,365 mio EUR), and the
-    # yield on them is the anchored income over that stock
-    assert household_data["Wealth in Other Financial Assets"].sum() == pytest.approx(3035365e6, rel=1e-6)
-    assert country.population.coefficient_fa_income == pytest.approx(98614e6 / 4 / 3035365e6, rel=1e-6)
+    # Other financial assets are scaled to the household stock of F3+F4+F511+F52+F62 (2,189,046 mio EUR;
+    # F512, F519 and F61 excluded, see HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS), and the yield on them is the
+    # anchored income over that stock
+    assert household_data["Wealth in Other Financial Assets"].sum() == pytest.approx(2189046e6, rel=1e-6)
+    assert country.population.coefficient_fa_income == pytest.approx(98614e6 / 4 / 2189046e6, rel=1e-6)
 
     # Eurostat D4 received by households: 98,614 mio EUR per year, quarterly in the model
     assert country.household_property_income == pytest.approx(98614e6)
     assert household_data["Income from Financial Assets"].sum() == pytest.approx(98614e6 / 4, rel=1e-6)
 
     # Rent paid carries the actual rentals removed from the input-output table, once. For the France 2014
-    # sample the removed amount is 12,256.9 mio EUR per quarter (CPA_L68B alone is 13,517.6 mio, but the
-    # household consumption cell is smaller than imputed plus actual rentals).
+    # sample the removed amount is 12,075.6 mio EUR per quarter (CPA_L68B alone is 13,517.6 mio, but the
+    # household consumption cell is smaller than imputed plus actual rentals). NPISH sits in government
+    # consumption, so the household cell is smaller than when NPISH was counted in it (12,256.9 mio before).
     # Rent paid is net of the housing inputs and their VAT, which households buy as goods.
-    gross_rent = 12256.86e6
+    gross_rent = 12075.55e6
     net_factor = household_data["Rent Paid"].sum() / gross_rent
     gross_rentals = household_data["Rent Imputed"].sum() / net_factor + gross_rent
     housing_inputs = country.industry_data["industry_vectors"]["Housing Input Demand in LCU"].sum()

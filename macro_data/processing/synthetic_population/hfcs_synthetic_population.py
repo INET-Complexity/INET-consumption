@@ -367,6 +367,14 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
             output_shares=output_shares,
             consumption_source=consumption_source,
         )
+        # Survey gross income before the model rebuilds these columns (used by balance-sheet scaling).
+        for source_column, gross_column in (
+            ("Rental Income from Real Estate", "HFCS Gross Rental Income"),
+            ("Income from Financial Assets", "HFCS Gross Financial Income"),
+            ("Income from Pensions", "HFCS Gross Pension Income"),
+        ):
+            if source_column in household_data:
+                household_data[gross_column] = household_data[source_column]
 
         unemployment_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Unemployment Rate (Value)"].iloc[0]
         participation_rate = exogenous_data.labour_stats.loc[f"{year}-Q{quarter}", "Participation Rate (Value)"].iloc[0]
@@ -483,7 +491,12 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         )
 
     def restrict(self) -> None:
-        diagnostics = [c for c in ("HFCS Source ID", "HFCS Consumption Ratio") if c in self.household_data]
+        diagnostics = [
+            c
+            for c in self.household_data.columns
+            if c in ("HFCS Source ID", "HFCS Consumption Ratio", "Balance Sheet Scaling Factor")
+            or str(c).startswith("HFCS Gross ")
+        ]
         self.household_data = self.household_data[RESTRICT_COLS + diagnostics]
 
     def compute_household_wealth(self, independents: Optional[list[str]] = None) -> None:
@@ -613,7 +626,9 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.household_data["Wealth in Other Financial Assets"] = positive_total_ifa
         self.household_data.loc[:, "Wealth in Other Financial Assets"] *= self.scale
         survey_total = self.household_data["Wealth in Other Financial Assets"].sum()
+        self.ifa_anchor_factor = 1.0
         if self.total_other_financial_assets is not None and survey_total > 0.0:
+            self.ifa_anchor_factor = self.total_other_financial_assets / survey_total
             # Anchor the stock to the national accounts, so that it is consistent with the income
             # from financial assets, which is anchored to the same accounts.
             self.household_data.loc[:, "Wealth in Other Financial Assets"] *= (

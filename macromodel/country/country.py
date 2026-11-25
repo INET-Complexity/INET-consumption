@@ -56,6 +56,7 @@ from macro_data.readers.permanent_income_mapping import (
     build_permanent_income_forecast_regressors,
     design_matrix_to_forecast_reader_names,
     load_permanent_income_design_matrix,
+    permanent_income_trend_growth,
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
@@ -94,6 +95,7 @@ from macromodel.agents.households.func.minimum_income import (
 )
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
+from macromodel.agents.households.income_belief_learning import steady_state_posterior_variance
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
 from macromodel.configurations import CountryConfiguration
@@ -551,6 +553,10 @@ class Country:
             and "income_belief_priors" in households.states
         ):
             households.initial_states["income_belief_priors"] = deepcopy(households.states["income_belief_priors"])
+            if "income_belief_noise_inputs" in households.states:
+                households.initial_states["income_belief_noise_inputs"] = deepcopy(
+                    households.states["income_belief_noise_inputs"]
+                )
         # The FRM coefficient table is likewise installed after the initial snapshot and read every
         # period under target_share_source="frm_magnitude"; keep it across reset.
         if "frm_coefficients" in households.states:
@@ -1303,6 +1309,21 @@ class Country:
                 n_households=households.ts.current("n_households"),
                 priors_table=income_belief_priors_table,
             )
+            if getattr(households.functions["consumption"], "uses_state_dependent_income_belief_noise", False):
+                # P starts at the steady state of its own noise variances, so theta has no
+                # start-up drift from the survey P prior (vault 2026-11-24, option a).
+                priors = households.states["income_belief_priors"]
+                priors["income_belief_p"] = steady_state_posterior_variance(
+                    np.asarray(priors["income_belief_rho"], dtype=float),
+                    np.asarray(priors["sigma2_v"], dtype=float),
+                    np.asarray(priors["sigma2_xi"], dtype=float),
+                )
+                # Member weights stay at their initial employee income so a job loser keeps
+                # their weight in the household average when their status switches.
+                households.states["income_belief_noise_inputs"] = {
+                    "priors_table": income_belief_priors_table,
+                    "member_weight_income": np.array(individuals.ts.current("employee_income"), dtype=float),
+                }
 
         # Stage 4 (portfolio choice): load the GTP-FRM coefficient table once at init
         # rather than per-period. Unlike load_income_belief_priors_table, this loader
@@ -1401,7 +1422,10 @@ class Country:
         country.data_minimum_annual_rental_yield = data_minimum_annual_rental_yield
         if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
             initialise_hfcs_consumption(
-                country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
+                country,
+                synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float),
+                dna_quintile_c_y=getattr(synthetic_population, "dna_quintile_c_y", None),
+                household_size=synthetic_population.household_data["Number of household members"].to_numpy(dtype=float),
             )
         return country
 
@@ -2513,6 +2537,21 @@ class Country:
             employed, self.individuals.states["Corresponding Household ID"]
         )
 
+    def _current_income_belief_noise_variances(self) -> dict[str, np.ndarray] | None:
+        """Household sigma2_v/sigma2_xi from members' current employment status, or None when off."""
+        if not getattr(self.households.functions["consumption"], "uses_state_dependent_income_belief_noise", False):
+            return None
+        noise_inputs = self.households.states["income_belief_noise_inputs"]
+        beliefs = compute_household_income_beliefs(
+            individuals_age=self.individuals.states["Age"],
+            individuals_activity_status=self.individuals.states["Activity Status"],
+            individuals_household_id=self.individuals.states["Corresponding Household ID"],
+            individuals_income=noise_inputs["member_weight_income"],
+            n_households=self.households.ts.current("n_households"),
+            priors_table=noise_inputs["priors_table"],
+        )
+        return {"sigma2_v": beliefs["sigma2_v"], "sigma2_xi": beliefs["sigma2_xi"]}
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         consumption_function = self.households.functions["consumption"]
         integrate_inputs = (
@@ -3549,6 +3588,10 @@ class Country:
             self.credit_market.book_unpaid_household_overdraft_interest(
                 unpaid=unpaid_overdraft_interest,
                 corresponding_bank=self.households.states["Corresponding Bank ID"],
+            )
+            # The booking follows the Stage 6 event snapshot; keep new events equal to the live arrears.
+            self.households.refresh_new_ficp_event_interest_arrears(
+                self.credit_market.current_consumer_debt_components_by_household()[2]
             )
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
@@ -5080,6 +5123,7 @@ class Country:
             self.households.update_income_belief_learning_state(
                 current_income=self.households.compute_non_property_income() / self.economy.ts.current(cpi_series)[0],
                 lagged_income=lagged_real_non_property_income,
+                noise_variances=self._current_income_belief_noise_variances(),
             )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()
@@ -5702,6 +5746,9 @@ class Country:
                 design_matrix=self._permanent_income_design_matrix,
                 start_period=self.start_period,
                 estimation_epoch=self._permanent_income_design_matrix.index.min(),
+                trend_growth_per_quarter=permanent_income_trend_growth(
+                    self._permanent_income_forecast_inputs.coefficient_table
+                ),
             )
         except ValueError as exc:
             # ValueError here is data-dependent (e.g. non-positive income/CPI,

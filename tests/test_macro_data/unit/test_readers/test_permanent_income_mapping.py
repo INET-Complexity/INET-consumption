@@ -402,3 +402,135 @@ def test__unemployment_rate_outside_unit_interval_raises():
             design_matrix=design,
             start_period=1980,
         )
+
+
+# --- Endogenous slow trend (one-sided HP over data + simulated log income) ---
+
+from statsmodels.tsa.filters.hp_filter import hpfilter  # noqa: E402
+
+from macro_data.readers.permanent_income_mapping import (  # noqa: E402
+    endogenous_time_trend,
+    one_sided_hp_trend,
+    permanent_income_trend_growth,
+)
+
+
+def test_one_sided_hp_trend_is_last_point_of_statsmodels_hp_trend():
+    rng = np.random.default_rng(0)
+    series = np.cumsum(rng.normal(0.005, 0.01, 60))
+    assert one_sided_hp_trend(series) == pytest.approx(hpfilter(series, lamb=1600)[1][-1], abs=1e-10)
+
+
+def test_endogenous_trend_has_no_jump_and_follows_income_trend_growth():
+    g = 0.005
+    history = 4.0 + g * np.arange(80)
+    # First simulated period: equals the calendar index.
+    assert endogenous_time_trend(
+        historical_log_income=history,
+        simulated_log_income=np.array([4.0 + g * 80]),
+        trend_at_initial_period=80.0,
+        trend_growth_per_quarter=g,
+    ) == pytest.approx(80.0)
+    # Simulated income growing at g: trend advances one unit per quarter, as in the estimation data.
+    growing = 4.0 + g * np.arange(80, 120)
+    assert endogenous_time_trend(
+        historical_log_income=history,
+        simulated_log_income=growing,
+        trend_at_initial_period=80.0,
+        trend_growth_per_quarter=g,
+    ) == pytest.approx(119.0, abs=1e-6)
+    # Flat simulated income: trend advances far less than the calendar.
+    flat = np.full(40, 4.0 + g * 80)
+    trend_flat = endogenous_time_trend(
+        historical_log_income=history,
+        simulated_log_income=flat,
+        trend_at_initial_period=80.0,
+        trend_growth_per_quarter=g,
+    )
+    assert trend_flat == pytest.approx(80.0, abs=0.2)  # stagnant income: the trend stops advancing
+
+
+def test_builder_splices_simulated_income_on_data_and_uses_endogenous_trend():
+    design_periods = pd.period_range("2010Q1", periods=24, freq="Q")
+    design_matrix = _design_matrix(design_periods)
+    start = pd.Period("2014Q1", freq="Q")
+
+    def build(n_periods, income):
+        sources = PermanentIncomeSimulationSources(
+            current_period=start + (n_periods - 1),
+            real_pc_income=income,
+            policy_rate=np.full(n_periods, 0.01),
+            cpi_fixed_basket=np.ones(n_periods),
+            unemployment_rate=np.full(n_periods, 0.1),
+        )
+        return build_permanent_income_forecast_regressors(
+            sources=sources,
+            design_matrix=design_matrix,
+            start_period=start,
+            estimation_epoch="2010Q1",
+            trend_growth_per_quarter=0.004,
+        )
+
+    design = design_matrix_to_forecast_reader_names(design_matrix)
+    x0 = build(1, np.array([100.0]))
+    assert x0["time_trend"] == pytest.approx(16.0)  # calendar index of 2014Q1 from 2010Q1
+    assert x0["log_real_pc_income"] == pytest.approx(design.loc[start, "log_real_pc_income"])
+
+    flat = build(40, np.full(40, 100.0))
+    assert flat["log_real_pc_income"] == pytest.approx(design.loc[start, "log_real_pc_income"])
+    assert flat["time_trend"] < 16.0 + 39.0  # slower than the calendar when income stops growing
+
+
+def _build_with_growth(design_matrix, n_periods, income, *, start="2014Q1", growth=0.004):
+    start_period = pd.Period(start, freq="Q")
+    sources = PermanentIncomeSimulationSources(
+        current_period=start_period + (n_periods - 1),
+        real_pc_income=income,
+        policy_rate=np.full(n_periods, 0.01),
+        cpi_fixed_basket=np.ones(n_periods),
+        unemployment_rate=np.full(n_periods, 0.1),
+    )
+    return build_permanent_income_forecast_regressors(
+        sources=sources,
+        design_matrix=design_matrix,
+        start_period=start_period,
+        estimation_epoch="2010Q1",
+        trend_growth_per_quarter=growth,
+    )
+
+
+def test_trend_growth_from_coefficient_table_is_positive_ratio():
+    table = pd.DataFrame({"coefficient": [0.0049477683, -1.0179989]}, index=["time_trend", "log_real_pc_income"])
+    assert permanent_income_trend_growth(table) == pytest.approx(0.0049477683 / 1.0179989)
+    with pytest.raises(RuntimeError):
+        permanent_income_trend_growth(table.assign(coefficient=[0.0049, 1.0]))
+
+
+def test_default_path_keeps_calendar_trend():
+    design_matrix = _design_matrix(pd.period_range("2010Q1", periods=24, freq="Q"))
+    sources = PermanentIncomeSimulationSources(
+        current_period=pd.Period("2014Q1", freq="Q") + 39,
+        real_pc_income=np.full(40, 100.0),
+        policy_rate=np.full(40, 0.01),
+        cpi_fixed_basket=np.ones(40),
+        unemployment_rate=np.full(40, 0.1),
+    )
+    x = build_permanent_income_forecast_regressors(
+        sources=sources, design_matrix=design_matrix, start_period="2014Q1", estimation_epoch="2010Q1"
+    )
+    assert x["time_trend"] == pytest.approx(16.0 + 39.0)
+
+
+def test_endogenous_trend_does_not_drift_over_100_quarters_with_flat_income():
+    design_periods = pd.period_range("2010Q1", periods=24, freq="Q")
+    design_matrix = _design_matrix(design_periods)
+    x = _build_with_growth(design_matrix, 100, np.full(100, 100.0))
+    assert abs(x["time_trend"] - 16.0) < 2.0  # calendar would give 115
+
+
+def test_endogenous_trend_raises_configuration_errors():
+    design_matrix = _design_matrix(pd.period_range("2014Q1", periods=8, freq="Q"))
+    with pytest.raises(RuntimeError, match="no design-matrix history"):
+        _build_with_growth(design_matrix, 3, np.full(3, 100.0))
+    with pytest.raises(RuntimeError, match="outside the design matrix"):
+        _build_with_growth(design_matrix, 3, np.full(3, 100.0), start="2020Q1")

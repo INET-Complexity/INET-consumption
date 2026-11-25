@@ -47,6 +47,16 @@ from macro_data.configuration.countries import Country
 from macro_data.configuration.region import Region
 from macro_data.readers.util.prune_util import DataFilterWarning, prune_index
 
+# National-accounts (nasa_10_f_bs) instruments of S14 that anchor the household illiquid financial
+# assets (IFA). Temporary: the income-factor scaling of the balance sheet is meant to replace it.
+# Excluded, deliberately:
+# - F512 (unlisted shares) and F519 (other equity): the national-accounts counterpart of household
+#   business equity. HFCS DA1140 (value of self-employment businesses) already enters real wealth
+#   through "Wealth Other Real Assets", so including them would count business equity twice.
+# - F61 (non-life insurance technical reserves): mostly prepaid premiums and claims reserves, not
+#   household savings (user decision 2026-11-24).
+HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS = ("F3", "F4", "F511", "F52", "F62")
+
 
 def get_perc_growth_series(country: str, growth_df: pd.DataFrame, series_name: Optional[str] = None) -> pd.Series:
     """
@@ -787,8 +797,9 @@ class EuroStatReader:
         """
         Get the stock of household financial assets other than deposits from the national accounts.
 
-        Sums debt securities (F3), loans (F4), equity and investment fund shares (F5) and insurance,
-        pension and standardised guarantee schemes (F6) held by households (S14).
+        Sums the instruments in ``HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS`` held by households (S14):
+        debt securities (F3), loans (F4), listed shares (F511), investment fund shares (F52) and
+        life-insurance and pension entitlements (F62).
 
         Args:
             country (Country): Country to get the stock for
@@ -809,7 +820,7 @@ class EuroStatReader:
             return None
         key_column = r"unit,co_nco,sector,finpos,na_item,geo\time"
         total = 0.0
-        for item in ("F3", "F4", "F5", "F6"):
+        for item in HOUSEHOLD_IFA_ANCHOR_INSTRUMENTS:
             row = df.loc[df[key_column] == f"MIO_NAC,NCO,S14,ASS,{item},{matches[0]}", str(year)].values
             if len(row) == 0:
                 return None

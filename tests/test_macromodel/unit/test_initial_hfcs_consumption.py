@@ -97,3 +97,37 @@ def test_default_fallback_keeps_opening_goods_cash_and_housing_without_changing_
     h.ts.reset()
     for key, value in opening.items():
         np.testing.assert_array_equal(h.ts.current(key), value)
+
+
+def test_off_switch_matches_pre_pr_legacy_reserve_path():
+    from macro_data.util.consumption_initialisation import allocate_hfcs_with_legacy_reserve
+
+    c = country()
+    h = c.households
+    expected = allocate_hfcs_with_legacy_reserve(
+        hfcs_c_y=np.array([0.6, 0.9]),
+        model_income=h.ts.current("expected_behavioural_income_raw"),
+        cash_rent=h.ts.current("rent"),
+        imputed_rent=h.ts.current("rent_imputed"),
+        vat=0.2,
+        aggregate_net_goods=165.0,
+        legacy_goods=h.ts.current("consumption"),
+    )
+    initialise_hfcs_consumption(c, np.array([0.6, 0.9]))
+    np.testing.assert_allclose(h.ts.current("consumption"), expected.goods)
+    np.testing.assert_allclose(h.ts.current("consumption_including_housing"), expected.total)
+    np.testing.assert_allclose(h.ts.current("initial_hfcs_dna_quintile_factor"), 1.0)
+
+
+def test_dna_option_keeps_anchor_and_requires_aligned_household_size():
+    c = country()
+    initialise_hfcs_consumption(
+        c, np.array([0.6, 0.9]), dna_quintile_c_y=[1.0, 1.0, 1.0, 1.0, 1.0], household_size=np.array([1.0, 2.0])
+    )
+    np.testing.assert_allclose(c.households.ts.current("consumption").sum(), 165.0)
+    with pytest.raises(ValueError, match="requires household_size"):
+        initialise_hfcs_consumption(country(), np.array([0.6, 0.9]), dna_quintile_c_y=[1.0] * 5)
+    with pytest.raises(ValueError, match="aligned"):
+        initialise_hfcs_consumption(
+            country(), np.array([0.6, 0.9]), dna_quintile_c_y=[1.0] * 5, household_size=np.array([1.0])
+        )

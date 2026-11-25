@@ -7,17 +7,23 @@ National-accounts stock levels are then no longer matched; their gaps are report
 Steps (spec: vault ``experiments/specs/2026-11-24-balance-sheet-scaling``):
 1. k_i from t0 income, computed once. HFCS net income = survey gross income netted with
    the model's runtime tax rates (no external tax simulator, no extra data file).
-2. Deposits, IFA (survey level, without the national-accounts anchor), debt, other
-   real assets, house values and imputed rents are multiplied by k_i. Rented dwellings:
-   value by the landlord's k_i, rent unchanged (it stays anchored to actual rent).
-3. Financial income = annual yield x IFA.
-4. Banks and debt installments are built afterwards from these stocks.
+2. Survey stocks are multiplied by k_i: deposits, IFA (survey level, without the
+   national-accounts anchor), debt, other real assets and house values (owner-occupied
+   dwellings by the owner's k_i, rented dwellings by the landlord's k_i). Rents are flows
+   anchored to the national accounts (imputed rent to CPA_L68A, actual rent to CPA_L68B)
+   and are not scaled.
+3. The rent/value floor is re-applied to the scaled values. It only raises rents; an owner's
+   "Rent Imputed" stays equal to the rent of the dwelling it lives in.
+4. Financial income = annual yield x IFA.
+5. Banks and debt installments are built afterwards from these stocks.
 """
 
 from typing import Optional
 
 import numpy as np
 import pandas as pd
+
+from macro_data.processing.synthetic_matching.matching_households_with_houses import apply_rent_yield_floor
 
 # Income concepts, named as in the consumption calibration.
 SCALING_INCOME_CONCEPTS = ("disp_geom_avg_income", "disposable_income", "disp_non_property_income")
@@ -31,7 +37,6 @@ HOUSEHOLD_STOCK_COLUMNS = (
     "Value of the Main Residence",
     "Value of other Properties",
     "Wealth Other Real Assets",
-    "Rent Imputed",
 )
 
 
@@ -107,9 +112,9 @@ def household_income_factors(model_annual: np.ndarray, hfcs_annual_scaled: np.nd
 
 
 def scale_housing_market(housing_df: pd.DataFrame, factors: np.ndarray) -> pd.DataFrame:
-    """Values by the owner's k_i; imputed rents of owner-occupied dwellings by the owner's k_i.
+    """Dwelling values by the owner's k_i. Rents are flows anchored to the national accounts and stay unchanged.
 
-    Rent of rented dwellings is unchanged. Dwellings without a household owner (social housing) are unchanged.
+    Dwellings without a household owner (social housing) are unchanged.
     """
     owners = pd.to_numeric(housing_df["Corresponding Owner Household ID"], errors="coerce").to_numpy()
     has_owner = np.isfinite(owners) & (owners >= 0) & (owners < len(factors))
@@ -117,9 +122,6 @@ def scale_housing_market(housing_df: pd.DataFrame, factors: np.ndarray) -> pd.Da
     owner_factor[has_owner] = factors[owners[has_owner].astype(int)]
     housing_df = housing_df.copy()
     housing_df["Value"] = housing_df["Value"].to_numpy(dtype=float) * owner_factor
-    owner_occupied = housing_df["Is Owner-Occupied"].to_numpy(dtype=bool)
-    rent = housing_df["Rent"].to_numpy(dtype=float)
-    housing_df["Rent"] = np.where(owner_occupied, rent * owner_factor, rent)
     return housing_df
 
 
@@ -144,8 +146,13 @@ def scale_household_balance_sheet(
     financial_asset_yield: float,
     financial_income_tax: float,
     employee_social_insurance_tax: float,
+    minimum_annual_rental_yield: float = 0.0,
+    rental_income_taxes: float = 0.0,
 ) -> tuple[Optional[pd.DataFrame], dict]:
-    """Apply steps 1-3 in place on ``population.household_data``; return the scaled housing table and diagnostics."""
+    """Apply steps 1-4 in place on ``population.household_data``; return the scaled housing table and diagnostics.
+
+    ``minimum_annual_rental_yield`` and ``rental_income_taxes`` are those used when the housing table was built.
+    """
     if is_scaled(population):
         raise ValueError("Household balance sheet is already scaled; re-apply only the financial-asset yield.")
     data = population.household_data
@@ -176,6 +183,23 @@ def scale_household_balance_sheet(
     population.set_household_net_wealth()
     scaled_housing = None if housing_df is None else scale_housing_market(housing_df, factors)
 
+    # Step 3. Scaled values can put rents below the rent/value floor; raise them to it.
+    floor_diagnostics = {}
+    if scaled_housing is not None:
+        rent_before = scaled_housing["Rent"].to_numpy(dtype=float).copy()
+        apply_rent_yield_floor(
+            household_data=data,
+            housing_df=scaled_housing,
+            minimum_annual_rental_yield=minimum_annual_rental_yield,
+            time_unit=round(12 / population.yearly_factor),
+            rental_income_taxes=rental_income_taxes,
+        )
+        raise_by_dwelling = scaled_housing["Rent"].to_numpy(dtype=float) - rent_before
+        owner_occupied = scaled_housing["Is Owner-Occupied"].to_numpy(dtype=bool)
+        for label, rows in (("owner_occupied", owner_occupied), ("rented", ~owner_occupied)):
+            floor_diagnostics[f"rent_floor_binding_{label}"] = int(np.count_nonzero(raise_by_dwelling[rows] > 0.0))
+            floor_diagnostics[f"rent_floor_uplift_{label}"] = float(raise_by_dwelling[rows].sum())
+
     data["Balance Sheet Scaling Factor"] = factors
     apply_financial_asset_yield(population, financial_asset_yield, financial_income_tax=financial_income_tax)
 
@@ -185,5 +209,6 @@ def scale_household_balance_sheet(
         "factor_p10_p50_p90": [float(v) for v in np.percentile(factors, [10, 50, 90])],
         "n_common_factor_fallback": n_fallback,
         "financial_asset_yield": financial_asset_yield,
+        **floor_diagnostics,
     }
     return scaled_housing, diagnostics

@@ -120,12 +120,13 @@ def test_stocks_scale_by_household_factor_so_ratios_match_hfcs():
     np.testing.assert_allclose(
         after["Wealth in Deposits"].to_numpy()[:2] / model_y, before["Wealth in Deposits"].to_numpy()[:2] / hfcs_scaled
     )
-    # Totals recomputed; rent paid unchanged.
+    # Totals recomputed; rents are national-accounts flows and stay unchanged.
     np.testing.assert_allclose(after["Net Wealth"], after["Wealth"] - after["Debt"])
     np.testing.assert_allclose(after["Rent Paid"], before["Rent Paid"])
-    # Housing: owner-occupied value and rent x owner k; rented value x landlord k, rent unchanged; social unchanged.
+    np.testing.assert_allclose(after["Rent Imputed"], before["Rent Imputed"])
+    # Housing: values x owner k (social unchanged); rents unchanged.
     np.testing.assert_allclose(scaled_housing["Value"], [20000.0 * k[0], 8000.0 * k[1], 5000.0])
-    np.testing.assert_allclose(scaled_housing["Rent"], [300.0 * k[0], 200.0, 100.0])
+    np.testing.assert_allclose(scaled_housing["Rent"], [300.0, 200.0, 100.0])
 
 
 def test_financial_income_follows_yield_and_enters_income_net_of_tax():
@@ -186,7 +187,7 @@ def test_hfcs_net_income_uses_runtime_taxes_and_leaves_transfers_untaxed():
 def test_housing_rows_without_household_owner_are_unchanged():
     out = scale_housing_market(housing_table(), np.array([2.0, 3.0]))
     np.testing.assert_allclose(out["Value"], [40000.0, 24000.0, 5000.0])
-    np.testing.assert_allclose(out["Rent"], [600.0, 200.0, 100.0])
+    np.testing.assert_allclose(out["Rent"], [300.0, 200.0, 100.0])
 
 
 def test_configuration_defaults_and_validation():
@@ -197,3 +198,71 @@ def test_configuration_defaults_and_validation():
     assert HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True).balance_sheet_scaling
     with pytest.raises(ValueError, match="financial_asset_yield"):
         HouseholdConsumptionInitialisationConfiguration(balance_sheet_scaling=True, financial_asset_yield=0.0)
+
+
+def matched_population_and_housing():
+    """Household 0 lives in its home (house 0); household 1 lets house 1 to household 2; house 2 is social."""
+    pop = toy_population()
+    data = pop.household_data
+    data["Tenure Status of the Main Residence"] = [1, 1, 3]
+    data["Corresponding Inhabited House ID"] = [0.0, np.nan, 1.0]
+    housing = pd.DataFrame(
+        {
+            "House ID": [0, 1, 2],
+            "Corresponding Owner Household ID": [0, 1, -1],
+            "Corresponding Inhabitant Household ID": [0.0, 2.0, np.nan],
+            "Is Owner-Occupied": [True, False, False],
+            "Value": [20000.0, 15000.0, 5000.0],
+            "Rent": [300.0, 200.0, 100.0],
+        }
+    )
+    set_hfcs_gross(pop, [1.3, 1.2, 1.0])
+    return pop, housing
+
+
+def test_imputed_rent_total_is_unchanged_and_equals_the_owner_dwelling_rent():
+    pop, housing = matched_population_and_housing()
+    imputed_before = pop.household_data["Rent Imputed"].sum()
+    scaled, _ = scale_household_balance_sheet(
+        pop, housing, concept="disp_geom_avg_income", financial_asset_yield=0.0293, **TAXES
+    )
+    data = pop.household_data
+    k = data["Balance Sheet Scaling Factor"].to_numpy()
+    assert data["Rent Imputed"].sum() == pytest.approx(imputed_before)
+    assert data.loc[0, "Rent Imputed"] == pytest.approx(scaled.loc[0, "Rent"])
+    np.testing.assert_allclose(scaled["Value"], [20000.0 * k[0], 15000.0 * k[1], 5000.0])
+
+
+def test_rent_floor_is_reapplied_after_scaling_and_never_lowers_a_rent():
+    pop, housing = matched_population_and_housing()
+    before = pop.household_data.copy()
+    phi = 0.05  # per quarter 0.0125 x value: not binding before scaling (250 < 300, 187.5 < 200)
+    scaled, diag = scale_household_balance_sheet(
+        pop,
+        housing,
+        concept="disp_geom_avg_income",
+        financial_asset_yield=0.0293,
+        minimum_annual_rental_yield=phi,
+        rental_income_taxes=TAX,
+        **TAXES,
+    )
+    data = pop.household_data
+    k = data["Balance Sheet Scaling Factor"].to_numpy()
+    floor = phi * 3 / 12 * scaled["Value"].to_numpy()
+    expected_rent = np.maximum(housing["Rent"].to_numpy(), floor)
+    np.testing.assert_allclose(scaled["Rent"], expected_rent)
+    assert np.all(scaled["Rent"].to_numpy() >= housing["Rent"].to_numpy())
+    # Owner: imputed rent follows its dwelling to the floor.
+    assert scaled.loc[0, "Rent"] == pytest.approx(phi / 4 * 20000.0 * k[0])
+    assert data.loc[0, "Rent Imputed"] == pytest.approx(scaled.loc[0, "Rent"])
+    # Rented dwelling: tenant pays the raise; landlord receives it net of the rental income tax.
+    raise_rented = scaled.loc[1, "Rent"] - 200.0
+    assert raise_rented == pytest.approx(phi / 4 * 15000.0 * k[1] - 200.0)
+    assert data.loc[2, "Rent Paid"] == pytest.approx(before.loc[2, "Rent Paid"] + raise_rented)
+    assert data.loc[1, "Rental Income from Real Estate"] == pytest.approx(
+        before.loc[1, "Rental Income from Real Estate"] + (1 - TAX) * raise_rented
+    )
+    assert scaled.loc[2, "Rent"] == pytest.approx(100.0)  # social dwelling above its floor: unchanged
+    assert diag["rent_floor_binding_owner_occupied"] == 1
+    assert diag["rent_floor_binding_rented"] == 1
+    assert diag["rent_floor_uplift_rented"] == pytest.approx(raise_rented)

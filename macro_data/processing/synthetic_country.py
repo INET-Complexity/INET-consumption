@@ -745,6 +745,7 @@ class SyntheticCountry:
             household_property_income=household_property_income,
             consumption_initialisation=country_configuration.household_consumption_initialisation,
             housing_market=housing_market,
+            minimum_annual_rental_yield=country_configuration.minimum_annual_rental_yield,
         )
 
         credit_market = cls.init_credit_market(
@@ -918,6 +919,7 @@ class SyntheticCountry:
         household_property_income: Optional[float] = None,
         consumption_initialisation=None,
         housing_market: Optional[SyntheticHousingMarket] = None,
+        minimum_annual_rental_yield: float = 0.0,
     ):
         """
         Initialize population wealth, income, and consumption patterns.
@@ -943,6 +945,7 @@ class SyntheticCountry:
             emitting_industry_indices (Optional[np.ndarray]): Indices of emitting industries
             household_property_income (Optional[float]): Annual property income received by
                 households in national currency; anchors income from financial assets if given
+            minimum_annual_rental_yield (float): Rent/value floor re-applied after balance-sheet scaling
         """
         population.set_wealth_distribution_function(independents=independents)
 
@@ -969,6 +972,8 @@ class SyntheticCountry:
                     financial_asset_yield=consumption_initialisation.financial_asset_yield,
                     financial_income_tax=tax_data.income_tax,
                     employee_social_insurance_tax=tax_data.employee_social_insurance_tax,
+                    minimum_annual_rental_yield=minimum_annual_rental_yield,
+                    rental_income_taxes=tax_data.income_tax,
                 )
                 if housing_market is not None:
                     housing_market.housing_market_data = scaled_housing

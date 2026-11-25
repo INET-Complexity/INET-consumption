@@ -102,6 +102,11 @@ from macro_data.processing.synthetic_matching.matching_households_with_houses im
 from macro_data.processing.synthetic_matching.matching_individuals_with_firms import (
     match_individuals_with_firms_country,
 )
+from macro_data.processing.synthetic_population.balance_sheet_scaling import (
+    apply_financial_asset_yield,
+    is_scaled,
+    scale_household_balance_sheet,
+)
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     SyntheticHFCSPopulation,
 )
@@ -367,6 +372,7 @@ class SyntheticCountry:
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
             household_property_income=household_property_income,
+            housing_market=housing_market,
         )
 
         if readers.emission_fractions is not None:
@@ -619,6 +625,7 @@ class SyntheticCountry:
             emitting_indices=emitting_industry_indices,
             emission_factors_array=emission_factors_array,
             household_property_income=household_property_income,
+            housing_market=housing_market,
         )
 
         if readers.emission_fractions is not None:
@@ -689,6 +696,7 @@ class SyntheticCountry:
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_indices: Optional[np.ndarray] = None,
         household_property_income: Optional[float] = None,
+        housing_market: Optional[SyntheticHousingMarket] = None,
     ) -> SyntheticCreditMarket:
         """
         This function takes care of matching the different agents together and initialising the Credit
@@ -735,6 +743,9 @@ class SyntheticCountry:
             emission_factors_array=emission_factors_array,
             emitting_industry_indices=emitting_indices,
             household_property_income=household_property_income,
+            consumption_initialisation=country_configuration.household_consumption_initialisation,
+            housing_market=housing_market,
+            minimum_annual_rental_yield=country_configuration.minimum_annual_rental_yield,
         )
 
         credit_market = cls.init_credit_market(
@@ -906,6 +917,9 @@ class SyntheticCountry:
         emission_factors_array: Optional[np.ndarray] = None,
         emitting_industry_indices: Optional[np.ndarray] = None,
         household_property_income: Optional[float] = None,
+        consumption_initialisation=None,
+        housing_market: Optional[SyntheticHousingMarket] = None,
+        minimum_annual_rental_yield: float = 0.0,
     ):
         """
         Initialize population wealth, income, and consumption patterns.
@@ -931,6 +945,7 @@ class SyntheticCountry:
             emitting_industry_indices (Optional[np.ndarray]): Indices of emitting industries
             household_property_income (Optional[float]): Annual property income received by
                 households in national currency; anchors income from financial assets if given
+            minimum_annual_rental_yield (float): Rent/value floor re-applied after balance-sheet scaling
         """
         population.set_wealth_distribution_function(independents=independents)
 
@@ -940,6 +955,29 @@ class SyntheticCountry:
             financial_income_tax=tax_data.income_tax,
             total_property_income=household_property_income,
         )
+        if consumption_initialisation is not None and consumption_initialisation.balance_sheet_scaling:
+            if is_scaled(population):
+                # Cached population being reset: stocks are already scaled; only re-apply the yield.
+                apply_financial_asset_yield(
+                    population,
+                    consumption_initialisation.financial_asset_yield,
+                    financial_income_tax=tax_data.income_tax,
+                )
+            else:
+                housing_df = None if housing_market is None else housing_market.housing_market_data
+                scaled_housing, diagnostics = scale_household_balance_sheet(
+                    population,
+                    housing_df,
+                    concept=consumption_initialisation.scaling_income_concept,
+                    financial_asset_yield=consumption_initialisation.financial_asset_yield,
+                    financial_income_tax=tax_data.income_tax,
+                    employee_social_insurance_tax=tax_data.employee_social_insurance_tax,
+                    minimum_annual_rental_yield=minimum_annual_rental_yield,
+                    rental_income_taxes=tax_data.income_tax,
+                )
+                if housing_market is not None:
+                    housing_market.housing_market_data = scaled_housing
+                population.balance_sheet_scaling_diagnostics = diagnostics
         public_pensions = population.household_data["Allocated Public Pension Benefits"].sum()
         other_transfers = population.household_data["Allocated Other Social Transfers"].sum()
         central_government.central_gov_data["Public Pension Benefits"] = [public_pensions]
@@ -1015,16 +1053,20 @@ class SyntheticCountry:
 
         self.match_households_firms_banks(self.banks, self.firms, self.industries, self.population, self.tax_data)
 
-        housing_data = set_housing_df(
-            synthetic_population=self.population,
-            rental_income_taxes=self.tax_data.income_tax,
-            social_housing_rent=self.population.social_housing_rent,
-            total_imputed_rent=total_rent,
-            total_actual_rent=self.total_actual_rent,
-            minimum_annual_rental_yield=self.country_configuration.minimum_annual_rental_yield,
-        )
-
-        housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)
+        if is_scaled(self.population):
+            # The housing market does not depend on firms. Rebuilding it from scaled values would
+            # re-impute owner rents and apply the rent floor a second time, so keep it as built.
+            housing_market = self.housing_market
+        else:
+            housing_data = set_housing_df(
+                synthetic_population=self.population,
+                rental_income_taxes=self.tax_data.income_tax,
+                social_housing_rent=self.population.social_housing_rent,
+                total_imputed_rent=total_rent,
+                total_actual_rent=self.total_actual_rent,
+                minimum_annual_rental_yield=self.country_configuration.minimum_annual_rental_yield,
+            )
+            housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)
 
         credit_market = self.set_wealth_and_credit(
             banks=self.banks,

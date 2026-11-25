@@ -13,3 +13,9 @@ Two estimands remain possible: fix transactions while allowing endogenous financ
 User selected transaction control with endogenous financing. Default validation requires the entire completed transaction table (identities, prices, sales and rentals) to match baseline exactly. Mortgage funding and housing-related asset draws may respond, and their deviations are reported in the audit. The earlier 3.63-million funding difference is therefore diagnostic, not a failure under this specification. Strict financing matching remains an optional lower-level diagnostic.
 
 The comparison controls period 60 only and reports impact MPCs. It uses the original unrestricted run's filtered household keys to prevent post-intervention sample composition from driving the comparison. Separate worker processes can run independent seed batches, each serial internally; concurrent model runs within one process are unsupported.
+
+## Full-campaign boundary
+
+The first campaign verified 28 seed pairs, failed on seed 15 and did not run seed 16. Replaying only completed baseline transactions instead of all proposals still fails in seed 15. The affected purchase passes DSTI but the provisional mortgage hits the 80% LTV ceiling, and the own-funds completion test cancels it. The mortgage is then zeroed. Thus no all-seed controlled estimate is available.
+
+Completing this counterfactual requires deciding whether a fixed purchase reserves its baseline downpayment before discretionary spending. Such a reservation changes financing priority and must be explicit. Existing lending limits and accounting remain enforced. No selected-seed paper result is substituted.

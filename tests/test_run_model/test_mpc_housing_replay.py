@@ -52,3 +52,13 @@ def test_transaction_control_allows_endogenous_financing():
     tape.record_or_verify(1,60,country(9.),treatment=True)
     assert tape.audit[0]['matched']
     assert not tape.audit[0]['financing_matched']
+
+
+def test_replays_completed_trades_instead_of_rejected_proposals():
+    tape=HousingReplayTape(60);baseline=country();treated=country()
+    baseline.housing_market.states['current_sales']=pd.DataFrame({'buyer_id':[1,2],'price_or_rent':[10.,20.]})
+    tape.capture_proposals(1,60,baseline)
+    baseline.housing_market.states['current_sales']=baseline.housing_market.states['current_sales'].iloc[:1].copy()
+    tape.record_or_verify(1,60,baseline,treatment=False)
+    tape.replay_proposals(1,60,treated)
+    assert len(treated.housing_market.states['current_sales'])==1

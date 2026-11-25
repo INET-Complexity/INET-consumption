@@ -27,6 +27,8 @@ class HousingReplayTape:
         self.completed = {}
         self.cash = {}
         self.audit = []
+        self.failure_detail = []
+        self.financing_cache = {}
 
     def active(self, period):
         return self.start <= period < self.stop
@@ -36,9 +38,9 @@ class HousingReplayTape:
 
     def replay_proposals(self, seed, period, country):
         key = seed, period
-        if key not in self.proposals:
-            raise HousingReplayMismatch(f'Missing baseline housing proposals: {key}')
-        country.housing_market.states['current_sales'] = deepcopy(self.proposals[key])
+        if key not in self.completed:
+            raise HousingReplayMismatch(f'Missing completed baseline housing transactions: {key}')
+        country.housing_market.states['current_sales'] = deepcopy(self.completed[key])
 
     def record_or_verify(self, seed, period, country, *, treatment):
         key = seed, period
@@ -47,13 +49,27 @@ class HousingReplayTape:
         if not np.isfinite(cash).all():
             raise HousingReplayMismatch(f'Nonfinite housing cash: {key}')
         completed = country.housing_market.states['current_sales'].copy(deep=True)
+        financial = {}
+        for name in ('income', 'financing_income', 'expected_income', 'liquid_financial_assets', 'received_mortgages', 'target_consumption'):
+            if name in getattr(getattr(hh, 'ts', None), 'dicts', {}):
+                financial[name] = np.asarray(hh.ts.current(name), dtype=float).copy()
         if not treatment:
+            self.financing_cache[key] = financial
             self.completed[key] = completed
             self.cash[key] = cash.copy()
             return
         try:
             pd.testing.assert_frame_equal(completed, self.completed[key], check_exact=True)
         except AssertionError as error:
+            compared = self.completed[key].merge(completed, on=list(completed.columns), how='left', indicator=True)
+            missing = compared.loc[compared['_merge'].eq('left_only')].drop(columns='_merge')
+            for _, transaction in missing.iterrows():
+                buyer = int(transaction['buyer_id'])
+                detail = dict(seed=seed, period=period, transaction=transaction.to_dict(), buyer_id=buyer)
+                for name, values in financial.items():
+                    detail[name + '_treatment'] = np.asarray(values[buyer]).tolist()
+                    detail[name + '_baseline'] = np.asarray(self.financing_cache[key][name][buyer]).tolist()
+                self.failure_detail.append(detail)
             raise HousingReplayMismatch(f'Completed housing transactions differ: {key}') from error
         difference = np.abs(cash - self.cash[key])
         matched = np.allclose(cash, self.cash[key], rtol=1e-10, atol=1e-6)
@@ -138,6 +154,8 @@ def run_housing_replay_experiment(*, control_periods=1, **kwargs):
         out = Path(kwargs['output_dir'])
         out.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(tape.audit).to_csv(out / 'housing_replay_audit.csv', index=False)
+        import json
+        (out / 'housing_replay_failures.json').write_text(json.dumps(tape.failure_detail, indent=2, default=str))
     expected = len(kwargs['seeds']) * control_periods
     if len(tape.audit) != expected:
         raise HousingReplayMismatch(f'Expected {expected} verified periods, got {len(tape.audit)}')

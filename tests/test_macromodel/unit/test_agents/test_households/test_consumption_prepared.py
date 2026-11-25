@@ -170,6 +170,9 @@ def test_hand_smoothed_base_rebase_target_and_dynamic_decomposition():
     cfg = configuration()
     rule = CreditAugmentedConsumption(**cfg)
     rate = np.array([0.04, 0.1])
+    # beta3 (-102) multiplies the change in the common income-forecast variance (theta-bar), not the change in u.
+    # A small delta keeps the term inside the +-0.5 clip, so the identity below stays non-trivial.
+    uncertainty_delta = 0.0004
     budget = expected * 0.7
     out, total = rule.evaluate_prepared_target(
         data,
@@ -178,13 +181,13 @@ def test_hand_smoothed_base_rebase_target_and_dynamic_decomposition():
         epsilon=np.full(2, 0.03),
         consumer_debt_rate_delta=0.02,
         debt_service_payments=DebtServicePayments([150, 50], [100, 100]),
-        uncertainty_delta=0.4,
+        uncertainty_delta=uncertainty_delta,
         expected_inflation=0.025,
     )
     log_target, a, g = oracle(cfg, expected, data.pi_log_ratio_rebased, data.opening_real, rate=rate, epsilon=0.03)
     np.testing.assert_allclose(out["target_consumption_raw_log_target"], log_target, rtol=1e-10, atol=1e-12)
     cash = np.array([50, -50]) / (expected * 2 * 1.025)
-    delta = 0.56 * (log_target - np.log(budget)) - 0.75 * cash - 0.005 * 0.4
+    delta = 0.56 * (log_target - np.log(budget)) - 0.75 * cash + cfg["uncertainty_propensity"] * uncertainty_delta
     np.testing.assert_allclose(out["target_consumption_interest_rate_cashflow_index"], cash, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(out["target_consumption_unguarded_delta_log_consumption"], delta, rtol=1e-10, atol=1e-12)
     desired = budget * np.exp(np.clip(delta, -0.5, 0.5))

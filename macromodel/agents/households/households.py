@@ -2818,14 +2818,21 @@ class Households(Agent):
         *,
         current_income: np.ndarray,
         lagged_income: np.ndarray | None,
+        noise_variances: dict[str, np.ndarray] | None = None,
     ) -> IncomeBeliefLearningOutputs | None:
-        """Advance optional income-belief posterior state."""
+        """Advance optional income-belief posterior state.
+
+        ``noise_variances`` (``sigma2_v``/``sigma2_xi``) overrides the static priors' noise
+        variances for this update only; posterior mean and variance carry over unchanged.
+        """
         priors = self.states.get("income_belief_priors")
         if priors is None:
             raise ValueError(
                 "Income-belief learning was requested by the consumption rule, "
                 "but households.states['income_belief_priors'] is not available."
             )
+        if noise_variances is not None:
+            priors = {**priors, **noise_variances}
         runtime_state = self._income_belief_runtime_state(priors)
         if lagged_income is None:
             self._append_income_belief_diagnostics(None)

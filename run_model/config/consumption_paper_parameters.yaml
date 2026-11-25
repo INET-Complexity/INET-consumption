@@ -72,11 +72,20 @@ account_diagnostics:
 asset_returns:
   paper_stochastic_v1:
     other_real_assets_depreciation_rate: 0.05
-    mu_eq: 0.0029
-    mu_bond: 0.0081
-    sigma_eq: 0.0935
-    sigma_bond: 0.0316
-    rho: -0.2585
+    # Quarterly log returns, France, 1990Q1-2025Q1 (N=140). PROVISIONAL (paper 2026-11-25), see issue #248.
+    # Equity: OECD share price index SPASTT01FRM661N (price only, no dividends).
+    # Bond: 10Y yield IRLTLT01FRM156N, return = carry y_{t-1}/4 - 8.5 * dy (total return).
+    # Mixed price/total-return basis understates the equity premium (#248).
+    # Previous values (2000Q1-2025Q1, notebooks/exploratory/random_stuff.ipynb):
+    # mu_eq 0.0029, mu_bond 0.0081, sigma_eq 0.0935, sigma_bond 0.0316, rho -0.2585.
+    mu_eq: 0.0109
+    mu_bond: 0.0130
+    sigma_eq: 0.0951
+    sigma_bond: 0.0348
+    rho: -0.0480
+    # Paper value: equity_weight 0.23 = (F511 + F522) / (F511 + F522 + F3 + F62), Eurostat nasa_10_f_bs,
+    # FR S14, 2014 (2010-19 mean also 0.23). Not yet active; runs use 0.5 (#248).
+    # equity_weight: 0.23
     equity_weight: 0.5
     draw_scope: country_period
     dividend_fund_payout_ratio: 0.10
@@ -85,7 +94,10 @@ asset_returns:
     # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy). Bank ratio unchanged.
     # Vault: experiments/2026-11-20-payout-earnings-sna.
     dividend_fund_firm_payout_ratio: 0.467
-    dividend_fund_bank_payout_ratio: 0.10
+    # Maximum bank payout share. PROVISIONAL 0.40 (paper 2026-11-25): lower end of EBA EU-bank payouts
+    # (dividends + buybacks: ~40% planned 2023, 51% of 2024 profits; EBA Risk Assessment Report).
+    # Upper bound for dividends only; French mutualist groups distribute less. Was 0.10. See issue #250.
+    dividend_fund_bank_payout_ratio: 0.40
 
 desired_consumption:
   credit_augmented:

@@ -266,3 +266,81 @@ def test_rent_floor_is_reapplied_after_scaling_and_never_lowers_a_rent():
     assert diag["rent_floor_binding_owner_occupied"] == 1
     assert diag["rent_floor_binding_rented"] == 1
     assert diag["rent_floor_uplift_rented"] == pytest.approx(raise_rented)
+    assert diag["rent_floor_binding_social"] == 0  # house 2 has no household owner
+
+
+def reset_country(monkeypatch, population, housing):
+    """A SyntheticCountry holding only what reset_firm_function_dependent touches; firm and credit steps stubbed."""
+    import macro_data.processing.synthetic_country as synthetic_country_module
+    from macro_data.processing.synthetic_country import SyntheticCountry
+    from macro_data.processing.synthetic_housing_market.default_synthetic_housing_market import (
+        DefaultSyntheticHousingMarket,
+    )
+
+    def rebuild_housing(synthetic_population, **kwargs):
+        """Stand-in for set_housing_df: re-imputes owner rents and re-applies the floor, i.e. changes them."""
+        rebuilt = housing.copy()
+        rebuilt["Rent"] *= 1.1
+        synthetic_population.household_data["Rent Imputed"] *= 1.1
+        return rebuilt
+
+    class Stub:
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    monkeypatch.setattr(synthetic_country_module, "set_housing_df", rebuild_housing)
+    monkeypatch.setattr(SyntheticCountry, "match_households_firms_banks", classmethod(lambda cls, *a, **k: None))
+    monkeypatch.setattr(SyntheticCountry, "set_wealth_and_credit", classmethod(lambda cls, *a, **k: Stub()))
+    country = SyntheticCountry.__new__(SyntheticCountry)
+    country.country_name = "FRA"
+    country.firms = Stub()
+    country.banks = country.central_government = country.central_bank = Stub()
+    country.industries = []
+    population.social_housing_rent = 0.0
+    country.population = population
+    country.tax_data = Stub()
+    country.tax_data.income_tax = TAX
+    country.country_configuration = Stub()
+    country.country_configuration.minimum_annual_rental_yield = 0.05
+    country.industry_data = country.consumption_weights_by_income = country.household_property_income = None
+    country.total_actual_rent = None
+    country.housing_market = DefaultSyntheticHousingMarket("FRA", housing)
+    return country
+
+
+def reset(country):
+    country.reset_firm_function_dependent(
+        capital_inputs_utilisation_rate=1.0,
+        initial_inventory_to_input_fraction=0.0,
+        intermediate_inputs_utilisation_rate=1.0,
+        zero_initial_debt=False,
+        zero_initial_deposits=False,
+    )
+
+
+def test_reset_keeps_scaled_rents_exactly(monkeypatch):
+    pop, housing = matched_population_and_housing()
+    scaled, _ = scale_household_balance_sheet(
+        pop,
+        housing,
+        concept="disp_geom_avg_income",
+        financial_asset_yield=0.0293,
+        minimum_annual_rental_yield=0.05,
+        rental_income_taxes=TAX,
+        **TAXES,
+    )
+    imputed = pop.household_data["Rent Imputed"].to_numpy().copy()
+    rents = scaled["Rent"].to_numpy().copy()
+    country = reset_country(monkeypatch, pop, scaled)
+    reset(country)
+    after = country.housing_market.housing_market_data
+    np.testing.assert_array_equal(after["Rent"].to_numpy(), rents)
+    np.testing.assert_array_equal(pop.household_data["Rent Imputed"].to_numpy(), imputed)
+    assert pop.household_data.loc[0, "Rent Imputed"] == after.loc[0, "Rent"]
+
+
+def test_reset_rebuilds_housing_when_not_scaled(monkeypatch):
+    pop, housing = matched_population_and_housing()
+    country = reset_country(monkeypatch, pop, housing)
+    reset(country)
+    np.testing.assert_allclose(country.housing_market.housing_market_data["Rent"], housing["Rent"] * 1.1)

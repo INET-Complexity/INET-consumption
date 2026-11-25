@@ -196,7 +196,14 @@ def scale_household_balance_sheet(
         )
         raise_by_dwelling = scaled_housing["Rent"].to_numpy(dtype=float) - rent_before
         owner_occupied = scaled_housing["Is Owner-Occupied"].to_numpy(dtype=bool)
-        for label, rows in (("owner_occupied", owner_occupied), ("rented", ~owner_occupied)):
+        owner = pd.to_numeric(scaled_housing["Corresponding Owner Household ID"], errors="coerce").to_numpy()
+        social = ~(owner >= 0)  # no household owner (NaN or -1)
+        groups = (
+            ("owner_occupied", owner_occupied),
+            ("rented", ~owner_occupied & ~social),
+            ("social", ~owner_occupied & social),
+        )
+        for label, rows in groups:
             floor_diagnostics[f"rent_floor_binding_{label}"] = int(np.count_nonzero(raise_by_dwelling[rows] > 0.0))
             floor_diagnostics[f"rent_floor_uplift_{label}"] = float(raise_by_dwelling[rows].sum())
 

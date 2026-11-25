@@ -1053,16 +1053,20 @@ class SyntheticCountry:
 
         self.match_households_firms_banks(self.banks, self.firms, self.industries, self.population, self.tax_data)
 
-        housing_data = set_housing_df(
-            synthetic_population=self.population,
-            rental_income_taxes=self.tax_data.income_tax,
-            social_housing_rent=self.population.social_housing_rent,
-            total_imputed_rent=total_rent,
-            total_actual_rent=self.total_actual_rent,
-            minimum_annual_rental_yield=self.country_configuration.minimum_annual_rental_yield,
-        )
-
-        housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)
+        if is_scaled(self.population):
+            # The housing market does not depend on firms. Rebuilding it from scaled values would
+            # re-impute owner rents and apply the rent floor a second time, so keep it as built.
+            housing_market = self.housing_market
+        else:
+            housing_data = set_housing_df(
+                synthetic_population=self.population,
+                rental_income_taxes=self.tax_data.income_tax,
+                social_housing_rent=self.population.social_housing_rent,
+                total_imputed_rent=total_rent,
+                total_actual_rent=self.total_actual_rent,
+                minimum_annual_rental_yield=self.country_configuration.minimum_annual_rental_yield,
+            )
+            housing_market = DefaultSyntheticHousingMarket(self.country_name, housing_data)
 
         credit_market = self.set_wealth_and_credit(
             banks=self.banks,

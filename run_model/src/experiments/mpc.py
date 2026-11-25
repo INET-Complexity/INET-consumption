@@ -179,6 +179,15 @@ def _run_one(
 
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
+    diagnostic_fields = (
+        "income", "income_employee", "income_social_transfers", "income_rental",
+        "income_financial_assets", "current_net_housing_cash_need", "housing_lfa_draw",
+        "consumption_cut_amount", "consumption", "target_consumption",
+        "overdraft_repayment", "early_consumer_repayment",
+        "scheduled_consumer_payment", "actual_consumer_payment", "unpaid_consumer_payment",
+        "actual_mortgage_payment", "unpaid_mortgage_payment", "liquid_financial_assets",
+        "target_consumption_calibrated_total",
+    )
     window_state_columns: dict[str, dict[str, np.ndarray]] = {
         state_name: {} for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS
     }
@@ -199,6 +208,29 @@ def _run_one(
         if offset == 0:
             metadata.append(make_household_metadata(country, seed=seed, pre_shock_row=pre_shock_row))
         capture_household_labor_state(country, offset=offset)
+        households = getattr(country, "households", None)
+        if households is None:
+            return
+        for field in diagnostic_fields:
+            try:
+                if field == "current_net_housing_cash_need":
+                    value = households.current_net_housing_cash_need()
+                elif field == "housing_lfa_draw":
+                    value = households.current_housing_lfa_draw()
+                elif field == "consumption_cut_amount":
+                    value = households.post_grant_feasible_plan.consumption_cut_amount
+                else:
+                    value = households.ts.current(field)
+                if value is None:
+                    continue
+                values = np.asarray(value, dtype=float).copy()
+            except (KeyError, AttributeError):
+                continue
+            if values.ndim > 1:
+                values = values.sum(axis=tuple(range(1, values.ndim)))
+            window_state_columns.setdefault(f"diagnostic_{field}", {})[
+                f"diagnostic_{field}_t{offset}"
+            ] = values
 
     if shock_period == 0:
         country = model.countries[country_code]
@@ -225,6 +257,8 @@ def _run_one(
     if not metadata:
         raise ValueError("Pre-shock metadata was not captured; check shock_period and t_max.")
     for state_name, state_columns in window_state_columns.items():
+        if state_name.startswith("diagnostic_"):
+            continue
         if len(state_columns) != horizon_periods + 1:
             raise ValueError(
                 f"Expected {horizon_periods + 1} {state_name} snapshots (t0..t{horizon_periods}); "
@@ -342,11 +376,13 @@ def _run_seed_pair(
     shock_state_columns = [
         column
         for column in shock_metadata.columns
-        if any(column.startswith(f"{state_name}_t") for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS)
+        if column.startswith("diagnostic_") or any(
+            column.startswith(f"{state_name}_t") for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS
+        )
     ]
     shock_state_metadata = shock_metadata[["household_id", *shock_state_columns]].rename(
         columns={
-            column: f"{column.split('_t', maxsplit=1)[0]}_shock_t{column.split('_t', maxsplit=1)[1]}"
+            column: f"{column.rsplit('_t', maxsplit=1)[0]}_shock_t{column.rsplit('_t', maxsplit=1)[1]}"
             for column in shock_state_columns
         }
     )
@@ -506,6 +542,7 @@ def run_mpc_experiment(
     shock_exempt_from_support: bool = False,
     keep_full_h5: bool = False,
     output_variables: list[str] | None = None,
+    paper_outputs: bool = False,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
 
@@ -663,6 +700,16 @@ def run_mpc_experiment(
             return panel
         return panel.loc[panel["cumulative_mpc_identified"].astype(bool)]
 
+    if paper_outputs:
+        from src.mpc_paper import write_paper_summaries, write_negative_mpc_diagnostics
+
+        write_paper_summaries(raw_household_panel, analysis_dir, sample="raw")
+        write_negative_mpc_diagnostics(raw_household_panel, analysis_dir, sample="raw")
+        write_negative_mpc_diagnostics(filtered_household_panel, analysis_dir, sample="filtered")
+        write_paper_summaries(filtered_household_panel, analysis_dir, sample="filtered")
+        from src.mpc_paper_figures import write_paper_figures
+
+        write_paper_figures(filtered_household_panel, analysis_dir / "plots")
     raw_summary = summarize_mpc_bins(cumulative_sample(raw_household_panel), mpc_column=plotted_mpc_column)
     filtered_summary = summarize_mpc_bins(cumulative_sample(filtered_household_panel), mpc_column=plotted_mpc_column)
     raw_household_panel.to_csv(analysis_dir / "household_mpc_panel_raw.csv", index=False)

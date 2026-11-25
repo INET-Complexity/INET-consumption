@@ -30,6 +30,14 @@ GROUP_SHORT = {
     "HHL": "Financially\nwealthy",
     "HHH": "Fully\ndiversified",
 }
+# Short tick labels for the top-row categories.
+LABEL_SHORT = {
+    "No borrowing": "None",
+    "Consumer\ncredit": "Consumer\ncredit",
+    "Mortgage\nonly": "Mort-\ngage",
+    "Constrained": "Constrained",
+    "Unconstrained": "Uncon-\nstrained",
+}
 GROUP_COLORS = {
     "LLL": "#8c3b1f",
     "LLH": "#c0602b",
@@ -88,13 +96,20 @@ def _boxes(ax, arrays, labels, colors, *, ylim=None):
         ax.set_ylim(*ylim)
 
 
-def mpc_impact_figure(panel, *, outcome, group_specs, path, ylim=(-0.1, 1.3)):
+def mpc_impact_figure(
+    panel,
+    *,
+    outcome,
+    group_specs,
+    path,
+    groups_title="Balance-sheet groups (NLA · IFA · HA, high/low vs median)",
+    ylim=(-0.1, 1.3),
+):
     """Box panels of the impact MPC.
 
-    ``group_specs``: list of (column, title, ordered labels) for the top row,
-    plus the 8 balance-sheet groups (column ``group_code``) on the bottom row
-    next to the consumption liquidity constraint.
-    Returns a table of group means.
+    Top row: one panel per entry of ``group_specs`` (column, title, ordered labels).
+    Bottom row (full width): the 8 balance-sheet groups (column ``group_code``),
+    titled ``groups_title``. Returns a table of group means.
     """
     rows = []
 
@@ -109,17 +124,19 @@ def mpc_impact_figure(panel, *, outcome, group_specs, path, ylim=(-0.1, 1.3)):
             rows.append({"panel": column, "group": label, "n": len(values), "mean": values.mean()})
         return arrays, labels
 
+    n_top = len(group_specs)
     with plt.rc_context(STYLE):
-        fig = plt.figure(figsize=(11.5, 7.0))
-        grid = GridSpec(2, 4, figure=fig, height_ratios=[1, 1.15], hspace=0.45, wspace=0.15)
-        top = [fig.add_subplot(grid[0, i]) for i in range(4)]
-        bottom = fig.add_subplot(grid[1, :3], sharey=top[0])
-        side = fig.add_subplot(grid[1, 3], sharey=top[0])
-        for ax, (column, title, order) in zip(top + [side], group_specs):
+        fig = plt.figure(figsize=(2.9 * n_top, 7.2))
+        grid = GridSpec(2, n_top, figure=fig, height_ratios=[1, 1.15], hspace=0.5, wspace=0.12)
+        top = [fig.add_subplot(grid[0, i]) for i in range(n_top)]
+        bottom = fig.add_subplot(grid[1, :], sharey=top[0])
+        for ax, (column, title, order) in zip(top, group_specs):
             arrays, labels = collect(column, order)
-            labels = [label.replace("No borrowing", "None").replace("Mortgage\nonly", "Mortgage") for label in labels]
+            labels = [LABEL_SHORT.get(label, label) for label in labels]
             _boxes(ax, arrays, labels, [STEEL] * len(arrays), ylim=ylim)
             ax.set_title(title)
+        for ax in top[1:]:
+            ax.tick_params(labelleft=False)
         codes = [c for c in GROUP_SHORT if (panel.group_code == c).any()]
         arrays, labels = collect("group_code", codes)
         _boxes(bottom, arrays, [GROUP_SHORT[c] for c in labels], [GROUP_COLORS[c] for c in labels], ylim=ylim)
@@ -131,12 +148,10 @@ def mpc_impact_figure(panel, *, outcome, group_specs, path, ylim=(-0.1, 1.3)):
                 xycoords=("data", "axes fraction"),
                 ha="center",
                 va="top",
-                fontsize=7,
+                fontsize=7.5,
                 color=GREY,
             )
-        bottom.set_title("Balance-sheet groups (NLA · IFA · HA, high/low vs median)")
-        for ax in top[1:] + [side]:
-            ax.tick_params(labelleft=False)
+        bottom.set_title(groups_title)
         top[0].set_ylabel("Impact MPC")
         bottom.set_ylabel("Impact MPC")
         _save(fig, path)
@@ -239,7 +254,7 @@ def multiplier_figure(curves, *, path, annotate=(4, 8, 16)):
             ax.axhline(1, color=GREY, lw=0.6, ls=":")
             ax.axhline(0, color=GREY, lw=0.6)
             ax.set_xlabel("Quarters after the transfer")
-        axes[0].set_ylabel("Cumulative multiplier (€ per € transferred)")
+        axes[0].set_ylabel("€ per € transferred")
         if len(curves) > 1:
             axes[0].legend(fontsize=8, loc="lower right")
         _save(fig, path)

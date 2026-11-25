@@ -59,3 +59,43 @@ def test_imf_growth_combines_npish_with_government():
     np.testing.assert_allclose(growth["HH Cons"].values, hh[1:] / hh[:-1] - 1)
     np.testing.assert_allclose(growth["Gov Cons"].values, gov[1:] / gov[:-1] - 1)
     assert "NPISH Cons" not in growth.columns
+
+
+def _imf_reader(levels):
+    from macro_data.readers.economic_data.imf_reader import IMFReader
+
+    quarters = [f"2014Q{q}" for q in range(1, 5)] + ["2015Q1"]
+    rows = [
+        {
+            "Indicator Name": name + ", Nominal, Domestic Currency",
+            "Country Name": "France",
+            "Country Code": "FR",
+            "Indicator Code": "x",
+            "Attribute": "Value",
+            **dict(zip(quarters, vals)),
+            "Base": None,
+        }
+        for name, vals in levels.items()
+    ]
+    reader = object.__new__(IMFReader)
+    reader.data = {"international_financial_statistics": pd.DataFrame(rows)}
+    return reader
+
+
+GDP = {"Gross Domestic Product": [100, 110, 121, 133.1, 146.41]}
+NPISH = "Non-profit Institutions Serving Households (NPISHs) Final Consumption Expenditure"
+GOV = "General Government Final Consumption Expenditure"
+
+
+def test_imf_npish_nan_quarter_keeps_government_level():
+    reader = _imf_reader({**GDP, GOV: [20, 30, 40, 50, 60], NPISH: [10, np.nan, 10, 10, 10]})
+    growth = reader.get_na_growth_rates("FRA")
+    gov = np.array([30.0, 30.0, 50.0, 60.0])
+    np.testing.assert_allclose(growth["Gov Cons"].values, gov[1:] / gov[:-1] - 1)
+
+
+def test_imf_npish_without_government_warns():
+    reader = _imf_reader({**GDP, NPISH: [10, 10, 10, 10, 10]})
+    with pytest.warns(UserWarning, match="government consumption is missing"):
+        growth = reader.get_na_growth_rates("FRA")
+    assert "NPISH Cons" not in growth.columns and "Gov Cons" not in growth.columns

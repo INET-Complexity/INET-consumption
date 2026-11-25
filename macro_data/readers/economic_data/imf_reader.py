@@ -405,8 +405,11 @@ class IMFReader:
         data = data.astype(float)
 
         # NPISH (S15) is mapped to government consumption, consistent with the ICIO mapping
-        if "Gov Cons" in data.columns and "NPISH Cons" in data.columns:
-            data["Gov Cons"] = data["Gov Cons"] + data["NPISH Cons"]
+        if "NPISH Cons" in data.columns:
+            if "Gov Cons" in data.columns:
+                data["Gov Cons"] = data["Gov Cons"].add(data["NPISH Cons"], fill_value=0)
+            else:
+                warnings.warn(f"IMF NPISH consumption for {country} not added: government consumption is missing.")
 
         data = (data / data.shift(1) - 1.0).iloc[1:]
         data["Gross Output"] = data["GDP"].values

@@ -267,6 +267,33 @@ def _shock_specs_frame(shock_specs: tuple[ShockSpec, ...]) -> pd.DataFrame:
     )
 
 
+_TAYLOR_FIELDS = ("targeted_inflation_rate", "rho", "r_star", "phi_pi", "phi_q")
+
+
+def _apply_policy_rule_overrides(
+    country_configurations: dict[str, CountryConfiguration],
+    country_code: str,
+    overrides: dict | None,
+) -> None:
+    """Experiment-only policy-rule changes; the YAML is untouched.
+
+    Keys: ``lower_bound`` (annual floor; None removes it) and any SmoothTaylorRule
+    coefficient in ``_TAYLOR_FIELDS``. Unknown keys are rejected.
+    """
+    if not overrides:
+        return
+    unknown = set(overrides) - {"lower_bound", *_TAYLOR_FIELDS}
+    if unknown:
+        raise ValueError(f"Unknown policy-rule override(s): {sorted(unknown)}.")
+    central_bank = country_configurations[country_code].central_bank
+    if "lower_bound" in overrides:
+        policy = central_bank.functions.policy_rate
+        policy.parameters = {**policy.parameters, "lower_bound": overrides["lower_bound"]}
+    for field in _TAYLOR_FIELDS:
+        if field in overrides:
+            setattr(central_bank.taylor_rule_overrides, field, overrides[field])
+
+
 def run_irf_experiment(
     *,
     seeds: list[int],
@@ -286,8 +313,12 @@ def run_irf_experiment(
     firm_loan_dscr: bool | None = None,
     keep_full_h5: bool = False,
     output_variables: list[str] | None = None,
+    policy_rule_overrides: dict | None = None,
 ) -> dict[str, Path]:
     """Run paired IRF simulations, aggregate responses, and write outputs.
+
+    ``policy_rule_overrides`` changes the monetary rule for this experiment only,
+    e.g. ``{"lower_bound": None}`` removes the floor on the policy rate.
 
     ``output_variables`` selects variable names from ``ALL_IRF_VARIABLES``.
     None retains all supported variables. Unknown, duplicate and empty selections
@@ -327,6 +358,7 @@ def run_irf_experiment(
         single_hfcs_survey=single_hfcs_survey,
         firm_loan_dscr=firm_loan_dscr,
     )
+    _apply_policy_rule_overrides(country_configurations, country_code, policy_rule_overrides)
     data_paths = DataPaths.default_paths(resolved_raw_data_path, [data.configuration.year])
     baseline_dir = output_dir / "baseline"
     shocks_dir = output_dir / "shocks"

@@ -775,8 +775,8 @@ def _household_head_age_proxy(country, *, n_households: int) -> np.ndarray:
 ACTIVITY_BRACKET_CODES = {
     "employed": 1,
     "unemployed": 2,
-    "investor": 3,
-    "not_economically_active": 4,
+    "not_economically_active": 3,
+    "retired": 4,
 }
 HOUSEHOLD_LABOR_STATE_COLUMNS = (
     "activity_bracket",
@@ -786,27 +786,28 @@ HOUSEHOLD_LABOR_STATE_COLUMNS = (
 
 
 def household_activity_bracket(country) -> np.ndarray:
-    """Return each household's labor-market activity bracket as an integer code.
+    """Return the reference person's labour-market status by household.
 
-    A household's bracket is resolved from its linked individuals' Activity
-    Status by priority: employed > unemployed > investor (firm or bank) > not
-    economically active. Codes are listed in ``ACTIVITY_BRACKET_CODES``.
-
-    Activity Status is a live model state, not a saved HDF5 time series (unlike
-    income/consumption), so callers must capture this via a posthook during the
-    simulation run rather than reading it back from disk afterwards.
+    The HFCS reference person (``Relation to Reference Person == 1``) defines
+    the household status. If no reference person is flagged, use the oldest
+    linked member, matching the model's household-head convention. Retired is
+    an explicit individual state; investors and all other non-employed statuses
+    are grouped as inactive for this figure.
     """
     households = country.households
     n_households = int(households.ts.current("n_households"))
-    activity = getattr(getattr(country, "individuals", None), "states", {}).get("Activity Status")
+    individual_states = getattr(getattr(country, "individuals", None), "states", {})
     corr_individuals = getattr(households, "states", {}).get("corr_individuals")
+    activity = individual_states.get("Activity Status")
     if activity is None or corr_individuals is None:
         return np.full(n_households, np.nan)
 
     activity = np.asarray(activity)
-    employed_mask = activity == ActivityStatus.EMPLOYED
-    unemployed_mask = activity == ActivityStatus.UNEMPLOYED
-    investor_mask = (activity == ActivityStatus.FIRM_INVESTOR) | (activity == ActivityStatus.BANK_INVESTOR)
+    relation = np.asarray(individual_states.get("Relation to Reference Person", np.full(activity.size, np.nan)), dtype=float)
+    ages = np.asarray(individual_states.get("Age", np.full(activity.size, np.nan)), dtype=float)
+    retired = np.asarray(individual_states.get("Is Retired", np.zeros(activity.size)), dtype=bool)
+    if relation.size != activity.size or ages.size != activity.size or retired.size != activity.size:
+        return np.full(n_households, np.nan)
 
     result = np.full(n_households, np.nan)
     for household_id, individual_ids in enumerate(corr_individuals):
@@ -814,14 +815,22 @@ def household_activity_bracket(country) -> np.ndarray:
         valid_ids = ids[(ids >= 0) & (ids < activity.size)]
         if not valid_ids.size:
             continue
-        if employed_mask[valid_ids].any():
-            result[household_id] = ACTIVITY_BRACKET_CODES["employed"]
-        elif unemployed_mask[valid_ids].any():
-            result[household_id] = ACTIVITY_BRACKET_CODES["unemployed"]
-        elif investor_mask[valid_ids].any():
-            result[household_id] = ACTIVITY_BRACKET_CODES["investor"]
+        flagged = valid_ids[relation[valid_ids] == 1.0]
+        if flagged.size:
+            head_id = int(flagged[0])
         else:
-            result[household_id] = ACTIVITY_BRACKET_CODES["not_economically_active"]
+            member_ages = np.nan_to_num(ages[valid_ids], nan=-np.inf)
+            head_id = int(valid_ids[int(np.argmax(member_ages))])
+
+        if retired[head_id]:
+            bracket = "retired"
+        elif activity[head_id] == ActivityStatus.EMPLOYED:
+            bracket = "employed"
+        elif activity[head_id] == ActivityStatus.UNEMPLOYED:
+            bracket = "unemployed"
+        else:
+            bracket = "not_economically_active"
+        result[household_id] = ACTIVITY_BRACKET_CODES[bracket]
     return result
 
 
@@ -907,6 +916,19 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
         where=gross_wealth > 0.0,
     )
     tenure = np.asarray(households.states["Tenure Status of the Main Residence"], dtype=int)
+    employee_income = _current_or_zero(households, "income_employee", n_households=n_households)
+    social_transfer_income = _current_or_zero(households, "income_social_transfers", n_households=n_households)
+    rental_income = _current_or_zero(households, "income_rental", n_households=n_households)
+    wealth_function = households.functions.get("wealth")
+    illiquid_returns_are_capital_gains = bool(
+        getattr(wealth_function, "illiquid_returns_are_capital_gains", False)
+    )
+    financial_income_name = (
+        "income_dividend_distributions" if illiquid_returns_are_capital_gains else "income_financial_assets"
+    )
+    financial_asset_income = _current_or_zero(households, financial_income_name, n_households=n_households)
+    non_property_income = employee_income + social_transfer_income
+    property_income = rental_income + financial_asset_income
 
     return pd.DataFrame(
         {
@@ -914,6 +936,12 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
             "pre_shock_row": int(pre_shock_row),
             "household_id": np.arange(n_households, dtype=int),
             "income": np.asarray(households.ts.current("income"), dtype=float),
+            "labor_income": employee_income,
+            "social_transfer_income": social_transfer_income,
+            "rental_income": rental_income,
+            "financial_asset_income": financial_asset_income,
+            "non_property_income": non_property_income,
+            "property_income": property_income,
             "net_wealth": np.asarray(households.ts.current("net_wealth"), dtype=float),
             "net_liquid_financial_assets": liquid_financial_assets - consumption_loan_debt,
             # Preserve the legacy consumer-debt-only measure and export the

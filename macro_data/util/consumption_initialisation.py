@@ -89,28 +89,6 @@ def winsorise_hfcs_consumption_ratios(
     return WinsorisedConsumptionRatios(result, valid, capped, float(lower), float(upper))
 
 
-def dna_quintile_factors(
-    hfcs_c_y: np.ndarray, model_income: np.ndarray, household_size: np.ndarray, target_c_y
-) -> np.ndarray:
-    """Household factors f_q = target C/Y_q / HFCS-ratio C/Y_q, by quintile of income / sqrt(size).
-
-    Quintile C/Y is the ratio of sums (sum hfcs_c_y * income / sum income), as in the DNA.
-    Multiplying hfcs_c_y by these factors makes each quintile's C/Y equal its target before the
-    goods anchor applies a common scale; the anchor therefore preserves the target's shape.
-    """
-    hfcs_c_y, income, size = (np.asarray(a, dtype=float) for a in (hfcs_c_y, model_income, household_size))
-    target = np.asarray(target_c_y, dtype=float)
-    if target.shape != (5,) or np.any(target <= 0) or np.any(size <= 0):
-        raise ValueError("dna_quintile_factors needs five positive targets and positive household sizes.")
-    rank = np.argsort(np.argsort(income / np.sqrt(size), kind="stable"), kind="stable")
-    quintile = rank * 5 // len(rank)
-    factors = np.ones(5)
-    for q in np.unique(quintile):
-        m = quintile == q
-        factors[q] = target[q] * income[m].sum() / (hfcs_c_y[m] * income[m]).sum()
-    return factors[quintile]
-
-
 def allocate_hfcs_ratio_consumption(
     *,
     hfcs_c_y: np.ndarray,
@@ -244,3 +222,104 @@ def allocate_hfcs_with_legacy_reserve(
     if not np.isfinite(total).all():
         raise ValueError("Reconciled initial expenditure must remain finite.")
     return InitialConsumptionAllocation(candidate, candidate_goods, goods, total, goods_scale, fallback)
+
+
+def allocate_dna_quintile_consumption(
+    *,
+    hfcs_c_y,
+    model_income,
+    household_size,
+    cash_rent,
+    imputed_rent,
+    vat,
+    aggregate_net_goods,
+    legacy_goods,
+    target_c_y,
+) -> InitialConsumptionAllocation:
+    """Opening budget whose quintile C/Y equals lambda * target C/Y_q, with goods summing to the anchor.
+
+    Quintiles rank income / sqrt(household_size) among positive-income households. Over feasible households
+    (F) the common level is the closed form
+        lambda = ((1 + vat) * G_F + sum_F H) / sum_q target_q * Y_{q,F},
+    G_F = anchor - legacy goods of fallback households, H = cash rent + imputed rent. Quintile total
+    C_q = lambda * target_q * Y_{q,F} is split within the quintile in proportion to hfcs_c_y * income, and
+    goods = (C - H) / (1 + vat). Total C (housing included) is scaled, so the shape holds exactly.
+    Fallback households keep legacy goods: income <= 0, raw HFCS total below housing, or allocated total
+    below housing (iterated until none remain). Their number is ``legacy_fallback.sum()``.
+    ``goods_scale`` holds lambda.
+    """
+    values = {
+        name: np.asarray(value, dtype=float)
+        for name, value in {
+            "hfcs_c_y": hfcs_c_y,
+            "model_income": model_income,
+            "household_size": household_size,
+            "cash_rent": cash_rent,
+            "imputed_rent": imputed_rent,
+            "legacy_goods": legacy_goods,
+        }.items()
+    }
+    shape = values["model_income"].shape
+    if len(shape) != 1 or any(a.shape != shape for a in values.values()):
+        raise ValueError("Initial consumption inputs must be aligned household vectors.")
+    for name, array in values.items():
+        if not np.isfinite(array).all() or (name != "model_income" and (array < 0).any()):
+            raise ValueError(f"{name} must be finite and nonnegative, except finite negative model income.")
+    if (values["household_size"] <= 0).any():
+        raise ValueError("household_size must be positive.")
+    target = np.asarray(target_c_y, dtype=float)
+    if target.shape != (5,) or not np.isfinite(target).all() or (target <= 0).any():
+        raise ValueError("target_c_y must contain five positive ratios.")
+    for name, value in (("vat", vat), ("aggregate_net_goods", aggregate_net_goods)):
+        scalar = np.asarray(value, dtype=float)
+        if scalar.shape != () or not np.isfinite(scalar) or scalar < 0:
+            raise ValueError(f"{name} must be a finite nonnegative scalar.")
+    y, c_y = values["model_income"], values["hfcs_c_y"]
+    housing = values["cash_rent"] + values["imputed_rent"]
+    candidate = c_y * y
+    positive = y > 0
+    quintile = np.full(shape, -1)
+    rank = np.argsort(np.argsort(y[positive] / np.sqrt(values["household_size"][positive]), kind="stable"))
+    quintile[positive] = rank * 5 // max(positive.sum(), 1)
+    fallback = ~positive | (candidate < housing)
+    vat1 = 1.0 + float(vat)
+    tol = 1e-12 * max(float(aggregate_net_goods), 1.0)
+    while True:
+        feasible = ~fallback
+        remaining = float(aggregate_net_goods) - values["legacy_goods"][fallback].sum()
+        if remaining < -tol:
+            raise ValueError("Reserved legacy goods exceed the aggregate consumption budget.")
+        if not feasible.any():
+            if abs(remaining) > tol:
+                raise ValueError("No feasible households can absorb the remaining aggregate goods budget.")
+            total = np.zeros(shape)
+            lam = 1.0
+            break
+        weighted_target = np.zeros(shape)
+        total_q = np.zeros(5)
+        for q in range(5):
+            m = feasible & (quintile == q)
+            if not m.any():
+                continue
+            denominator = candidate[m].sum()
+            if not denominator > 0:
+                raise ValueError(f"HFCS-ratio consumption of quintile {q + 1} must be positive.")
+            total_q[q] = target[q] * y[m].sum()
+            weighted_target[m] = candidate[m] / denominator
+        numerator = vat1 * max(remaining, 0.0) + housing[feasible].sum()
+        lam = numerator / total_q.sum()
+        total = np.zeros(shape)
+        for q in range(5):
+            m = feasible & (quintile == q)
+            total[m] = lam * total_q[q] * weighted_target[m]
+        below = feasible & (total < housing)
+        if not below.any():
+            break
+        fallback = fallback | below
+    goods = values["legacy_goods"].copy()
+    goods[feasible] = (total[feasible] - housing[feasible]) / vat1
+    total = vat1 * goods + housing
+    if not np.isfinite(total).all():
+        raise ValueError("Reconciled initial expenditure must remain finite.")
+    candidate_goods = np.where(fallback, values["legacy_goods"], np.maximum(candidate - housing, 0.0) / vat1)
+    return InitialConsumptionAllocation(candidate, candidate_goods, goods, total, float(lam), fallback)

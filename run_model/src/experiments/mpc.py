@@ -723,6 +723,8 @@ def run_mpc_experiment(
         from src.mpc_paper_figures import write_paper_figures
 
         write_paper_figures(filtered_household_panel, analysis_dir / "plots")
+        if "real_cmpc_4q" in filtered_household_panel:
+            write_paper_figures(filtered_household_panel, analysis_dir / "plots", measure="cumulative_4q")
     raw_summary = summarize_mpc_bins(cumulative_sample(raw_household_panel), mpc_column=plotted_mpc_column)
     filtered_summary = summarize_mpc_bins(cumulative_sample(filtered_household_panel), mpc_column=plotted_mpc_column)
     raw_household_panel.to_csv(analysis_dir / "household_mpc_panel_raw.csv", index=False)

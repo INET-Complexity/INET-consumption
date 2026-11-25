@@ -45,12 +45,10 @@ def prepare_paper_groups(panel):
                 "owner_mortgage": "Mortgagors",
                 "owner_outright": "Outright\nowners",
                 "owner_other": "Other tenure",
-                "unknown": "Unknown",
+                "unknown": "Other tenure",
             }
-        ).fillna("Unknown")
-        specs.append(
-            ("tenure", "Housing tenure", ["Renters", "Mortgagors", "Outright\nowners", "Other tenure", "Unknown"])
-        )
+        ).fillna("Other tenure")
+        specs.append(("tenure", "Housing tenure", ["Renters", "Mortgagors", "Outright\nowners", "Other tenure"]))
     if "activity_bracket_t0" in panel:
         panel["labour"] = panel.activity_bracket_t0.map({1: "Employed", 2: "Unemployed", 3: "Inactive", 4: "Retired"})
         specs.append(("labour", "Labour-market status", ["Employed", "Unemployed", "Inactive", "Retired"]))
@@ -58,9 +56,11 @@ def prepare_paper_groups(panel):
         consumer = panel.consumption_loan_debt > 1e-8
         mortgage = panel.mortgage_debt > 1e-8
         panel["borrowing"] = np.select(
-            [consumer & mortgage, consumer, mortgage], ["Both", "Consumer\ncredit", "Mortgage"], default="No borrowing"
+            [consumer & mortgage, consumer, mortgage],
+            ["Both", "Consumer\ncredit", "Mortgage\nonly"],
+            default="No borrowing",
         )
-        specs.append(("borrowing", "Borrowing", ["No borrowing", "Consumer\ncredit", "Mortgage", "Both"]))
+        specs.append(("borrowing", "Borrowing", ["No borrowing", "Consumer\ncredit", "Mortgage\nonly", "Both"]))
     if "mpc_regime" in panel:
         panel["constraint"] = pd.Series(pd.NA, index=panel.index, dtype="string")
         panel.loc[panel.mpc_regime.eq("unconstrained"), "constraint"] = "Unconstrained"

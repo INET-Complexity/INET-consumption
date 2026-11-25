@@ -78,7 +78,7 @@ def test_figure_preserves_constant_groups_and_readable_borrowing_label(tmp_path)
             "net_liquid_financial_assets_all_debt": [2.0, 2.0],
             "illiquid_financial_assets": [3.0, 3.0],
             "housing_wealth": [4.0, 4.0],
-            "housing_tenure": [None, None],
+            "housing_tenure": [None, "owner_other"],
             "activity_bracket_t0": [1, 1],
             "consumption_loan_debt": [0.0, 0.0],
             "mortgage_debt": [0.0, 0.0],
@@ -92,7 +92,7 @@ def test_figure_preserves_constant_groups_and_readable_borrowing_label(tmp_path)
     assert groups.loc[groups.variable.eq("income_paper_group"), "n"].sum() == 2
     assert groups.loc[groups.variable.eq("illiquid_financial_assets_paper_group"), "n"].sum() == 2
     assert groups.loc[groups.variable.eq("borrowing"), "group"].tolist() == ["No borrowing"]
-    assert groups.loc[groups.variable.eq("tenure"), "group"].tolist() == ["Unknown"]
+    assert groups.loc[groups.variable.eq("tenure"), "group"].tolist() == ["Other tenure"]
     assert (tmp_path / "paper_impact_mpc.pdf").stat().st_size > 0
 
 
@@ -115,11 +115,12 @@ def test_summary_and_figure_use_same_positive_asset_groups(tmp_path):
     summary = pd.read_csv(tmp_path / "paper_mpc_summary_groups.csv")
     figure = pd.read_csv(tmp_path / "paper_figure_group_means.csv")
     matched = figure.merge(summary, on=["variable", "group"], validate="one_to_one", suffixes=("_figure", "_summary"))
-    assert len(matched) == len(figure) == 6
+    assert len(matched) == len(figure) == 5
     np.testing.assert_array_equal(matched.n_figure, matched.n_summary)
     np.testing.assert_allclose(matched.mean_figure, matched.mean_summary)
     np.testing.assert_allclose(matched.transfer_weighted_mpc_figure, matched.transfer_weighted_mpc_summary)
-    assert matched.set_index("group").loc["Zero", "n_figure"] == 5
+    assert "Zero" not in figure.group.tolist()
+    assert summary.set_index("group").loc["Zero", "n"] == 5
 
 
 def test_consumption_constraint_excludes_arrears_only_and_other_regimes():
@@ -163,3 +164,29 @@ def test_empty_filtered_summary_has_readable_schema(tmp_path):
     result = pd.read_csv(tmp_path / "paper_mpc_summary_empty.csv")
     assert result.empty
     assert {"outcome", "n", "mean", "transfer_weighted_mpc", "seed_cluster_se"}.issubset(result.columns)
+
+
+def test_cumulative_figure_uses_identified_rows_without_rebinning(tmp_path):
+    from src.mpc_paper_figures import write_paper_figures
+
+    panel = pd.DataFrame(
+        {
+            "seed": [1] * 10,
+            "income": np.arange(1, 11, dtype=float),
+            "real_mpc_impact": [0.1] * 10,
+            "real_cmpc_4q": np.arange(10) / 10 + 1.0,
+            "real_shock_amount": [2.0] * 10,
+            "cumulative_mpc_identified": [False] * 5 + [True] * 5,
+        }
+    )
+    write_paper_figures(panel, tmp_path, measure="cumulative_4q", show_transfer_weighted_mean=False)
+    groups = pd.read_csv(tmp_path / "paper_cumulative_4q_figure_group_means.csv").set_index("group")
+    assert groups.index.tolist() == ["Q3", "Q4", "Q5"]
+    assert groups.n.tolist() == [1, 2, 2]
+    np.testing.assert_allclose(groups["mean"], [1.5, 1.65, 1.85])
+    write_paper_summaries(panel, tmp_path, sample="cumulative")
+    table = pd.read_csv(tmp_path / "paper_mpc_summary_cumulative.csv")
+    table = table[(table.variable == "income_paper_group") & (table.outcome == "real_cmpc_4q")].set_index("group")
+    np.testing.assert_allclose(groups["mean"], table.loc[groups.index, "mean"])
+    assert (tmp_path / "paper_cumulative_4q_mpc.pdf").stat().st_size > 0
+    assert not (tmp_path / "paper_impact_mpc.pdf").exists()

@@ -103,13 +103,16 @@ def mpc_impact_figure(
     group_specs,
     path,
     groups_title="Balance-sheet groups (NLA · IFA · HA, high/low vs median)",
+    group_labels=None,
     ylim=(-0.1, 1.3),
 ):
     """Box panels of the impact MPC.
 
     Top row: one panel per entry of ``group_specs`` (column, title, ordered labels).
     Bottom row (full width): the 8 balance-sheet groups (column ``group_code``),
-    titled ``groups_title``. Returns a table of group means.
+    titled ``groups_title``; ``group_labels`` maps group codes (e.g. "LLL") to
+    x-axis labels (default ``GROUP_SHORT``; use "\\n" for line breaks).
+    Returns a table of group means.
     """
     rows = []
 
@@ -139,7 +142,8 @@ def mpc_impact_figure(
             ax.tick_params(labelleft=False)
         codes = [c for c in GROUP_SHORT if (panel.group_code == c).any()]
         arrays, labels = collect("group_code", codes)
-        _boxes(bottom, arrays, [GROUP_SHORT[c] for c in labels], [GROUP_COLORS[c] for c in labels], ylim=ylim)
+        xlabels = {**GROUP_SHORT, **(group_labels or {})}
+        _boxes(bottom, arrays, [xlabels[c] for c in labels], [GROUP_COLORS[c] for c in labels], ylim=ylim)
         shares = panel.group_code.value_counts(normalize=True)
         for x, code in enumerate(labels, start=1):
             bottom.annotate(
@@ -221,7 +225,13 @@ def irf_figure(bands, *, shocks, variables, path):
         plt.show()
 
 
-def multiplier_figure(curves, *, path, annotate=(4, 8, 16)):
+def multiplier_figure(
+    curves,
+    *,
+    path,
+    annotate=(4, 8, 16),
+    titles=("Real GDP", "Real household consumption (incl. VAT)"),
+):
     """Cumulative transfer multipliers by horizon.
 
     ``curves``: {regime label: DataFrame indexed by quarters with columns
@@ -248,8 +258,8 @@ def multiplier_figure(curves, *, path, annotate=(4, 8, 16)):
                                 ha="center",
                                 fontsize=8,
                             )
-        axes[0].set_title("Real GDP")
-        axes[1].set_title("Real household consumption (incl. VAT)")
+        axes[0].set_title(titles[0])
+        axes[1].set_title(titles[1])
         for ax in axes:
             ax.axhline(1, color=GREY, lw=0.6, ls=":")
             ax.axhline(0, color=GREY, lw=0.6)

@@ -25,6 +25,8 @@ def _categorical_colors(n_colors):
 IRF_SHOCK_LABELS = {
     "common_income_uncertainty_25pct": "Common income\nuncertainty (+25%)",
     "individual_income_uncertainty_25pct": "Individual income\nuncertainty (+25%)",
+    "total_income_uncertainty_25pct": "Total income\nuncertainty (+25%)",
+    "household_transfer_10pct": "One-off transfer\n(10% median income)",
     "common_uncertainty": "Common income\nuncertainty",
     "individual_uncertainty": "Individual income\nuncertainty",
 }

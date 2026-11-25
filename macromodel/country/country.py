@@ -5101,6 +5101,9 @@ class Country:
         )
         self.reconcile_realised_household_support()
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
+        # The staged one-off transfer is paid by the central government: keep its total for the deficit.
+        staged_shock = self._staged_household_income_shock
+        self._settled_one_off_transfer_total = 0.0 if staged_shock is None else float(np.sum(staged_shock))
         if getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=False)
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
@@ -5339,6 +5342,10 @@ class Country:
         self.central_government.ts.total_household_social_transfers.append(
             [self.households.ts.current("income_social_transfers").sum()]
         )
+        self.central_government.ts.total_one_off_transfers.append(
+            [getattr(self, "_settled_one_off_transfer_total", 0.0)]
+        )
+        self._settled_one_off_transfer_total = 0.0
         self.central_government.ts.debt_interest_rate.append(
             [
                 self.central_government.functions["debt_interest"].compute_interest_rate(

@@ -13,6 +13,7 @@ import numpy as np
 
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.simulation import Simulation
+from macromodel.utils.prehooks.household_income_shock import create_household_income_shock_hook
 
 ShockKind = Literal[
     "government_consumption",
@@ -21,6 +22,8 @@ ShockKind = Literal[
     "unemployment_rate",
     "common_income_uncertainty",
     "individual_income_uncertainty",
+    "total_income_uncertainty",
+    "household_transfer",
 ]
 _SAFE_SHOCK_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -33,7 +36,13 @@ class ShockSpec:
     change in the relevant variance component, and ``random_log_sd`` is the
     standard deviation of its lognormal multiplier. Those kinds require
     ``mode="multiplicative"``. Common shocks draw one multiplier shared by all
-    households; individual shocks draw one multiplier per household.
+    households; individual shocks draw one multiplier per household. Total
+    shocks scale the whole uncertainty index theta (individual plus common
+    component) by one factor; ``random_log_sd=None`` makes it deterministic.
+
+    For ``household_transfer``, ``magnitude`` is the equal nominal payment per
+    household as a fraction of median positive household income, paid once by
+    the central government through the MPC experiment's staged-income channel.
     """
 
     name: str
@@ -423,7 +432,14 @@ def create_irf_shock_hook(
             time_unit=time_unit,
             spec=spec,
         )
-    if spec.kind in {"common_income_uncertainty", "individual_income_uncertainty"}:
+    if spec.kind == "household_transfer":
+        return create_household_transfer_shock_hook(
+            country_code=country_code,
+            initial_year=initial_year,
+            time_unit=time_unit,
+            spec=spec,
+        )
+    if spec.kind in {"common_income_uncertainty", "individual_income_uncertainty", "total_income_uncertainty"}:
         return create_income_uncertainty_shock_hook(
             country_code=country_code,
             initial_year=initial_year,
@@ -449,11 +465,14 @@ def create_income_uncertainty_shock_hook(
     values and separate IRF arms do not consume the model's shared random
     stream.
     """
-    if spec.kind not in {"common_income_uncertainty", "individual_income_uncertainty"}:
-        raise ValueError("Income-uncertainty hook requires a common or individual uncertainty kind.")
+    if spec.kind not in {"common_income_uncertainty", "individual_income_uncertainty", "total_income_uncertainty"}:
+        raise ValueError("Income-uncertainty hook requires a common, individual or total uncertainty kind.")
     if not np.isfinite(spec.magnitude) or spec.magnitude <= -1.0:
         raise ValueError("Income-uncertainty shock magnitude must be finite and greater than -1.")
-    if spec.random_log_sd is None or not np.isfinite(spec.random_log_sd) or spec.random_log_sd <= 0.0:
+    deterministic = spec.kind == "total_income_uncertainty" and spec.random_log_sd is None
+    if not deterministic and (
+        spec.random_log_sd is None or not np.isfinite(spec.random_log_sd) or spec.random_log_sd <= 0.0
+    ):
         raise ValueError("Income-uncertainty shocks require a finite, positive random_log_sd.")
     if spec.mode != "multiplicative":
         raise ValueError("Income-uncertainty shocks require mode='multiplicative'.")
@@ -473,10 +492,19 @@ def create_income_uncertainty_shock_hook(
         individual_factors = np.ones(n_households, dtype=float)
 
         if _active_period(spec, initial_year, time_unit, year, month):
-            rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, model_period))
-            log_sd = float(spec.random_log_sd)
-            log_mean = np.log1p(float(spec.magnitude)) - 0.5 * log_sd**2
-            if spec.kind == "common_income_uncertainty":
+            if deterministic:
+                factor = 1.0 + float(spec.magnitude)
+            else:
+                rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, model_period))
+                log_sd = float(spec.random_log_sd)
+                log_mean = np.log1p(float(spec.magnitude)) - 0.5 * log_sd**2
+            if spec.kind == "total_income_uncertainty":
+                # theta = individual * f_i + common * f_c: equal factors scale theta itself.
+                if not deterministic:
+                    factor = float(rng.lognormal(mean=log_mean, sigma=log_sd))
+                common_factor = factor
+                individual_factors = np.full(n_households, factor, dtype=float)
+            elif spec.kind == "common_income_uncertainty":
                 common_factor = float(rng.lognormal(mean=log_mean, sigma=log_sd))
             else:
                 individual_factors = rng.lognormal(
@@ -494,3 +522,37 @@ def create_income_uncertainty_shock_hook(
         }
 
     return income_uncertainty_shock_hook
+
+
+def create_household_transfer_shock_hook(
+    *,
+    country_code: str,
+    initial_year: int,
+    time_unit: int,
+    spec: ShockSpec,
+    exempt_from_support_test: bool = True,
+) -> Callable[[Simulation, int, int], None]:
+    """Create a one-off government transfer to every household, as in the MPC experiment.
+
+    The equal nominal payment is ``magnitude`` times median positive household
+    income in the shock period. It is staged through
+    ``Country.stage_household_income_shock`` (same channel and support-test
+    treatment as the MPC experiment), and the central government books its
+    total in ``total_one_off_transfers``, which enters the deficit.
+    """
+    if spec.kind != "household_transfer":
+        raise ValueError("Household-transfer hook requires kind='household_transfer'.")
+    if spec.duration != 1:
+        raise ValueError("Household-transfer shocks are one-off: duration must be 1.")
+    if spec.mode != "multiplicative" or spec.magnitude <= 0.0:
+        raise ValueError(
+            "Household-transfer shocks need mode='multiplicative' and a positive fraction of median income."
+        )
+    target_year, target_month = _period_to_year_month(initial_year, time_unit, spec.period)
+    return create_household_income_shock_hook(
+        country_code=country_code,
+        target_year=target_year,
+        target_month=target_month,
+        shock_fraction_of_median_income=float(spec.magnitude),
+        exempt_from_support_test=exempt_from_support_test,
+    )

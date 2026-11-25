@@ -249,7 +249,7 @@ def multiplier_figure(curves, *, path, annotate=(4, 8, 16)):
                                 fontsize=8,
                             )
         axes[0].set_title("Real GDP")
-        axes[1].set_title("Real household consumption")
+        axes[1].set_title("Real household consumption (incl. VAT)")
         for ax in axes:
             ax.axhline(1, color=GREY, lw=0.6, ls=":")
             ax.axhline(0, color=GREY, lw=0.6)

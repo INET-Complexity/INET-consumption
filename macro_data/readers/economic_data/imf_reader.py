@@ -350,7 +350,7 @@ class IMFReader:
         - Returns quarterly data
         - Uses seasonally adjusted data when available
         - Growth rates are returned as decimals
-        - Combines household and NPISH consumption
+        - Combines government and NPISH consumption
         """
         if isinstance(country, str):
             country = Country(country)
@@ -404,10 +404,12 @@ class IMFReader:
         ).iloc[0:-1]
         data = data.astype(float)
 
-        if "HH Cons" in data.columns and "NPISH Cons" in data.columns:
-            data["HH Cons"] = data["HH Cons"] + data["NPISH Cons"]
-        elif "NPISH Cons" in data.columns:
-            data["HH Cons"] = data["NPISH Cons"]
+        # NPISH (S15) is mapped to government consumption, consistent with the ICIO mapping
+        if "NPISH Cons" in data.columns:
+            if "Gov Cons" in data.columns:
+                data["Gov Cons"] = data["Gov Cons"].add(data["NPISH Cons"], fill_value=0)
+            else:
+                warnings.warn(f"IMF NPISH consumption for {country} not added: government consumption is missing.")
 
         data = (data / data.shift(1) - 1.0).iloc[1:]
         data["Gross Output"] = data["GDP"].values

@@ -173,6 +173,11 @@ class IncomeHistories(_ImmutableRecord):
     ``guard_nominal_history`` is the economy series ``income_guard``: the lower bound on behavioural income in
     force in each period (the subsistence series S in legacy_stage5 mode, G = guard share x M in minimum_income
     mode; PLAN.md section 5.5). Rows are not rewritten when the mode changes.
+
+    ``expected_inflation`` is the planning-period expected CPI inflation Pi^e_t. The current income row is
+    deflated at the nominalization price ``current_consumer_price * (1 + expected_inflation)``, the same
+    expected price level that converts the real budget into nominal demand; earlier rows use their own
+    realised prices. Opening stocks keep ``current_consumer_price`` (their own end-of-(t-1) date).
     """
 
     behavioural_income_nominal_history: np.ndarray
@@ -191,9 +196,18 @@ class IncomeHistories(_ImmutableRecord):
     upstream_raw_history: np.ndarray | None = None
     upstream_floor_used_history: np.ndarray | None = None
     upstream_component_floor_used_history: np.ndarray | None = None
+    expected_inflation: float = 0.0
 
     def __post_init__(self):
         _units(self.income_units, self.guard_units)
+        if (
+            np.ndim(self.expected_inflation) != 0
+            or isinstance(self.expected_inflation, (bool, np.bool_))
+            or not np.isfinite(float(self.expected_inflation))
+            or float(self.expected_inflation) <= -1
+        ):
+            raise ValueError("expected_inflation must be a finite scalar greater than -1.")
+        object.__setattr__(self, "expected_inflation", float(self.expected_inflation))
         for name in ("current_consumer_price", "initial_consumer_price", "months_per_period"):
             object.__setattr__(self, name, _positive_scalar(getattr(self, name), name))
         if (
@@ -268,6 +282,11 @@ class ConsumptionInputs(_ImmutableRecord):
     window_row_count: int
     current_deflator: float
 
+    @property
+    def nominalization_deflator(self) -> float:
+        """Expected period-t price level CPI_{t-1}(1 + Pi^e_t) relative to the initial CPI."""
+        return self.current_deflator * (1.0 + self.histories.expected_inflation)
+
     def __post_init__(self):
         for name in (
             "income_base_real",
@@ -297,7 +316,12 @@ def prepare_inputs(
     pass_kind: PassKind,
     household_layout_key: str,
 ) -> ConsumptionInputs:
-    """Pure validated history smoothing and M-based PI rebase in log arithmetic."""
+    """Pure validated history smoothing and M-based PI rebase in log arithmetic.
+
+    Period-t flows (the current income/guard row and M) are deflated at the nominalization price
+    CPI_{t-1}(1 + Pi^e_t), so the real budget converted back at that price has the calibrated C/Y.
+    Earlier rows use their own realised CPI; opening stocks use CPI_{t-1}, their own date.
+    """
     _identity(period_id, household_layout_key, pass_kind)
     if (
         not isinstance(histories, IncomeHistories)
@@ -317,13 +341,16 @@ def prepare_inputs(
     ):
         raise ValueError("history, snapshot and PI household dimensions must match.")
     prices = histories.consumer_price_history
-    if histories.price_history_layout == "missing_current":
-        prices = np.append(prices, histories.current_consumer_price)
+    if histories.price_history_layout == "aligned":
+        prices = prices[:-1]
+    prices = np.append(prices, histories.current_consumer_price * (1.0 + histories.expected_inflation))
     with np.errstate(over="ignore", under="ignore", invalid="ignore", divide="ignore"):
         deflators = prices / histories.initial_consumer_price
         d = histories.current_consumer_price / histories.initial_consumer_price
     _array(deflators, "historical deflators", ndim=1, positive=True)
     _positive_scalar(d, "current_deflator")
+    # Expected period-t price relative to the initial CPI: the current-row deflator.
+    d_expected = deflators[-1]
     n = min(histories.history_window, prices.size)
     b_nom = histories.behavioural_income_nominal_history[-n:]
     s_nom = histories.guard_nominal_history[-n:]
@@ -335,7 +362,7 @@ def prepare_inputs(
         )
         b = np.exp(log_b)
         annual_b = (12 / histories.months_per_period) * b
-        log_m_real = np.log(pi_payload.monetary_income_nominal) - np.log(d)
+        log_m_real = np.log(pi_payload.monetary_income_nominal) - np.log(d_expected)
         adjustment = log_m_real - log_b
         proxy = log_m_real + pi_payload.pi_log_ratio_original
         rebased = pi_payload.pi_log_ratio_original + adjustment
@@ -465,6 +492,7 @@ class ConsumptionInputAdapter:
         current_consumer_price: float,
         price_history_layout: PriceHistoryLayout,
         history_window: int = 4,
+        expected_inflation: float = 0.0,
     ) -> ConsumptionInputs:
         """Read ready B/S/selected CPI paths, without producer calls or stock recapture."""
         _identity(period_id, household_layout_key, pass_kind)
@@ -506,6 +534,7 @@ class ConsumptionInputAdapter:
                 sources.guard_units,
                 months_per_period=economy.time_unit,
                 history_window=history_window,
+                expected_inflation=expected_inflation,
                 **optional,
             )
         except KeyError as exc:

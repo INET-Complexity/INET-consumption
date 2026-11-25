@@ -246,3 +246,29 @@ def test_total_refinanced_balance_and_other_service_reduce_net_new_cash():
     # Total annuity capacity is 240, of which 120 refinances existing debt.
     np.testing.assert_allclose(result.dsti_maximum_loan_size, [120.0])
     np.testing.assert_allclose(result.borrow_planned, [120.0])
+
+
+def test__overdraft_repayment_is_financed_by_selling_unsold_illiquid_assets_never_by_credit():
+    # Borrow branch fully financed by credit, no-shortfall row, and a sell branch that already used the IFA.
+    result = _compute(
+        preferred_margin_after_lfa=np.asarray([PREFERRED_MARGIN_BORROW, 0.0, PREFERRED_MARGIN_SELL], dtype=float),
+        preferred_margin_amount=np.asarray([10.0, 0.0, 45.0], dtype=float),
+        income=np.full(3, 100.0),
+        scheduled_mortgage_payment=np.zeros(3),
+        r_b=np.zeros(3),
+        current_ifa=np.asarray([50.0, 20.0, 50.0], dtype=float),
+        overdraft_repayment_need=np.asarray([30.0, 30.0, 30.0], dtype=float),
+    )
+    without = _compute(
+        preferred_margin_after_lfa=np.asarray([PREFERRED_MARGIN_BORROW, 0.0, PREFERRED_MARGIN_SELL], dtype=float),
+        preferred_margin_amount=np.asarray([10.0, 0.0, 45.0], dtype=float),
+        income=np.full(3, 100.0),
+        scheduled_mortgage_payment=np.zeros(3),
+        r_b=np.zeros(3),
+        current_ifa=np.asarray([50.0, 20.0, 50.0], dtype=float),
+    )
+
+    np.testing.assert_allclose(result.liquidation_planned, [30.0, 20.0, 50.0])
+    np.testing.assert_allclose(result.forced_liquidation_amount - without.forced_liquidation_amount, [30.0, 20.0, 5.0])
+    np.testing.assert_array_equal(result.shadow_credit_requested, without.shadow_credit_requested)
+    np.testing.assert_array_equal(result.residual_shortfall_after_caps, without.residual_shortfall_after_caps)

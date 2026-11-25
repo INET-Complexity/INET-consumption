@@ -35,6 +35,7 @@ import pandas as pd
 from numba import njit
 
 from macromodel.agents.banks.banks import Banks
+from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
 from macromodel.agents.firms import Firms
 from macromodel.agents.households.households import Households
 from macromodel.markets.credit_market.types_of_loans import LoanTypes
@@ -115,8 +116,7 @@ def _compute_loan_type_preference_caps(
     """Compute currency-valued bank supply caps from loan-type preference shares."""
     max_car = np.maximum(
         0.0,
-        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-        - banks.ts.current("total_outstanding_loans"),
+        banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
     )
     firm_weights = banks.ts.initial("new_loans_fraction_firms") * np.exp(
         -credit_supply_temperature * current_npl_firm_loans
@@ -441,7 +441,7 @@ def compute_available_bank_supply_for_credit_tranche(
         0.0,
         np.minimum(
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - capital_requirement_exposure(banks)
             - new_credit_by_bank,
             max_supply_based_on_preferences - new_preference_credit_by_bank,
         ),
@@ -651,8 +651,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
         # Bank-side diagnostic rooms/caps at the start of clearing
         car_room_initial = np.maximum(
             0.0,
-            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans"),
+            banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio - capital_requirement_exposure(banks),
         )
         _append_scalar(banks.ts, "credit_market_car_room_initial", float(car_room_initial.sum()))
 
@@ -850,7 +849,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -998,7 +997,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -1126,7 +1125,7 @@ class DefaultCreditMarketClearer(CreditMarketClearer):
                 # Supply
                 total_credit_supply = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
                     - new_credit_by_bank[bank_id]
                 )
 
@@ -1311,7 +1310,8 @@ class PolednaCreditMarketClearer(CreditMarketClearer):
                     break
                 bank_cap_req = (
                     banks.ts.current("equity")[bank_id] / banks.parameters.capital_adequacy_ratio
-                    - (1 - 1.0 / loan_maturity) * banks.ts.current("total_outstanding_loans")[bank_id]
+                    - capital_requirement_exposure(banks)[bank_id]
+                    + banks.ts.current("total_outstanding_loans")[bank_id] / loan_maturity
                     - new_credit_by_bank[bank_id]
                 )
                 capital_stock_collateral_capacity = (
@@ -1504,6 +1504,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
 
         self._last_received_debt_rollover_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
         self._last_received_overdraft_refinance_credit_by_firm = np.zeros(firms.ts.current("n_firms"))
+        self._last_overdraft_term_out_by_bank = np.zeros(banks.ts.current("n_banks"))
         initial_new_credit_by_firm = new_credit_by_firm.copy()
 
         # Ordinary firm loans clear before rollover/refinance so legacy-liability repair cannot
@@ -1583,7 +1584,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         residual_car_room = np.maximum(
             0.0,
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - capital_requirement_exposure(banks)
             - new_credit_by_bank,
         )
         new_debt_rollover_st_loans = self.clear_loans(
@@ -1604,10 +1605,16 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_credit_by_firm += new_debt_rollover_st_loans[0].sum(axis=0)
         new_credit_by_bank += new_debt_rollover_st_loans[0].sum(axis=1)
 
+        # Overdraft refinance: any bank lends from its free capital room; the demand left within the firm's
+        # borrowing capacity is then termed out by the firm's own bank, which holds the overdraft, up to the
+        # firm overdrafts that bank books net of those the first loans repay. That loan replaces the overdraft
+        # it repays at the same bank one for one (target <= overdraft), so it leaves the bank's
+        # capital-requirement exposure unchanged and needs no room. Relief for a retired overdraft thus applies
+        # only at the bank holding it, never to loans another bank's overdraft would repay.
         residual_car_room = np.maximum(
             0.0,
             banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-            - banks.ts.current("total_outstanding_loans")
+            - capital_requirement_exposure(banks)
             - new_credit_by_bank,
         )
         firm_pref_room_before_refinance = np.maximum(
@@ -1632,10 +1639,14 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_preference_credit_by_bank=np.zeros(banks.ts.current("n_banks")),
             target_credit_override=target_overdraft_refinance_credit,
             append_firm_diagnostics=False,
+            own_bank_term_out=np.asarray(firms.states["Corresponding Bank ID"], dtype=int),
         )
         self._last_received_overdraft_refinance_credit_by_firm = new_refinance_st_loans[0].sum(axis=0)
         new_credit_by_firm += new_refinance_st_loans[0].sum(axis=0)
-        new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1)
+        # The term-out replaces booked overdrafts at the same bank: it uses no capital room, so it is neither
+        # counted against later tranches nor in credit_market_car_room_used.
+        self._last_overdraft_term_out_by_bank = self._last_term_out_by_bank.copy()
+        new_credit_by_bank += new_refinance_st_loans[0].sum(axis=1) - self._last_overdraft_term_out_by_bank
         new_st_loans = np.zeros_like(new_ordinary_st_loans)
         new_st_loans[0] = new_ordinary_st_loans[0] + new_debt_rollover_st_loans[0] + new_refinance_st_loans[0]
         new_st_loans[1] = np.divide(
@@ -1796,6 +1807,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
         new_preference_credit_by_bank: np.ndarray | None = None,
         target_credit_override: np.ndarray | None = None,
         append_firm_diagnostics: bool = True,
+        own_bank_term_out: np.ndarray | None = None,
     ) -> np.ndarray:
         """Clear the market for a specific loan type using the water bucket algorithm.
 
@@ -1821,6 +1833,12 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             target_credit_override (np.ndarray | None): Optional demand vector used
                 for tranche-level clearing, such as ordinary short-term or overdraft
                 refinance demand. The recorded target series is left unchanged.
+            own_bank_term_out (np.ndarray | None): Bank ID per borrower. When
+                given, the borrower capacity the bank supply leaves unfilled is
+                lent by the borrower's own bank without capital room, up to the
+                firm overdrafts that bank books net of those already refinanced
+                in this tranche: used for overdraft refinance, which replaces the
+                overdraft at that bank. The amount is ``_last_term_out_by_bank``.
             append_firm_diagnostics (bool): Whether this call appends firm-level
                 binding diagnostics. Split short-term tranches disable this and
                 append one aggregate short-term diagnostic after the tranches are
@@ -1832,6 +1850,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 - Index 1: Period interest rate
                 - Index 2: Scheduled annuity payment
         """
+        self._last_term_out_by_bank = np.zeros(banks.ts.current("n_banks"))
         # Get bank interest rates
         if loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN:
             loan_maturity = banks.parameters.short_term_firm_loan_maturity
@@ -1928,17 +1947,21 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
                 )
             )
         elif loan_type == LoanTypes.HOUSEHOLD_CONSUMPTION_LOAN:
-            loan_to_income_restrictions = (
-                banks.parameters.household_consumption_loans_loan_to_income_ratio
-                * 0.5
-                * (
-                    households.ts.prev("income")[agents_with_demand]
-                    + households.ts.current("income")[agents_with_demand]
+            if not banks.parameters.enable_household_consumption_loans_loan_to_income_restriction:
+                # Off: only the paper's DSTI cap on gross income applies, at origination
+                # (CreditMarket.enforce_household_origination_dsti).
+                credit_restrictions = np.full(agents_with_demand.shape, np.inf)
+            else:
+                credit_restrictions = (
+                    banks.parameters.household_consumption_loans_loan_to_income_ratio
+                    * 0.5
+                    * (
+                        households.ts.prev("income")[agents_with_demand]
+                        + households.ts.current("income")[agents_with_demand]
+                    )
+                    - households.ts.current("debt")[agents_with_demand]
+                    - new_credit_by_household[agents_with_demand]
                 )
-                - households.ts.current("debt")[agents_with_demand]
-                - new_credit_by_household[agents_with_demand]
-            )
-            credit_restrictions = loan_to_income_restrictions
         elif loan_type == LoanTypes.MORTGAGE:
             loan_to_income_restrictions = (
                 banks.parameters.mortgage_loan_to_income_ratio
@@ -1980,7 +2003,7 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             car_room = np.maximum(
                 0.0,
                 banks.ts.current("equity") / banks.parameters.capital_adequacy_ratio
-                - banks.ts.current("total_outstanding_loans")
+                - capital_requirement_exposure(banks)
                 - new_credit_by_bank,
             )
             pref_room = np.maximum(0.0, max_supply_based_on_preferences - new_preference_credit_by_bank)
@@ -2079,7 +2102,6 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             if diagnostics_enabled:
                 _append_firm_diagnostics(np.zeros(n_firms))
             return new_loans
-        capacities_weights = capacities / capacities_sum
 
         # Determine total supply and priorities
         supply = compute_available_bank_supply_for_credit_tranche(
@@ -2089,10 +2111,72 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             new_preference_credit_by_bank=new_preference_credit_by_bank,
         )
         supply_sum = supply.sum()
-        if supply_sum == 0.0:
+        if supply_sum == 0.0 and own_bank_term_out is None:
             if diagnostics_enabled:
                 _append_firm_diagnostics(np.zeros(n_firms))
             return new_loans
+        if supply_sum > 0.0:
+            self._distribute_tranche(
+                new_loans,
+                supply=supply,
+                capacities=capacities,
+                agents_with_demand=agents_with_demand,
+                debtor_priorities=debtor_priorities,
+                banks_ir=banks_ir,
+            )
+        if own_bank_term_out is not None:
+            n_banks = banks.ts.current("n_banks")
+            granted = new_loans[0][:, agents_with_demand].sum(axis=0)
+            own_bank = np.asarray(own_bank_term_out, dtype=int)[agents_with_demand]
+            term_out = np.maximum(capacities - granted, 0.0)
+            # A bank can only term out the overdrafts it books, net of those the loans above already repay.
+            booked = np.asarray(banks.ts.current("overdrafts_to_firms"), dtype=float)
+            left = np.maximum(booked - np.bincount(own_bank, weights=granted, minlength=n_banks), 0.0)
+            wanted = np.bincount(own_bank, weights=term_out, minlength=n_banks)
+            scale = np.divide(left, wanted, out=np.ones(n_banks), where=wanted > left)
+            term_out = term_out * scale[own_bank]
+            new_loans[0, own_bank, agents_with_demand] += term_out
+            self._last_term_out_by_bank = np.bincount(own_bank, weights=term_out, minlength=n_banks)
+        new_loans[1, :, agents_with_demand] = np.where(
+            new_loans[0, :, agents_with_demand] > 0.0,
+            banks_ir[:, np.newaxis],
+            0.0,
+        )
+        new_loans[2, :, agents_with_demand] = _annuity_payment(
+            new_loans[0, :, agents_with_demand],
+            banks_ir[:, np.newaxis],
+            loan_maturity,
+        )
+        if (
+            new_debt_service_by_firm is not None
+            and (loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN)
+            and banks.parameters.enable_firm_loans_dscr_restriction
+        ):
+            principal_by_firm = new_loans[0].sum(axis=0)
+            new_debt_service_by_firm += principal_by_firm * _annuity_payment_factor(
+                underwriting_rate,
+                loan_maturity,
+            )
+
+        if diagnostics_enabled:
+            _append_firm_diagnostics(new_loans[0].sum(axis=0))
+
+        return new_loans
+
+    def _distribute_tranche(
+        self,
+        new_loans: np.ndarray,
+        *,
+        supply: np.ndarray,
+        capacities: np.ndarray,
+        agents_with_demand: np.ndarray,
+        debtor_priorities: np.ndarray,
+        banks_ir: np.ndarray,
+    ) -> None:
+        """Fill ``new_loans[0]`` from the bank supply with the water-bucket rule (in place)."""
+        supply_sum = supply.sum()
+        capacities_sum = capacities.sum()
+        capacities_weights = capacities / capacities_sum
         supply_weights = supply / supply_sum
         if self.creditor_selection_is_deterministic:
             creditor_priorities = self.get_creditor_priorities_deterministic(
@@ -2128,31 +2212,6 @@ class WaterBucketCreditMarketClearer(CreditMarketClearer):
             loan_matrix = np.outer(supply_weights, received_loans_by_debtors)
             for bank_idx in range(len(supply_weights)):
                 new_loans[0, bank_idx, agents_with_demand] = loan_matrix[bank_idx, :]
-        new_loans[1, :, agents_with_demand] = np.where(
-            new_loans[0, :, agents_with_demand] > 0.0,
-            banks_ir[:, np.newaxis],
-            0.0,
-        )
-        new_loans[2, :, agents_with_demand] = _annuity_payment(
-            new_loans[0, :, agents_with_demand],
-            banks_ir[:, np.newaxis],
-            loan_maturity,
-        )
-        if (
-            new_debt_service_by_firm is not None
-            and (loan_type == LoanTypes.FIRM_SHORT_TERM_LOAN or loan_type == LoanTypes.FIRM_LONG_TERM_LOAN)
-            and banks.parameters.enable_firm_loans_dscr_restriction
-        ):
-            principal_by_firm = new_loans[0].sum(axis=0)
-            new_debt_service_by_firm += principal_by_firm * _annuity_payment_factor(
-                underwriting_rate,
-                loan_maturity,
-            )
-
-        if diagnostics_enabled:
-            _append_firm_diagnostics(new_loans[0].sum(axis=0))
-
-        return new_loans
 
     @staticmethod
     @njit(cache=True)

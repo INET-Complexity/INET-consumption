@@ -67,6 +67,7 @@ def compute_stage4_household_diagnostics(
     frm_magnitude_coefficients: dict[str, float] | None = None,
     population_scale_factor: float | None = None,
     net_wealth_scale_divisor: float | None = None,
+    frm_target: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> Stage4HouseholdDiagnostics:
     """Compute the full Stage 4 shadow diagnostics set for one household-period.
 
@@ -79,8 +80,8 @@ def compute_stage4_household_diagnostics(
     resulting ``target_illiquid_assets`` and ``target_tfa_base`` as separate,
     precomputed inputs (per Increment 2's finalized 5-array signature).
 
-    ``post_surplus_lfa`` is supplied by the caller already inclusive of any
-    positive investable surplus — this function does not floor or add
+    ``post_surplus_lfa`` is supplied by the caller already inclusive of the
+    period's saving, whatever its sign — this function does not floor or add
     ``investable_surplus`` to it. ``investable_surplus`` is forwarded only as
     a diagnostic value, independent of the ``post_surplus_lfa`` arithmetic.
 
@@ -88,7 +89,7 @@ def compute_stage4_household_diagnostics(
         opening_tfa_scale (np.ndarray): Previous-period total financial
             assets, ``LFA_{t-1} + IFA_{t-1}``.
         post_surplus_lfa (np.ndarray): Liquid assets after the period's
-            return and after any positive investable surplus has already
+            return and after the period's saving (of either sign) has already
             been incorporated (the page's ``post_surplus_lfa`), supplied
             directly by the caller from the actual household balance sheet.
         post_return_ifa (np.ndarray): Illiquid assets after the period's
@@ -121,6 +122,10 @@ def compute_stage4_household_diagnostics(
         net_wealth_scale_divisor (float | None): Forwarded to
             ``compute_target_illiquid_share``; required only when
             ``target_share_source="frm_magnitude"``.
+        frm_target (tuple[np.ndarray, np.ndarray] | None): Forwarded to
+            ``compute_target_illiquid_share``; the per-household FRM target
+            fixed at initialisation. When given, the covariate arguments are
+            not required.
 
     Returns:
         Stage4HouseholdDiagnostics: The full diagnostics set for this period.
@@ -139,6 +144,7 @@ def compute_stage4_household_diagnostics(
         frm_magnitude_coefficients=frm_magnitude_coefficients,
         population_scale_factor=population_scale_factor,
         net_wealth_scale_divisor=net_wealth_scale_divisor,
+        frm_target=frm_target,
     )
     target_illiquid_assets = target_illiquid_share * target_tfa_base
 

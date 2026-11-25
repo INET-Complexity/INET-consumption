@@ -214,10 +214,15 @@ WAGE_INDEXED_TRANSFERS_OVERRIDES: dict[str, Any] = {
     "central_government.functions.social_benefits.parameters.['regular_transfer_indexation']": "average_wage",
 }
 
+HOUSEHOLD_SUPPORT_OVERRIDES: dict[str, Any] = {
+    "household_support.['mode']": "legacy_stage5",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
     "government_consumption": GOVERNMENT_CONSUMPTION_OVERRIDES,
+    "household_support": HOUSEHOLD_SUPPORT_OVERRIDES,
     "wage_indexed_transfers": WAGE_INDEXED_TRANSFERS_OVERRIDES,
     "unemployment_replacement_rate": UNEMPLOYMENT_REPLACEMENT_RATE_OVERRIDES,
     "wage_competition_anchor": WAGE_COMPETITION_ANCHOR_OVERRIDES,

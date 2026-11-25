@@ -374,7 +374,7 @@ def test__load_country_configuration_resolves_real_fra_cacf_parameters():
     assert params["income_growth_propensity"] == expected_income_growth_propensity
     assert params["debt_service_cashflow_propensity"] == -0.75
     assert "interest_rate_cashflow_propensity" not in params
-    assert params["uncertainty_propensity"] == -0.005
+    assert params["uncertainty_propensity"] == canonical["uncertainty_propensity"] == -102.0
     assert params["partial_adjustment_speed"] == 0.56
     assert params["long_run_mpc_lower_bound"] == 0.0
     assert params["long_run_mpc_upper_bound"] == 2.0
@@ -413,7 +413,7 @@ def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
     assert params["mu_eq"] == 0.0029
     assert params["equity_weight"] == 0.5
     assert params["uses_portfolio_choice"] is True
-    assert params["target_share_source"] == "scalar"
+    assert params["target_share_source"] == "frm_magnitude"
     assert params["default_target_illiquid_share"] == 0.65
     assert params["phi_1"] == 5.0
     assert params["lambda_kappa"] == 0.1

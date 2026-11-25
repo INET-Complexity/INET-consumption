@@ -45,6 +45,7 @@ def prepared(
     q=0.2,
     m=None,
     pass_kind="first",
+    expected_inflation=0.0,
 ):
     units = MonetaryUnits("EUR", scale)
     raw = np.full((4, 2), 120 * months / 3 * scale) if raw is None else np.asarray(raw, float)
@@ -61,7 +62,18 @@ def prepared(
         np.full(h, 150 * months / 3 * scale) if m is None else m,
         np.broadcast_to(q, (h,)),
     )
-    histories = IncomeHistories(raw, floor, prices, current, initial, "aligned", units, units, months_per_period=months)
+    histories = IncomeHistories(
+        raw,
+        floor,
+        prices,
+        current,
+        initial,
+        "aligned",
+        units,
+        units,
+        months_per_period=months,
+        expected_inflation=expected_inflation,
+    )
     return prepare_inputs(histories, opening, pi, period_id=1, pass_kind=pass_kind, household_layout_key="run:order")
 
 
@@ -150,12 +162,17 @@ def test_hand_smoothed_base_rebase_target_and_dynamic_decomposition():
         floor=[[10, 10], [40, 20], [30, 10], [160, 10]],
         prices=[100, 200, 100, 200],
         current=200,
+        expected_inflation=0.025,
     )
-    expected = np.array([(10 * 20 * 80 * 80) ** 0.25, (20 * 20 * 40 * 80) ** 0.25])
+    # The current row is deflated at the nominalization price 200 * 1.025; earlier rows at their own.
+    expected = np.array([(10 * 20 * 80 * 160 / 2.05) ** 0.25, (20 * 20 * 40 * 160 / 2.05) ** 0.25])
     np.testing.assert_allclose(data.income_base_real, expected, rtol=1e-10, atol=1e-12)
     cfg = configuration()
     rule = CreditAugmentedConsumption(**cfg)
     rate = np.array([0.04, 0.1])
+    # beta3 (-102) multiplies the change in the common income-forecast variance (theta-bar), not the change in u.
+    # A small delta keeps the term inside the +-0.5 clip, so the identity below stays non-trivial.
+    uncertainty_delta = 0.0004
     budget = expected * 0.7
     out, total = rule.evaluate_prepared_target(
         data,
@@ -164,13 +181,13 @@ def test_hand_smoothed_base_rebase_target_and_dynamic_decomposition():
         epsilon=np.full(2, 0.03),
         consumer_debt_rate_delta=0.02,
         debt_service_payments=DebtServicePayments([150, 50], [100, 100]),
-        uncertainty_delta=0.4,
+        uncertainty_delta=uncertainty_delta,
         expected_inflation=0.025,
     )
     log_target, a, g = oracle(cfg, expected, data.pi_log_ratio_rebased, data.opening_real, rate=rate, epsilon=0.03)
     np.testing.assert_allclose(out["target_consumption_raw_log_target"], log_target, rtol=1e-10, atol=1e-12)
-    cash = np.array([50, -50]) / (expected * 2)
-    delta = 0.56 * (log_target - np.log(budget)) - 0.75 * cash - 0.005 * 0.4
+    cash = np.array([50, -50]) / (expected * 2 * 1.025)
+    delta = 0.56 * (log_target - np.log(budget)) - 0.75 * cash + cfg["uncertainty_propensity"] * uncertainty_delta
     np.testing.assert_allclose(out["target_consumption_interest_rate_cashflow_index"], cash, rtol=1e-10, atol=1e-12)
     np.testing.assert_allclose(out["target_consumption_unguarded_delta_log_consumption"], delta, rtol=1e-10, atol=1e-12)
     desired = budget * np.exp(np.clip(delta, -0.5, 0.5))
@@ -447,3 +464,194 @@ def test_conditional_pi_diagnostics_still_reconstruct_supplied_proxy():
         rtol=1e-10,
         atol=1e-12,
     )
+
+
+# Real income at the nominalization price CPI_{t-1}(1 + Pi^e_t): option A of the consumption price basis.
+EXPECTED_INFLATIONS = [-0.01, 0.0, 0.02]
+
+
+def steady_real_income(pi_e, *, real=100.0, current=120.0, months=3, window=4, m_real=125.0):
+    """Constant real income: row k is real*P_k, the period-t row and M are valued at current*(1+pi_e)."""
+    past = [100.0, 105.0, 110.0, current][-window:][:-1]
+    expected_price = current * (1 + pi_e)
+    raw = np.array([real * p / 100 for p in past] + [real * expected_price / 100])[:, None] * np.ones((1, 2))
+    units = MonetaryUnits("EUR", 1)
+    values = [np.full(2, v) for v in [500, 800, 1500, 100, 50, 90, 40]]
+    opening = OpeningSnapshot(1, "run:order", units, OpeningStockValues(*values))
+    m = np.full(2, m_real * expected_price / 100)
+    pi = PermanentIncomePayload(1, "first", "run:order", units, m, np.full(2, 0.2))
+    histories = IncomeHistories(
+        raw,
+        np.full_like(raw, 1.0),
+        np.array(past),
+        current,
+        100.0,
+        "missing_current",
+        units,
+        units,
+        months_per_period=months,
+        history_window=window,
+        expected_inflation=pi_e,
+    )
+    return prepare_inputs(histories, opening, pi, period_id=1, pass_kind="first", household_layout_key="run:order")
+
+
+@pytest.mark.parametrize("pi_e", EXPECTED_INFLATIONS)
+def test_nominal_long_run_consumption_over_income_equals_rule_ratio(pi_e):
+    data = steady_real_income(pi_e)
+    rule = CreditAugmentedConsumption(**configuration())
+    out, _ = rule.evaluate_prepared_target(
+        data, lagged_real_consumption_budget=data.income_base_real, expected_inflation=pi_e
+    )
+    rule_ratio = np.exp(out["target_consumption_log_long_run"])
+    current_nominal_income = data.histories.behavioural_income_nominal_history[-1]
+    # Nominal long-run C over same-period nominal income is the rule's c/y, for any Pi^e.
+    np.testing.assert_allclose(out["target_consumption_long_run"] / current_nominal_income, rule_ratio, rtol=1e-12)
+    # Same identity against the income base valued at the price it was deflated with.
+    base_nominal = data.income_base_real * data.nominalization_deflator
+    np.testing.assert_allclose(out["target_consumption_long_run"] / base_nominal, rule_ratio, rtol=1e-12)
+    np.testing.assert_allclose(data.nominalization_deflator, 1.2 * (1 + pi_e), rtol=1e-15)
+
+
+def test_steady_real_income_rule_is_invariant_to_expected_inflation():
+    rule = CreditAugmentedConsumption(**configuration())
+    results = []
+    for pi_e in EXPECTED_INFLATIONS:
+        data = steady_real_income(pi_e)
+        out, total = rule.evaluate_prepared_target(data, lagged_real_consumption_budget=data.income_base_real)
+        results.append((data, out, total, pi_e))
+    reference_data, reference, reference_total, _ = results[1]
+    for data, out, total, pi_e in results:
+        np.testing.assert_allclose(data.income_base_real, 100.0, rtol=1e-12)
+        np.testing.assert_allclose(data.pi_log_ratio_rebased, reference_data.pi_log_ratio_rebased, rtol=1e-12)
+        for name in ("log_long_run", "real_budget", "net_liquid_assets_ratio", "debt_service_income_nominal"):
+            scale = (1 + pi_e) if name == "debt_service_income_nominal" else 1.0
+            np.testing.assert_allclose(
+                out["target_consumption_" + name], reference["target_consumption_" + name] * scale, rtol=1e-12
+            )
+        # Only the nominal conversion carries expected inflation.
+        np.testing.assert_allclose(total, reference_total * (1 + pi_e), rtol=1e-12)
+
+
+def test_current_row_uses_expected_price_and_past_rows_their_own_prices():
+    units = MonetaryUnits("EUR", 1)
+    raw = np.array([[90.0, 50.0], [99.0, 60.0], [132.0, 70.0]])
+    guard = np.full_like(raw, 1.0)
+    values = [np.full(2, v) for v in [500, 800, 1500, 100, 50, 90, 40]]
+    opening = OpeningSnapshot(1, "k", units, OpeningStockValues(*values))
+    m = np.array([140.0, 80.0])
+    pi = PermanentIncomePayload(1, "first", "k", units, m, np.array([0.1, -0.2]))
+    pi_e = 0.02
+    records = []
+    for layout, prices in (("missing_current", [100.0, 110.0]), ("aligned", [100.0, 110.0, 120.0])):
+        histories = IncomeHistories(
+            raw,
+            guard,
+            prices,
+            120.0,
+            100.0,
+            layout,
+            units,
+            units,
+            months_per_period=1,
+            history_window=3,
+            expected_inflation=pi_e,
+        )
+        records.append(prepare_inputs(histories, opening, pi, period_id=1, pass_kind="first", household_layout_key="k"))
+    deflators = np.array([1.0, 1.1, 1.2 * (1 + pi_e)])
+    expected_base = np.exp(np.mean(np.log(raw / deflators[:, None]), axis=0))
+    for data in records:
+        np.testing.assert_allclose(data.income_base_real, expected_base, rtol=1e-12)
+        # Permanent income: M is a period-t flow at the same expected price.
+        np.testing.assert_allclose(
+            data.log_permanent_income_proxy_real, np.log(m / deflators[-1]) + pi.pi_log_ratio_original, rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            data.pi_log_ratio_rebased, data.log_permanent_income_proxy_real - np.log(expected_base), rtol=1e-12
+        )
+        # Opening stocks (end of t-1) keep the latest realised price CPI_{t-1}.
+        np.testing.assert_allclose(data.opening_real.liquid_financial_assets, 500 / 1.2, rtol=1e-12)
+        assert data.current_deflator == pytest.approx(1.2, rel=1e-15)
+
+
+@pytest.mark.parametrize("pi_e", EXPECTED_INFLATIONS)
+def test_fixed_nominal_inputs_shift_ratios_by_documented_factors(pi_e):
+    """Fixed nominal history: only the current row (weight 1/n) and M are re-priced by 1 + Pi^e."""
+    rule = CreditAugmentedConsumption(**configuration())
+    reference = prepared(expected_inflation=0.0)
+    data = prepared(expected_inflation=pi_e)
+    n = data.window_row_count
+    np.testing.assert_allclose(data.income_base_real, reference.income_base_real * (1 + pi_e) ** (-1 / n), rtol=1e-12)
+    # y^p is re-priced by the full factor, y by 1/n of it: ln(y^p/y) moves by -(1 - 1/n) ln(1 + Pi^e).
+    np.testing.assert_allclose(
+        data.pi_log_ratio_rebased - reference.pi_log_ratio_rebased, -(1 - 1 / n) * np.log1p(pi_e), atol=1e-12
+    )
+    out, _ = rule.evaluate_prepared_target(data, lagged_real_consumption_budget=data.income_base_real)
+    ref, _ = rule.evaluate_prepared_target(reference, lagged_real_consumption_budget=reference.income_base_real)
+    # Real stock at its own date over real income at the expected price.
+    np.testing.assert_allclose(
+        out["target_consumption_raw_net_liquid_assets_ratio"],
+        ref["target_consumption_raw_net_liquid_assets_ratio"] * (1 + pi_e) ** (1 / n),
+        rtol=1e-12,
+    )
+    # Nominal debt-service denominator: base valued at the expected price.
+    np.testing.assert_allclose(
+        out["target_consumption_debt_service_income_nominal"],
+        ref["target_consumption_debt_service_income_nominal"] * (1 + pi_e) ** (1 - 1 / n),
+        rtol=1e-12,
+    )
+
+
+@pytest.mark.parametrize("pi_e", EXPECTED_INFLATIONS)
+def test_single_row_window_permanent_to_current_income_invariant_to_expected_inflation(pi_e):
+    units = MonetaryUnits("EUR", 1)
+    raw = np.array([[150.0, 80.0]])
+    values = [np.full(2, v) for v in [500, 800, 1500, 100, 50, 90, 40]]
+    opening = OpeningSnapshot(1, "k", units, OpeningStockValues(*values))
+    pi = PermanentIncomePayload(1, "first", "k", units, np.array([140.0, 90.0]), np.array([0.1, -0.2]))
+
+    def build(expected_inflation):
+        histories = IncomeHistories(
+            raw,
+            np.ones_like(raw),
+            [],
+            120.0,
+            100.0,
+            "missing_current",
+            units,
+            units,
+            months_per_period=1,
+            history_window=1,
+            expected_inflation=expected_inflation,
+        )
+        return prepare_inputs(histories, opening, pi, period_id=1, pass_kind="first", household_layout_key="k")
+
+    np.testing.assert_allclose(build(pi_e).pi_log_ratio_rebased, build(0.0).pi_log_ratio_rebased, atol=1e-12)
+
+
+def test_nominalization_inflation_must_match_prepared_inflation():
+    data = prepared(expected_inflation=0.01)
+    rule = CreditAugmentedConsumption(**configuration())
+    with pytest.raises(ValueError, match="expected_inflation"):
+        rule.evaluate_prepared_target(
+            data, lagged_real_consumption_budget=data.income_base_real, expected_inflation=0.0
+        )
+    with pytest.raises(ValueError, match="expected_inflation"):
+        compute(rule, data)
+
+
+@pytest.mark.parametrize("bad", [-1.0, np.nan, np.inf, True])
+def test_income_histories_reject_invalid_expected_inflation(bad):
+    units = MonetaryUnits("EUR", 1)
+    with pytest.raises(ValueError, match="expected_inflation"):
+        IncomeHistories(
+            np.ones((4, 1)),
+            np.ones((4, 1)),
+            np.ones(3),
+            1.0,
+            1.0,
+            "missing_current",
+            units,
+            units,
+            expected_inflation=bad,
+        )

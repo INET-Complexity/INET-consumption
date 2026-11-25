@@ -247,7 +247,7 @@ def _two_bank_toy():
             "overdrafts_to_households",
             "household_overdraft_interest_received",
             "household_deposit_interest_paid",
-            "household_overdraft_interest_capitalised",
+            "household_overdraft_interest_accrued",
             "firm_overdraft_interest_received",
             "firm_deposit_interest_paid",
             "interest_received_on_loans",
@@ -317,12 +317,14 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
     household_overdraft_interest = overdraft_rate[household_bank] * np.maximum(-lfa, 0.0)
     firm_deposit_interest = deposit_rate[firm_bank] * np.maximum(firm_deposits, 0.0)
     firm_overdraft_interest = overdraft_rate[firm_bank] * np.maximum(-firm_deposits, 0.0)
-    capitalised = np.array([0.0, 0.5, 0.0, 0.0, 2.0, 0.0])
+    # Interest left unpaid is accrued (held as consumer interest arrears), not received.
+    accrued = np.array([0.0, 0.5, 0.0, 0.0, 2.0, 0.0])
+    household_overdraft_interest = household_overdraft_interest - accrued
     banks.record_household_deposit_interest(
         deposit_interest_received=household_deposit_interest,
         overdraft_interest_paid=household_overdraft_interest,
         households_corresponding_bank=household_bank,
-        overdraft_interest_capitalised=capitalised,
+        overdraft_interest_accrued=accrued,
     )
     banks.record_firm_deposit_interest(
         deposit_interest_received=firm_deposit_interest,
@@ -349,7 +351,7 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
         + np.bincount(firm_bank, firm_overdraft_interest - firm_deposit_interest, minlength=2)
     )
     np.testing.assert_allclose(received, expected, rtol=1e-14)
-    # Capitalised overdraft interest is accounting profit but not distributable (or taxable) cash profit.
+    # Accrued overdraft interest is accounting profit but not distributable (or taxable) cash profit.
     banks.ts.override_current("interest_received_on_deposits", received)
     np.testing.assert_allclose(
         banks.compute_profits() - banks.compute_cash_distributable_profits(), [0.5, 2.0], rtol=1e-14
@@ -360,3 +362,32 @@ def test__two_banks_book_mixed_sign_balances_gross_and_receive_each_depositors_i
         np.array([120.0 + 25.0 + 50.0 - 100.0 - 35.0, 50.0 + 12.0 + 60.0 - 30.0 - 70.0 - 8.0]),
         rtol=1e-14,
     )
+
+
+def test__overdrafts_are_capital_requirement_exposure_and_count_in_insolvency(test_banks):
+    from types import SimpleNamespace
+
+    from macromodel.agents.banks.func.capital_requirement import capital_requirement_exposure
+    from macromodel.agents.banks.func.demography import DefaultBankDemography
+
+    n_banks = test_banks.ts.current("n_banks")
+    loans, household_overdrafts, firm_overdrafts = (
+        np.full(n_banks, 100.0),
+        np.full(n_banks, 30.0),
+        np.full(n_banks, 20.0),
+    )
+    test_banks.ts.override_current("total_outstanding_loans", loans)
+    test_banks.ts.override_current("overdrafts_to_households", household_overdrafts)
+    test_banks.ts.override_current("overdrafts_to_firms", firm_overdrafts)
+    np.testing.assert_array_equal(capital_requirement_exposure(test_banks), np.full(n_banks, 150.0))
+    # Loans stay loans only: the overdrafts are a separate exposure.
+    np.testing.assert_array_equal(test_banks.ts.current("total_outstanding_loans"), loans)
+
+    # Equity 6 covers 5% of the loans (5) but not of loans plus overdrafts (7.5).
+    test_banks.functions["demography"] = DefaultBankDemography(solvency_ratio=0.05, reserve_weight=0.0)
+    test_banks.ts.override_current("equity", np.full(n_banks, 6.0))
+    test_banks.ts.override_current("deposits", np.zeros(n_banks))
+    test_banks.states["is_insolvent"] = np.zeros(n_banks, dtype=bool)
+    removed = []
+    test_banks.handle_insolvency(credit_market=SimpleNamespace(remove_loans_by_bank=removed.append))
+    assert removed == list(range(n_banks))

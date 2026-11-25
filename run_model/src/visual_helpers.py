@@ -914,6 +914,15 @@ def _compute_bank_credit_supply_caps(country):
     loans_hist = _safe_ts_values(banks.ts, "total_outstanding_loans")
     if equity_hist is None or loans_hist is None:
         return None
+    # Overdrafts are capital-requirement exposure next to loans (capital_requirement_exposure).
+    overdraft_hists = [
+        values
+        for values in (
+            _safe_ts_values(banks.ts, "overdrafts_to_households"),
+            _safe_ts_values(banks.ts, "overdrafts_to_firms"),
+        )
+        if values is not None
+    ]
 
     car = getattr(getattr(banks, "parameters", None), "capital_adequacy_ratio", None)
     if car is None or not np.isfinite(car) or car <= 0:
@@ -967,6 +976,9 @@ def _compute_bank_credit_supply_caps(country):
             equity = np.resize(equity, n_banks)
         if loans.size != n_banks:
             loans = np.resize(loans, n_banks)
+        for overdraft_hist in overdraft_hists:
+            if t < len(overdraft_hist):
+                loans = loans + np.resize(_to_1d_array(overdraft_hist[t]), n_banks)
 
         max_car = np.maximum(0.0, equity / car - loans)
         total_caps[t, :] = max_car

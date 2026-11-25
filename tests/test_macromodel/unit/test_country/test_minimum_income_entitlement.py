@@ -458,3 +458,114 @@ def test_reset_reparses_household_support(datawrapper):
     }
     with pytest.raises(ValueError, match="base_year"):
         simulation.reset(configuration)
+
+
+def test_frm_coefficients_survive_reset_under_frm_magnitude(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    households = simulation.countries["FRA"].households
+    assert households.functions["wealth"].target_share_source == "frm_magnitude"
+    before = households.states["frm_coefficients"]
+    simulation.reset(deepcopy(simulation.configuration))
+    after = simulation.countries["FRA"].households.states["frm_coefficients"]
+    assert after.magnitude_coefficients == before.magnitude_coefficients
+
+
+def test_frm_target_is_identical_in_borrow_versus_sell_and_stage4_within_a_period(datawrapper):
+    simulation = _production_simulation(datawrapper, {})
+    households = simulation.countries["FRA"].households
+    log = []
+    stage = {"name": None}
+    original_target = households.frm_target_share
+
+    def logged_target():
+        out = original_target()
+        log.append((stage["name"], out[0].copy()))
+        return out
+
+    def tagged(name, method):
+        def wrapper(*args, **kwargs):
+            stage["name"] = name
+            try:
+                return method(*args, **kwargs)
+            finally:
+                stage["name"] = None
+
+        return wrapper
+
+    households.frm_target_share = logged_target
+    households.build_borrow_vs_sell_inputs = tagged("borrow_vs_sell", households.build_borrow_vs_sell_inputs)
+    households.compute_stage4_portfolio_diagnostics = tagged("stage4", households.compute_stage4_portfolio_diagnostics)
+
+    for t in (0, 1):
+        log.clear()
+        simulation.iterate(t=t)
+        borrow_vs_sell = [target for name, target in log if name == "borrow_vs_sell"]
+        stage4 = [target for name, target in log if name == "stage4"]
+        assert borrow_vs_sell and stage4
+        np.testing.assert_array_equal(borrow_vs_sell[-1], stage4[-1])
+
+
+@pytest.mark.parametrize("mode", ["legacy_stage5", "minimum_income"])
+def test_minimum_sale_size_is_a_share_of_m_in_both_support_modes(test_country, monkeypatch, mode):
+    if mode == "minimum_income":
+        _use_minimum_income(test_country, minimum_sale_share_of_m=0.25)
+    else:
+        test_country.household_support = _read_household_support_parameters(
+            {"minimum_income": {"minimum_sale_share_of_m": 0.25}}
+        )
+    _fix_benefit_setter(test_country, monkeypatch, index=1.5)
+    test_country.scale = 2
+    initial_cpi = test_country.economy.initial_consumer_price_level()
+    monkeypatch.setattr(test_country.economy, "current_consumer_price_level", lambda: 1.2 * initial_cpi)
+
+    _start_period(test_country)
+
+    level = (
+        RSA
+        * test_country.scale
+        * test_country.economy.time_unit
+        * test_country.households._current_consumption_units()
+        * 1.5
+        * 1.2
+    )
+    np.testing.assert_allclose(test_country._minimum_sale_size, 0.25 * level, rtol=1e-12)
+
+
+def test_minimum_sale_share_default_and_validation():
+    assert _read_household_support_parameters({}).minimum_income.minimum_sale_share_of_m == 0.20
+    assert (
+        _read_household_support_parameters(
+            {"minimum_income": {"minimum_sale_share_of_m": 0}}
+        ).minimum_income.minimum_sale_share_of_m
+        == 0.0
+    )
+    for bad in (1.0, -0.1, True):
+        with pytest.raises(ValueError):
+            _read_household_support_parameters({"minimum_income": {"minimum_sale_share_of_m": bad}})
+
+
+def test_minimum_sale_size_is_persisted_each_period_and_required_under_the_resolver(test_country, monkeypatch):
+    _fix_benefit_setter(test_country, monkeypatch)
+    test_country.configuration.households.parameters.uses_feasibility_resolver = True
+    with pytest.raises(RuntimeError, match="minimum sale size"):
+        test_country._current_minimum_sale_size()
+    _start_period(test_country)
+    np.testing.assert_array_equal(
+        test_country.households.ts.current("minimum_sale_size"), test_country._minimum_sale_size
+    )
+
+
+def test_debt_arrears_flag_ignores_float_residue(test_country, monkeypatch):
+    test_country.configuration.households.parameters.uses_feasibility_resolver = True
+    n = test_country.households.ts.current("n_households")
+    zeros = np.zeros(n)
+    monkeypatch.setattr(test_country.households, "current_unpaid_consumer_service", lambda: zeros)
+    unpaid_mortgage = zeros.copy()
+    unpaid_mortgage[0] = 5.0
+    monkeypatch.setattr(test_country.households, "current_unpaid_mortgage_service", lambda: unpaid_mortgage)
+    arrears = zeros.copy()
+    arrears[1] = 4.7e-10
+    arrears[2] = 10.0 * test_country.scale
+    monkeypatch.setattr(test_country.credit_market, "household_arrears_outstanding", lambda: arrears)
+    flag = test_country._household_debt_arrears_active()
+    assert flag[0] and not flag[1] and flag[2]

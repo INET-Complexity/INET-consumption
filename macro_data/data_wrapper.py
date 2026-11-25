@@ -487,6 +487,9 @@ class DataWrapper:
             population = synthetic_countries[country].population
             population.household_consumption_stage = CONSUMPTION_DATA_STAGE
             population.hfcs_consumption_source_sha256 = source.sha256
+            population.dna_quintile_c_y = configuration.country_configs[
+                country
+            ].household_consumption_initialisation.dna_quintile_c_y
         return cls(
             household_consumption_signature=consumption_signature,
             synthetic_countries=synthetic_countries,

@@ -7,15 +7,30 @@ import numpy as np
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
 
 SETTLEMENT_DISABLED = 0.0
+# Retired: rebalancing no longer requires new saving, so this status is never assigned. The code is kept
+# so the numeric status values of older output files keep their meaning.
 SETTLEMENT_NO_SURPLUS = 1.0
 SETTLEMENT_INACTION = 2.0
 SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY = 3.0
+# Stage 4 illiquid purchase blocked because the household sold illiquid assets in Stage 5 of the same
+# period (any settled Stage 5 sale: forced liquidity sale, purchase-funding sale, or a negligible one).
+# Before this rule the code was unreachable; the numeric value is kept.
 SETTLEMENT_FORCED_LIQUIDATION = 4.0
 SETTLEMENT_INVALID_INPUT = 5.0
 SETTLEMENT_CONSERVATION_FAILURE = 6.0
 SETTLEMENT_SETTLED = 7.0
+# Stage 4 illiquid purchase blocked because the household has unpaid or suspended debt service this period,
+# or outstanding consumer or mortgage arrears: debt is serviced before resources go to investment.
+SETTLEMENT_BLOCKED_DEBT_ARREARS = 8.0
+# Stage 4 illiquid sale not executed because its gross amount is below the minimum sale size.
+SETTLEMENT_BELOW_MINIMUM_SALE = 9.0
 
 _CLEARING_NOISE_TOL = 1e-6
+# Conservation check: |lfa_flow + ifa_flow + cost| <= atol + rtol * (|lfa_flow| + |ifa_flow| + |cost|).
+# rtol = 1e-12 is about 4500 double-precision ulps of the flow size, ample for the rounding of a three-term
+# sum; a genuine imbalance of 1e-12 of the flow (1e-4 on a 1e8 flow) is still flagged.
+_CONSERVATION_RTOL = 1e-12
+_CONSERVATION_ATOL = 1e-8
 
 
 @dataclass(frozen=True)
@@ -39,27 +54,54 @@ def settle_portfolio_reallocation(
     *,
     base_lfa: np.ndarray,
     base_ifa: np.ndarray,
-    investable_surplus: np.ndarray,
     rebalancing: PortfolioRebalancingResult,
     settlement_enabled: bool,
     forced_liquidation_active: np.ndarray,
     waive_fixed_cost: np.ndarray | None = None,
+    debt_arrears_active: np.ndarray | None = None,
+    minimum_sale_size: np.ndarray | None = None,
 ) -> PortfolioSettlement:
     """Commit Stage 4 reallocation flows without allocating saving twice.
 
     ``base_lfa`` is the current liquid balance after the ordinary wealth update;
-    it already includes positive saving. The Stage 4 flows therefore only move
-    wealth between LFA and IFA and charge adjustment cost on LFA.
+    it already includes this period's saving, whatever its sign. The Stage 4 flows
+    therefore only move wealth between LFA and IFA and charge adjustment cost on
+    LFA. Households rebalance their existing portfolio whether or not they saved
+    this period: the rebalancing rule is a function of the stocks, never of the
+    period saving flow, so no saving input is needed here.
 
     ``waive_fixed_cost`` marks households that already paid the illiquid-trade
     cost this period on a Stage 5 sale. Their trade settles without the fixed
     cost: only ``committed_cost`` is zeroed, so the LFA flow stays the pure
     transfer ``-committed_ifa`` and no money is created or destroyed.
+
+    ``forced_liquidation_active`` marks households with a settled Stage 5 sale this
+    period. Their illiquid purchases are blocked (``SETTLEMENT_FORCED_LIQUIDATION``,
+    flows zero, no cost); their sales settle as for any other household.
+
+    ``debt_arrears_active`` marks households with unpaid or suspended debt service this
+    period or outstanding arrears. Their illiquid purchases are blocked
+    (``SETTLEMENT_BLOCKED_DEBT_ARREARS``); sales stay allowed. Forced-liquidation
+    status takes precedence when both apply.
+
+    ``minimum_sale_size`` is the smallest gross illiquid sale executed. A Stage 4 sale
+    (counterfactual IFA flow < 0) with ``-flow < minimum_sale_size`` is not executed
+    (``SETTLEMENT_BELOW_MINIMUM_SALE``, flows zero, no cost), also for Stage 5 sellers. A sale of the
+    whole illiquid holding is exempt.
     """
     base_lfa = np.asarray(base_lfa, dtype=float)
     base_ifa = np.asarray(base_ifa, dtype=float)
-    investable_surplus = np.asarray(investable_surplus, dtype=float)
     forced_liquidation_active = np.asarray(forced_liquidation_active, dtype=bool)
+    debt_arrears_active = (
+        np.zeros(base_lfa.shape, dtype=bool)
+        if debt_arrears_active is None
+        else np.asarray(debt_arrears_active, dtype=bool)
+    )
+    minimum_sale_size = (
+        np.zeros(base_lfa.shape, dtype=float)
+        if minimum_sale_size is None
+        else np.asarray(minimum_sale_size, dtype=float)
+    )
     portfolio_valid_flag = np.asarray(rebalancing.portfolio_valid_flag, dtype=bool)
     counterfactual_lfa_flow = np.asarray(rebalancing.counterfactual_lfa_flow, dtype=float)
     counterfactual_ifa_flow = np.asarray(rebalancing.counterfactual_ifa_flow, dtype=float)
@@ -68,8 +110,9 @@ def settle_portfolio_reallocation(
     arrays = (
         base_lfa,
         base_ifa,
-        investable_surplus,
         forced_liquidation_active,
+        debt_arrears_active,
+        minimum_sale_size,
         portfolio_valid_flag,
         counterfactual_lfa_flow,
         counterfactual_ifa_flow,
@@ -91,31 +134,48 @@ def settle_portfolio_reallocation(
         finite_inputs = (
             np.isfinite(base_lfa)
             & np.isfinite(base_ifa)
-            & np.isfinite(investable_surplus)
             & np.isfinite(counterfactual_lfa_flow)
             & np.isfinite(counterfactual_ifa_flow)
             & np.isfinite(adjustment_cost)
         )
-        conservation_valid = np.isclose(
-            counterfactual_lfa_flow + counterfactual_ifa_flow + adjustment_cost,
-            0.0,
-            rtol=1e-10,
-            atol=1e-8,
+        # The flows are population-expanded (~1e8), so the float rounding of their sum scales with their
+        # size. Compare the residual with a tolerance relative to the flow magnitude, plus a small absolute
+        # floor for tiny flows. np.isclose against 0 has no relative part, so it cannot be used here.
+        flow_scale = np.abs(counterfactual_lfa_flow) + np.abs(counterfactual_ifa_flow) + np.abs(adjustment_cost)
+        conservation_valid = (
+            np.abs(counterfactual_lfa_flow + counterfactual_ifa_flow + adjustment_cost)
+            <= _CONSERVATION_ATOL + _CONSERVATION_RTOL * flow_scale
         )
         invalid = ~finite_inputs | ~portfolio_valid_flag | ~conservation_valid
         conservation_failure = finite_inputs & portfolio_valid_flag & ~conservation_valid
 
-        # Fixed precedence: invalid, forced liquidation, no surplus, negative
-        # LFA, then ordinary valid settlement.
+        # Fixed precedence: invalid, forced-liquidation purchase block, negative LFA, then
+        # ordinary valid settlement.
         status[invalid & ~conservation_failure] = SETTLEMENT_INVALID_INPUT
         status[conservation_failure] = SETTLEMENT_CONSERVATION_FAILURE
         valid[invalid] = False
 
-        forced = ~invalid & forced_liquidation_active
+        # A household with any settled Stage 5 sale this period (forced liquidity sale, purchase-funding
+        # sale, or a negligible one) may not buy illiquid assets in Stage 4. Its sales stay allowed
+        # (fixed cost waived by the caller); a zero flow is not blocked here and keeps its normal status.
+        forced = ~invalid & forced_liquidation_active & (counterfactual_ifa_flow > 0.0)
         status[forced] = SETTLEMENT_FORCED_LIQUIDATION
-
-        no_surplus = ~invalid & ~forced & (investable_surplus <= 0.0)
-        status[no_surplus] = SETTLEMENT_NO_SURPLUS
+        # Unpaid or suspended debt service, or arrears: no illiquid purchase until debt is serviced.
+        arrears_blocked = ~invalid & ~forced & debt_arrears_active & (counterfactual_ifa_flow > 0.0)
+        status[arrears_blocked] = SETTLEMENT_BLOCKED_DEBT_ARREARS
+        forced = forced | arrears_blocked
+        # A sale below the minimum size is not executed (sales that repay an overdraft included: the
+        # overdraft is then served by the Stage 5 overdraft sale or stays).
+        # A sale of the whole illiquid holding is exempt: otherwise a holding below the minimum is frozen.
+        sells_everything = -counterfactual_ifa_flow >= base_ifa * (1.0 - _CONSERVATION_RTOL)
+        too_small = (
+            ~invalid
+            & (counterfactual_ifa_flow < 0.0)
+            & (-counterfactual_ifa_flow < minimum_sale_size)
+            & ~sells_everything
+        )
+        status[too_small] = SETTLEMENT_BELOW_MINIMUM_SALE
+        forced = forced | too_small
 
         # A purchase may not overdraw the account: block it when LFA is negative or would close negative.
         # A sale of illiquid assets is allowed while overdrawn: its proceeds repay the overdraft.
@@ -123,15 +183,11 @@ def settle_portfolio_reallocation(
         # A sale whose proceeds net of the trade cost are not positive would deepen the overdraft: it stays blocked.
         sale_while_overdrawn = overdrawn & (counterfactual_ifa_flow < 0.0) & (counterfactual_lfa_flow > 0.0)
         negative_lfa = (
-            ~invalid
-            & ~forced
-            & ~no_surplus
-            & ~sale_while_overdrawn
-            & (overdrawn | (base_lfa + counterfactual_lfa_flow < 0.0))
+            ~invalid & ~forced & ~sale_while_overdrawn & (overdrawn | (base_lfa + counterfactual_lfa_flow < 0.0))
         )
         status[negative_lfa] = SETTLEMENT_BLOCKED_NEGATIVE_LIQUIDITY
 
-        eligible = ~invalid & ~forced & ~no_surplus & ~negative_lfa
+        eligible = ~invalid & ~forced & ~negative_lfa
         # Stage 4's counterfactual LFA flow already includes the fixed cost;
         # expose the transfer separately so the settled stock update charges it
         # exactly once on the liquid side.

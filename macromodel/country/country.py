@@ -56,6 +56,7 @@ from macro_data.readers.permanent_income_mapping import (
     build_permanent_income_forecast_regressors,
     design_matrix_to_forecast_reader_names,
     load_permanent_income_design_matrix,
+    permanent_income_trend_growth,
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
@@ -78,7 +79,11 @@ from macromodel.agents.households.consumption_inputs import (
     PermanentIncomePayload,
 )
 from macromodel.agents.households.func.consumption import CreditAugmentedConsumption
-from macromodel.agents.households.func.financial_feasibility import PLAN_ROUND_DOWN, forced_liquidation_cash
+from macromodel.agents.households.func.financial_feasibility import (
+    PLAN_ROUND_DOWN,
+    forced_liquidation_cash,
+    overdraft_sale_need,
+)
 from macromodel.agents.households.func.minimum_income import (
     assessed_income,
     assessment_flow,
@@ -90,6 +95,7 @@ from macromodel.agents.households.func.minimum_income import (
 )
 from macromodel.agents.households.households import DEFAULT_CU_WEIGHTS, Households
 from macromodel.agents.households.households_ts import realised_consumption_outcomes
+from macromodel.agents.households.income_belief_learning import steady_state_posterior_variance
 from macromodel.agents.individuals.individual_properties import ActivityStatus
 from macromodel.agents.individuals.individuals import Individuals
 from macromodel.configurations import CountryConfiguration
@@ -193,6 +199,9 @@ class MinimumIncomeParameters(NamedTuple):
     base_year: int = 2014
     notional_asset_return_annual: float = 0.03
     guard_share_of_m: float = 0.01
+    # Minimum size of an illiquid sale (Stage 4 voluntary and Stage 5 liquidity sale) as a share of the household's
+    # quarterly minimum income level M. 0.20 approximates French gross saving over GDP. Defined in both support modes.
+    minimum_sale_share_of_m: float = 0.20
 
 
 class HouseholdSupportParameters(NamedTuple):
@@ -240,6 +249,15 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
     guard_share = positive("guard_share_of_m")
     if not guard_share < 1.0:
         raise ValueError("household_support.minimum_income.guard_share_of_m must lie in (0, 1).")
+    # 0 switches the minimum sale size off.
+    minimum_sale_share = minimum_income.get("minimum_sale_share_of_m", defaults.minimum_income.minimum_sale_share_of_m)
+    if (
+        isinstance(minimum_sale_share, bool)
+        or not isinstance(minimum_sale_share, (int, float))
+        or not 0.0 <= minimum_sale_share < 1.0
+    ):
+        raise ValueError("household_support.minimum_income.minimum_sale_share_of_m must lie in [0, 1).")
+    minimum_sale_share = float(minimum_sale_share)
     return HouseholdSupportParameters(
         mode,
         goods_floor,
@@ -248,6 +266,7 @@ def _read_household_support_parameters(block: Mapping[str, Any] | None) -> House
             base_year=int(base_year),
             notional_asset_return_annual=positive("notional_asset_return_annual"),
             guard_share_of_m=guard_share,
+            minimum_sale_share_of_m=minimum_sale_share,
         ),
     )
 
@@ -534,6 +553,14 @@ class Country:
             and "income_belief_priors" in households.states
         ):
             households.initial_states["income_belief_priors"] = deepcopy(households.states["income_belief_priors"])
+            if "income_belief_noise_inputs" in households.states:
+                households.initial_states["income_belief_noise_inputs"] = deepcopy(
+                    households.states["income_belief_noise_inputs"]
+                )
+        # The FRM coefficient table is likewise installed after the initial snapshot and read every
+        # period under target_share_source="frm_magnitude"; keep it across reset.
+        if "frm_coefficients" in households.states:
+            households.initial_states["frm_coefficients"] = deepcopy(households.states["frm_coefficients"])
         self._consumption_input_adapter = ConsumptionInputAdapter()
         self._consumption_run_id = 0
         self.firms = firms
@@ -573,6 +600,8 @@ class Country:
         _validate_minimum_income_base_year(self.household_support, initial_year)
         # None (no entitlement computed yet), "assessed" (T fixed for the period) or "booked" (T settled).
         self._minimum_income_status: Optional[str] = None
+        # Smallest illiquid sale of the period per household; set at each period start (None before the first).
+        self._minimum_sale_size: Optional[np.ndarray] = None
         self.economy.configure_consumer_price_sources(configuration.economy)
 
         _validate_minimum_income_resolver(
@@ -881,7 +910,8 @@ class Country:
         # mortgage, own sale proceeds, the purchase sale and the liquid assets
         # D, so support never finances it. A seller's surplus is a resource.
         resources = income_without_support + forced_liquidation_cash(hh.post_grant_feasible_plan)
-        # max(LFA - D, 0), as in the settlement: an overdraft is not a claim on support.
+        # max(LFA - D, 0), as in the settlement: an overdraft is not a claim on support (the plan repays it as a
+        # senior use from the household's own resources, never from support).
         resources += np.maximum(hh.ts.current("liquid_financial_assets") - hh.current_housing_lfa_draw(), 0.0)
         resources += hh.ts.current("received_consumption_loans")
         resources += np.maximum(-hh.current_net_housing_cash_need(), 0.0)
@@ -1279,6 +1309,21 @@ class Country:
                 n_households=households.ts.current("n_households"),
                 priors_table=income_belief_priors_table,
             )
+            if getattr(households.functions["consumption"], "uses_state_dependent_income_belief_noise", False):
+                # P starts at the steady state of its own noise variances, so theta has no
+                # start-up drift from the survey P prior (vault 2026-11-24, option a).
+                priors = households.states["income_belief_priors"]
+                priors["income_belief_p"] = steady_state_posterior_variance(
+                    np.asarray(priors["income_belief_rho"], dtype=float),
+                    np.asarray(priors["sigma2_v"], dtype=float),
+                    np.asarray(priors["sigma2_xi"], dtype=float),
+                )
+                # Member weights stay at their initial employee income so a job loser keeps
+                # their weight in the household average when their status switches.
+                households.states["income_belief_noise_inputs"] = {
+                    "priors_table": income_belief_priors_table,
+                    "member_weight_income": np.array(individuals.ts.current("employee_income"), dtype=float),
+                }
 
         # Stage 4 (portfolio choice): load the GTP-FRM coefficient table once at init
         # rather than per-period. Unlike load_income_belief_priors_table, this loader
@@ -1296,12 +1341,8 @@ class Country:
                     "uses_portfolio_choice=True requires a non-null frm_coefficients_path, "
                     "either on the wealth function configuration or via DataPaths."
                 )
-            # NOTE: stored for a future increment's use (the precomputed/grouped
-            # target_share_source paths, e.g. compute_frm_magnitude_target_share);
-            # Increment 3's active "scalar" target_share_source does not read this
-            # state at all, so loading the wrong file would currently go unnoticed
-            # by tests. Validate this path resolution again when a later increment
-            # starts reading households.states["frm_coefficients"].
+            # Read by Households.frm_target_share under target_share_source="frm_magnitude";
+            # the "scalar" source does not read it.
             households.states["frm_coefficients"] = load_frm_coefficients(resolved_frm_path)
 
         permanent_income_forecast_inputs: Optional[PermanentIncomeForecastInputs] = None
@@ -1381,7 +1422,10 @@ class Country:
         country.data_minimum_annual_rental_yield = data_minimum_annual_rental_yield
         if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
             initialise_hfcs_consumption(
-                country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
+                country,
+                synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float),
+                dna_quintile_c_y=getattr(synthetic_population, "dna_quintile_c_y", None),
+                household_size=synthetic_population.household_data["Number of household members"].to_numpy(dtype=float),
             )
         return country
 
@@ -1531,6 +1575,7 @@ class Country:
         self._consumption_run_id += 1
         self._clear_household_income_shock()
         self._minimum_income_status = None
+        self._minimum_sale_size = None
 
     def _clear_household_income_shock(self) -> None:
         """Clear any staged household income shock used by MPC experiments."""
@@ -1567,11 +1612,17 @@ class Country:
     stage_household_expected_income_shock = stage_household_income_shock
 
     def _household_resources_exempt_from_support_test(self) -> np.ndarray:
-        """Per-household resources that the support test ignores: the positive part of an exempt staged shock."""
+        """Per-household resources that the support test ignores.
+
+        The positive part of an exempt staged shock, and the cash of the forced sale that repays the opening
+        overdraft: support is set as if there were no overdraft, so it neither covers the overdraft nor shrinks
+        because of the sale that repays it.
+        """
+        exempt = self.households.current_overdraft_sale_cash()
         shock = getattr(self, "_staged_household_income_shock", None)
         if shock is None or not getattr(self, "_household_income_shock_exempt_from_support", False):
-            return np.zeros(self.households.ts.current("stage5_subsistence_support").shape)
-        return np.maximum(shock, 0.0)
+            return exempt
+        return exempt + np.maximum(shock, 0.0)
 
     def _apply_household_income_shock(self, income: np.ndarray) -> np.ndarray:
         """Add the staged MPC income shock when one is active."""
@@ -1939,10 +1990,30 @@ class Country:
         else:
             n_households = hh.ts.current("n_households")
             level, assessed, entitlement = (np.zeros(n_households) for _ in range(3))
+        self._minimum_sale_size = self._compute_minimum_sale_size(minimum_income_mode_level=level)
+        hh.ts.minimum_sale_size.append(self._minimum_sale_size.copy())
         hh.ts.minimum_income_level.append(level)
         hh.ts.minimum_income_assessed.append(assessed)
         hh.ts.minimum_income_entitlement.append(entitlement)
         self._minimum_income_status = "assessed"
+
+    def _compute_minimum_sale_size(self, *, minimum_income_mode_level: np.ndarray) -> np.ndarray:
+        """Smallest illiquid sale executed this period: ``minimum_sale_share_of_m`` x M per household.
+
+        M is the minimum income level of PLAN.md section 3.1, evaluated from the household_support parameters
+        and the same inputs as the entitlement, in both support modes (the stored ``minimum_income_level`` series
+        is zero in legacy mode). In minimum_income mode the level just computed is reused.
+        """
+        if self.household_support.mode == "minimum_income":
+            level = minimum_income_mode_level
+        else:
+            government_ts = self.central_government.ts
+            level = self._compute_minimum_income_level(
+                transfer_index=government_ts.current("total_other_benefits")[0]
+                / government_ts.initial("total_other_benefits")[0],
+                cpi_ratio=self.benefit_price_level() / self.economy.initial_consumer_price_level(),
+            )
+        return self.household_support.minimum_income.minimum_sale_share_of_m * level
 
     def _compute_minimum_income_level(self, *, transfer_index: float, cpi_ratio: float) -> np.ndarray:
         """Guaranteed level M per household from the current consumption units (PLAN.md section 3.1)."""
@@ -2214,6 +2285,11 @@ class Country:
         # run; the final recompute in update_realised_metrics books the rent actually received. A landlord thus
         # plans on rent due and realises rent received: the shortfall (1 - tax) x unpaid rent lands in its
         # realised cash, with no true-up (PLAN.md section 3.3).
+        # Pass 1 (pre-credit) runs before the housing market: it forecasts from the current lettings, the
+        # dwellings let at the end of t-1 at their t-1 rents. Pass 2 (post-labour) runs after the housing market
+        # is processed, so it reads the period-t rent of the dwellings actually let; the known receipts
+        # (refresh_known_household_receipts) and the allocator use this pass-2 value, which equals the realised
+        # rental income up to unpaid rent.
         diagnostic_income_rental = self.households.compute_rental_income(
             housing_data=self.housing_market.states["properties"],
             income_taxes=self.central_government.states["Income Tax"],
@@ -2226,7 +2302,9 @@ class Country:
             "illiquid_returns_are_capital_gains",
             False,
         )
-        expected_dividend_income = self.households.compute_expected_dividend_income()
+        expected_dividend_income = self.households.compute_expected_dividend_income(
+            income_tax_rate=self.central_government.states["Income Tax"]
+        )
         expected_income_financial_assets = (
             expected_dividend_income
             if paper_returns_are_capital_gains
@@ -2450,6 +2528,30 @@ class Country:
                 hh.ts.dicts[key].append(values.copy())
         return payments
 
+    def _refresh_household_employment(self) -> None:
+        """Set each household's current number of employed members (an FRM covariate)."""
+        if getattr(self.households.functions["wealth"], "target_share_source", None) != "frm_magnitude":
+            return
+        employed = (self.individuals.states["Activity Status"] == ActivityStatus.EMPLOYED).astype(float)
+        self.households.states["household_members_in_employment"] = self.households.aggregate_individual_amount(
+            employed, self.individuals.states["Corresponding Household ID"]
+        )
+
+    def _current_income_belief_noise_variances(self) -> dict[str, np.ndarray] | None:
+        """Household sigma2_v/sigma2_xi from members' current employment status, or None when off."""
+        if not getattr(self.households.functions["consumption"], "uses_state_dependent_income_belief_noise", False):
+            return None
+        noise_inputs = self.households.states["income_belief_noise_inputs"]
+        beliefs = compute_household_income_beliefs(
+            individuals_age=self.individuals.states["Age"],
+            individuals_activity_status=self.individuals.states["Activity Status"],
+            individuals_household_id=self.individuals.states["Corresponding Household ID"],
+            individuals_income=noise_inputs["member_weight_income"],
+            n_households=self.households.ts.current("n_households"),
+            priors_table=noise_inputs["priors_table"],
+        )
+        return {"sigma2_v": beliefs["sigma2_v"], "sigma2_xi": beliefs["sigma2_xi"]}
+
     def _set_household_target_demand(self, *, replace_current: bool) -> None:
         consumption_function = self.households.functions["consumption"]
         integrate_inputs = (
@@ -2545,6 +2647,8 @@ class Country:
                 household_layout_key=input_layout,
                 current_consumer_price=self.economy.current_consumer_price_level(),
                 price_history_layout="aligned" if price_rows == income_rows else "missing_current",
+                # Current real income is valued at the nominalization price CPI_{t-1}(1 + Pi^e).
+                expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             )
 
         uses_feasibility_resolver = self.configuration.households.parameters.uses_feasibility_resolver
@@ -2813,6 +2917,7 @@ class Country:
         else:
             self.households.clear_pre_grant_feasible_plan()
             stage5_residual_shortfall = residual_shortfall_after_lfa
+        self._refresh_household_employment()
         borrow_vs_sell_inputs = self.households.build_borrow_vs_sell_inputs(
             target_consumption_total=(
                 self.households.consumption_cash_factor() * self.households.ts.current("target_consumption").sum(axis=1)
@@ -2864,6 +2969,9 @@ class Country:
             replace_current=replace_current,
             existing_consumer_balance=existing_balance + current_cons_interest,
             other_debt_service=np.maximum(deposit_service, 0.0),
+            overdraft_repayment_need=self._planned_overdraft_repayment_need(liquidity_shortfall, scheduled_debt_service)
+            if uses_feasibility_resolver
+            else 0.0,
         )
         # Stage 5 (feasibility resolver), Increment 5: extend the live carrier
         # with the DSTI-capped shadow_credit_requested value just computed
@@ -2892,7 +3000,31 @@ class Country:
             self.households.populate_pre_grant_feasible_plan_planned_liquidation(
                 planned_liquidation_total=self.households.ts.current("liquidation_planned"),
                 current_ifa=self.households.ts.current("illiquid_financial_assets"),
+                overdraft_liquidation_total=self.households.ts.current("overdraft_liquidation_planned"),
             )
+
+    def _planned_overdraft_repayment_need(
+        self, liquidity_shortfall: np.ndarray, scheduled_debt_service: np.ndarray
+    ) -> np.ndarray:
+        """Forced sale that repays the opening overdraft B before cutting planned uses (``overdraft_sale_need``).
+
+        G is the VAT-inclusive target consumption and V the target investment cash, the same planned uses
+        as the liquidity shortfall L. Support S is the legacy_stage5 support, zero in minimum_income mode.
+        Before the housing market the housing draw is unknown, so B is the
+        opening overdraft max(-LFA, 0).
+        """
+        hh = self.households
+        return overdraft_sale_need(
+            opening_overdraft=np.maximum(-np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float), 0.0),
+            income=hh.current_financing_income(),
+            liquidity_shortfall=liquidity_shortfall,
+            desired_goods=hh.consumption_cash_factor() * np.asarray(hh.ts.current("target_consumption")).sum(axis=1),
+            goods_floor=self._effective_goods_floor(),
+            cash_rent=hh.current_consumption_cash_rent(),
+            scheduled_service=scheduled_debt_service,
+            investment=hh.target_investment_cash(),
+            support_enabled=self._stage5_support_enabled(),
+        )
 
     def update_planning_metrics(self) -> None:
         """Compatibility wrapper for callers that still use the old phase name."""
@@ -3234,23 +3366,31 @@ class Country:
         """Settle interest on household accounts and book it at each household's own bank.
 
         The bank receives exactly the overdraft interest the households pay and
-        pays exactly the deposit interest they receive.
+        pays exactly the deposit interest they receive. Interest the plan left
+        unpaid is neither charged to the account nor received: the bank accrues
+        it, held as consumer interest arrears (``book_unpaid_household_overdraft_interest``).
         """
         rates = {
             "bank_interest_rate_on_household_deposits": self.banks.ts.current("interest_rate_on_household_deposits"),
             "bank_overdraft_rate_on_household_deposits": self.banks.ts.current("overdraft_rate_on_household_deposits"),
         }
         deposit_interest, overdraft_interest = self.households.compute_deposit_interest_components(**rates)
-        self.households.ts.interest_paid_on_deposits.append(self.households.compute_interest_paid_on_deposits(**rates))
-        self.households.ts.overdraft_interest_paid.append(overdraft_interest)
-        self.households.ts.total_overdraft_interest_paid.append([overdraft_interest.sum()])
         plan = self.households.post_grant_feasible_plan
-        unpaid = None if plan is None else plan.unpaid_overdraft_interest
+        # The plan's unpaid overdraft interest is held as consumer interest arrears, not charged to the account.
+        unpaid = (
+            np.zeros_like(overdraft_interest)
+            if plan is None or plan.unpaid_overdraft_interest is None
+            else np.asarray(plan.unpaid_overdraft_interest, dtype=float)
+        )
+        paid = overdraft_interest - unpaid
+        self.households.ts.interest_paid_on_deposits.append(paid - deposit_interest)
+        self.households.ts.overdraft_interest_paid.append(paid)
+        self.households.ts.total_overdraft_interest_paid.append([paid.sum()])
         self.banks.record_household_deposit_interest(
             deposit_interest_received=deposit_interest,
-            overdraft_interest_paid=overdraft_interest,
+            overdraft_interest_paid=paid,
             households_corresponding_bank=self.households.states["Corresponding Bank ID"],
-            overdraft_interest_capitalised=np.zeros_like(overdraft_interest) if unpaid is None else unpaid,
+            overdraft_interest_accrued=unpaid,
         )
 
     def reconcile_post_grant_feasible_plan(self) -> None:
@@ -3281,6 +3421,15 @@ class Country:
         self.households.reserve_post_grant_executable_liquidation(
             available_pre_stage4_ifa=self.households.ts.current("illiquid_financial_assets"),
             purchase_liquidation=None if completion is None else completion.purchase_liquidation,
+            net_housing_cash_need=None if completion is None else completion.net_housing_cash_need,
+            minimum_sale_size=self._current_minimum_sale_size(),
+            support_floor_gap=(
+                self._effective_goods_floor()
+                + np.asarray(self.households.current_consumption_cash_rent(), dtype=float)
+                - np.asarray(self.households.current_financing_income(), dtype=float)
+                if self._stage5_support_enabled()
+                else None
+            ),
         )
         settled_plan = self.households.post_grant_feasible_plan
         if settled_plan is None or settled_plan.granted_consumer_credit_by_bank_and_household is None:
@@ -3292,6 +3441,29 @@ class Country:
         )
         self.credit_market.prepare_household_service_snapshot()
         self.households.persist_post_grant_planned_liquidation_total()
+
+    def _current_minimum_sale_size(self) -> np.ndarray | None:
+        """This period's minimum illiquid sale; required under the feasibility resolver."""
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        if self._minimum_sale_size is None:
+            raise RuntimeError("The minimum sale size is set at period start; it has not been computed.")
+        return self._minimum_sale_size
+
+    def _household_debt_arrears_active(self) -> np.ndarray | None:
+        """Households with unpaid or suspended debt service this period, or consumer or mortgage arrears.
+
+        They may not buy illiquid assets in Stage 4: debt is serviced before investment.
+        """
+        if not self.configuration.households.parameters.uses_feasibility_resolver:
+            return None
+        owed = (
+            np.asarray(self.households.current_unpaid_consumer_service(), dtype=float)
+            + np.asarray(self.households.current_unpaid_mortgage_service(), dtype=float)
+            + self.credit_market.household_arrears_outstanding()
+        )
+        # Population-expanded currency units: ignore float residue far below one unit of the scale.
+        return owed > 1e-6 * self.scale
 
     def settle_authoritative_household_payments(self) -> None:
         """Apply the floor, settle consumer service, and commit household debt once."""
@@ -3314,6 +3486,7 @@ class Country:
             support_exempt_resources=self._household_resources_exempt_from_support_test(),
             support_enabled=self._stage5_support_enabled(),
             scheduled_overdraft_interest=self.household_overdraft_interest_due(),
+            opening_overdraft=self.households.current_opening_overdraft(),
         )
         goods_consumption = self.households._scale_consumption_matrix_to_household_totals(
             target_consumption=target_consumption,
@@ -3408,6 +3581,18 @@ class Country:
             remaining_periods=self.households.ts.current("ficp_exclusion_remaining_periods"),
         )
         self.credit_market.remove_repaid_loans(("cons_loans", "mort_loans"))
+        # Unpaid overdraft interest follows the consumer unpaid-service path (after this period's consumer
+        # settlement, so it is due first next period); it is not charged to the account.
+        unpaid_overdraft_interest = self.households.post_grant_feasible_plan.unpaid_overdraft_interest
+        if unpaid_overdraft_interest is not None:
+            self.credit_market.book_unpaid_household_overdraft_interest(
+                unpaid=unpaid_overdraft_interest,
+                corresponding_bank=self.households.states["Corresponding Bank ID"],
+            )
+            # The booking follows the Stage 6 event snapshot; keep new events equal to the live arrears.
+            self.households.refresh_new_ficp_event_interest_arrears(
+                self.credit_market.current_consumer_debt_components_by_household()[2]
+            )
         self.households.ts.consumption_loan_debt.append(
             self.credit_market.compute_outstanding_consumption_loans_by_household()
         )
@@ -4898,6 +5083,11 @@ class Country:
         self.households.ts.total_dividend_fund_income_tax_withheld.append([dividend_income_tax_withheld.sum()])
         self.households.ts.income_dividend_distributions.append(dividend_income)
         self.households.ts.total_income_dividend_distributions.append([dividend_income.sum()])
+        # Settled less planned: zero unless a firm paid less than declared (distress, a pre-credit plan below the
+        # proposal, or a settlement cash cap), then negative.
+        forecast_error = dividend_income - self.households.ts.current("expected_income_dividend_distributions")
+        self.households.ts.dividend_income_forecast_error.append(forecast_error)
+        self.households.ts.total_dividend_income_forecast_error.append([forecast_error.sum()])
         if paper_returns_are_capital_gains:
             self.households.stage_illiquid_valuation_return(period_index=period_index)
             financial_asset_income = dividend_income
@@ -4933,6 +5123,7 @@ class Country:
             self.households.update_income_belief_learning_state(
                 current_income=self.households.compute_non_property_income() / self.economy.ts.current(cpi_series)[0],
                 lagged_income=lagged_real_non_property_income,
+                noise_variances=self._current_income_belief_noise_variances(),
             )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()
@@ -4972,6 +5163,7 @@ class Country:
             readjusted_factors_ch4=readjusted_factors_ch4,
             emitting_indices_ch4=self.emitting_indices_ch4,
         )
+        self._refresh_household_employment()
         illiquid_financial_asset_return_rate = self.households.update_wealth(
             housing_data=self.housing_market.states["properties"],
             tau_cf=self.central_government.states["Household Capital Formation Tax"],
@@ -4979,6 +5171,8 @@ class Country:
             tau_vat=self.central_government.states["Value-added Tax"],
             tau_vat_on_investment=self.central_government.states["Household Investment VAT Rate"] or 0.0,
             unpaid_rent=unpaid_rent,
+            debt_arrears_active=self._household_debt_arrears_active(),
+            minimum_sale_size=self._current_minimum_sale_size(),
         )
         self.economy.ts.illiquid_financial_asset_return_rate.append([illiquid_financial_asset_return_rate])
         self.households.ts.wealth_histogram.append(get_histogram(self.households.ts.current("wealth"), self.scale))
@@ -5552,6 +5746,9 @@ class Country:
                 design_matrix=self._permanent_income_design_matrix,
                 start_period=self.start_period,
                 estimation_epoch=self._permanent_income_design_matrix.index.min(),
+                trend_growth_per_quarter=permanent_income_trend_growth(
+                    self._permanent_income_forecast_inputs.coefficient_table
+                ),
             )
         except ValueError as exc:
             # ValueError here is data-dependent (e.g. non-positive income/CPI,

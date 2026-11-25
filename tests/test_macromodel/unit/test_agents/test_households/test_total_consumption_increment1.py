@@ -171,6 +171,9 @@ def test_early_repayment_reserves_rent_and_gross_investment(test_households):
     h.investment_tax_rate = 0.2
     for key, value in [("expected_income", 100.0), ("rent", 30.0)]:
         h.ts.override_current(key, np.full(n, value))
+    # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+    for key in ("price_paid_for_property", "received_mortgages", "property_sale_proceeds", "mortgage_sale_repayment"):
+        h.ts.override_current(key, np.zeros(n))
     inv = np.zeros_like(h.ts.current("target_investment"))
     inv[:, 0] = 10.0
     h.ts.override_current("target_investment", inv)

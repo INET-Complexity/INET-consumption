@@ -18,6 +18,7 @@ from macromodel.agents.households.func.financial_feasibility import PostGrantFea
 from macromodel.agents.households.func.investment import NoHouseholdInvestment
 from macromodel.agents.households.func.portfolio_diagnostics import Stage4HouseholdDiagnostics
 from macromodel.agents.households.func.portfolio_rebalancing import PortfolioRebalancingResult
+from macromodel.agents.households.func.portfolio_settlement import SETTLEMENT_FORCED_LIQUIDATION, SETTLEMENT_SETTLED
 from macromodel.agents.households.func.target_credit import DefaultHouseholdTargetCredit
 from macromodel.agents.households.func.wealth import PaperAssetReturnWealthSetter
 from macromodel.agents.households.income_belief_learning import compute_zeta
@@ -1191,23 +1192,22 @@ class TestHouseholds:
         np.testing.assert_allclose(test_households.compute_expected_income(), np.full(n_households, 29.0))
         np.testing.assert_allclose(test_households.compute_income(), np.full(n_households, 40.0))
 
-    def test__expected_dividend_income_ignores_current_unsettled_receipts(self, test_households):
+    def test__expected_dividend_income_is_last_declaration_net_of_withholding(self, test_households):
         n_households = test_households.ts.current("n_households")
-        prior_settled_income = np.full(n_households, 7.0)
-        test_households.ts.override_current("income_dividend_distributions", prior_settled_income)
-        test_households.ts.override_current(
-            "dividend_fund_settled_firm_distribution",
-            np.full(n_households, 100.0),
-        )
-        test_households.ts.override_current(
-            "dividend_fund_settled_bank_distribution",
-            np.full(n_households, 50.0),
-        )
+        # Last period's settled income and this period's receipts do not enter the forecast.
+        test_households.ts.override_current("income_dividend_distributions", np.full(n_households, 7.0))
+        test_households.ts.override_current("dividend_fund_settled_firm_distribution", np.full(n_households, 100.0))
+        test_households.ts.override_current("dividend_fund_declared_firm_distribution", np.arange(n_households) * 4.0)
+        test_households.ts.override_current("dividend_fund_declared_bank_distribution", np.full(n_households, 2.0))
 
         np.testing.assert_allclose(
-            test_households.compute_expected_dividend_income(),
-            prior_settled_income,
+            test_households.compute_expected_dividend_income(income_tax_rate=0.25),
+            0.75 * (np.arange(n_households) * 4.0 + 2.0),
         )
+
+    def test__expected_dividend_income_rejects_invalid_tax_rate(self, test_households):
+        with pytest.raises(ValueError, match="income_tax_rate"):
+            test_households.compute_expected_dividend_income(income_tax_rate=1.5)
 
     def test__residual_illiquid_return_base_excludes_fixed_direct_share_proxy(self, test_households):
         direct_share_fraction = np.array([0.0, 0.25, 1.0])
@@ -1963,6 +1963,7 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         def capture(**kwargs):
             seen["waive"] = kwargs.get("waive_fixed_cost")
+            seen["forced"] = kwargs.get("forced_liquidation_active")
             return original(**kwargs)
 
         monkeypatch.setattr(households_module, "settle_portfolio_reallocation", capture)
@@ -1971,6 +1972,49 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
 
         # The configured plan settled a Stage 5 sale of 8 for every household.
         assert seen["waive"] is not None and np.all(seen["waive"])
+        # The same indicator blocks illiquid purchases of a Stage 5 seller in Stage 4.
+        assert np.all(seen["forced"])
+
+    def test__stage5_seller_cannot_buy_illiquid_assets_in_stage4_but_others_can(self, test_households, monkeypatch):
+        n_households, _ = self._configure_update_wealth(test_households, monkeypatch, resolver=True, settles=True)
+        seller = np.arange(n_households) % 2 == 0
+        sale = np.where(seller, 8.0, 0.0)
+        test_households.post_grant_feasible_plan = SimpleNamespace(
+            funded_from_liquid_assets=np.zeros(n_households),
+            credit_granted=np.zeros(n_households),
+            settled_liquidation_total=sale,
+            reserved_liquidation_total=sale,
+            liquidation_sale_cost=np.zeros(n_households),
+        )
+        monkeypatch.setattr(
+            test_households,
+            "settle_post_grant_liquidation",
+            lambda *, base_lfa, base_ifa: (base_lfa + sale, base_ifa - sale),
+        )
+        ones = np.ones(n_households)
+        diagnostics = replace(
+            test_households.compute_stage4_portfolio_diagnostics(),
+            rebalancing=replace(
+                self._zero_rebalancing(n_households),
+                counterfactual_lfa_flow=-10.0 * ones,
+                counterfactual_ifa_flow=10.0 * ones,
+                inaction_flag=np.zeros(n_households, dtype=bool),
+            ),
+        )
+        monkeypatch.setattr(test_households, "compute_stage4_portfolio_diagnostics", lambda **_kwargs: diagnostics)
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        status = test_households.ts.current("portfolio_settlement_status")
+        np.testing.assert_array_equal(status[seller], SETTLEMENT_FORCED_LIQUIDATION)
+        np.testing.assert_array_equal(status[~seller], SETTLEMENT_SETTLED)
+        # Blocked buyer keeps the post-sale stocks; the others buy 10.
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets")[seller], 108.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets")[seller], 42.0)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets")[~seller], 90.0)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets")[~seller], 60.0)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), np.zeros(n_households))
+        np.testing.assert_allclose(test_households.ts.current("illiquid_trade_cost_paid"), np.zeros(n_households))
 
     def test__resolver_books_deposit_interest_once_as_a_direct_liquid_return(self, test_households, monkeypatch):
         n_households, _ = self._configure_update_wealth(
@@ -2240,6 +2284,42 @@ class TestHouseholdsUpdateWealthPortfolioSettlement:
             + test_households.ts.current("portfolio_adjustment_cost"),
             np.zeros(n_households),
         )
+
+    @pytest.mark.parametrize("consumption", [0.0, 100.0, 150.0], ids=["positive", "zero", "negative"])
+    def test__settled_update_rebalances_the_stock_whatever_the_sign_of_period_saving(
+        self, test_households, monkeypatch, consumption
+    ):
+        n_households, _ = self._configure_update_wealth(
+            test_households,
+            monkeypatch,
+            resolver=True,
+            settles=True,
+            use_actual_diagnostics=True,
+            use_real_liquidation=True,
+        )
+        test_households.functions["wealth"].fixed_cost_share = 0.005
+        test_households.ts.override_current("consumption", np.full(n_households, consumption))
+        test_households.ts.override_current("debt_installments", np.zeros(n_households))
+
+        test_households.update_wealth(housing_data=pd.DataFrame(), tau_cf=0.0)
+
+        # income 100 - consumption: saving 100 / 0 / -50. The rule acts on the stocks (LFA 100, IFA 50), not on
+        # the saving flow, so households trade toward the 0.5 target whatever the sign of saving.
+        np.testing.assert_allclose(
+            test_households.ts.current("portfolio_investable_surplus"), np.full(n_households, 100.0 - consumption)
+        )
+        ifa_flow = test_households.ts.current("portfolio_counterfactual_ifa_flow")
+        cost = test_households.ts.current("portfolio_adjustment_cost")
+        status = test_households.ts.current("portfolio_settlement_status")
+        traders = cost > 0.0
+        assert traders.sum() > 0 and (ifa_flow[traders] != 0.0).all()
+        assert not np.any(status == 1.0)  # the retired no-surplus status is never assigned
+        np.testing.assert_array_equal(status[traders], np.full(traders.sum(), 7.0))
+        np.testing.assert_allclose(test_households.ts.current("portfolio_settlement_committed_ifa_flow"), ifa_flow)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_financial_assets"), 50.0 + ifa_flow)
+        np.testing.assert_allclose(test_households.ts.current("liquid_financial_assets"), 100.0 - ifa_flow - cost)
+        np.testing.assert_allclose(test_households.ts.current("illiquid_trade_cost_paid"), cost)
+        np.testing.assert_allclose(test_households.ts.current("stage5_cash_ledger_residual"), 0.0, atol=1e-9)
 
     def test__legacy_compatibility_disabled_settlement_preserves_shadow_stock_update(
         self, test_households, monkeypatch
@@ -2967,6 +3047,29 @@ class TestPopulatePostGrantFeasiblePlan:
             np.full(n_households, 2.0),
         )
 
+    def test__persist_keeps_the_reserved_overdraft_sale_after_the_second_planning_pass(self, test_households):
+        n_households = test_households.ts.current("n_households")
+        self._populate_pre_grant_plan(
+            test_households,
+            residual_after_lfa=np.full(n_households, 10.0),
+            credit_requested=np.full(n_households, 6.0),
+            planned_liquidation=np.full(n_households, 2.0),
+        )
+        test_households.pre_grant_feasible_plan = replace(
+            test_households.pre_grant_feasible_plan, overdraft_liquidation_total=np.full(n_households, 1.5)
+        )
+        test_households.populate_post_grant_feasible_plan_from_granted_credit(
+            credit_granted=np.full(n_households, 6.0),
+        )
+        # The post-labour pass overwrites both shadow series; the pin restores the reserved sale.
+        test_households.ts.override_current("liquidation_planned", np.full(n_households, 99.0))
+        test_households.ts.override_current("overdraft_liquidation_planned", np.full(n_households, 99.0))
+
+        test_households.persist_post_grant_planned_liquidation_total()
+
+        np.testing.assert_allclose(test_households.ts.current("liquidation_planned"), 2.0)
+        np.testing.assert_allclose(test_households.ts.current("overdraft_liquidation_planned"), 1.5)
+
     def test__post_grant_liquidation_exposes_authoritative_bases_once(self, test_households):
         n_households = test_households.ts.current("n_households")
         self._populate_pre_grant_plan(
@@ -3539,6 +3642,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_is_separate_from_subsistence_shortfall(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         # The expected capacity of 40 assumes no cash rent and no investment, so set both
         # explicitly instead of relying on the sample household's initial state.
@@ -3570,6 +3681,14 @@ class TestPopulatePostGrantFeasiblePlan:
 
     def test__early_repayment_capacity_reduces_an_overdraft_and_planned_overdraft_interest_first(self, test_households):
         n_households = test_households.ts.current("n_households")
+        for name in (
+            "price_paid_for_property",
+            "received_mortgages",
+            "property_sale_proceeds",
+            "mortgage_sale_repayment",
+        ):
+            # No housing transaction: the housing draw D is zero, so the opening overdraft is max(-LFA, 0).
+            test_households.ts.override_current(name, np.zeros(n_households))
         test_households.ts.override_current("expected_income", np.full(n_households, 100.0))
         test_households.ts.override_current("rent", np.zeros(n_households))
         test_households.ts.override_current("target_investment", np.zeros(n_households))
@@ -4201,3 +4320,88 @@ def test_uncertainty_change_keeps_previous_period_fixed_during_replanning(test_h
         households.current_income_belief_learning_inputs(common_forecast_variance=0.0)["uncertainty_delta"],
         decreased_common["uncertainty_delta"],
     )
+
+
+def _frm_ready_households(households):
+    """Give the households known FRM covariates and coefficients (net wealth is the only varying input)."""
+    n = households.ts.current("n_households")
+    households.states["household_head_age"] = np.full(n, 50.0)
+    households.states["household_members_in_employment"] = np.ones(n)
+    households.states["Investment Attitudes"] = np.full(n, 2)
+    households.states["Tenure Status of the Main Residence"] = np.full(n, 3)
+    households.states["portfolio_participates"] = np.ones(n, dtype=bool)
+    households.states["population_scale_factor"] = 1.0
+    households.states["frm_coefficients"] = SimpleNamespace(
+        magnitude_coefficients={
+            "constant": 0.0,
+            "age": 0.0,
+            "household_members_in_employment": 0.0,
+            "investment_attitudes": 0.0,
+            "mortgagor": 0.5,
+            "owner": 0.3,
+            "net_wealth": 0.2,
+        },
+        net_wealth_scale_divisor=1e5,
+    )
+    households.ts.override_current("wealth", np.full(n, 1e5))
+    households.ts.override_current("debt", np.zeros(n))
+    households.ts.override_current("mortgage_debt", np.zeros(n))
+    households.states.pop("frm_target_share", None)
+    return n
+
+
+def _target(households):
+    return households.frm_target_share()[0].copy()
+
+
+def test_frm_target_share_responds_to_each_current_covariate(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    households.states["frm_coefficients"].magnitude_coefficients.update(
+        {"age": 0.01, "household_members_in_employment": 0.1, "investment_attitudes": 0.05}
+    )
+    households.states["Tenure Status of the Main Residence"][:] = 1
+    base = _target(households)
+
+    def changed(mutate):
+        mutate()
+        out = _target(households)
+        assert out[0] != base[0]
+        np.testing.assert_array_equal(out[1:], base[1:])
+        return out
+
+    mortgage = households.ts.current("mortgage_debt")
+    changed(lambda: mortgage.__setitem__(0, 10.0))  # owner -> mortgagor
+    mortgage[0] = 0.0
+    changed(lambda: households.states["household_members_in_employment"].__setitem__(0, 3.0))
+    households.states["household_members_in_employment"][0] = 1.0
+    changed(lambda: households.states["household_head_age"].__setitem__(0, 70.0))
+    households.states["household_head_age"][0] = 50.0
+    households.ts.override_current("wealth", households.ts.current("wealth") + np.eye(n)[0] * 2e5)
+    out = _target(households)
+    assert out[0] != base[0]
+    np.testing.assert_array_equal(out[1:], base[1:])
+
+
+def test_frm_target_share_follows_net_wealth_each_period(test_households):
+    households = test_households
+    _frm_ready_households(households)
+    first = _target(households)
+    households.ts.override_current("wealth", households.ts.current("wealth") * 3.0 + 1e5)
+    assert not np.array_equal(_target(households), first)
+
+
+def test_frm_owner_and_mortgagor_dummies_follow_mortgage_not_tenure_code(test_households):
+    households = test_households
+    n = _frm_ready_households(households)
+    households.states["frm_coefficients"].magnitude_coefficients["net_wealth"] = 0.0  # isolate the dummies
+    tenure = households.states["Tenure Status of the Main Residence"]
+    tenure[:] = np.array([1, 1, 2, 3, -1] + [3] * (n - 5))
+    mortgage = np.zeros(n)
+    mortgage[[1, 3]] = 5.0  # a buyer coded 1 with a mortgage is a mortgagor; a renter stays 0/0
+    households.ts.override_current("mortgage_debt", mortgage)
+    target = _target(households)
+    renter, owner, mortgagor = target[4], target[0], target[1]
+    assert renter < owner < mortgagor
+    assert target[2] == owner  # tenure 2 without a mortgage is an owner
+    assert target[3] == target[4] == renter  # a renter with a mortgage and a social tenant are 0/0

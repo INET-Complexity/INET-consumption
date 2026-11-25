@@ -503,3 +503,15 @@ def test__household_head_covariates_shape_and_dtype():
     assert employed_count.shape == (3,)
     assert head_age.dtype.kind == "f"
     assert employed_count.dtype.kind == "f"
+
+
+def test_compute_target_illiquid_share_uses_the_given_frm_target_without_covariates():
+    share = np.array([0.2, 0.0, 0.7])
+    flag = np.zeros(3, dtype=bool)
+    got_share, got_flag = compute_target_illiquid_share(
+        portfolio_participates=np.array([True, False, True]),
+        target_share_source="frm_magnitude",
+        frm_target=(share, flag),
+    )
+    np.testing.assert_array_equal(got_share, share)
+    np.testing.assert_array_equal(got_flag, flag)

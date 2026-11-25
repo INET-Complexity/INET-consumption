@@ -333,6 +333,7 @@ def create_households_timeseries(
         # Minimum income (PLAN.md section 3): level M, assessed income Y and top-up T fixed at period start,
         # and T as booked in realised social income. Zero in legacy_stage5 mode.
         minimum_income_level=np.zeros(len(data)),
+        minimum_sale_size=np.zeros(len(data)),
         minimum_income_assessed=np.zeros(len(data)),
         minimum_income_entitlement=np.zeros(len(data)),
         income_minimum_income=np.zeros(len(data)),
@@ -363,6 +364,8 @@ def create_households_timeseries(
         total_dividend_fund_income_tax_withheld=[0.0],
         expected_income_dividend_distributions=np.zeros(len(data)),
         total_expected_income_dividend_distributions=[0.0],
+        dividend_income_forecast_error=np.zeros(len(data)),
+        total_dividend_income_forecast_error=[0.0],
         illiquid_financial_asset_capital_gains=np.zeros(len(data)),
         total_illiquid_financial_asset_capital_gains=[0.0],
         dividend_fund_settled_firm_distribution=np.zeros(len(data)),

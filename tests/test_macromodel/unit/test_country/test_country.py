@@ -197,6 +197,11 @@ def _make_ficp_test_country():
 
 
 class TestCountry:
+    @pytest.fixture(autouse=True)
+    def _minimum_sale_size_is_set_at_period_start(self, test_country):
+        # The period-start step is not run by these tests; the minimum sale size is required under the resolver.
+        test_country._minimum_sale_size = np.zeros(test_country.households.ts.current("n_households"))
+
     def test__legacy_compatibility_portfolio_settlement_configuration_matrix(self):
         class Wealth:
             uses_portfolio_choice = False
@@ -1337,14 +1342,16 @@ class TestCountry:
         assert plan is not None
         np.testing.assert_allclose(plan.credit_granted, credit_granted)
         np.testing.assert_allclose(plan.credit_rationing_gap, np.full(n_households, 6.0))
-        np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation)
-        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 4.0))
+        # The unfunded deficit 10 - 4 granted - 2 planned = 4 (less than the rationing gap 6)
+        # is covered by a forced sale (IFA ample): planned 2 + 4 = 6, residual 0.
+        np.testing.assert_allclose(plan.planned_liquidation_total, planned_liquidation + 4.0)
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.zeros(n_households))
         np.testing.assert_allclose(plan.granted_consumer_credit_by_bank_and_household, settlement)
         np.testing.assert_allclose(plan.consumer_debt_liability_booking, credit_granted)
         np.testing.assert_allclose(plan.bank_consumer_loan_asset_booking, settlement.sum(axis=1))
         np.testing.assert_allclose(settled["credit_granted"], credit_granted)
         np.testing.assert_allclose(settled["granted_consumer_credit_by_bank_and_household"], settlement)
-        np.testing.assert_allclose(test_country.households.ts.current("liquidation_planned"), planned_liquidation)
+        np.testing.assert_allclose(test_country.households.ts.current("liquidation_planned"), planned_liquidation + 4.0)
 
     def test__reconcile_post_grant_feasible_plan_raises_when_cleared_grant_missing(self, test_country, monkeypatch):
         n_households = test_country.households.ts.current("n_households")
@@ -1896,14 +1903,16 @@ class TestCountry:
         test_country.prepare_goods_market_clearing()
 
         plan = test_country.households.post_grant_feasible_plan
+        # Rationed credit (6 - 0 = 6) is replaced by a forced sale (IFA ample), so the
+        # residual is 10 - 0 granted - 1 planned - 6 top-up = 3, not 9.
         np.testing.assert_allclose(plan.credit_granted, np.zeros(n_households))
-        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 9.0))
-        np.testing.assert_allclose(plan.consumption_cut_amount, np.full(n_households, 9.0))
-        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 91.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.consumption_cut_amount, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 97.0))
         np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.zeros(n_households))
         np.testing.assert_allclose(
             test_country.households.ts.current("target_consumption").sum(axis=1),
-            np.full(n_households, 91.0),
+            np.full(n_households, 97.0),
         )
         np.testing.assert_allclose(
             test_country.current_stage5_subsistence_support_by_household(),
@@ -1976,14 +1985,16 @@ class TestCountry:
         test_country.prepare_goods_market_clearing()
 
         plan = test_country.households.post_grant_feasible_plan
+        # Rationed credit (6 - 4 = 2) is replaced by a forced sale (IFA ample), so the
+        # residual is 10 - 4 granted - 1 planned - 2 top-up = 3, not 5.
         np.testing.assert_allclose(plan.credit_granted, np.full(n_households, 4.0))
-        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 5.0))
-        np.testing.assert_allclose(plan.consumption_cut_amount, np.full(n_households, 5.0))
-        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 95.0))
+        np.testing.assert_allclose(plan.residual_shortfall_after_granted_credit, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.consumption_cut_amount, np.full(n_households, 3.0))
+        np.testing.assert_allclose(plan.consumption_after_floor, np.full(n_households, 97.0))
         np.testing.assert_allclose(plan.remaining_subsistence_shortfall, np.zeros(n_households))
         np.testing.assert_allclose(
             test_country.households.ts.current("target_consumption").sum(axis=1),
-            np.full(n_households, 95.0),
+            np.full(n_households, 97.0),
         )
         np.testing.assert_allclose(
             test_country.current_stage5_subsistence_support_by_household(),
@@ -2745,6 +2756,7 @@ class TestCountry:
             design_matrix=design_matrix,
             start_period=test_country.start_period,
             estimation_epoch=design_matrix.index.min(),
+            trend_growth_per_quarter=country_module.permanent_income_trend_growth(forecast_inputs.coefficient_table),
         )
         expected = pure_forecast_common_permanent_income(x_t, forecast_inputs)
 

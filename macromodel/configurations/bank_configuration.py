@@ -68,6 +68,7 @@ class BankParameters(BaseModel):
     firm_loans_cfads_haircut: float = Field(ge=0, le=1, default=1.0)
     firm_loans_dscr_underwriting_rate_mode: Literal["max_bank_rate"] = "max_bank_rate"
     household_consumption_loans_loan_to_income_ratio: float = Field(ge=0, le=1, default=0.05)
+    enable_household_consumption_loans_loan_to_income_restriction: bool = True
     mortgage_loan_to_income_ratio: float = Field(ge=0, le=30, default=0.05)
     mortgage_loan_to_value_ratio: float = Field(ge=0, le=1, default=0.05)
     mortgage_debt_service_to_income_ratio: float = Field(ge=0, le=1, default=0.05)

@@ -70,6 +70,7 @@ from macromodel.agents.households.func.portfolio_settlement import (
     settle_portfolio_reallocation,
 )
 from macromodel.agents.households.func.portfolio_target_share import (
+    compute_frm_magnitude_target_share,
     compute_household_head_covariates,
 )
 from macromodel.agents.households.func.post_liquidation_settlement import (
@@ -171,6 +172,8 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "shadow_credit_requested": 0.0,
     "forced_liquidation_amount": 0.0,
     "residual_shortfall_after_caps": 0.0,
+    # Part of liquidation_planned that repays the opening overdraft.
+    "overdraft_liquidation_planned": 0.0,
     "realised_cash_flow_adjustment": 0.0,
     # Final Stage 5 cash-ledger control.  A resolver-path period may persist
     # only when this is numerically zero: it is the difference between closing
@@ -192,9 +195,11 @@ _STAGE5_DIAGNOSTIC_INITIAL_VALUES: dict[str, float | bool] = {
     "unmet_floor": 0.0,
     "resource_deficit": 0.0,
     # Overdraft interest due on the opening negative LFA (planned as debt service) and the part left unpaid,
-    # which capitalises into the overdraft.
+    # which becomes consumer interest arrears at the household's bank.
     "scheduled_overdraft_interest": 0.0,
     "unpaid_overdraft_interest": 0.0,
+    # Opening overdraft max(D - LFA, 0) the plan repays as a senior use, after debt service.
+    "overdraft_repayment": 0.0,
     "consumer_payment_suspension_needed": False,
     "consumer_payment_suspension_amount": 0.0,
     "mortgage_payment_suspension_needed": False,
@@ -513,7 +518,8 @@ class Households(Agent):
 
         # Stage 4 (portfolio choice) Increment 5: household-head age and employed-
         # member count, required by the opt-in target_share_source="frm_magnitude"
-        # path (compute_frm_magnitude_target_share). Frozen at init like
+        # path (compute_frm_magnitude_target_share). Initial values: the employed-member
+        # count is refreshed every period by Country (head age is static). Sourced like
         # portfolio_participates above, consistent with how every other FRM
         # covariate (Investment Attitudes, Tenure Status, Wealth Quintile) is
         # sourced in this method. No production code aggregates individual-level
@@ -925,8 +931,12 @@ class Households(Agent):
         *,
         planned_liquidation_total: np.ndarray,
         current_ifa: np.ndarray,
+        overdraft_liquidation_total: np.ndarray | None = None,
     ) -> None:
         """Extend the live Stage 5 carrier with planned illiquid liquidation.
+
+        ``overdraft_liquidation_total`` is the part of the sale that repays the
+        opening overdraft; the settlement exempts its cash from the support test.
 
         Increment 6 promotes the already-sanctioned Increment 3 liquidation
         amount into the live carrier. It does not re-run borrow-vs-sell or
@@ -960,6 +970,7 @@ class Households(Agent):
             self.pre_grant_feasible_plan,
             planned_liquidation_total=cleaned_liquidation,
             available_illiquid_assets=feasible_ifa,
+            overdraft_liquidation_total=overdraft_liquidation_total,
         )
 
     def current_live_planned_liquidation_total(self) -> np.ndarray:
@@ -1088,12 +1099,23 @@ class Households(Agent):
         return self._current_post_grant_feasible_plan_field("planned_liquidation_total")
 
     def reserve_post_grant_executable_liquidation(
-        self, *, available_pre_stage4_ifa: np.ndarray, purchase_liquidation: np.ndarray | None = None
+        self,
+        *,
+        available_pre_stage4_ifa: np.ndarray,
+        purchase_liquidation: np.ndarray | None = None,
+        net_housing_cash_need: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
+        support_floor_gap: np.ndarray | None = None,
     ) -> None:
         """Reserve executable Stage 5 liquidation before floor and goods planning.
 
         ``purchase_liquidation`` is the illiquid sale that pays for a completed
         property purchase; it shares the single trade cost with the forced sale.
+        ``net_housing_cash_need`` is X of the completion rule: a seller's surplus
+        max(-X, 0) is cash that reduces the forced sale; ``support_floor_gap``
+        (F + R - y with support, else None) keeps the part of it that lowers
+        support from replacing the overdraft sale. Every household replaces
+        rationed consumer credit by a forced sale where its illiquid assets allow.
         """
         if self.post_grant_feasible_plan is None:
             raise RuntimeError("Stage 5 liquidation reservation requires a settled post-grant plan.")
@@ -1102,6 +1124,10 @@ class Households(Agent):
             available_pre_stage4_ifa=available_pre_stage4_ifa,
             sale_cost=self.current_illiquid_trade_cost(),
             purchase_liquidation=purchase_liquidation,
+            own_sale_surplus=None if net_housing_cash_need is None else np.maximum(-net_housing_cash_need, 0.0),
+            minimum_sale_size=minimum_sale_size,
+            support_floor_gap=support_floor_gap,
+            replace_rationed_credit=True,
         )
 
     def current_illiquid_trade_cost(self) -> np.ndarray:
@@ -1151,10 +1177,22 @@ class Households(Agent):
         return settlement.post_liquidation_lfa, settlement.post_liquidation_ifa
 
     def persist_post_grant_planned_liquidation_total(self) -> None:
-        """Pin the household-panel liquidation series to the settled post-grant source."""
+        """Pin the household-panel liquidation series to the settled post-grant source.
+
+        ``liquidation_planned`` records the reserved (executed) net sale and ``overdraft_liquidation_planned``
+        the cash its overdraft part raises after the trade cost. The post-labour planning pass recomputes both as shadow values; this pin, run
+        again after it, keeps the recorded series on the sale actually reserved.
+        """
         self.ts.override_current(
             "liquidation_planned",
             self.current_post_grant_planned_liquidation_total().copy(),
+        )
+        overdraft_sale = self.post_grant_feasible_plan.overdraft_liquidation_total
+        self.ts.override_current(
+            "overdraft_liquidation_planned",
+            np.zeros(self.ts.current("n_households"))
+            if overdraft_sale is None
+            else np.asarray(overdraft_sale, dtype=float).copy(),
         )
 
     def current_post_grant_residual_shortfall(self) -> np.ndarray:
@@ -1183,8 +1221,10 @@ class Households(Agent):
         Income, a seller's housing surplus max(-X, 0), liquid assets left after
         the housing draw D floored at zero, granted consumer credit K and the
         forced liquidation net of its cost and of the purchase sale. The floor
-        on max(LFA - D, 0) matches the resolver: an overdraft is not a claim on
-        support.
+        on max(LFA - D, 0) keeps the overdraft out of the support test: the
+        overdraft is not a claim on support. The allocator repays it as a
+        senior use instead (``current_opening_overdraft``), so the household's
+        own resources are LFA - D without the floor.
         """
         plan = self.post_grant_feasible_plan
         if plan is None:
@@ -1199,6 +1239,22 @@ class Households(Agent):
             + liquid_assets_after_housing
             + np.asarray(plan.credit_granted, dtype=float)
             + forced_liquidation_cash(plan)
+        )
+
+    def current_overdraft_sale_cash(self) -> np.ndarray:
+        """Cash of the forced sale that repays the opening overdraft, net of the trade cost (zero without one)."""
+        plan = self.post_grant_feasible_plan
+        n_households = self.ts.current("n_households")
+        overdraft_sale = None if plan is None else getattr(plan, "overdraft_liquidation_total", None)
+        if overdraft_sale is None or plan.reserved_liquidation_total is None:
+            return np.zeros(n_households)
+        return np.minimum(np.asarray(overdraft_sale, dtype=float), forced_liquidation_cash(plan))
+
+    def current_opening_overdraft(self) -> np.ndarray:
+        """B = max(D - LFA, 0): the opening overdraft, net of the housing draw, that the plan repays."""
+        return np.maximum(
+            self.current_housing_lfa_draw() - np.asarray(self.ts.current("liquid_financial_assets"), dtype=float),
+            0.0,
         )
 
     def current_early_consumer_repayment_capacity(self) -> np.ndarray:
@@ -1250,10 +1306,9 @@ class Households(Agent):
             - self.target_investment_cash()
             - (0.0 if overdraft_interest is None else np.asarray(overdraft_interest, dtype=float))
         )
-        # The surplus reduces an opening overdraft first: no early repayment while LFA, net of the
-        # planned uses, is negative. Rounded down like the allocator so it cannot leave a negative residue.
-        opening_lfa = np.asarray(self.ts.current("liquid_financial_assets"), dtype=float)
-        overdraft = np.minimum(opening_lfa, 0.0)
+        # The surplus repays the opening overdraft B = max(D - LFA, 0) first, as the allocator does: no early
+        # repayment while it is not repaid. Rounded down like the allocator so it cannot leave a negative residue.
+        overdraft = -self.current_opening_overdraft()
         surplus = surplus + overdraft - PLAN_ROUND_DOWN * (np.abs(income) - overdraft)
         capacity = np.where(eligible, np.maximum(surplus, 0.0), 0.0)
         self.post_grant_feasible_plan = replace(
@@ -1463,6 +1518,28 @@ class Households(Agent):
             for household_id in np.flatnonzero(new_event_mask)
         )
 
+    def refresh_new_ficp_event_interest_arrears(self, interest_arrears: np.ndarray) -> None:
+        """Re-snapshot the interest arrears of FICP events emitted this period.
+
+        Unpaid overdraft interest is booked as consumer interest arrears after the Stage 6
+        event snapshot, in the same period. Only the residual interest arrears of events still
+        at stage 0 are refreshed; principal fields and every household or bank flow are unchanged.
+        """
+        interest_arrears = np.asarray(interest_arrears, dtype=float)
+        residual = np.asarray(self.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float)
+        if interest_arrears.shape != residual.shape:
+            raise ValueError("interest_arrears must contain exactly one value per household.")
+        new_event = (
+            np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool)
+            & ~np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
+            & (np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float) == 0.0)
+        )
+        if np.any(new_event):
+            self.ts.override_current(
+                "ficp_forgiveness_event_residual_interest_arrears",
+                np.where(new_event, interest_arrears, residual),
+            )
+
     def mark_ficp_forgiveness_processed(self, household_id: int, episode_id: int) -> None:
         """Mark one emitted FICP forgiveness event as consumed by the next increment."""
         n_households = int(self.ts.current("n_households"))
@@ -1541,6 +1618,7 @@ class Households(Agent):
             "resource_deficit",
             "scheduled_overdraft_interest",
             "unpaid_overdraft_interest",
+            "overdraft_repayment",
         )
         for field_name in required_fields:
             value = getattr(plan, field_name)
@@ -1563,6 +1641,7 @@ class Households(Agent):
         support_exempt_resources: np.ndarray | None = None,
         support_enabled: bool = True,
         scheduled_overdraft_interest: np.ndarray | None = None,
+        opening_overdraft: np.ndarray | None = None,
     ) -> None:
         """Apply the Stage 5 payment order to the settled carrier; ``support_enabled=False`` pays no support."""
         if self.post_grant_feasible_plan is None:
@@ -1603,6 +1682,7 @@ class Households(Agent):
             support_exempt_resources=support_exempt_resources,
             support_enabled=support_enabled,
             scheduled_overdraft_interest=scheduled_overdraft_interest,
+            opening_overdraft=opening_overdraft,
         )
         self._record_consumption_floor_diagnostics()
 
@@ -1774,18 +1854,43 @@ class Households(Agent):
             current_other_financial_assets=self.ts.current("illiquid_financial_assets"),
         )
 
-    def compute_expected_dividend_income(self) -> np.ndarray:
-        """Forecast only dividends realised before the current planning period.
+    def compute_expected_dividend_income(self, income_tax_rate: float) -> np.ndarray:
+        """Plan on the dividends already declared for this period, net of withholding.
 
-        Current declarations settle after the planning and goods-market phases,
-        so they cannot finance the current period's Stage 5 feasibility.
+        A distribution settled in period t is the one declared at the end of
+        t-1 (``record_diagnostic_dividend_fund``), and settlement never exceeds
+        the declaration. The household's share of both declarations is known
+        when period t is planned, so
+
+            E_{h,t} = (1 - tau) x (declared firm_{h,t-1} + declared bank_{h,t-1}),
+
+        with tau the Income Tax withheld at source on settlement
+        (``compute_dividend_income_after_withholding``). The current rows of the
+        declared series are still the t-1 rows at planning. Bank declarations
+        always settle in full. A firm pays less than its declaration, and the
+        gap is a negative forecast error (``dividend_income_forecast_error``),
+        when (i) the firm is distressed or insolvent at settlement (nothing is
+        paid), (ii) its pre-credit plan reserves less than the proposal
+        (``dividend_fund_planned_distribution`` below the declaration, from
+        forecast cash), or (iii) its cash after debt service and the facility
+        repayment does not cover the planned amount at settlement.
+
+        At t = 1 the current rows are the opening t0 rows, which are zero: no
+        declaration exists before the first period, so nothing is settled at
+        t = 1 and the forecast is zero as well, with no surprise. The first
+        payment, at t = 2, is the declaration made at the end of t = 1.
         """
-        distribution = np.asarray(self.ts.current("income_dividend_distributions"), dtype=float)
-        if distribution.shape != self.ts.current("illiquid_financial_assets").shape:
+        declared = np.asarray(self.ts.current("dividend_fund_declared_firm_distribution"), dtype=float) + np.asarray(
+            self.ts.current("dividend_fund_declared_bank_distribution"), dtype=float
+        )
+        if declared.shape != self.ts.current("illiquid_financial_assets").shape:
             raise ValueError("Expected dividend income must contain one value per household.")
-        if not np.all(np.isfinite(distribution)) or np.any(distribution < -1e-9):
-            raise ValueError("Dividend income must be finite and non-negative.")
-        return np.maximum(distribution, 0.0)
+        if not np.all(np.isfinite(declared)) or np.any(declared < -1e-9):
+            raise ValueError("Declared dividends must be finite and non-negative.")
+        tax_rate = float(income_tax_rate)
+        if not np.isfinite(tax_rate) or not 0.0 <= tax_rate <= 1.0:
+            raise ValueError("income_tax_rate must be a finite scalar between zero and one.")
+        return (1.0 - tax_rate) * np.maximum(declared, 0.0)
 
     def compute_income_from_financial_assets(self, period_index: int | None = None) -> np.ndarray:
         """Calculate current income from financial assets.
@@ -2608,6 +2713,7 @@ class Households(Agent):
         replace_current: bool = False,
         existing_consumer_balance: np.ndarray | float = 0.0,
         other_debt_service: np.ndarray | float = 0.0,
+        overdraft_repayment_need: np.ndarray | float = 0.0,
     ) -> ResidualCapacityFallbackResult:
         """Compute and persist the Stage 5 Increment 3 shadow residual-capacity fallback.
 
@@ -2643,6 +2749,7 @@ class Households(Agent):
             current_ifa=np.asarray(current_ifa, dtype=float),
             existing_consumer_balance=existing_consumer_balance,
             other_debt_service=other_debt_service,
+            overdraft_repayment_need=overdraft_repayment_need,
         )
         if replace_current:
             self.ts.override_current("dsti_headroom", result.dsti_headroom)
@@ -2653,6 +2760,7 @@ class Households(Agent):
             self.ts.override_current("shadow_credit_requested", result.shadow_credit_requested)
             self.ts.override_current("forced_liquidation_amount", result.forced_liquidation_amount)
             self.ts.override_current("residual_shortfall_after_caps", result.residual_shortfall_after_caps)
+            self.ts.override_current("overdraft_liquidation_planned", result.overdraft_liquidation_planned)
         else:
             self.ts.dsti_headroom.append(result.dsti_headroom)
             self.ts.dsti_maximum_loan_size.append(result.dsti_maximum_loan_size)
@@ -2662,6 +2770,7 @@ class Households(Agent):
             self.ts.shadow_credit_requested.append(result.shadow_credit_requested)
             self.ts.forced_liquidation_amount.append(result.forced_liquidation_amount)
             self.ts.residual_shortfall_after_caps.append(result.residual_shortfall_after_caps)
+            self.ts.overdraft_liquidation_planned.append(result.overdraft_liquidation_planned)
         return result
 
     def build_borrow_vs_sell_inputs(
@@ -2704,34 +2813,14 @@ class Households(Agent):
         )
         post_surplus_lfa = self.ts.current("liquid_financial_assets")
 
-        frm_covariates = None
-        frm_magnitude_coefficients = None
-        population_scale_factor = None
-        net_wealth_scale_divisor = None
-        if wealth_function.target_share_source == "frm_magnitude":
-            tenure_status = self.states["Tenure Status of the Main Residence"]
-            frm_covariates = {
-                "age": self.states["household_head_age"],
-                "household_members_in_employment": self.states["household_members_in_employment"],
-                "investment_attitudes": self.states["Investment Attitudes"],
-                "mortgagor": (tenure_status == 2).astype(float),
-                "owner": (tenure_status == 1).astype(float),
-                "net_wealth": self.compute_net_wealth(),
-            }
-            frm_coefficients = self.states["frm_coefficients"]
-            frm_magnitude_coefficients = frm_coefficients.magnitude_coefficients
-            population_scale_factor = self.states["population_scale_factor"]
-            net_wealth_scale_divisor = frm_coefficients.net_wealth_scale_divisor
+        frm_target = self.frm_target_share() if wealth_function.target_share_source == "frm_magnitude" else None
 
         diagnostics = compute_stage4_household_diagnostics(
             opening_tfa_scale=opening_tfa_scale,
             post_surplus_lfa=post_surplus_lfa,
             post_return_ifa=current_ifa,
             investable_surplus=investable_surplus,
-            frm_covariates=frm_covariates,
-            frm_magnitude_coefficients=frm_magnitude_coefficients,
-            population_scale_factor=population_scale_factor,
-            net_wealth_scale_divisor=net_wealth_scale_divisor,
+            frm_target=frm_target,
             portfolio_participates=self.states["portfolio_participates"],
             target_share_source=wealth_function.target_share_source,
             default_target_illiquid_share=wealth_function.default_target_illiquid_share,
@@ -2751,14 +2840,21 @@ class Households(Agent):
         *,
         current_income: np.ndarray,
         lagged_income: np.ndarray | None,
+        noise_variances: dict[str, np.ndarray] | None = None,
     ) -> IncomeBeliefLearningOutputs | None:
-        """Advance optional income-belief posterior state."""
+        """Advance optional income-belief posterior state.
+
+        ``noise_variances`` (``sigma2_v``/``sigma2_xi``) overrides the static priors' noise
+        variances for this update only; posterior mean and variance carry over unchanged.
+        """
         priors = self.states.get("income_belief_priors")
         if priors is None:
             raise ValueError(
                 "Income-belief learning was requested by the consumption rule, "
                 "but households.states['income_belief_priors'] is not available."
             )
+        if noise_variances is not None:
+            priors = {**priors, **noise_variances}
         runtime_state = self._income_belief_runtime_state(priors)
         if lagged_income is None:
             self._append_income_belief_diagnostics(None)
@@ -4033,6 +4129,8 @@ class Households(Agent):
         tau_vat_on_investment: float = 0.0,
         tau_vat: float = 0.0,
         unpaid_rent: np.ndarray | None = None,
+        debt_arrears_active: np.ndarray | None = None,
+        minimum_sale_size: np.ndarray | None = None,
     ) -> float:
         """Update household wealth positions.
 
@@ -4294,7 +4392,6 @@ class Households(Agent):
             settles = getattr(self.functions["wealth"], "settles_portfolio_choice", False)
             portfolio_base_lfa = wealth_base_lfa
             portfolio_base_ifa = wealth_base_ifa
-            forced_liquidation_active = np.zeros(wealth_base_lfa.shape, dtype=bool)
             if settles:
                 if not self.uses_feasibility_resolver or self.post_grant_feasible_plan is None:
                     raise RuntimeError("Settled portfolio choice requires the final post-grant feasibility carrier.")
@@ -4305,14 +4402,21 @@ class Households(Agent):
                 if self.uses_feasibility_resolver and self.post_grant_feasible_plan is not None
                 else None
             )
+            # A Stage 5 seller may not buy illiquid assets in the same period's Stage 4.
+            forced_liquidation_active = (
+                np.zeros(wealth_base_lfa.shape, dtype=bool)
+                if settled_sale is None
+                else np.asarray(settled_sale, dtype=float) > 0.0
+            )
             settlement = settle_portfolio_reallocation(
                 base_lfa=portfolio_base_lfa,
                 base_ifa=portfolio_base_ifa,
-                investable_surplus=diagnostics.portfolio_investable_surplus,
                 rebalancing=diagnostics.rebalancing,
                 settlement_enabled=settles,
                 forced_liquidation_active=forced_liquidation_active,
-                waive_fixed_cost=None if settled_sale is None else np.asarray(settled_sale, dtype=float) > 0.0,
+                waive_fixed_cost=None if settled_sale is None else forced_liquidation_active,
+                debt_arrears_active=debt_arrears_active,
+                minimum_sale_size=minimum_sale_size,
             )
             wealth_base_lfa = settlement.closing_lfa
             wealth_base_ifa = settlement.closing_ifa
@@ -4436,34 +4540,14 @@ class Households(Agent):
         # "frm_magnitude" path is selected. The default "scalar" path (unchanged
         # from Increment 3) does not need these and must not pay for building
         # this dict on every period for every country that has not opted in.
-        frm_covariates = None
-        frm_magnitude_coefficients = None
-        population_scale_factor = None
-        net_wealth_scale_divisor = None
-        if wealth_function.target_share_source == "frm_magnitude":
-            tenure_status = self.states["Tenure Status of the Main Residence"]
-            frm_covariates = {
-                "age": self.states["household_head_age"],
-                "household_members_in_employment": self.states["household_members_in_employment"],
-                "investment_attitudes": self.states["Investment Attitudes"],
-                "mortgagor": (tenure_status == 2).astype(float),
-                "owner": (tenure_status == 1).astype(float),
-                "net_wealth": self.compute_net_wealth(),
-            }
-            frm_coefficients = self.states["frm_coefficients"]
-            frm_magnitude_coefficients = frm_coefficients.magnitude_coefficients
-            population_scale_factor = self.states["population_scale_factor"]
-            net_wealth_scale_divisor = frm_coefficients.net_wealth_scale_divisor
+        frm_target = self.frm_target_share() if wealth_function.target_share_source == "frm_magnitude" else None
 
         diagnostics = compute_stage4_household_diagnostics(
             opening_tfa_scale=opening_tfa_scale,
             post_surplus_lfa=post_surplus_lfa,
             post_return_ifa=post_return_ifa,
             investable_surplus=investable_surplus,
-            frm_covariates=frm_covariates,
-            frm_magnitude_coefficients=frm_magnitude_coefficients,
-            population_scale_factor=population_scale_factor,
-            net_wealth_scale_divisor=net_wealth_scale_divisor,
+            frm_target=frm_target,
             portfolio_participates=self.states["portfolio_participates"],
             target_share_source=wealth_function.target_share_source,
             default_target_illiquid_share=wealth_function.default_target_illiquid_share,
@@ -4677,6 +4761,58 @@ class Households(Agent):
         self.ts.total_consumption_loan_debt.append([self.ts.current("consumption_loan_debt").sum()])
         self.ts.total_mortgage_debt.append([self.ts.current("mortgage_debt").sum()])
         return self.ts.current("consumption_loan_debt") + self.ts.current("mortgage_debt")
+
+    def frm_target_share(self) -> tuple[np.ndarray, np.ndarray]:
+        """Household-level FRM target illiquid share omega*_it = Phi(x_it' beta) (GTP-FRM).
+
+        Evaluated each period on the household's current characteristics:
+        owner and mortgagor dummies, employed household members, head age,
+        investment attitude and net wealth (last closed period's wealth minus debt, scaled as in
+        ``compute_frm_magnitude_target_share``). Which of these move in the model:
+        owner/mortgagor (housing market purchases and sales, mortgage origination and
+        repayment), employed members (live: ``Country`` refreshes
+        ``states["household_members_in_employment"]`` from the individuals' activity
+        status before each use) and net wealth. Head age is static (the demography
+        function only updates the population count) and investment attitude is a frozen
+        state.
+
+        The dummies follow DHHST, on which the FRM was estimated, not the model tenure
+        code (HB0300; buyers are set to 1 whatever their financing): owner = owns the main
+        residence (model owner codes 1, 2, 4) with no mortgage outstanding; mortgagor =
+        owns it with a mortgage outstanding. The model's mortgage ledger pools
+        main-residence and other-property mortgages, so a mortgage on another property
+        also counts. Renters and social tenants are 0/0.
+
+        Known wedges (handled in the initialisation work): head age is the RA0100
+        reference person (FRM: DHAGEH1), and model net wealth (other properties and real
+        assets, NA-rescaled IFA) differs from the FRM definition (TFA + main residence -
+        debt, raw HFCS IFA).
+
+        Returns:
+            ``(target_illiquid_share, target_share_clipped_flag)``, each ``(n_households,)``.
+        """
+        # Balance-sheet inputs come from the last CLOSED period: wealth is appended only at the end of
+        # update_wealth, after Stage 4, while period-t debt rows are appended during the Stage 5
+        # settlement. Reading the closed row k makes the borrow-versus-sell call (before settlement)
+        # and Stage 4 (after it) see identical inputs. Tenure is the current state (the housing market
+        # clears before both calls), so a new buyer is an owner without a mortgage until the next
+        # period's closed row shows the loan.
+        k = len(self.ts.dicts["wealth"]) - 1
+        owns_residence = np.isin(self.states["Tenure Status of the Main Residence"], [1, 2, 4])
+        has_mortgage = self.ts.dicts["mortgage_debt"][k] > 0.0
+        frm_coefficients = self.states["frm_coefficients"]
+        return compute_frm_magnitude_target_share(
+            age=self.states["household_head_age"],
+            household_members_in_employment=self.states["household_members_in_employment"],
+            investment_attitudes=self.states["Investment Attitudes"],
+            mortgagor=(owns_residence & has_mortgage).astype(float),
+            owner=(owns_residence & ~has_mortgage).astype(float),
+            net_wealth=self.ts.dicts["wealth"][k] - self.ts.dicts["debt"][k],
+            portfolio_participates=self.states["portfolio_participates"],
+            magnitude_coefficients=frm_coefficients.magnitude_coefficients,
+            population_scale_factor=self.states["population_scale_factor"],
+            net_wealth_scale_divisor=frm_coefficients.net_wealth_scale_divisor,
+        )
 
     def compute_net_wealth(self) -> np.ndarray:
         """Calculate household net wealth.

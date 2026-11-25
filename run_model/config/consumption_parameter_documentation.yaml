@@ -169,6 +169,10 @@ stage_3:
       zero_income_weight_fallback: equal_adult_member_weights
       rho_scope: scalar
       runtime_posterior_state_only: true
+      state_dependent_noise: >
+        When uses_state_dependent_income_belief_noise is true, sigma2_v and sigma2_xi are
+        re-selected each quarter from members' current employment status x age group,
+        aggregated with fixed initial income weights. Posterior mean and variance are not reset.
     income_signal:
       source: households.ts.income_employee + income_social_transfers + income_rental
       label: non_financial_household_income
@@ -231,8 +235,8 @@ stage_4:
       opening_tfa_formula: LFA + IFA
       post_return_ifa_formula: (1 + r_kappa) * IFA_lagged
       post_return_lfa_formula: (1 + r_ell) * LFA_lagged
-      target_tfa_base_formula: post_return_lfa + post_return_ifa + max(investable_surplus, 0)
-      positive_surplus_only: true
+      target_tfa_base_formula: post_surplus_lfa + post_return_ifa  # realised LFA already holds the period saving, any sign
+      positive_surplus_only: false  # households rebalance the stock even with zero or negative saving
     adjustment_rule:
       lambda_formula: phi_1 / (phi_1 + phi_2)
       fixed_cost_base: total_financial_assets

@@ -555,8 +555,14 @@ def run_mpc_experiment(
     output_variables: list[str] | None = None,
     paper_outputs: bool = False,
     capture_diagnostics: bool | None = None,
+    goods_floor: bool | None = None,
 ) -> dict[str, Path]:
     """Run paired MPC simulations, analyse household responses, and write outputs.
+
+    ``goods_floor`` overrides ``household_support.goods_floor`` for this
+    experiment only (None keeps the YAML value). False lets floor-bound
+    households consume at their behavioural target, so their MPC is not
+    censored by the subsistence floor.
 
     ``output_variables`` selects additive household outcomes: cash, total,
     behavioural_total_target, imputed_rent, target_consumption_total_mpc.
@@ -617,6 +623,9 @@ def run_mpc_experiment(
         force_rebuild_data=force_rebuild_data,
         single_hfcs_survey=single_hfcs_survey,
     )
+    if goods_floor is not None:
+        country_cfg = country_configurations[country_code]
+        country_cfg.household_support = {**country_cfg.household_support, "goods_floor": bool(goods_floor)}
     data_paths = DataPaths.default_paths(resolved_raw_data_path, [data.configuration.year])
 
     baseline_dir = output_dir / "baseline"

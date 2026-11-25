@@ -1,7 +1,11 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from run_model.src.household_classes import classify_households
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "run_model"))
+from src.household_classes import classify_households  # noqa: E402
 
 
 def _panel(rows):

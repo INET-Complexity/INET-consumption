@@ -97,3 +97,13 @@ def test_default_fallback_keeps_opening_goods_cash_and_housing_without_changing_
     h.ts.reset()
     for key, value in opening.items():
         np.testing.assert_array_equal(h.ts.current(key), value)
+
+
+def test_dna_quintile_option_stores_factors_and_keeps_anchor():
+    c = country()
+    initialise_hfcs_consumption(
+        c, np.array([0.6, 0.9]), dna_quintile_c_y=[1.0, 1.0, 1.0, 1.0, 1.0], household_size=np.array([1.0, 1.0])
+    )
+    h = c.households
+    np.testing.assert_allclose(h.ts.current("consumption").sum(), 165.0)
+    assert h.ts.current("initial_hfcs_dna_quintile_factor").shape == (2,)

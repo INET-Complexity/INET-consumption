@@ -5,10 +5,13 @@ import numpy as np
 from macro_data.util.consumption_initialisation import (
     allocate_hfcs_ratio_consumption,
     allocate_hfcs_with_legacy_reserve,
+    dna_quintile_factors,
 )
 
 
-def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True):
+def initialise_hfcs_consumption(
+    country, source_ratios, *, legacy_fallback=True, dna_quintile_c_y=None, household_size=None
+):
     """Replace opening expenditure without changing income, assets or transfers.
 
     The raw aligned income includes the model's net-interest/imputed-rent
@@ -18,6 +21,8 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
     Feasible households absorb the remaining aggregate goods budget. This is an
     opening-state fallback, not an income floor or a new support payment.
     legacy_fallback=False retains strict validation for explicit diagnostics.
+    dna_quintile_c_y (optional) rescales source ratios by quintile of income / sqrt(household_size)
+    so quintile C/Y follows the DNA shape; the goods anchor then sets the common level.
     """
     hh = country.households
     if "expected_behavioural_income_raw" not in hh.ts.dicts:
@@ -32,6 +37,10 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
         raise ValueError("Opening sector goods must be a finite nonnegative vector.")
     if not np.isfinite(price) or price <= 0:
         raise ValueError("Opening consumer price level must be finite and positive.")
+    quintile_factors = np.ones(len(income))
+    if dna_quintile_c_y is not None:
+        quintile_factors = dna_quintile_factors(source_ratios, income, household_size, dna_quintile_c_y)
+        source_ratios = np.asarray(source_ratios, dtype=float) * quintile_factors
     allocator = allocate_hfcs_with_legacy_reserve if legacy_fallback else allocate_hfcs_ratio_consumption
     fallback_inputs = {"legacy_goods": hh.ts.current("consumption")} if legacy_fallback else {}
     result = allocator(
@@ -66,6 +75,7 @@ def initialise_hfcs_consumption(country, source_ratios, *, legacy_fallback=True)
         "initial_hfcs_candidate_total": result.candidate_total,
         "initial_hfcs_final_c_y": final_ratios,
         "initial_hfcs_goods_scale": np.where(fallback, 1.0, result.goods_scale),
+        "initial_hfcs_dna_quintile_factor": quintile_factors,
     }.items():
         hh.ts[name] = values
     # National-accounts goods and VAT aggregates are unchanged by redistribution.

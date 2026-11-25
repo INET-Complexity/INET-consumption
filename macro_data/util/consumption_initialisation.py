@@ -89,6 +89,28 @@ def winsorise_hfcs_consumption_ratios(
     return WinsorisedConsumptionRatios(result, valid, capped, float(lower), float(upper))
 
 
+def dna_quintile_factors(
+    hfcs_c_y: np.ndarray, model_income: np.ndarray, household_size: np.ndarray, target_c_y
+) -> np.ndarray:
+    """Household factors f_q = target C/Y_q / HFCS-ratio C/Y_q, by quintile of income / sqrt(size).
+
+    Quintile C/Y is the ratio of sums (sum hfcs_c_y * income / sum income), as in the DNA.
+    Multiplying hfcs_c_y by these factors makes each quintile's C/Y equal its target before the
+    goods anchor applies a common scale; the anchor therefore preserves the target's shape.
+    """
+    hfcs_c_y, income, size = (np.asarray(a, dtype=float) for a in (hfcs_c_y, model_income, household_size))
+    target = np.asarray(target_c_y, dtype=float)
+    if target.shape != (5,) or np.any(target <= 0) or np.any(size <= 0):
+        raise ValueError("dna_quintile_factors needs five positive targets and positive household sizes.")
+    rank = np.argsort(np.argsort(income / np.sqrt(size), kind="stable"), kind="stable")
+    quintile = rank * 5 // len(rank)
+    factors = np.ones(5)
+    for q in np.unique(quintile):
+        m = quintile == q
+        factors[q] = target[q] * income[m].sum() / (hfcs_c_y[m] * income[m]).sum()
+    return factors[quintile]
+
+
 def allocate_hfcs_ratio_consumption(
     *,
     hfcs_c_y: np.ndarray,

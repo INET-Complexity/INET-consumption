@@ -803,7 +803,9 @@ def household_activity_bracket(country) -> np.ndarray:
         return np.full(n_households, np.nan)
 
     activity = np.asarray(activity)
-    relation = np.asarray(individual_states.get("Relation to Reference Person", np.full(activity.size, np.nan)), dtype=float)
+    relation = np.asarray(
+        individual_states.get("Relation to Reference Person", np.full(activity.size, np.nan)), dtype=float
+    )
     ages = np.asarray(individual_states.get("Age", np.full(activity.size, np.nan)), dtype=float)
     retired = np.asarray(individual_states.get("Is Retired", np.zeros(activity.size)), dtype=bool)
     if relation.size != activity.size or ages.size != activity.size or retired.size != activity.size:
@@ -920,9 +922,7 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
     social_transfer_income = _current_or_zero(households, "income_social_transfers", n_households=n_households)
     rental_income = _current_or_zero(households, "income_rental", n_households=n_households)
     wealth_function = households.functions.get("wealth")
-    illiquid_returns_are_capital_gains = bool(
-        getattr(wealth_function, "illiquid_returns_are_capital_gains", False)
-    )
+    illiquid_returns_are_capital_gains = bool(getattr(wealth_function, "illiquid_returns_are_capital_gains", False))
     financial_income_name = (
         "income_dividend_distributions" if illiquid_returns_are_capital_gains else "income_financial_assets"
     )

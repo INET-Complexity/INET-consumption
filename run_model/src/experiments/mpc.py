@@ -180,12 +180,24 @@ def _run_one(
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
     diagnostic_fields = (
-        "income", "income_employee", "income_social_transfers", "income_rental",
-        "income_financial_assets", "current_net_housing_cash_need", "housing_lfa_draw",
-        "consumption_cut_amount", "consumption", "target_consumption",
-        "overdraft_repayment", "early_consumer_repayment",
-        "scheduled_consumer_payment", "actual_consumer_payment", "unpaid_consumer_payment",
-        "actual_mortgage_payment", "unpaid_mortgage_payment", "liquid_financial_assets",
+        "income",
+        "income_employee",
+        "income_social_transfers",
+        "income_rental",
+        "income_financial_assets",
+        "current_net_housing_cash_need",
+        "housing_lfa_draw",
+        "consumption_cut_amount",
+        "consumption",
+        "target_consumption",
+        "overdraft_repayment",
+        "early_consumer_repayment",
+        "scheduled_consumer_payment",
+        "actual_consumer_payment",
+        "unpaid_consumer_payment",
+        "actual_mortgage_payment",
+        "unpaid_mortgage_payment",
+        "liquid_financial_assets",
         "target_consumption_calibrated_total",
     )
     window_state_columns: dict[str, dict[str, np.ndarray]] = {
@@ -228,9 +240,7 @@ def _run_one(
                 continue
             if values.ndim > 1:
                 values = values.sum(axis=tuple(range(1, values.ndim)))
-            window_state_columns.setdefault(f"diagnostic_{field}", {})[
-                f"diagnostic_{field}_t{offset}"
-            ] = values
+            window_state_columns.setdefault(f"diagnostic_{field}", {})[f"diagnostic_{field}_t{offset}"] = values
 
     if shock_period == 0:
         country = model.countries[country_code]
@@ -376,9 +386,8 @@ def _run_seed_pair(
     shock_state_columns = [
         column
         for column in shock_metadata.columns
-        if column.startswith("diagnostic_") or any(
-            column.startswith(f"{state_name}_t") for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS
-        )
+        if column.startswith("diagnostic_")
+        or any(column.startswith(f"{state_name}_t") for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS)
     ]
     shock_state_metadata = shock_metadata[["household_id", *shock_state_columns]].rename(
         columns={
@@ -701,7 +710,7 @@ def run_mpc_experiment(
         return panel.loc[panel["cumulative_mpc_identified"].astype(bool)]
 
     if paper_outputs:
-        from src.mpc_paper import write_paper_summaries, write_negative_mpc_diagnostics
+        from src.mpc_paper import write_negative_mpc_diagnostics, write_paper_summaries
 
         write_paper_summaries(raw_household_panel, analysis_dir, sample="raw")
         write_negative_mpc_diagnostics(raw_household_panel, analysis_dir, sample="raw")

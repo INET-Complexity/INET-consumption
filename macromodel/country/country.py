@@ -743,6 +743,8 @@ class Country:
         Public benefits are untaxed; rental/dividend receipts are net of Income
         Tax. Deposit interest uses the existing unwithheld posting convention.
         This is an origination forecast, not the behavioural-income transform.
+        The staged one-off MPC transfer is spendable cash, but is not recurring
+        income eligible for consumer-credit or mortgage underwriting.
         """
         from macromodel.util.wage_receipts import labour_income_components
 
@@ -771,7 +773,7 @@ class Country:
         social = hh.ts.current("expected_income_social_transfers") - hh.ts.current("minimum_income_entitlement")
         gross = bridge["gross_wages"] + social
         gross = gross + (hh.ts.current("income_rental") + financial) / (1.0 - tau) + np.maximum(-deposit, 0.0)
-        return np.maximum(self._apply_household_income_shock(gross), 0.0)
+        return np.maximum(gross, 0.0)
 
     def refresh_known_household_receipts(self) -> None:
         """Replace wage/regular-benefit forecasts for current financing only."""

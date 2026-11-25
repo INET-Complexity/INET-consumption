@@ -51,3 +51,38 @@ def test_negative_income_and_missing_values():
     assert out[0] == "P-HtM"  # tau = 0, m = 0 is the zero-liquidity kink
     assert out[1] != "P-HtM" and out[1] != "R-HtM"
     assert pd.isna(out[2])
+
+
+def test_paper_eight_groups_median_split_and_three_group_collapse():
+    from src.household_classes import classify_balance_sheet_groups
+
+    # income 100; ratios: NLA = (LFA - consumer - mortgage)/y, IFA/y, HA/y
+    panel = _panel(
+        [
+            [100, 0, 50, 0, 0, 0],  # NLA -0.5, IFA 0, HA 0 -> LLL
+            [100, 0, 0, 0, 900, 400],  # NLA -4 (mortgage counted), HA 9 -> LLH
+            [100, 500, 0, 300, 0, 0],  # NLA 5, IFA 3 -> HHL
+            [100, 500, 0, 300, 900, 0],  # HHH
+            [0, 1, 0, 0, 0, 0],  # non-positive income -> unclassified
+        ]
+    )
+    out = classify_balance_sheet_groups(panel)
+    assert list(out.group_code[:4]) == ["LLL", "LLH", "HHL", "HHH"]
+    assert out.group_label[1] == "Housing-rich hand-to-mouth"
+    assert list(out.group_3[:4]) == [
+        "Poor hand-to-mouth",
+        "Wealthy hand-to-mouth",
+        "Doubly wealthy",
+        "Doubly wealthy",
+    ]
+    assert pd.isna(out.group_code[4]) and pd.isna(out.group_3[4])
+
+
+def test_median_split_is_within_seed():
+    from src.household_classes import classify_balance_sheet_groups
+
+    panel = pd.concat([_panel([[100, 10, 0, 0, 0, 0], [100, 20, 0, 0, 0, 0]])] * 2, ignore_index=True)
+    panel.loc[2:, "seed"] = 2
+    panel.loc[2:, "liquid_financial_assets"] *= 100  # seed 2 richer: split still within seed
+    out = classify_balance_sheet_groups(panel)
+    assert list(out.group_code.str[0]) == ["L", "H", "L", "H"]

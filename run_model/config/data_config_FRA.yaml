@@ -26,6 +26,9 @@ country_configs:
       registration_sha256: 4cc18938b7076f9a00276d3a51712a0967cb6fc9283a10d54c02186331a84053
       # Scale stocks by k_i = model / HFCS net income (vault spec 2026-11-24-balance-sheet-scaling).
       balance_sheet_scaling: true
+      # OECD Expert Group on Disaggregated National Accounts (EG DNA), France 2014: P31/B6G by
+      # quintile of equivalised disposable income, Q1..Q5 (aggregate 0.853). Shape target only (vault row 25).
+      dna_quintile_c_y: [1.034, 0.984, 0.934, 0.901, 0.707]
     firms_configuration:
       constructor: Default
       zero_initial_deposits: false

@@ -1401,7 +1401,10 @@ class Country:
         country.data_minimum_annual_rental_yield = data_minimum_annual_rental_yield
         if getattr(synthetic_population, "household_consumption_stage", None) == CONSUMPTION_DATA_STAGE:
             initialise_hfcs_consumption(
-                country, synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float)
+                country,
+                synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float),
+                dna_quintile_c_y=getattr(synthetic_population, "dna_quintile_c_y", None),
+                household_size=synthetic_population.household_data["Number of household members"].to_numpy(dtype=float),
             )
         return country
 

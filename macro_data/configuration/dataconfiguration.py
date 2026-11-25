@@ -191,9 +191,14 @@ class HouseholdConsumptionInitialisationConfiguration(BaseModel):
     # Annual yield on IFA replacing the D4 anchor when scaling is on: Eurostat nasa_10_nf_tr S14 FR,
     # D4 sub-items matched to F3+F4+F511+F52+F62, mean 2010-19 (vault, 2026-11-24).
     financial_asset_yield: float = 0.0293
+    # Opening C/Y by quintile of equivalised income (Q1..Q5), used as a shape target for the
+    # HFCS-ratio opening budget; the goods anchor still sets the level. None: off.
+    dna_quintile_c_y: Optional[list[float]] = Field(default=None, min_length=5, max_length=5)
 
     @model_validator(mode="after")
     def validate_source(self):
+        if self.dna_quintile_c_y is not None and not all(v > 0.0 for v in self.dna_quintile_c_y):
+            raise ValueError("dna_quintile_c_y must contain five positive ratios.")
         if self.balance_sheet_scaling and not self.financial_asset_yield > 0.0:
             raise ValueError("balance_sheet_scaling requires a positive annual financial_asset_yield.")
         if self.method == "hfcs_cy":

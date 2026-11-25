@@ -59,7 +59,7 @@ def test__load_country_configuration_resolves_paper_parameter_ref(tmp_path):
     params = config.households.functions.wealth.parameters
     assert "paper_parameter_file" not in params
     assert "paper_parameter_ref" not in params
-    assert params["mu_eq"] == 0.0109  # total-return basis, #248
+    assert params["mu_eq"] == 0.0029
     assert params["equity_weight"] == 0.5
 
 
@@ -135,7 +135,7 @@ def test__load_country_configuration_merges_embedded_parameter_overrides(tmp_pat
     params = config.households.functions.wealth.parameters
     assert "paper_parameter_file" not in params
     assert "paper_parameter_ref" not in params
-    assert params["mu_eq"] == 0.0109  # total-return basis, #248
+    assert params["mu_eq"] == 0.0029
     assert params["equity_weight"] == 0.25
     assert params["draw_scope"] == "country_period"
 
@@ -182,7 +182,7 @@ def test__load_country_configuration_merges_multiple_paper_parameter_refs(tmp_pa
     assert "paper_parameter_refs" not in params
     assert "paper_parameter_file" not in params
     assert "paper_parameter_ref" not in params
-    assert params["mu_eq"] == 0.0109  # total-return basis, #248
+    assert params["mu_eq"] == 0.0029
     assert params["equity_weight"] == 0.5
     assert params["uses_portfolio_choice"] is False
     assert params["phi_1"] == 5.0

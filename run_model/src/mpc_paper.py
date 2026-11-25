@@ -13,9 +13,12 @@ def write_paper_summaries(panel, output_dir, *, sample):
     Standard errors use seed-level aggregate responses; households within a
     simulation are not treated as independent observations.
     """
+    from src.mpc_paper_groups import prepare_paper_groups
+
+    panel, specs = prepare_paper_groups(panel)
     rows = []
     columns = [c for c in panel if c.endswith("mpc_impact") or "cmpc_" in c]
-    group_columns = [c for c in panel if c.endswith("_bin")]
+    group_columns = [field for field, _title, _order in specs]
     groups = [("all", "all", panel)]
     for column in group_columns:
         groups.extend((column, str(label), frame) for label, frame in panel.groupby(column, observed=True))
@@ -57,7 +60,20 @@ def write_paper_summaries(panel, output_dir, *, sample):
             )
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows).to_csv(output_dir / f"paper_mpc_summary_{sample}.csv", index=False)
+    summary_columns = [
+        "variable",
+        "group",
+        "outcome",
+        "n",
+        "seeds",
+        "mean",
+        "median",
+        "negative_share",
+        "transfer_weighted_mpc",
+        "seed_cluster_se",
+        "total_transfer",
+    ]
+    pd.DataFrame(rows, columns=summary_columns).to_csv(output_dir / f"paper_mpc_summary_{sample}.csv", index=False)
     diagnostic = [c for c in panel if c.startswith("diagnostic_")]
     if diagnostic:
         panel[["seed", "household_id", *diagnostic]].to_csv(

@@ -9,61 +9,9 @@ import pandas as pd
 
 def write_paper_figures(panel, output_dir):
     """Unweighted boxes and means; transfer-weighted means as diamonds."""
-    from src.mpc_analysis import assign_quantile_bin
+    from src.mpc_paper_groups import prepare_paper_groups
 
-    panel = panel.copy()
-    specs = []
-    for field, title in [
-        ("income", "Household income"),
-        ("labor_income", "Labour income"),
-        ("non_property_income", "Non-property income"),
-        ("property_income", "Property income"),
-        ("liquid_financial_assets", "Liquid financial assets"),
-        ("net_liquid_financial_assets_all_debt", "Net liquid assets"),
-        ("illiquid_financial_assets", "Illiquid financial assets"),
-        ("housing_wealth", "Housing wealth"),
-    ]:
-        group = field + "_paper_group"
-        panel[group] = pd.Series(pd.NA, index=panel.index, dtype="string")
-        if field in (
-            "illiquid_financial_assets",
-            "housing_wealth",
-            "labor_income",
-            "non_property_income",
-            "property_income",
-        ):
-            positive = panel[field] > 0
-            panel.loc[panel[field] == 0, group] = "Zero"
-            panel.loc[panel[field] < 0, group] = "Negative"
-            panel.loc[positive, group] = assign_quantile_bin(panel.loc[positive, field]).astype("string")
-        else:
-            panel[group] = assign_quantile_bin(panel[field]).astype("string")
-        specs.append((group, title, ["Negative", "Zero", "Q1", "Q2", "Q3", "Q4", "Q5", "all"]))
-    panel["tenure"] = panel.housing_tenure.map(
-        {
-            "renter": "Renters",
-            "owner_mortgage": "Mortgagors",
-            "owner_outright": "Outright\nowners",
-            "owner_other": "Other tenure",
-            "unknown": "Unknown",
-        }
-    )
-    panel["tenure"] = panel["tenure"].fillna("Unknown")
-    panel["labour"] = panel.activity_bracket_t0.map({1: "Employed", 2: "Unemployed", 3: "Inactive", 4: "Retired"})
-    consumer = panel.consumption_loan_debt > 1e-8
-    mortgage = panel.mortgage_debt > 1e-8
-    panel["borrowing"] = np.select(
-        [consumer & mortgage, consumer, mortgage], ["Both", "Consumer\ncredit", "Mortgage"], default="No borrowing"
-    )
-    panel["constraint"] = panel.mpc_regime.map(
-        {"liquidity_constrained": "Constrained", "unconstrained": "Unconstrained"}
-    )
-    specs += [
-        ("tenure", "Housing tenure", ["Renters", "Mortgagors", "Outright\nowners", "Other tenure", "Unknown"]),
-        ("labour", "Reference person", ["Employed", "Unemployed", "Inactive", "Retired"]),
-        ("borrowing", "Borrowing", ["No borrowing", "Consumer\ncredit", "Mortgage", "Both"]),
-        ("constraint", "Liquidity constraint", ["Constrained", "Unconstrained"]),
-    ]
+    panel, specs = prepare_paper_groups(panel)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fig, axes = plt.subplots(3, 4, figsize=(18, 11), sharey=True)

@@ -726,6 +726,7 @@ def build_household_mpc_panel(
         additions["baseline_floor_support"] = regime_inputs["stage5_subsistence_support"]
         additions["baseline_subsistence_floor"] = floor
         additions["baseline_consumption_before_floor"] = regime_inputs["consumption_before_floor"]
+        additions["baseline_consumption_cut_amount"] = regime_inputs["consumption_cut_amount"]
         additions["mpc_regime"] = classify_mpc_regime(
             support=regime_inputs["stage5_subsistence_support"],
             consumption_before_floor=regime_inputs["consumption_before_floor"],

@@ -1,12 +1,12 @@
 # Housing replay: implementation and unresolved financing control
 
-The serial experimental runner `run_housing_replay_experiment` records baseline housing matches before credit clearing, replays those matches in treatment, and retains the model's native purchase-completion, seller, mortgage and bank settlement. It checks the completed transaction table and each household's net housing cash need and housing liquid-asset draw. It aborts when those controls do not hold. It does not overwrite household cash or bank accounts.
+The serial experimental runner `run_housing_replay_experiment` records baseline housing matches before credit clearing, replays those matches in treatment, and retains the model's native purchase-completion, seller, mortgage and bank settlement. It checks the completed transaction table and reports each household's net housing cash need and housing liquid-asset draw. It aborts when transactions do not match; financing deviations are allowed and audited under the selected specification. It does not overwrite household cash or bank accounts.
 
 The control window is explicit: `control_periods=1` addresses impact; cumulative controlled estimates require control of the whole cumulative window. The runner requires `n_jobs=1` in a dedicated process. Temporary method instrumentation is restored on success and failure. The ordinary MPC runner is unchanged.
 
 Seed 3, transfer period 60, 10% median positive income, current minimum-income regime: replayed completed transactions match but the strict cash/funding check fails (maximum difference about 3.63 million model units). A successful replay of matches is therefore insufficient to claim that housing resources are held fixed. No controlled MPC is reported from this failed smoke run.
 
-Two estimands remain possible: fix transactions while allowing endogenous financing, or fix transactions and financing. The latter requires intervention before mortgage origination/purchase funding and matching counterpart entries, not a post-settlement cash overwrite. The user selected transaction control with endogenous financing, as described below. The previously verified unrestricted 30-seed results remain valid.
+Two estimands remain possible: fix transactions while allowing endogenous financing, or fix transactions and financing. The latter requires intervention before mortgage origination/purchase funding and matching counterpart entries, not a post-settlement cash overwrite. The user selected transaction control with endogenous financing, as described below. The old unrestricted results were later found to include the temporary transfer in credit underwriting and have been superseded by the corrected 30-seed experiment; transaction-replay feasibility must not be inferred from those older numerical results.
 
 ## Selected specification
 

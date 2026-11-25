@@ -94,3 +94,72 @@ def test_figure_preserves_constant_groups_and_readable_borrowing_label(tmp_path)
     assert groups.loc[groups.variable.eq("borrowing"), "group"].tolist() == ["No borrowing"]
     assert groups.loc[groups.variable.eq("tenure"), "group"].tolist() == ["Unknown"]
     assert (tmp_path / "paper_impact_mpc.pdf").stat().st_size > 0
+
+
+def test_summary_and_figure_use_same_positive_asset_groups(tmp_path):
+    from src.mpc_paper_figures import write_paper_figures
+
+    panel = pd.DataFrame(
+        {
+            "seed": [1] * 10,
+            "household_id": range(10),
+            "illiquid_financial_assets": [0.0] * 5 + [1.0, 2.0, 3.0, 4.0, 5.0],
+            # Legacy whole-sample bins must not substitute for positive-holder groups.
+            "illiquid_financial_assets_bin": ["Q1", "Q1", "Q2", "Q2", "Q3", "Q3", "Q4", "Q4", "Q5", "Q5"],
+            "real_mpc_impact": np.arange(10) / 10,
+            "real_shock_amount": np.arange(10) + 1.0,
+        }
+    )
+    write_paper_summaries(panel, tmp_path, sample="groups")
+    write_paper_figures(panel, tmp_path)
+    summary = pd.read_csv(tmp_path / "paper_mpc_summary_groups.csv")
+    figure = pd.read_csv(tmp_path / "paper_figure_group_means.csv")
+    matched = figure.merge(summary, on=["variable", "group"], validate="one_to_one", suffixes=("_figure", "_summary"))
+    assert len(matched) == len(figure) == 6
+    np.testing.assert_array_equal(matched.n_figure, matched.n_summary)
+    np.testing.assert_allclose(matched.mean_figure, matched.mean_summary)
+    np.testing.assert_allclose(matched.transfer_weighted_mpc_figure, matched.transfer_weighted_mpc_summary)
+    assert matched.set_index("group").loc["Zero", "n_figure"] == 5
+
+
+def test_consumption_constraint_excludes_arrears_only_and_other_regimes():
+    from src.mpc_paper_groups import prepare_paper_groups
+
+    panel = pd.DataFrame(
+        {
+            "mpc_regime": [
+                "liquidity_constrained",
+                "liquidity_constrained",
+                "unconstrained",
+                "minimum_income_recipient",
+                "floor_bound_self_funded",
+            ],
+            "baseline_consumption_cut_amount": [10.0, 0.0, 0.0, 10.0, 0.0],
+            "baseline_subsistence_floor": [100.0] * 5,
+        }
+    )
+    grouped, _ = prepare_paper_groups(panel)
+    assert grouped.constraint.iloc[0] == "Constrained"
+    assert pd.isna(grouped.constraint.iloc[1])
+    assert grouped.constraint.iloc[2] == "Unconstrained"
+    assert grouped.constraint.iloc[3:].isna().all()
+
+
+def test_constraint_requires_evidence_and_accepts_saved_diagnostics():
+    import pytest
+    from src.mpc_paper_groups import prepare_paper_groups
+
+    panel = pd.DataFrame({"mpc_regime": ["liquidity_constrained"], "baseline_subsistence_floor": [100.0]})
+    with pytest.raises(ValueError, match="baseline consumption cuts"):
+        prepare_paper_groups(panel)
+    panel["diagnostic_consumption_cut_amount_t1"] = [10.0]
+    grouped, _ = prepare_paper_groups(panel)
+    assert grouped.constraint.iloc[0] == "Constrained"
+
+
+def test_empty_filtered_summary_has_readable_schema(tmp_path):
+    panel = pd.DataFrame(columns=["seed", "shock_amount", "mpc_impact"])
+    write_paper_summaries(panel, tmp_path, sample="empty")
+    result = pd.read_csv(tmp_path / "paper_mpc_summary_empty.csv")
+    assert result.empty
+    assert {"outcome", "n", "mean", "transfer_weighted_mpc", "seed_cluster_se"}.issubset(result.columns)

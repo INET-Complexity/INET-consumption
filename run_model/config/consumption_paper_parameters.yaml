@@ -116,7 +116,7 @@ desired_consumption:
     # (issue #90) is unchanged by this recalibration.
     income_growth_propensity: 0.0          # beta1 fixed at zero in the retained calibration.
     debt_service_cashflow_propensity: -0.75  # beta2: change in quarterly contractual payments / cash income
-    uncertainty_propensity: -0.005
+    uncertainty_propensity: -102.0  # Aron et al. (2012) UK -0.0071 per pp of the 4q change in u; slope d4 theta_bar/d4 u = 0.0070 (vault 2026-11-25)
     partial_adjustment_speed: 0.56
     # Legacy linear-wealth clip only; the logarithmic tail below replaces it.
     long_run_mpc_lower_bound: 0.0

@@ -204,3 +204,43 @@ def irf_figure(bands, *, shocks, variables, path):
         fig.tight_layout(rect=(0.02, 0.05, 1, 1))
         _save(fig, path)
         plt.show()
+
+
+def multiplier_figure(curves, *, path, annotate=(4, 8, 16)):
+    """Cumulative transfer multipliers by horizon.
+
+    ``curves``: {regime label: DataFrame indexed by quarters with columns
+    gdp, gdp_se, cons, cons_se}. The first regime is solid, others dashed.
+    """
+    with plt.rc_context(STYLE):
+        fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.5), sharey=True, gridspec_kw={"wspace": 0.08})
+        for (label, d), style in zip(curves.items(), ("-", "--", ":")):
+            for ax, var, color in ((axes[0], "gdp", NAVY), (axes[1], "cons", WARM)):
+                q = d.index.to_numpy()
+                ax.fill_between(
+                    q, d[var] - 1.96 * d[f"{var}_se"], d[var] + 1.96 * d[f"{var}_se"], color=color, alpha=0.18, lw=0
+                )
+                ax.plot(q, d[var], color=color, lw=2, ls=style, label=label)
+                if style == "-":
+                    for h in annotate:
+                        if h in d.index:
+                            ax.plot(h, d.loc[h, var], "o", color=color, ms=4)
+                            ax.annotate(
+                                f"{d.loc[h, var]:.2f}",
+                                (h, d.loc[h, var]),
+                                textcoords="offset points",
+                                xytext=(0, 8),
+                                ha="center",
+                                fontsize=8,
+                            )
+        axes[0].set_title("Real GDP")
+        axes[1].set_title("Real household consumption")
+        for ax in axes:
+            ax.axhline(1, color=GREY, lw=0.6, ls=":")
+            ax.axhline(0, color=GREY, lw=0.6)
+            ax.set_xlabel("Quarters after the transfer")
+        axes[0].set_ylabel("Cumulative multiplier (€ per € transferred)")
+        if len(curves) > 1:
+            axes[0].legend(fontsize=8, loc="lower right")
+        _save(fig, path)
+        plt.show()

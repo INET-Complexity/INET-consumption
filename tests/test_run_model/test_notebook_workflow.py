@@ -714,6 +714,8 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
             self.countries = countries
 
     monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+    # This table test mocks regressor construction; use a fixed trend calibration too.
+    monkeypatch.setattr(nw, "permanent_income_trend_growth", lambda _table: 0.01)
 
     country = SimpleNamespace(
         start_period=pd.Period("2014Q1", freq="Q"),
@@ -790,7 +792,8 @@ def test_build_permanent_income_forecast_contribution_table_returns_regressor_co
     assert result["period"].tolist() == [1, 1, 2, 2]
     assert result["regressor"].tolist() == ["constant", "time_trend", "constant", "time_trend"]
     assert (
-        result["simulation_source"].tolist() == ["frozen_design_matrix_initial_period", "simulation_period_index"] * 2
+        result["simulation_source"].tolist()
+        == ["frozen_design_matrix_initial_period", "simulation_period_index_or_endogenous_hp_trend"] * 2
     )
     assert result["is_fixed"].tolist() == [True, False, True, False]
     assert result["contribution"].tolist() == [2.0, -2.0, 2.0, -3.0]
@@ -802,6 +805,8 @@ def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_re
             self.countries = countries
 
     monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+    # This table test mocks regressor construction; use a fixed trend calibration too.
+    monkeypatch.setattr(nw, "permanent_income_trend_growth", lambda _table: 0.01)
 
     country = SimpleNamespace(
         start_period=pd.Period("2014Q1", freq="Q"),
@@ -866,7 +871,7 @@ def test_build_permanent_income_forecast_contribution_table_can_exclude_fixed_re
     )
 
     assert result["regressor"].tolist() == ["time_trend"]
-    assert result["simulation_source"].tolist() == ["simulation_period_index"]
+    assert result["simulation_source"].tolist() == ["simulation_period_index_or_endogenous_hp_trend"]
     assert result["is_fixed"].tolist() == [False]
     assert result.attrs["include_fixed"] is False
 
@@ -877,6 +882,8 @@ def test_build_permanent_income_forecast_contribution_table_recovers_missing_sou
             self.countries = countries
 
     monkeypatch.setattr(nw, "Simulation", FakeSimulation)
+    # This table test mocks regressor construction; use a fixed trend calibration too.
+    monkeypatch.setattr(nw, "permanent_income_trend_growth", lambda _table: 0.01)
 
     country = SimpleNamespace(
         start_period=pd.Period("2014Q1", freq="Q"),
@@ -924,7 +931,7 @@ def test_build_permanent_income_forecast_contribution_table_recovers_missing_sou
     )
 
     assert result["regressor"].tolist() == ["time_trend"]
-    assert result["simulation_source"].tolist() == ["simulation_period_index"]
+    assert result["simulation_source"].tolist() == ["simulation_period_index_or_endogenous_hp_trend"]
     assert result["is_fixed"].tolist() == [False]
 
 

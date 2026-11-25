@@ -438,12 +438,19 @@ def test_run_mpc_experiment_rejects_tolerance_with_a_row_dropping_filter(tmp_pat
 
 
 @pytest.mark.parametrize("keep_full_h5", [False, True])
-def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monkeypatch, keep_full_h5):
+@pytest.mark.parametrize("capture_diagnostics", [False, True])
+@pytest.mark.parametrize("shock_period", [0, 1])
+def test_run_one_writes_window_and_only_keeps_full_h5_on_request(
+    tmp_path, monkeypatch, keep_full_h5, capture_diagnostics, shock_period
+):
     import h5py
     import numpy as np
 
+    from macromodel.timeseries import TimeSeries
+
     class FakeCountry:
-        pass
+        def __init__(self):
+            self.households = SimpleNamespace(ts=TimeSeries(income=np.ones(2)))
 
     class FakeModel:
         def __init__(self):
@@ -493,7 +500,7 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
     stale = seed_dir / "multi_country_simulation.h5"
     stale.write_bytes(b"previous full run")
 
-    mpc_runner._run_one(
+    metadata = mpc_runner._run_one(
         data=SimpleNamespace(configuration=SimpleNamespace(year=2014), time_unit=3),
         country_configurations={
             "FRA": SimpleNamespace(
@@ -505,18 +512,20 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(tmp_path, monke
         t_max=4,
         output_dir=tmp_path / "baseline",
         shock=False,
-        shock_period=1,
+        shock_period=shock_period,
         shock_fraction=0.01,
         horizon_periods=2,
         keep_full_h5=keep_full_h5,
         output_variables=["cash"],
+        capture_diagnostics=capture_diagnostics,
     )
+    assert ("diagnostic_income_t0" in metadata.columns) == capture_diagnostics
     assert support_seen == [{"mode": "minimum_income", "goods_floor": False}]
 
     window = np.load(seed_dir / "mpc_window.npz")
     assert {k for k in window.files if k.startswith("outcome_")} == {"outcome_cash"}
     assert window["consumption"].shape == (2, 2)
-    assert int(window["shock_row"]) == 2
+    assert int(window["shock_row"]) == shock_period + 1
     assert not list(seed_dir.glob(".scratch-*"))
     if keep_full_h5:
         with h5py.File(stale, "r") as handle:

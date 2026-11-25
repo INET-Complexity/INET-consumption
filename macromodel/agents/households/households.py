@@ -1518,6 +1518,28 @@ class Households(Agent):
             for household_id in np.flatnonzero(new_event_mask)
         )
 
+    def refresh_new_ficp_event_interest_arrears(self, interest_arrears: np.ndarray) -> None:
+        """Re-snapshot the interest arrears of FICP events emitted this period.
+
+        Unpaid overdraft interest is booked as consumer interest arrears after the Stage 6
+        event snapshot, in the same period. Only the residual interest arrears of events still
+        at stage 0 are refreshed; principal fields and every household or bank flow are unchanged.
+        """
+        interest_arrears = np.asarray(interest_arrears, dtype=float)
+        residual = np.asarray(self.ts.current("ficp_forgiveness_event_residual_interest_arrears"), dtype=float)
+        if interest_arrears.shape != residual.shape:
+            raise ValueError("interest_arrears must contain exactly one value per household.")
+        new_event = (
+            np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool)
+            & ~np.asarray(self.ts.current("ficp_forgiveness_event_processed"), dtype=bool)
+            & (np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float) == 0.0)
+        )
+        if np.any(new_event):
+            self.ts.override_current(
+                "ficp_forgiveness_event_residual_interest_arrears",
+                np.where(new_event, interest_arrears, residual),
+            )
+
     def mark_ficp_forgiveness_processed(self, household_id: int, episode_id: int) -> None:
         """Mark one emitted FICP forgiveness event as consumed by the next increment."""
         n_households = int(self.ts.current("n_households"))

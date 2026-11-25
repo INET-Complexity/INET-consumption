@@ -56,6 +56,7 @@ from macro_data.readers.permanent_income_mapping import (
     build_permanent_income_forecast_regressors,
     design_matrix_to_forecast_reader_names,
     load_permanent_income_design_matrix,
+    permanent_income_trend_growth,
     rebase_real_pc_income_index,
 )
 from macro_data.readers.portfolio_frm import load_frm_coefficients
@@ -5705,6 +5706,9 @@ class Country:
                 design_matrix=self._permanent_income_design_matrix,
                 start_period=self.start_period,
                 estimation_epoch=self._permanent_income_design_matrix.index.min(),
+                trend_growth_per_quarter=permanent_income_trend_growth(
+                    self._permanent_income_forecast_inputs.coefficient_table
+                ),
             )
         except ValueError as exc:
             # ValueError here is data-dependent (e.g. non-positive income/CPI,

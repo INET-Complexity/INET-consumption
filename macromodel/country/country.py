@@ -1400,9 +1400,7 @@ class Country:
                 country,
                 synthetic_population.household_data["HFCS Consumption Ratio"].to_numpy(dtype=float),
                 dna_quintile_c_y=getattr(synthetic_population, "dna_quintile_c_y", None),
-                household_size=synthetic_population.household_data["Number of household members"].to_numpy(
-                    dtype=float
-                ),
+                household_size=synthetic_population.household_data["Number of household members"].to_numpy(dtype=float),
             )
         return country
 

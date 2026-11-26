@@ -53,12 +53,22 @@ class ShockSpec:
     mode: Literal["additive", "multiplicative"] = "additive"
     random_log_sd: float | None = None
     prevent_rehiring: bool = False
+    rehiring_lockout_duration: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.prevent_rehiring, bool):
             raise ValueError("prevent_rehiring must be a boolean.")
         if self.prevent_rehiring and self.kind != "unemployment_rate":
             raise ValueError("prevent_rehiring is only supported for unemployment_rate shocks.")
+        if self.rehiring_lockout_duration is not None:
+            if not self.prevent_rehiring:
+                raise ValueError("rehiring_lockout_duration requires prevent_rehiring=True.")
+            if (
+                isinstance(self.rehiring_lockout_duration, bool)
+                or not isinstance(self.rehiring_lockout_duration, int)
+                or self.rehiring_lockout_duration < self.duration
+            ):
+                raise ValueError("rehiring_lockout_duration must be an integer >= duration.")
         try:
             magnitude = np.asarray(self.magnitude, dtype=float)
         except (TypeError, ValueError) as exc:
@@ -342,7 +352,9 @@ def create_unemployment_rate_shock_hook(
     workers to separate. The normal labour market can rehire separated workers,
     so the realised unemployment-rate IRF remains endogenous. With
     ``prevent_rehiring=True``, directly separated workers remain ineligible for
-    hiring until the end of the common shock window. Other workers can be hired.
+    hiring until the common release at period + rehiring_lockout_duration
+    (default: duration). Separation duration and lockout duration may differ,
+    allowing a one-off separation with a year-long lockout. Other workers can be hired.
     Their unemployment status and benefit eligibility are unchanged.
     """
 
@@ -399,7 +411,9 @@ def create_unemployment_rate_shock_hook(
         country.individuals.states["Started New Job"][separated_ids] = False
         country.individuals.states["Offered Wage of Accepted Job"][separated_ids] = 0.0
         if spec.prevent_rehiring:
-            deadlines[separated_ids] = np.maximum(deadlines[separated_ids], spec.period + spec.duration)
+            deadlines[separated_ids] = np.maximum(
+                deadlines[separated_ids], spec.period + (spec.rehiring_lockout_duration or spec.duration)
+            )
             states["IRF Rehiring Blocked"] = deadlines > period
         applied_periods.add(period)
         logging.info(

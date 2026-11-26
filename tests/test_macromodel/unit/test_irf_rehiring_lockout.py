@@ -118,3 +118,90 @@ def test_disabled_option_preserves_draws_and_does_not_add_lockout_state():
 def test_invalid_lockout_spec_rejected(kwargs):
     with pytest.raises(ValueError, match="prevent_rehiring"):
         ShockSpec(name="bad", period=1, magnitude=0.01, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("magnitude", "duration", "expected_counts"),
+    [
+        (0.02, 1, [20, 20, 20, 20]),
+        (0.005, 4, [5, 10, 15, 20]),
+    ],
+)
+def test_alternative_design_cohort_sizes_and_common_release(magnitude, duration, expected_counts):
+    sim, firms, ind, _ = setup_market()
+    ind.states["Activity Status"] = np.array([A.EMPLOYED] * 800 + [A.UNEMPLOYED] * 200)
+    ind.states["Corresponding Firm ID"] = np.array([0] * 800 + [-1] * 200)
+    ind.states["Started New Job"] = np.zeros(1000, dtype=bool)
+    ind.states["Offered Wage of Accepted Job"] = np.zeros(1000)
+    firms.states["Employments"] = [list(range(800))]
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(
+            name="alternative",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=magnitude,
+            duration=duration,
+            prevent_rehiring=True,
+            rehiring_lockout_duration=4,
+        ),
+    )
+    for (year, month), expected in zip([(2020, 4), (2020, 7), (2020, 10), (2021, 1)], expected_counts):
+        hook(sim, year, month)
+        assert ind.states["IRF Rehiring Blocked"].sum() == expected
+        assert (ind.states["Activity Status"] == A.UNEMPLOYED).sum() == 200 + expected
+    hook(sim, 2021, 4)
+    assert not ind.states["IRF Rehiring Blocked"].any()
+    assert (ind.states["Activity Status"] == A.UNEMPLOYED).sum() == 220
+
+
+@pytest.mark.parametrize("lockout", [0, 2, 3.5, True])
+def test_invalid_lockout_duration_rejected(lockout):
+    with pytest.raises(ValueError, match="rehiring_lockout_duration"):
+        ShockSpec(
+            name="invalid",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=0.005,
+            duration=4,
+            prevent_rehiring=True,
+            rehiring_lockout_duration=lockout,
+        )
+
+
+def test_lockout_duration_requires_restriction():
+    with pytest.raises(ValueError, match="requires prevent_rehiring"):
+        ShockSpec(name="invalid", kind="unemployment_rate", period=1, magnitude=0.02, rehiring_lockout_duration=4)
+
+
+@pytest.mark.parametrize(
+    "cls", [DefaultLabourMarketClearer, ReservationWageBindingDefaultLabourMarketClearer, PolednaLabourMarketClearer]
+)
+def test_one_off_workers_stay_blocked_after_separation_window_ends(cls):
+    sim, firms, ind, hh = setup_market()
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(
+            name="once",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=0.01,
+            duration=1,
+            prevent_rehiring=True,
+            rehiring_lockout_duration=4,
+        ),
+    )
+    for year, month in [(2020, 4), (2020, 7), (2020, 10), (2021, 1)]:
+        hook(sim, year, month)
+        clearer(cls).clear(firms, hh, ind)
+        mask = ind.states["IRF Rehiring Blocked"]
+        assert mask.sum() == 1
+        assert np.all(ind.states["Activity Status"][mask] == A.UNEMPLOYED)
+    blocked = mask.copy()
+    hook(sim, 2021, 4)
+    clearer(cls).clear(firms, hh, ind)
+    assert np.all(ind.states["Activity Status"][blocked] == A.EMPLOYED)

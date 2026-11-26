@@ -143,6 +143,8 @@ def _country(
         income_social_transfers=np.array([40.0]),
         income_rental=np.zeros(1),
         income_financial_assets=np.zeros(1),
+        housing_taxes_property=np.zeros(1),
+        housing_taxes_residence=np.zeros(1),
         stage5_subsistence_support=np.array([40.0]),
         total_income_social_transfers=np.array([40.0]),
         nominal_amount_spent_in_lcu=np.array([[spent]]),

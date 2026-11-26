@@ -19,6 +19,8 @@ def _country_with_market(market):
                 "expected_income_social_transfers": 0.0,
                 "expected_income_financial_assets": 0.0,
                 "income_rental": 0.0,
+                "housing_taxes_property": 0.0,
+                "housing_taxes_residence": 0.0,
                 "income_bridge_current": 0.0,
                 "income_bridge_property": 0.0,
                 "income_bridge_floor_used": 0.0,

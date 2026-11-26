@@ -171,13 +171,13 @@ class GoodsMarket:
         seller_priorities = {}
 
         for c in goods_market_participants.keys():
-            seller_priorities[c] = np.array(
+            buyer_priorities[c] = np.array(
                 [
                     goods_market_participants[c][i].transactor_settings["Buyer Priority"]
                     for i in range(len(goods_market_participants[c]))
                 ]
             )
-            buyer_priorities[c] = np.array(
+            seller_priorities[c] = np.array(
                 [
                     goods_market_participants[c][i].transactor_settings["Seller Priority"]
                     for i in range(len(goods_market_participants[c]))

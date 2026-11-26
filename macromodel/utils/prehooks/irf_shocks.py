@@ -52,8 +52,13 @@ class ShockSpec:
     duration: int = 1
     mode: Literal["additive", "multiplicative"] = "additive"
     random_log_sd: float | None = None
+    prevent_rehiring: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.prevent_rehiring, bool):
+            raise ValueError("prevent_rehiring must be a boolean.")
+        if self.prevent_rehiring and self.kind != "unemployment_rate":
+            raise ValueError("prevent_rehiring is only supported for unemployment_rate shocks.")
         try:
             magnitude = np.asarray(self.magnitude, dtype=float)
         except (TypeError, ValueError) as exc:
@@ -335,7 +340,10 @@ def create_unemployment_rate_shock_hook(
     ``0.01`` attempts to separate about 1 percent of the labour force. For
     ``mode='multiplicative'``, ``magnitude`` is the share of currently employed
     workers to separate. The normal labour market can rehire separated workers,
-    so the realised unemployment-rate IRF remains endogenous.
+    so the realised unemployment-rate IRF remains endogenous. With
+    ``prevent_rehiring=True``, directly separated workers remain ineligible for
+    hiring until the end of the common shock window. Other workers can be hired.
+    Their unemployment status and benefit eligibility are unchanged.
     """
 
     if spec.kind != "unemployment_rate":
@@ -348,6 +356,13 @@ def create_unemployment_rate_shock_hook(
         if country_code not in simulation.countries:
             raise ValueError(f"Unemployment-rate shock cannot find country '{country_code}'.")
         period = _year_month_to_period(initial_year, time_unit, year, month)
+        country = simulation.countries[country_code]
+        if spec.prevent_rehiring:
+            states = country.individuals.states
+            deadlines = states.setdefault(
+                "IRF Rehiring Blocked Until", np.zeros(len(states["Activity Status"]), dtype=int)
+            )
+            states["IRF Rehiring Blocked"] = deadlines > period
         if period in applied_periods or not _active_period(spec, initial_year, time_unit, year, month):
             return
         country = simulation.countries[country_code]
@@ -383,6 +398,9 @@ def create_unemployment_rate_shock_hook(
 
         country.individuals.states["Started New Job"][separated_ids] = False
         country.individuals.states["Offered Wage of Accepted Job"][separated_ids] = 0.0
+        if spec.prevent_rehiring:
+            deadlines[separated_ids] = np.maximum(deadlines[separated_ids], spec.period + spec.duration)
+            states["IRF Rehiring Blocked"] = deadlines > period
         applied_periods.add(period)
         logging.info(
             "Applied unemployment separation shock %s at %s-%s: separated=%s",

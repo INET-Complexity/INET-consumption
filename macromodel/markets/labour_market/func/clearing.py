@@ -324,6 +324,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
             current_individual_wages=current_individual_wages,
             average_industry_productivity=firms.states["Labour Productivity by Industry"],
             current_individual_started_new_job=individuals.states["Started New Job"],
+            rehiring_blocked=individuals.states.get("IRF Rehiring Blocked"),
         )
 
         return (
@@ -530,6 +531,7 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
         searchers: np.ndarray | None = None,
         searcher_stay_rate: np.ndarray | None = None,
         offered_rate_by_firm: np.ndarray | None = None,
+        rehiring_blocked: np.ndarray | None = None,
     ) -> tuple[np.ndarray, int]:
         """Match unemployed workers, and employed searchers if given, with firms needing labour.
 
@@ -575,6 +577,8 @@ class DefaultLabourMarketClearer(LabourMarketClearer):
 
         # Collect potential employees
         unemployed_ind = np.array(current_individuals_activity == ActivityStatus.UNEMPLOYED)
+        if rehiring_blocked is not None:
+            unemployed_ind &= ~rehiring_blocked
 
         # Iterate over firms in random order
         firm_id_rnd = np.nonzero(missing_productivity > 0)[0]
@@ -869,6 +873,7 @@ class ReservationWageBindingDefaultLabourMarketClearer(DefaultLabourMarketCleare
             current_individual_wages=current_individual_wages,
             average_industry_productivity=firms.states["Labour Productivity by Industry"],
             current_individual_started_new_job=individuals.states["Started New Job"],
+            rehiring_blocked=individuals.states.get("IRF Rehiring Blocked"),
             searchers=searchers,
             searcher_stay_rate=searcher_stay_rate,
             offered_rate_by_firm=offered_rate_by_firm,
@@ -1227,7 +1232,14 @@ class PolednaLabourMarketClearer(LabourMarketClearer):
             current_individuals_industry=current_individuals_industry,
             individuals_corresponding_firm=individuals_corresponding_firm,
             prev_individuals_productivity=prev_individuals_productivity,
-            current_ind_ea=np.logical_not(current_individuals_activity == ActivityStatus.NOT_ECONOMICALLY_ACTIVE),
+            current_ind_ea=(
+                np.logical_not(current_individuals_activity == ActivityStatus.NOT_ECONOMICALLY_ACTIVE)
+                & ~np.asarray(
+                    individuals.states.get(
+                        "IRF Rehiring Blocked", np.zeros(len(current_individuals_activity), dtype=bool)
+                    )
+                )
+            ),
             desired_labour_inputs=desired_labour_inputs,
             prev_labour_inputs=prev_labour_inputs,
             offered_wage=individuals.states["Offered Wage of Accepted Job"],

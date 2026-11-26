@@ -52,8 +52,28 @@ class ShockSpec:
     duration: int = 1
     mode: Literal["additive", "multiplicative"] = "additive"
     random_log_sd: float | None = None
+    prevent_rehiring: bool = False
+    rehiring_lockout_duration: int | None = None
+    rehiring_scope: Literal["displaced", "all_unemployed"] = "displaced"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.prevent_rehiring, bool):
+            raise ValueError("prevent_rehiring must be a boolean.")
+        if self.prevent_rehiring and self.kind != "unemployment_rate":
+            raise ValueError("prevent_rehiring is only supported for unemployment_rate shocks.")
+        if self.rehiring_scope not in {"displaced", "all_unemployed"}:
+            raise ValueError("rehiring_scope must be displaced or all_unemployed.")
+        if self.rehiring_scope == "all_unemployed" and not self.prevent_rehiring:
+            raise ValueError("rehiring_scope=all_unemployed requires prevent_rehiring=True.")
+        if self.rehiring_lockout_duration is not None:
+            if not self.prevent_rehiring:
+                raise ValueError("rehiring_lockout_duration requires prevent_rehiring=True.")
+            if (
+                isinstance(self.rehiring_lockout_duration, bool)
+                or not isinstance(self.rehiring_lockout_duration, int)
+                or self.rehiring_lockout_duration < self.duration
+            ):
+                raise ValueError("rehiring_lockout_duration must be an integer >= duration.")
         try:
             magnitude = np.asarray(self.magnitude, dtype=float)
         except (TypeError, ValueError) as exc:
@@ -335,7 +355,16 @@ def create_unemployment_rate_shock_hook(
     ``0.01`` attempts to separate about 1 percent of the labour force. For
     ``mode='multiplicative'``, ``magnitude`` is the share of currently employed
     workers to separate. The normal labour market can rehire separated workers,
-    so the realised unemployment-rate IRF remains endogenous.
+    so the realised unemployment-rate IRF remains endogenous. With
+    ``prevent_rehiring=True``, directly separated workers remain ineligible for
+    hiring until the common release at period + rehiring_lockout_duration
+    (default: duration). Separation duration and lockout duration may differ,
+    allowing a one-off separation with a year-long lockout. Other workers can be hired.
+    With ``rehiring_scope="all_unemployed"``, all hiring from unemployment is
+    blocked during that window, including initially unemployed people and
+    subsequent endogenous separations. Job-to-job search remains available.
+    Unemployment status and benefit eligibility are unchanged. This is a
+    job-finding restriction, not an exact unemployment-rate target.
     """
 
     if spec.kind != "unemployment_rate":
@@ -348,6 +377,19 @@ def create_unemployment_rate_shock_hook(
         if country_code not in simulation.countries:
             raise ValueError(f"Unemployment-rate shock cannot find country '{country_code}'.")
         period = _year_month_to_period(initial_year, time_unit, year, month)
+        country = simulation.countries[country_code]
+        if spec.prevent_rehiring:
+            states = country.individuals.states
+            deadlines = states.setdefault(
+                "IRF Rehiring Blocked Until", np.zeros(len(states["Activity Status"]), dtype=int)
+            )
+            lockout_end = spec.period + (spec.rehiring_lockout_duration or spec.duration)
+            if spec.rehiring_scope == "all_unemployed" and spec.period <= period < lockout_end:
+                # Block eligibility for the whole population: workers separated
+                # later during clearing must not re-enter hiring either. Clearers
+                # apply this mask only to unemployment-to-employment candidates.
+                deadlines[:] = np.maximum(deadlines, lockout_end)
+            states["IRF Rehiring Blocked"] = deadlines > period
         if period in applied_periods or not _active_period(spec, initial_year, time_unit, year, month):
             return
         country = simulation.countries[country_code]
@@ -360,7 +402,7 @@ def create_unemployment_rate_shock_hook(
         unemployed = activity == ActivityStatus.UNEMPLOYED
         labour_force = int(np.sum(employed | unemployed))
         employed_ids = np.flatnonzero(employed & (corresponding_firm >= 0) & (firm_counts[corresponding_firm] > 1))
-        if labour_force == 0 or employed_ids.size == 0:
+        if labour_force == 0:
             applied_periods.add(period)
             return
 
@@ -368,13 +410,44 @@ def create_unemployment_rate_shock_hook(
             n_to_separate = int(np.ceil(float(spec.magnitude) * float(np.sum(employed))))
         else:
             n_to_separate = int(np.ceil(float(spec.magnitude) * float(labour_force)))
-        n_to_separate = max(0, min(n_to_separate, int(employed_ids.size)))
+        requested_separations = n_to_separate
+        # The model requires each firm to retain an employee. The initial
+        # eligibility check alone does not protect the last worker when more
+        # than one employee is sampled from the same firm.
+        separation_capacity = int(np.maximum(firm_counts - 1, 0).sum())
+        n_to_separate = max(0, min(n_to_separate, separation_capacity, int(employed_ids.size)))
+        if n_to_separate < requested_separations:
+            logging.warning(
+                "Unemployment shock %s capped separations at %s of %s requested to retain one employee per firm",
+                spec.name,
+                n_to_separate,
+                requested_separations,
+            )
         if n_to_separate == 0:
             applied_periods.add(period)
             return
 
         rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, period))
-        separated_ids = rng.choice(employed_ids, size=n_to_separate, replace=False)
+        candidates = rng.choice(employed_ids, size=n_to_separate, replace=False)
+        remaining = firm_counts.copy()
+        selected = []
+        for individual_id in candidates:
+            firm_id = int(corresponding_firm[individual_id])
+            if remaining[firm_id] > 1:
+                selected.append(int(individual_id))
+                remaining[firm_id] -= 1
+        if len(selected) < n_to_separate:
+            # Preserve the original keyed draw when feasible; replace only
+            # draws that would otherwise empty a firm.
+            alternatives = np.setdiff1d(employed_ids, candidates, assume_unique=True)
+            for individual_id in rng.permutation(alternatives):
+                firm_id = int(corresponding_firm[individual_id])
+                if remaining[firm_id] > 1:
+                    selected.append(int(individual_id))
+                    remaining[firm_id] -= 1
+                    if len(selected) == n_to_separate:
+                        break
+        separated_ids = np.asarray(selected, dtype=int)
         for individual_id in separated_ids:
             firm_id = int(corresponding_firm[int(individual_id)])
             activity[int(individual_id)] = ActivityStatus.UNEMPLOYED
@@ -383,6 +456,11 @@ def create_unemployment_rate_shock_hook(
 
         country.individuals.states["Started New Job"][separated_ids] = False
         country.individuals.states["Offered Wage of Accepted Job"][separated_ids] = 0.0
+        if spec.prevent_rehiring:
+            deadlines[separated_ids] = np.maximum(
+                deadlines[separated_ids], spec.period + (spec.rehiring_lockout_duration or spec.duration)
+            )
+            states["IRF Rehiring Blocked"] = deadlines > period
         applied_periods.add(period)
         logging.info(
             "Applied unemployment separation shock %s at %s-%s: separated=%s",

@@ -261,6 +261,11 @@ def _shock_specs_frame(shock_specs: tuple[ShockSpec, ...]) -> pd.DataFrame:
                 "shock_duration": spec.duration,
                 "shock_mode": spec.mode,
                 "shock_random_log_sd": spec.random_log_sd,
+                "shock_prevent_rehiring": spec.prevent_rehiring,
+                "shock_rehiring_scope": spec.rehiring_scope if spec.prevent_rehiring else None,
+                "shock_rehiring_lockout_duration": (
+                    (spec.rehiring_lockout_duration or spec.duration) if spec.prevent_rehiring else None
+                ),
             }
             for spec in shock_specs
         ]

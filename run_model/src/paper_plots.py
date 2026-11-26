@@ -74,14 +74,14 @@ def _save(fig, path: Path) -> None:
     fig.savefig(path.with_suffix(".png"), dpi=250)
 
 
-def _boxes(ax, arrays, labels, colors, *, ylim=None):
+def _boxes(ax, arrays, labels, colors, *, ylim=None, whis=(5, 95), showfliers=False):
     positions = np.arange(1, len(arrays) + 1)
     box = ax.boxplot(
         arrays,
         positions=positions,
         widths=0.6,
-        whis=(5, 95),
-        showfliers=False,
+        whis=whis,
+        showfliers=showfliers,
         patch_artist=True,
         medianprops=dict(color="white", linewidth=1.4),
         whiskerprops=dict(color=GREY, linewidth=0.8),
@@ -105,6 +105,8 @@ def mpc_impact_figure(
     groups_title="Balance-sheet groups (NLA · IFA · HA, high/low vs median)",
     group_labels=None,
     ylim=(-0.1, 1.3),
+    whis=(5, 95),
+    showfliers=False,
 ):
     """Box panels of the impact MPC.
 
@@ -112,6 +114,10 @@ def mpc_impact_figure(
     Bottom row (full width): the 8 balance-sheet groups (column ``group_code``),
     titled ``groups_title``; ``group_labels`` maps group codes (e.g. "LLL") to
     x-axis labels (default ``GROUP_SHORT``; use "\\n" for line breaks).
+    ``whis`` sets percentile whiskers (e.g. (0, 100) for min/max) or an
+    interquartile-range multiplier. ``showfliers`` draws observations beyond
+    the whiskers; ``ylim=None`` lets the axes include the displayed data.
+    These display options do not filter observations or change group means.
     Returns a table of group means.
     """
     rows = []
@@ -136,14 +142,22 @@ def mpc_impact_figure(
         for ax, (column, title, order) in zip(top, group_specs):
             arrays, labels = collect(column, order)
             labels = [LABEL_SHORT.get(label, label) for label in labels]
-            _boxes(ax, arrays, labels, [STEEL] * len(arrays), ylim=ylim)
+            _boxes(ax, arrays, labels, [STEEL] * len(arrays), ylim=ylim, whis=whis, showfliers=showfliers)
             ax.set_title(title)
         for ax in top[1:]:
             ax.tick_params(labelleft=False)
         codes = [c for c in GROUP_SHORT if (panel.group_code == c).any()]
         arrays, labels = collect("group_code", codes)
         xlabels = {**GROUP_SHORT, **(group_labels or {})}
-        _boxes(bottom, arrays, [xlabels[c] for c in labels], [GROUP_COLORS[c] for c in labels], ylim=ylim)
+        _boxes(
+            bottom,
+            arrays,
+            [xlabels[c] for c in labels],
+            [GROUP_COLORS[c] for c in labels],
+            ylim=ylim,
+            whis=whis,
+            showfliers=showfliers,
+        )
         shares = panel.group_code.value_counts(normalize=True)
         for x, code in enumerate(labels, start=1):
             bottom.annotate(

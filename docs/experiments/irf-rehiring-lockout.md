@@ -1,6 +1,8 @@
 # Alternative unemployment shock designs
 
-The IRF notebook includes two designs, replacing the previous 2% separation flow in each of four quarters:
+The notebook now defaults to `REHIRING_SCOPE="all_unemployed"`: no hiring from the unemployed pool is allowed during the four-quarter restriction. This prevents replacement hiring from offsetting the aggregate employment loss. Job-to-job moves remain allowed. Benefits, work effort and normal endogenous separations continue, so the unemployment-rate response is endogenous and can exceed the initial rise; this does not impose a fixed +2 pp unemployment-rate plateau.
+
+Two separation profiles are available, replacing the previous 2% flow in each of four quarters:
 
 | Shock name | Separations | Rehiring eligibility |
 |---|---|---|
@@ -11,9 +13,9 @@ Both directly displace about 2% of the labour force in total, subject to availab
 
 `ShockSpec.duration` controls how long separations repeat. `prevent_rehiring=True` excludes directly displaced workers from hiring until the common release at `period + rehiring_lockout_duration`. The optional lockout duration defaults to `duration`, must be an integer at least as long as `duration`, and requires `prevent_rehiring=True`. This separates a one-quarter separation intervention from a four-quarter unemployment restriction.
 
-Workers remain unemployed with the existing benefit treatment. Initially unemployed workers and endogenous separations remain eligible. The filter covers default, reservation-wage-binding and Poledna clearers. The library defaults preserve unrestricted hiring. Other shock kinds reject the restriction.
+`rehiring_scope="displaced"` retains the earlier cohort-only restriction: initially unemployed workers and endogenous separations remain eligible. With `rehiring_scope="all_unemployed"`, everyone in the unemployed pool is excluded, including workers separated after the prehook during labour clearing. Activity status remains unemployed and benefit treatment is unchanged. The filter applies only to unemployment-to-employment matching, so job-to-job matching is preserved. All three clearers (default, reservation-wage-binding and Poledna) respect the restriction. The library defaults preserve unrestricted hiring; specifying the all-unemployed scope requires `prevent_rehiring=True`. Other shock kinds reject the restriction.
 
-`run_model/run_irf.ipynb` enables `PREVENT_REHIRING=True`. Set it False for unrestricted versions of these two designs. Results go to a directory with `-job-loss-designs-no-rehiring` appended (or `-job-loss-designs` without the restriction), preserving earlier outputs. The notebook limits concurrent runs to four; measure RAM before launching. Existing figures are cleared because they describe the earlier experiment. The paper-figures notebook must explicitly select the new directory and shock name; old outputs are not relabelled.
+`run_model/run_irf.ipynb` enables `PREVENT_REHIRING=True` and `REHIRING_SCOPE="all_unemployed"`. Select `"displaced"` to reproduce the earlier cohort-only experiment. Set it False for unrestricted versions of these two designs. The all-unemployed experiment adds `-job-loss-designs-no-rehiring-all-unemployed` to the run directory; the earlier cohort-only experiment uses `-job-loss-designs-no-rehiring`. Without restrictions the suffix is `-job-loss-designs`. Earlier outputs are preserved. The notebook limits concurrent runs to four; measure RAM before launching. Existing figures are cleared because they describe the earlier experiment. The paper-figures notebook must explicitly select the new directory and shock name; old outputs are not relabelled.
 
 Example YAML for the CLI:
 
@@ -26,6 +28,7 @@ shocks:
     duration: 1
     mode: additive
     prevent_rehiring: true
+    rehiring_scope: all_unemployed
     rehiring_lockout_duration: 4
   - name: unemp_05pp_quarterly
     kind: unemployment_rate
@@ -34,7 +37,8 @@ shocks:
     duration: 4
     mode: additive
     prevent_rehiring: true
+    rehiring_scope: all_unemployed
     rehiring_lockout_duration: 4
 ```
 
-Use a distinct output directory. `analysis/irf_shock_specs.csv` records the restriction and effective lockout duration. For a fixed shock name/seed the restriction does not alter first-wave separation draws; later cohorts may differ as employment paths diverge. Differently named designs use different keyed draws. This change includes unit regression checks, not new macroeconomic estimates.
+Use a distinct output directory. `analysis/irf_shock_specs.csv` records the restriction, scope and effective lockout duration. For a fixed shock name/seed the restriction does not alter first-wave separation draws; later cohorts may differ as employment paths diverge. Differently named designs use different keyed draws. This change includes unit regression checks, not new macroeconomic estimates.

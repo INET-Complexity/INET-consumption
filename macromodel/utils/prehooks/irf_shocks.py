@@ -54,12 +54,17 @@ class ShockSpec:
     random_log_sd: float | None = None
     prevent_rehiring: bool = False
     rehiring_lockout_duration: int | None = None
+    rehiring_scope: Literal["displaced", "all_unemployed"] = "displaced"
 
     def __post_init__(self) -> None:
         if not isinstance(self.prevent_rehiring, bool):
             raise ValueError("prevent_rehiring must be a boolean.")
         if self.prevent_rehiring and self.kind != "unemployment_rate":
             raise ValueError("prevent_rehiring is only supported for unemployment_rate shocks.")
+        if self.rehiring_scope not in {"displaced", "all_unemployed"}:
+            raise ValueError("rehiring_scope must be displaced or all_unemployed.")
+        if self.rehiring_scope == "all_unemployed" and not self.prevent_rehiring:
+            raise ValueError("rehiring_scope=all_unemployed requires prevent_rehiring=True.")
         if self.rehiring_lockout_duration is not None:
             if not self.prevent_rehiring:
                 raise ValueError("rehiring_lockout_duration requires prevent_rehiring=True.")
@@ -355,7 +360,11 @@ def create_unemployment_rate_shock_hook(
     hiring until the common release at period + rehiring_lockout_duration
     (default: duration). Separation duration and lockout duration may differ,
     allowing a one-off separation with a year-long lockout. Other workers can be hired.
-    Their unemployment status and benefit eligibility are unchanged.
+    With ``rehiring_scope="all_unemployed"``, all hiring from unemployment is
+    blocked during that window, including initially unemployed people and
+    subsequent endogenous separations. Job-to-job search remains available.
+    Unemployment status and benefit eligibility are unchanged. This is a
+    job-finding restriction, not an exact unemployment-rate target.
     """
 
     if spec.kind != "unemployment_rate":
@@ -374,6 +383,12 @@ def create_unemployment_rate_shock_hook(
             deadlines = states.setdefault(
                 "IRF Rehiring Blocked Until", np.zeros(len(states["Activity Status"]), dtype=int)
             )
+            lockout_end = spec.period + (spec.rehiring_lockout_duration or spec.duration)
+            if spec.rehiring_scope == "all_unemployed" and spec.period <= period < lockout_end:
+                # Block eligibility for the whole population: workers separated
+                # later during clearing must not re-enter hiring either. Clearers
+                # apply this mask only to unemployment-to-employment candidates.
+                deadlines[:] = np.maximum(deadlines, lockout_end)
             states["IRF Rehiring Blocked"] = deadlines > period
         if period in applied_periods or not _active_period(spec, initial_year, time_unit, year, month):
             return

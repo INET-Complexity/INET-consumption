@@ -205,3 +205,105 @@ def test_one_off_workers_stay_blocked_after_separation_window_ends(cls):
     hook(sim, 2021, 4)
     clearer(cls).clear(firms, hh, ind)
     assert np.all(ind.states["Activity Status"][blocked] == A.EMPLOYED)
+
+
+@pytest.mark.parametrize(
+    "cls", [DefaultLabourMarketClearer, ReservationWageBindingDefaultLabourMarketClearer, PolednaLabourMarketClearer]
+)
+@pytest.mark.parametrize("duration", [1, 4])
+def test_all_unemployed_scope_blocks_replacement_and_restores_hiring(cls, duration):
+    sim, firms, ind, hh = setup_market()
+    # Reflect workforce changes between periods as the simulation would.
+    current = firms.ts.current
+    firms.ts.current = lambda key: (
+        np.array([len(firms.states["Employments"][0])], dtype=float)
+        if key in {"labour_inputs", "normalised_labour_inputs"}
+        else current(key)
+    )
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(
+            name="macro",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=0.01,
+            duration=duration,
+            prevent_rehiring=True,
+            rehiring_lockout_duration=4,
+            rehiring_scope="all_unemployed",
+        ),
+    )
+    hook(sim, 2020, 1)
+    assert not ind.states["IRF Rehiring Blocked"].any()
+    for year, month in [(2020, 4), (2020, 7), (2020, 10), (2021, 1)]:
+        hook(sim, year, month)
+        assert ind.states["IRF Rehiring Blocked"].all()
+        if duration == 1 and month == 7:
+            # Separation after the prehook: this worker must also stay out of hiring.
+            worker = firms.states["Employments"][0].pop()
+            ind.states["Activity Status"][worker] = A.UNEMPLOYED
+            ind.states["Corresponding Firm ID"][worker] = -1
+        unemployed = ind.states["Activity Status"] == A.UNEMPLOYED
+        result = clearer(cls).clear(firms, hh, ind)
+        assert result[1] == 0
+        assert np.all(ind.states["Activity Status"][unemployed] == A.UNEMPLOYED)
+        assert np.all(ind.states["Corresponding Firm ID"][unemployed] == -1)
+    # Expiry restores the pool, without setting anyone employed in the hook.
+    unemployed = ind.states["Activity Status"] == A.UNEMPLOYED
+    hook(sim, 2021, 4)
+    assert not ind.states["IRF Rehiring Blocked"].any()
+    assert np.all(ind.states["Activity Status"][unemployed] == A.UNEMPLOYED)
+    clearer(cls).clear(firms, hh, ind)
+    assert np.all(ind.states["Activity Status"][unemployed] == A.EMPLOYED)
+
+
+def test_all_unemployed_mask_preserves_job_to_job_matching():
+    matcher = clearer(ReservationWageBindingDefaultLabourMarketClearer)
+    assignments = np.array([0, 0, 1, 1, -1])
+    statuses = np.array([A.EMPLOYED] * 4 + [A.UNEMPLOYED])
+    employees = [[0, 1], [2, 3]]
+    _, joined = matcher.hiring(
+        firm_employments=employees,
+        firm_industries=np.zeros(2, dtype=int),
+        current_individuals_activity=statuses,
+        current_individuals_industry=np.zeros(5, dtype=int),
+        individuals_corresponding_firm=assignments,
+        prev_individuals_productivity=np.ones(5),
+        desired_labour_inputs=np.array([3.0, 2.0]),
+        prev_labour_inputs=np.array([2.0, 2.0]),
+        offered_wage_function=lambda firm, labour: np.ones_like(labour) * 100,
+        offered_wage=np.zeros(5),
+        individual_reservation_wages=np.zeros(5),
+        current_individual_wages=np.ones(5) * 10,
+        average_industry_productivity=np.ones(1),
+        current_individual_started_new_job=np.zeros(5, dtype=bool),
+        searchers=np.array([False, False, True, False, False]),
+        searcher_stay_rate=np.array([np.inf, np.inf, 1.0, np.inf, np.inf]),
+        offered_rate_by_firm=np.array([100.0, 0.0]),
+        rehiring_blocked=np.ones(5, dtype=bool),
+    )
+    assert joined == 0
+    assert matcher.last_num_job_to_job == 1
+    assert assignments[2] == 0
+    assert assignments[4] == -1
+    assert statuses[4] == A.UNEMPLOYED
+
+
+@pytest.mark.parametrize("scope", ["invalid", "ALL_UNEMPLOYED"])
+def test_invalid_rehiring_scope_rejected(scope):
+    with pytest.raises(ValueError, match="rehiring_scope"):
+        ShockSpec(
+            name="invalid",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=0.02,
+            prevent_rehiring=True,
+            rehiring_scope=scope,
+        )
+
+
+def test_all_unemployed_scope_requires_restriction():
+    with pytest.raises(ValueError, match="requires prevent_rehiring"):
+        ShockSpec(name="invalid", kind="unemployment_rate", period=1, magnitude=0.02, rehiring_scope="all_unemployed")

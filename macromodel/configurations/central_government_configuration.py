@@ -47,6 +47,13 @@ class CentralGovernmentTaxOverrides(BaseModel):
     household_capital_formation_rate: float | None = None
     firm_capital_formation_rate: float | None = None
     production_tax_vector_scale: float | None = Field(default=None, gt=0.0)
+    # Household housing taxes, opt-in (None = disabled). Annual LCU revenue
+    # targets from data; the rate is fixed at t0 as target / t0 base.
+    # Property tax (ESA D29A, dwellings): owner pays on dwelling value.
+    property_tax_revenue_target_annual: float | None = Field(default=None, ge=0.0)
+    # Residence tax (ESA D59A excl. net-wealth tax): occupant pays on rental
+    # value (cash rent, or imputed rent for owner-occupiers).
+    residence_tax_revenue_target_annual: float | None = Field(default=None, ge=0.0)
 
 
 class CentralGovernmentConfiguration(BaseModel):

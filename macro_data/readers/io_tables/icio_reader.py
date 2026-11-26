@@ -1197,17 +1197,23 @@ def split_gfcf_column(
     investment_fractions: dict[str | Country, dict[str, float]],
     iot: pd.DataFrame,
 ):
-    # Split the total GFCF column
+    """Split total GFCF into firm and household columns.
+
+    The government share goes to firm GFCF, not to government consumption.
+    Government consumption (ICIO GGFC = ESA P3) already includes government
+    consumption of fixed capital, which the model pays as cash to the public
+    sector firms (O, P, Q). Those firms then buy capital goods through the firm
+    investment rule. Adding P51G to government consumption as well would count
+    public investment twice.
+    """
     for c in considered_countries:
         ind = iot.index.get_level_values(1).isin(industries)
+        firm_and_government = investment_fractions[c]["Firm"] + investment_fractions[c]["Government"]
         iot.loc[ind, (c, "Firm Fixed Capital Formation")] = (
-            investment_fractions[c]["Firm"] * iot.loc[ind, (c, "Fixed Capital Formation")]
+            firm_and_government * iot.loc[ind, (c, "Fixed Capital Formation")]
         )
         iot.loc[ind, (c, "Household Fixed Capital Formation")] = (
             investment_fractions[c]["Household"] * iot.loc[ind, (c, "Fixed Capital Formation")]
-        )
-        iot.loc[ind, (c, "Government Consumption")] += (
-            investment_fractions[c]["Government"] * iot.loc[ind, (c, "Fixed Capital Formation")]
         )
         iot = iot.loc[
             :,

@@ -81,6 +81,10 @@ def initialise_hfcs_consumption(
     for name, values in replacements.items():
         hh.ts.override_current(name, values)
     final_ratios = np.divide(result.total, income, out=np.full_like(result.total, np.nan), where=income > 0)
+    # Opening financing headroom: liquid assets are the first resource beyond income.
+    liquid = np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float)
+    resources = income + np.maximum(liquid, 0.0)
+    liquidity_ratios = np.divide(result.total, resources, out=np.full_like(result.total, np.nan), where=resources > 0)
     fallback = result.legacy_fallback if result.legacy_fallback is not None else np.zeros(len(income), dtype=bool)
     for name, values in {
         "initial_hfcs_source_c_y": np.asarray(source_ratios, dtype=float).copy(),
@@ -88,6 +92,8 @@ def initialise_hfcs_consumption(
         "initial_hfcs_candidate_total": result.candidate_total,
         "initial_hfcs_final_c_y": final_ratios,
         "initial_hfcs_goods_scale": np.where(fallback, 1.0, result.goods_scale),
+        "initial_hfcs_liquid_financial_assets": liquid.copy(),
+        "initial_hfcs_c_over_income_plus_liquid": liquidity_ratios,
         # DNA mode: total / HFCS-ratio total per feasible household (1 on fallback / off).
         "initial_hfcs_dna_quintile_factor": np.divide(
             result.total,

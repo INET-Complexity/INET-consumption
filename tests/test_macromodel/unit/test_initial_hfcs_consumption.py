@@ -21,6 +21,7 @@ def country():
         cacf_real_consumption_budget=np.zeros(2),
         target_consumption=np.zeros((2, 2)),
         realised_household_expenditure=np.zeros(2),
+        liquid_financial_assets=np.array([20.0, -50.0]),
     )
     return SimpleNamespace(
         households=SimpleNamespace(ts=ts),
@@ -41,6 +42,15 @@ def test_uses_unfloored_income_effective_vat_and_preserves_sector_aggregate():
     np.testing.assert_allclose(h.ts.current("initial_hfcs_candidate_total"), [60.0, 180.0])
     np.testing.assert_allclose(h.ts.current("realised_household_expenditure"), [45.0, 134.0])
     assert result.goods_scale == 1.0
+
+
+def test_records_opening_liquidity_headroom_ignoring_negative_balances():
+    c = country()
+    initialise_hfcs_consumption(c, np.array([0.6, 0.9]))
+    h = c.households
+    np.testing.assert_array_equal(h.ts.current("initial_hfcs_liquid_financial_assets"), [20.0, -50.0])
+    # totals 60, 180; resources 100+20, 200+max(-50,0)
+    np.testing.assert_allclose(h.ts.current("initial_hfcs_c_over_income_plus_liquid"), [0.5, 0.9])
 
 
 def test_reset_restores_final_opening_budget_and_diagnostics():

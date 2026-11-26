@@ -894,6 +894,26 @@ def make_household_labor_state_snapshot(country) -> dict[str, np.ndarray]:
     return snapshot
 
 
+def reconcile_owner_mortgage_tenure(tenure: pd.Series, mortgage_debt: np.ndarray | pd.Series) -> pd.Series:
+    """Refresh owner financing labels from current mortgage balances, without changing model state.
+
+    The recorded owner category does not establish current mortgage status:
+    new buyers receive code 1 regardless of funding, and loans can be repaid.
+    Mortgages in this model are pooled across all owned properties (see
+    ``sold_collateral_share``); any positive balance encumbers an owner-occupied
+    residence. A renter's mortgage on other property does not change tenure.
+    Other/free-use/social/unknown categories are kept separate from owners.
+    """
+    result = tenure.astype("string").copy()
+    debt = pd.Series(np.asarray(mortgage_debt, dtype=float), index=result.index)
+    owners = result.isin(["owner_outright", "owner_mortgage"])
+    if (owners & (~np.isfinite(debt) | (debt < -1e-8))).any():
+        raise ValueError("Owner tenure classification requires finite nonnegative mortgage balances.")
+    result.loc[owners & (debt > 1e-8)] = "owner_mortgage"
+    result.loc[owners & (debt <= 1e-8)] = "owner_outright"
+    return result
+
+
 def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.DataFrame:
     """Capture pre-shock household characteristics used for binning MPCs.
 
@@ -908,7 +928,7 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
     illiquid_financial_assets = np.asarray(households.ts.current("illiquid_financial_assets"), dtype=float)
     wealth_other_real_assets = _current_or_zero(households, "wealth_other_real_assets", n_households=n_households)
     consumption_loan_debt = np.asarray(households.ts.current("consumption_loan_debt"), dtype=float)
-    mortgage_debt = _current_or_zero(households, "mortgage_debt", n_households=n_households)
+    mortgage_debt = np.asarray(households.ts.current("mortgage_debt"), dtype=float)
     debt = consumption_loan_debt + mortgage_debt
     gross_wealth = liquid_financial_assets + illiquid_financial_assets + wealth_main + wealth_other_property
     gross_wealth = gross_wealth + wealth_other_real_assets
@@ -919,6 +939,8 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
         where=gross_wealth > 0.0,
     )
     tenure = np.asarray(households.states["Tenure Status of the Main Residence"], dtype=int)
+    recorded_tenure = pd.Series(tenure).map(TENURE_LABELS).fillna("other")
+    current_tenure = reconcile_owner_mortgage_tenure(recorded_tenure, mortgage_debt)
     employee_income = _current_or_zero(households, "income_employee", n_households=n_households)
     social_transfer_income = _current_or_zero(households, "income_social_transfers", n_households=n_households)
     rental_income = _current_or_zero(households, "income_rental", n_households=n_households)
@@ -957,7 +979,8 @@ def make_household_metadata(country, *, seed: int, pre_shock_row: int) -> pd.Dat
             "gross_wealth": gross_wealth,
             "debt_asset_ratio": debt_asset_ratio,
             "head_age": _household_head_age_proxy(country, n_households=n_households),
-            "housing_tenure": pd.Series(tenure).map(TENURE_LABELS).fillna("other").to_numpy(),
+            "housing_tenure": current_tenure.to_numpy(),
+            "housing_tenure_recorded": recorded_tenure.to_numpy(),
             "tenure_code": tenure,
         }
     )

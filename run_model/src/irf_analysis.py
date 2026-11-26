@@ -76,6 +76,17 @@ IRF_CHANNEL_VARIABLES: tuple[IRFVariable, ...] = (
     IRFVariable("household_mortgage_rate", "{country}/banks/average_interest_rates_on_mortgages", "first"),
     IRFVariable("household_deposit_rate", "{country}/banks/average_interest_rate_on_household_deposits", "first"),
     IRFVariable("firm_deposit_rate", "{country}/banks/average_interest_rate_on_firm_deposits", "first"),
+    # Expenditure-side GDP components for the Y = C + I + G + dINV + X - M decomposition.
+    # Exports/imports are recorded after the always_adjust trade plug; the pre-balancing
+    # residual is the true expenditure-minus-output gap before that plug.
+    IRFVariable("change_in_inventories", "{country}/economy/total_changes_in_inventories", "first"),
+    IRFVariable("exports", "{country}/economy/total_exports", "first"),
+    IRFVariable("imports", "{country}/economy/total_imports", "first"),
+    IRFVariable("household_fce", "{country}/economy/total_household_fce", "first"),
+    IRFVariable("government_fce", "{country}/economy/total_government_fce", "first"),
+    IRFVariable(
+        "gdp_expenditure_prebalancing_residual", "{country}/economy/gdp_expenditure_prebalancing_residual", "first"
+    ),
 )
 TFP_INVESTMENT_INTENSITY_IRF_VARIABLE = IRFVariable(
     "tfp_investment_intensity",

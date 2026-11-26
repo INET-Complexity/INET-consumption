@@ -6,7 +6,11 @@ import pandas as pd
 
 def prepare_paper_groups(panel):
     """Group the displayed sample once; exclude arrears-only cases from consumption constraints."""
-    from src.mpc_analysis import MPC_REGIME_RELATIVE_TOLERANCE, assign_quantile_bin
+    from src.mpc_analysis import (
+        MPC_REGIME_RELATIVE_TOLERANCE,
+        assign_quantile_bin,
+        reconcile_owner_mortgage_tenure,
+    )
 
     panel = panel.copy()
     specs = []
@@ -39,6 +43,11 @@ def prepare_paper_groups(panel):
             panel[group] = assign_quantile_bin(panel[field]).astype("string")
         specs.append((group, title, ["Negative", "Zero", "Q1", "Q2", "Q3", "Q4", "Q5", "all"]))
     if "housing_tenure" in panel:
+        owner_rows = panel.housing_tenure.isin(["owner_outright", "owner_mortgage"])
+        if owner_rows.any():
+            if "mortgage_debt" not in panel:
+                raise ValueError("Housing tenure requires mortgage_debt; rebuild the panel from saved metadata.")
+            panel["housing_tenure"] = reconcile_owner_mortgage_tenure(panel.housing_tenure, panel.mortgage_debt)
         panel["tenure"] = panel.housing_tenure.map(
             {
                 "renter": "Renters",

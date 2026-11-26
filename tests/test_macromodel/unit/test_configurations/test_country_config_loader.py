@@ -410,7 +410,7 @@ def test__load_country_configuration_resolves_real_fra_wealth_parameter_refs():
     assert "paper_parameter_refs" not in params
     assert "paper_parameter_file" not in params
     assert "paper_parameter_ref" not in params
-    assert params["mu_eq"] == 0.0029
+    assert params["mu_eq"] == 0.0109  # total-return basis, #248
     assert params["equity_weight"] == 0.5
     assert params["uses_portfolio_choice"] is True
     assert params["target_share_source"] == "frm_magnitude"

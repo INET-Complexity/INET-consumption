@@ -556,6 +556,7 @@ class CentralGovernment(Agent):
             + self.ts.current("total_other_social_transfers")[0]
             + self.ts.current("total_necessity_support")[0]
             + self.ts.current("total_minimum_income")[0]
+            + self.ts.current("total_one_off_transfers")[0]
         )
         all_benefits = total_unemployment_benefits + total_household_social_transfers
         return np.array(

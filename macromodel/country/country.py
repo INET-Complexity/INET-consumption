@@ -1392,6 +1392,17 @@ class Country:
             scale=scale,
         )
 
+        # Household housing taxes: rates fixed at t0 from annual data targets (opt-in).
+        initial_properties = housing_market.states["properties"]
+        central_government.calibrate_housing_taxes(
+            property_tax_revenue_target_annual=tax_overrides.property_tax_revenue_target_annual,
+            residence_tax_revenue_target_annual=tax_overrides.residence_tax_revenue_target_annual,
+            property_values=initial_properties["Value"].fillna(0.0).values,
+            property_owner_ids=initial_properties["Corresponding Owner Household ID"].values,
+            occupant_rental_value=households.ts.current("rent") + households.ts.current("rent_imputed"),
+            periods_per_year=periods_per_year(time_unit),
+        )
+
         country = cls(
             country_name=country_name,
             scale=scale,
@@ -2408,6 +2419,7 @@ class Country:
             borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
             imputed_rent=hh.current_consumption_imputed_rent(),
             subsistence=guard,
+            housing_taxes=hh.ts.current("housing_taxes_property") + hh.ts.current("housing_taxes_residence"),
         )
         # Keep loan interest separate from deposit/overdraft interest so only
         # the contractual opening-loan amount is frozen across planning passes.
@@ -5100,6 +5112,16 @@ class Country:
             [self.households.ts.current("income_financial_assets").sum()]
         )
         self.reconcile_realised_household_support()
+        # Housing taxes: owner pays property tax on every owned dwelling (incl. rented-out), occupant pays
+        # residence tax on rental value (cash or imputed rent). Netted from income, hence from deposits.
+        properties = self.housing_market.states["properties"]
+        housing_taxes_property, housing_taxes_residence = self.central_government.compute_household_housing_taxes(
+            property_values=properties["Value"].fillna(0.0).values,
+            property_owner_ids=properties["Corresponding Owner Household ID"].values,
+            occupant_rental_value=self.households.ts.current("rent") + self.households.ts.current("rent_imputed"),
+        )
+        self.households.ts.housing_taxes_property.append(housing_taxes_property)
+        self.households.ts.housing_taxes_residence.append(housing_taxes_residence)
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         # The staged one-off transfer is paid by the central government: keep its total for the deficit.
         staged_shock = self._staged_household_income_shock
@@ -5308,6 +5330,8 @@ class Country:
             current_household_new_real_wealth=self.households.ts.current("investment"),
             current_total_exports=self.economy.ts.current("exports_before_taxes").sum(),
             current_firm_capital_formation=self.firms.ts.current("total_capital_inputs_bought_costs").sum(),
+            household_property_taxes=self.households.ts.current("housing_taxes_property").sum(),
+            household_residence_taxes=self.households.ts.current("housing_taxes_residence").sum(),
         )
 
         # General government fields

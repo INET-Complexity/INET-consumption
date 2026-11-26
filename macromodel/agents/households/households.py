@@ -2024,6 +2024,7 @@ class Households(Agent):
         - Social transfers
         - Rental income
         - Financial assets
+        less housing taxes (property and residence)
 
         Returns:
             np.ndarray: Total current income by household
@@ -2037,7 +2038,8 @@ class Households(Agent):
             income = income + self.ts.current("income_dividend_distributions")
         else:
             income = income + self.ts.current("income_financial_assets")
-        return income
+        # Housing taxes are paid from deposits: net them like the other taxes withheld at source.
+        return income - self.ts.current("housing_taxes_property") - self.ts.current("housing_taxes_residence")
 
     def compute_non_property_income(self) -> np.ndarray:
         """Calculate non-property current income (employment + social transfers).

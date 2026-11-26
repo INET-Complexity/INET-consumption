@@ -351,6 +351,9 @@ def create_households_timeseries(
             "Allocated Other Social Transfers", pd.Series(0.0, index=data.index)
         ).values,
         expected_income_social_transfers=data["Regular Social Transfers"].values,
+        # Housing taxes paid by each household (property tax as owner, residence tax as occupant); opt-in.
+        housing_taxes_property=np.zeros(len(data)),
+        housing_taxes_residence=np.zeros(len(data)),
         income_rental=data["Rental Income from Real Estate"].values,
         total_income_rental=[data["Rental Income from Real Estate"].values.sum()],
         diagnostic_income_rental=data["Rental Income from Real Estate"].values,

@@ -26,6 +26,8 @@ def test_initial_pi_excludes_property_receipts_and_preserves_behavioural_income(
             **{
                 name: zero.copy()
                 for name in (
+                    "housing_taxes_property",
+                    "housing_taxes_residence",
                     "income_bridge_current",
                     "income_bridge_property",
                     "income_bridge_floor_used",

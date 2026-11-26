@@ -154,6 +154,9 @@ class CentralGovernment(Agent):
             "Household Capital Formation Tax": household_capital_formation_rate,
             "Firm Capital Formation Tax": firm_capital_formation_rate,
             "Taxes Less Subsidies Rates": taxes_less_subsidies_rates,
+            # Per-period housing-tax rates; set by calibrate_housing_taxes (0 = disabled).
+            "Property Tax Rate": 0.0,
+            "Residence Tax Rate": 0.0,
             "unemployment_benefits_model": synthetic_central_government.unemployment_benefits_model,
             "other_benefits_model": synthetic_central_government.other_benefits_model,
         }
@@ -310,6 +313,57 @@ class CentralGovernment(Agent):
             raise RuntimeError("Positive public-pension control has no eligible weighted recipients.")
         return budget * weights / weights.sum()
 
+    def calibrate_housing_taxes(
+        self,
+        property_tax_revenue_target_annual: float | None,
+        residence_tax_revenue_target_annual: float | None,
+        property_values: np.ndarray,
+        property_owner_ids: np.ndarray,
+        occupant_rental_value: np.ndarray,
+        periods_per_year: int,
+    ) -> None:
+        """Fix the per-period housing-tax rates at t0 from annual data targets.
+
+        rate = (annual target / periods_per_year) / t0 base, so that the t0 base
+        yields the annual target over one year. The property-tax base is the
+        value of household-owned dwellings; the residence-tax base is the rental
+        value (cash plus imputed rent) of occupied dwellings. A None target
+        disables the tax. Rates are never tuned to simulated outcomes.
+        """
+
+        def rate(target: float | None, base: float) -> float:
+            if target is None or target == 0.0:
+                return 0.0
+            if base <= 0.0:
+                raise ValueError("Housing-tax base at t0 must be positive when a revenue target is set.")
+            return target / periods_per_year / base
+
+        owned = np.asarray(property_owner_ids) >= 0
+        self.states["Property Tax Rate"] = rate(
+            property_tax_revenue_target_annual, float(np.sum(np.asarray(property_values, dtype=float)[owned]))
+        )
+        self.states["Residence Tax Rate"] = rate(
+            residence_tax_revenue_target_annual, float(np.sum(occupant_rental_value))
+        )
+
+    def compute_household_housing_taxes(
+        self,
+        property_values: np.ndarray,
+        property_owner_ids: np.ndarray,
+        occupant_rental_value: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Per-household property tax (owner, all owned dwellings incl. rented-out) and residence tax (occupant)."""
+        n_households = len(occupant_rental_value)
+        owner_ids = np.asarray(property_owner_ids)
+        owned = owner_ids >= 0
+        property_tax = self.states["Property Tax Rate"] * np.bincount(
+            owner_ids[owned].astype(int),
+            weights=np.asarray(property_values, dtype=float)[owned],
+            minlength=n_households,
+        )
+        residence_tax = self.states["Residence Tax Rate"] * np.asarray(occupant_rental_value, dtype=float)
+        return property_tax, residence_tax
+
     def compute_taxes(
         self,
         current_ind_employee_income: np.ndarray,
@@ -326,6 +380,8 @@ class CentralGovernment(Agent):
         taxes_less_subsidies_rates: np.ndarray,
         current_total_exports: float,
         current_firm_capital_formation: float = 0.0,
+        household_property_taxes: float = 0.0,
+        household_residence_taxes: float = 0.0,
     ) -> None:
         """Calculate all tax revenues for the current period.
 
@@ -352,7 +408,15 @@ class CentralGovernment(Agent):
             current_total_exports (float): Total exports
             current_firm_capital_formation (float): Realised firm capital-goods
                 purchases before the capital-formation tax
+            household_property_taxes (float): Property tax paid by households
+                this period (sum of the settled household payments)
+            household_residence_taxes (float): Residence tax paid by households
+                this period (sum of the settled household payments)
         """
+        # Housing taxes: receipts are the settled household payments, one booking.
+        self.ts.taxes_property.append([household_property_taxes])
+        self.ts.taxes_residence.append([household_residence_taxes])
+
         # Firms and government use the same calibrated industry tax vector.
         production_tax = np.sum(
             taxes_less_subsidies_rates[current_firm_industries] * current_firm_production * current_firm_price
@@ -517,6 +581,8 @@ class CentralGovernment(Agent):
             + self.ts.current("taxes_income")[0]
             + self.ts.current("taxes_employee_si")[0]
             + self.ts.current("taxes_employer_si")[0]
+            + self.ts.current("taxes_property")[0]
+            + self.ts.current("taxes_residence")[0]
             + household_rent_paid_to_government
         )
 

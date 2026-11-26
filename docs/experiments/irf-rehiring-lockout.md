@@ -42,3 +42,14 @@ shocks:
 ```
 
 Use a distinct output directory. `analysis/irf_shock_specs.csv` records the restriction, scope and effective lockout duration. For a fixed shock name/seed the restriction does not alter first-wave separation draws; later cohorts may differ as employment paths diverge. Differently named designs use different keyed draws. This change includes unit regression checks, not new macroeconomic estimates.
+
+
+## Separation size versus the unemployment-rate response
+
+The magnitude is the directly imposed separation flow, not the total realised rate difference. The one-off profile uses duration=1: it applies the 2%-of-labour-force separation only once. The staggered profile applies 0.5% in each of four quarters. Both also shut down ordinary job finding under the all-unemployed scope, so their unemployment responses can converge even though their exogenous separation profiles differ. Unemployment panels show percentage-point differences from the contemporaneous control, not annualised rates.
+
+The saved 24-seed all-unemployed run inspected on 2026-11-26 shows the one-off unemployment response at +3.768, +5.358, +7.044 and +8.611 pp in the first four quarters; the staggered response is +2.286, +4.472, +6.633 and +8.682 pp. The one-off specification still records separation duration=1. These are results from the saved run before the small-firm sampler correction, not new validation results. The aggregates cannot separately identify foregone ordinary hires from other equilibrium responses. A freeze-only arm would be needed for that attribution.
+
+Sampling retains at least one employee per firm. If sampled workers would empty a firm, replacements are drawn from other firms' remaining capacity. If the total requested separations exceed that capacity, the shock is capped and emits a warning with requested and feasible counts. Such capped runs do not deliver the nominal shock size and must be reported accordingly.
+
+The committed paper notebook now includes dataset, restriction-scope and job-loss-shock selectors, validates required shock names, and labels the exogenous separation profiles explicitly. Old outputs are never treated as new macro-mode results.

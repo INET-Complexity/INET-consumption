@@ -307,3 +307,99 @@ def test_invalid_rehiring_scope_rejected(scope):
 def test_all_unemployed_scope_requires_restriction():
     with pytest.raises(ValueError, match="requires prevent_rehiring"):
         ShockSpec(name="invalid", kind="unemployment_rate", period=1, magnitude=0.02, rehiring_scope="all_unemployed")
+
+
+def _small_firm_market(sizes, total=101):
+    sim, firms, ind, hh = setup_market()
+    employed = sum(sizes)
+    ind.states.update(
+        {
+            "Activity Status": np.array([A.EMPLOYED] * employed + [A.UNEMPLOYED] * (total - employed)),
+            "Corresponding Firm ID": np.r_[np.repeat(np.arange(len(sizes)), sizes), np.full(total - employed, -1)],
+            "Employment Industry": np.zeros(total, dtype=int),
+            "Corresponding Household ID": np.arange(total),
+            "Started New Job": np.zeros(total, dtype=bool),
+            "Offered Wage of Accepted Job": np.zeros(total),
+        }
+    )
+    values = {
+        "labour_inputs": np.ones(total),
+        "employee_income": np.ones(total) * 10,
+        "reservation_wages": np.zeros(total),
+    }
+    ind.ts.current = values.__getitem__
+    ends = np.cumsum([0, *sizes])
+    firms.states.update(
+        {
+            "Employments": [list(range(ends[i], ends[i + 1])) for i in range(len(sizes))],
+            "Industry": np.zeros(len(sizes), dtype=int),
+            "Labour Productivity by Industry": np.ones(1),
+        }
+    )
+    fv = {
+        "n_firms": len(sizes),
+        "normalised_labour_inputs": np.array(sizes, dtype=float),
+        "labour_inputs": np.array(sizes, dtype=float),
+        "desired_labour_inputs": np.array(sizes, dtype=float) + 2,
+    }
+    firms.ts.current = fv.__getitem__
+    hh.ts.current = lambda key: np.ones(total) * 100
+    return sim, firms, ind, hh
+
+
+@pytest.mark.parametrize(
+    "cls", [DefaultLabourMarketClearer, ReservationWageBindingDefaultLabourMarketClearer, PolednaLabourMarketClearer]
+)
+def test_unemployment_shock_caps_infeasible_separations_and_keeps_firms_nonempty(cls, caplog):
+    sim, firms, ind, hh = _small_firm_market([2, 1], total=100)
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(
+            name="edge",
+            kind="unemployment_rate",
+            period=1,
+            magnitude=0.02,
+            duration=1,
+            prevent_rehiring=True,
+            rehiring_lockout_duration=4,
+            rehiring_scope="all_unemployed",
+        ),
+    )
+    hook(sim, 2020, 4)
+    assert [len(x) for x in firms.states["Employments"]] == [1, 1]
+    assert (ind.states["Activity Status"] == A.UNEMPLOYED).sum() == 98
+    assert "1 of 2 requested" in caplog.text
+    clearer(cls).clear(firms, hh, ind)
+    assert all(len(x) >= 1 for x in firms.states["Employments"])
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_sampling_preserves_requested_count_when_other_firms_have_capacity(seed):
+    sim, firms, ind, _ = _small_firm_market([2, 2, 2])
+    sim.random_seed = seed
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(name="small-firms", kind="unemployment_rate", period=1, magnitude=0.02),
+    )
+    hook(sim, 2020, 4)
+    # ceil(.02 * 101) = 3; each firm can lose exactly one worker.
+    assert [len(x) for x in firms.states["Employments"]] == [1, 1, 1]
+    assert (ind.states["Activity Status"] == A.UNEMPLOYED).sum() == 98
+
+
+def test_singleton_only_population_reports_unattainable_shock(caplog):
+    sim, firms, ind, _ = _small_firm_market([1, 1])
+    hook = create_unemployment_rate_shock_hook(
+        country_code="FRA",
+        initial_year=2020,
+        time_unit=3,
+        spec=ShockSpec(name="singletons", kind="unemployment_rate", period=1, magnitude=0.02),
+    )
+    before = ind.states["Activity Status"].copy()
+    hook(sim, 2020, 4)
+    np.testing.assert_array_equal(before, ind.states["Activity Status"])
+    assert "0 of 3 requested" in caplog.text

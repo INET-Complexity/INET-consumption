@@ -402,7 +402,7 @@ def create_unemployment_rate_shock_hook(
         unemployed = activity == ActivityStatus.UNEMPLOYED
         labour_force = int(np.sum(employed | unemployed))
         employed_ids = np.flatnonzero(employed & (corresponding_firm >= 0) & (firm_counts[corresponding_firm] > 1))
-        if labour_force == 0 or employed_ids.size == 0:
+        if labour_force == 0:
             applied_periods.add(period)
             return
 
@@ -410,13 +410,44 @@ def create_unemployment_rate_shock_hook(
             n_to_separate = int(np.ceil(float(spec.magnitude) * float(np.sum(employed))))
         else:
             n_to_separate = int(np.ceil(float(spec.magnitude) * float(labour_force)))
-        n_to_separate = max(0, min(n_to_separate, int(employed_ids.size)))
+        requested_separations = n_to_separate
+        # The model requires each firm to retain an employee. The initial
+        # eligibility check alone does not protect the last worker when more
+        # than one employee is sampled from the same firm.
+        separation_capacity = int(np.maximum(firm_counts - 1, 0).sum())
+        n_to_separate = max(0, min(n_to_separate, separation_capacity, int(employed_ids.size)))
+        if n_to_separate < requested_separations:
+            logging.warning(
+                "Unemployment shock %s capped separations at %s of %s requested to retain one employee per firm",
+                spec.name,
+                n_to_separate,
+                requested_separations,
+            )
         if n_to_separate == 0:
             applied_periods.add(period)
             return
 
         rng = np.random.default_rng(_stable_shock_seed(simulation.random_seed, spec, period))
-        separated_ids = rng.choice(employed_ids, size=n_to_separate, replace=False)
+        candidates = rng.choice(employed_ids, size=n_to_separate, replace=False)
+        remaining = firm_counts.copy()
+        selected = []
+        for individual_id in candidates:
+            firm_id = int(corresponding_firm[individual_id])
+            if remaining[firm_id] > 1:
+                selected.append(int(individual_id))
+                remaining[firm_id] -= 1
+        if len(selected) < n_to_separate:
+            # Preserve the original keyed draw when feasible; replace only
+            # draws that would otherwise empty a firm.
+            alternatives = np.setdiff1d(employed_ids, candidates, assume_unique=True)
+            for individual_id in rng.permutation(alternatives):
+                firm_id = int(corresponding_firm[individual_id])
+                if remaining[firm_id] > 1:
+                    selected.append(int(individual_id))
+                    remaining[firm_id] -= 1
+                    if len(selected) == n_to_separate:
+                        break
+        separated_ids = np.asarray(selected, dtype=int)
         for individual_id in separated_ids:
             firm_id = int(corresponding_firm[int(individual_id)])
             activity[int(individual_id)] = ActivityStatus.UNEMPLOYED

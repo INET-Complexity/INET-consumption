@@ -1257,6 +1257,8 @@ def build_macro_output_df(model, country_code):
         "taxes_rental_income": "fiscal_revenue_rental_income_taxes",
         "taxes_employee_si": "fiscal_revenue_employee_social_insurance",
         "taxes_employer_si": "fiscal_revenue_employer_social_insurance",
+        "taxes_property": "fiscal_revenue_property_taxes",
+        "taxes_residence": "fiscal_revenue_residence_taxes",
         "taxes_on_products": "fiscal_revenue_taxes_on_products",
         "total_rent_received": "fiscal_revenue_social_housing_rent",
     }

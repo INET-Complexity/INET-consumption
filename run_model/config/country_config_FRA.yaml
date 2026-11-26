@@ -564,6 +564,21 @@ FRA:
       # and 4.6% before the initial-state fixes. See working doc C17-C19 in
       # knowledge-vault/wiki/debugging/2026-11-05-initial-state-working-doc.md.
       production_tax_vector_scale: 1.0
+      # Household housing taxes (opt-in; null disables). Annual EUR revenue
+      # targets for France 2014; each rate is fixed at t0 as target / t0 base
+      # and is never tuned to simulated outcomes. See
+      # knowledge-vault/wiki/plans/2026-11-26-housing-taxes-spec.md.
+      # Property tax (ESA D29A, dwellings), paid by the owner on dwelling value.
+      # Source: Eurostat nasa_10_nf_tr, FRA 2014, sector S14 (households),
+      # D29 paid = EUR 19,752m (households' other taxes on production as
+      # producers of housing services, mostly taxe fonciere on dwellings).
+      # Alternative: EUR 25bn = D29X39 data (2.53% GDP) minus model (1.37% GDP).
+      property_tax_revenue_target_annual: 1.9752e10
+      # Residence tax (ESA D59A, taxe d'habitation), paid by the occupant on
+      # rental value (cash rent, imputed rent for owner-occupiers).
+      # EUR 18.4bn = D59A EUR 23.6bn (Eurostat gov_10a_taxag, FRA 2014) minus
+      # ISF approx. EUR 5.2bn. Both numbers to be confirmed with DGFiP.
+      residence_tax_revenue_target_annual: 1.84e10
     functions:
       social_benefits:
         # name: ConstantSocialBenefitsSetter

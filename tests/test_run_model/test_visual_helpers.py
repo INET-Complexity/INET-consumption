@@ -830,6 +830,21 @@ def test_net_interest_receipts_use_paired_baseline_income(baseline_income):
         assert np.isnan(receipts.loc[1])
 
 
+def test_irf_interest_rates_are_annualised_but_unemployment_is_not():
+    from src.visual_helpers import _prepare_irf_plot_panel
+
+    panel = pd.DataFrame(
+        [
+            dict(seed=1, shock_name="s", horizon=0, variable=v, baseline=0.0, delta=0.0025, pct_delta=np.nan)
+            for v in ("policy_rate", "household_mortgage_rate", "unemployment_rate")
+        ]
+    )
+    values = _prepare_irf_plot_panel(panel, periods_per_year=4).set_index("variable").plot_value
+    assert values["policy_rate"] == pytest.approx(1.0)
+    assert values["household_mortgage_rate"] == pytest.approx(1.0)
+    assert values["unemp"] == pytest.approx(0.25)
+
+
 def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percent():
     panel = pd.DataFrame(
         [
@@ -852,11 +867,11 @@ def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percen
 
     figures = plot_irf_panels(panel, ["common_uncertainty"], show=False)
 
-    figure = next(fig for fig in figures if fig._suptitle.get_text().startswith("Income uncertainty:"))
+    figure = next(fig for fig in figures if fig._suptitle.get_text().startswith("Income uncertainty ("))
     axes = figure.axes
     assert len(axes) == 2
     assert axes[0].get_title() == "Income uncertainty change (index units)"
-    assert axes[1].get_title() == "Real hh consumption, %"
+    assert axes[1].get_title() == r"$\bf{Real~hh~consumption}$" + "\n%"
     assert axes[0].get_ylabel() == "Common income\nuncertainty"
     np.testing.assert_allclose(axes[0].lines[0].get_ydata(), [0.02])
     np.testing.assert_allclose(axes[1].lines[0].get_ydata(), [100 * (1.10 / 1.02 - 1)])
@@ -871,7 +886,7 @@ def test_plot_irf_panels_compares_uncertainty_index_with_real_consumption_percen
     ]
     macro_only = plot_irf_panels(without_uncertainty, ["common_uncertainty"], show=False)
     assert len(macro_only) == 1
-    assert macro_only[0]._suptitle.get_text().startswith("Macro and investment:")
+    assert macro_only[0]._suptitle.get_text().startswith("Macro and investment (")
 
 
 @pytest.mark.parametrize("historical", [False, True])

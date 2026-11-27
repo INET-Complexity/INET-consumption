@@ -23,11 +23,20 @@ def _categorical_colors(n_colors):
 
 
 IRF_SHOCK_LABELS = {
+    "gov_cons_5pct": "Government\nconsumption +5%",
+    "policy_rate_100bp": "Policy rate\n+100bp",
+    "policy_rate_1pp_once": "Monetary tightening\n(+1pp, one-off)",
+    "policy_rate_gradual_1pp": "Monetary tightening\n(gradual to +1pp)",
+    "income_tax_1pp": "Income tax\n+1pp",
+    "income_tax_5pp": "Income tax\n+5pp",
+    "unemp_2pp_once": "Separations 2%\n(one-off)",
+    "unemp_1pp_once": "Separations 1%\n(one-off)",
+    "unemp_05pp_quarterly": "Separations 0.5%\n(4 quarters)",
     "common_income_uncertainty_25pct": "Common income\nuncertainty (+25%)",
     "individual_income_uncertainty_25pct": "Individual income\nuncertainty (+25%)",
     "total_income_uncertainty_25pct": "Total income\nuncertainty (+25%)",
     "total_income_uncertainty_1pct": "Total income\nuncertainty (+1%)",
-    "household_transfer_10pct": "One-off transfer\n(10% median income)",
+    "household_transfer_10pct": "One-off transfer\n(10% median inc.)",
     "common_uncertainty": "Common income\nuncertainty",
     "individual_uncertainty": "Individual income\nuncertainty",
 }
@@ -45,7 +54,7 @@ IRF_PANEL_LABELS = {
     "real_cons": "Real hh consumption, %",
     "cpi": "CPI, %",
     "unemp": "Unemployment rate, pp",
-    "policy_rate": "Policy rate, pp",
+    "policy_rate": "Policy rate, pp p.a.",
     "gfcf": "Gross fixed capital formation, %",
     "gfcf_intensity": "GFCF intensity (GFCF / GDP), %",
     "tfp_investment_intensity": "TFP investment intensity, %",
@@ -57,12 +66,12 @@ IRF_PANEL_LABELS = {
     "income_uncertainty_delta": "Income uncertainty change (index units)",
     "consumption_uncertainty_contribution": "Consumption-rule uncertainty contribution, ×100",
     "real_household_income": "Real hh income, %",
-    "firm_loan_rate": "Short-term firm loan rate, pp",
-    "firm_long_term_loan_rate": "Long-term firm loan rate, pp",
-    "household_consumption_loan_rate": "Hh consumption loan rate, pp",
-    "household_mortgage_rate": "Mortgage rate, pp",
-    "household_deposit_rate": "Hh deposit rate, pp",
-    "firm_deposit_rate": "Firm deposit rate, pp",
+    "firm_loan_rate": "Short-term firm loan rate, pp p.a.",
+    "firm_long_term_loan_rate": "Long-term firm loan rate, pp p.a.",
+    "household_consumption_loan_rate": "Hh consumption loan rate, pp p.a.",
+    "household_mortgage_rate": "Mortgage rate, pp p.a.",
+    "household_deposit_rate": "Hh deposit rate, pp p.a.",
+    "firm_deposit_rate": "Firm deposit rate, pp p.a.",
     "firm_loan_interest_paid": "Firm interest paid, %",
     "firm_received_credit": "New firm credit, %",
     "firm_debt": "Firm debt, %",
@@ -97,6 +106,8 @@ IRF_RATE_VARIABLES = {
     "firm_deposit_rate",
     "consumption_uncertainty_contribution",
 }
+# Interest rates are stored per model period; plots annualise them.
+IRF_PERIOD_INTEREST_RATE_VARIABLES = IRF_RATE_VARIABLES - {"unemployment_rate", "consumption_uncertainty_contribution"}
 IRF_COUNT_VARIABLES = {
     "firm_production",
     "firm_employees",
@@ -145,13 +156,19 @@ IRF_PANEL_GROUPS = {
 }
 
 
-def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
-    """Convert stored IRF deltas to plot units and derive real aggregates."""
+def _prepare_irf_plot_panel(panel: pd.DataFrame, periods_per_year: int = 1) -> pd.DataFrame:
+    """Convert stored IRF deltas to plot units and derive real aggregates.
+
+    Interest rates are stored per model period; ``periods_per_year`` scales
+    their deltas to annual percentage points (4 for a quarterly model).
+    """
     result = panel.copy()
     result["plot_value"] = np.nan
     result.loc[result.variable.isin(IRF_RATE_VARIABLES), "plot_value"] = (
         100 * result.loc[result.variable.isin(IRF_RATE_VARIABLES), "delta"]
     )
+    interest_mask = result.variable.isin(IRF_PERIOD_INTEREST_RATE_VARIABLES)
+    result.loc[interest_mask, "plot_value"] *= periods_per_year
     uncertainty_mask = result.variable == "income_uncertainty_delta"
     # This series is a change in an index, not a relative percentage change.
     result.loc[uncertainty_mask, "plot_value"] = result.loc[uncertainty_mask, "delta"]
@@ -224,29 +241,57 @@ def _prepare_irf_plot_panel(panel: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+IRF_SHOCK_COLORS = ("#1f5fa8", "#c2410c", "#0f766e", "#7c3aed", "#b45309", "#be185d", "#4d7c0f", "#475569")
+
+
+def _split_irf_label(label: str) -> tuple[str, str]:
+    """Split ``"Name, unit"`` into title and unit so the unit sits on its own line."""
+    if "\n" in label:
+        title, unit = label.split("\n", 1)
+        return title, unit.strip("()")
+    if ", " in label:
+        title, unit = label.rsplit(", ", 1)
+        return title, unit
+    return label, ""
+
+
 def plot_irf_panels(
     panel: pd.DataFrame,
     shock_names: list[str] | tuple[str, ...],
     *,
     country: str = "FRA",
     confidence: float = 0.10,
+    inner_confidence: float = 0.25,
+    shock_durations: dict[str, int] | None = None,
+    periods_per_year: int = 4,
+    color: str = IRF_SHOCK_COLORS[0],
     figsize: tuple[float, float] | None = None,
     show: bool = True,
 ):
-    """Plot seed-median impulse responses with central quantile bands.
+    """Plot seed-median impulse responses with nested quantile fan bands.
 
     The input is the long panel written by ``run_irf_experiment``. This helper
     converts the stored deltas to percent or percentage-point responses,
     derives real GDP, consumption and income responses, then summarizes seeds.
+    Rows are shocks, columns are variables; all panels use ``color``.
+    Interest rates are annualised with ``periods_per_year``. The outer band spans quantiles ``[confidence, 1 - confidence]``,
+    the inner band ``[inner_confidence, 1 - inner_confidence]``. When
+    ``shock_durations`` maps a shock name to its duration in quarters (default:
+    the panel's ``shock_duration`` column), the quarters in which the impulse
+    is active are shaded grey.
     """
+    from matplotlib.ticker import MaxNLocator
+
     if not 0.0 < confidence < 0.5:
         raise ValueError("confidence must be between 0 and 0.5.")
+    if not confidence <= inner_confidence < 0.5:
+        raise ValueError("inner_confidence must be between confidence and 0.5.")
     required = {"seed", "shock_name", "horizon", "variable", "pct_delta", "delta"}
     missing = required.difference(panel.columns)
     if missing:
         raise ValueError(f"IRF panel is missing required columns: {sorted(missing)}")
 
-    plot_panel = _prepare_irf_plot_panel(panel)
+    plot_panel = _prepare_irf_plot_panel(panel, periods_per_year=periods_per_year)
     available = set(plot_panel["variable"])
     groups = {
         name: [variable for variable in variables if variable in available]
@@ -256,53 +301,78 @@ def plot_irf_panels(
     groups = {name: variables for name, variables in groups.items() if variables}
     if not groups:
         raise ValueError("IRF panel contains no variables with configured plot labels.")
-    lower_q, upper_q = confidence, 1.0 - confidence
-    quantile_pct = int(round((1.0 - 2.0 * confidence) * 100))
+    outer_pct = int(round((1.0 - 2.0 * confidence) * 100))
+    inner_pct = int(round((1.0 - 2.0 * inner_confidence) * 100))
+    n_seeds = plot_panel["seed"].nunique()
+    if shock_durations is None and "shock_duration" in panel.columns:
+        shock_durations = panel.dropna(subset=["shock_duration"]).groupby("shock_name")["shock_duration"].first()
+        shock_durations = {name: int(value) for name, value in shock_durations.items()}
+    shock_durations = shock_durations or {}
+    summary = (
+        plot_panel.loc[plot_panel["shock_name"].isin(shock_names)]
+        .groupby(["shock_name", "variable", "horizon"])["plot_value"]
+        .quantile([confidence, inner_confidence, 0.5, 1.0 - inner_confidence, 1.0 - confidence])
+        .unstack()
+    )
+    summary.columns = ["lo", "lo_in", "med", "hi_in", "hi"]
+
+    style = {
+        "font.size": 9,
+        "axes.titlesize": 10,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.edgecolor": "#888888",
+        "axes.grid": True,
+        "axes.grid.axis": "y",
+        "grid.color": "#e5e5e5",
+        "grid.linewidth": 0.6,
+        "xtick.color": "#555555",
+        "ytick.color": "#555555",
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+    }
     figures = []
     for group_name, variables in groups.items():
         rows = max(len(shock_names), 1)
         cols = len(variables)
-        if figsize is None:
-            group_figsize = (max(4.6 * cols, 14.0), max(3.2 * rows, 8.0))
-        else:
-            group_figsize = figsize
-        fig, axs = plt.subplots(rows, cols, figsize=group_figsize, sharex=True, squeeze=False)
-        for row_idx, shock_name in enumerate(shock_names):
-            for col_idx, variable in enumerate(variables):
-                ax = axs[row_idx, col_idx]
-                subset = plot_panel.loc[(plot_panel["shock_name"] == shock_name) & (plot_panel["variable"] == variable)]
-                if subset.empty:
-                    ax.set_visible(False)
-                    continue
-                grouped = subset.groupby("horizon")["plot_value"]
-                median = grouped.median()
-                lower = grouped.quantile(lower_q)
-                upper = grouped.quantile(upper_q)
-                horizon = median.index.to_numpy()
-                ax.fill_between(horizon, lower.to_numpy(), upper.to_numpy(), alpha=0.2, lw=0)
-                ax.plot(horizon, median.to_numpy(), lw=2.2)
-                ax.axhline(0.0, color="grey", lw=1)
-                if row_idx == 0:
-                    ax.set_title(IRF_PANEL_LABELS[variable], fontweight="bold", pad=8)
-                if col_idx == 0:
-                    ax.set_ylabel(
-                        _format_irf_shock_label(shock_name),
-                        fontweight="bold",
-                        rotation=0,
-                        ha="right",
-                        va="center",
-                        labelpad=12,
-                    )
-                if row_idx == rows - 1:
-                    ax.set_xlabel("Quarters after shock")
-        # Reserve a fixed physical header before adding the figure title, so
-        # tight_layout does not count the title twice on tall shock grids.
-        fig.tight_layout(rect=(0.22, 0, 1, 1 - 0.45 / fig.get_figheight()))
-        fig.suptitle(
-            f"{group_name}: IRFs, seed median and {quantile_pct}% band ({country})",
-            fontweight="bold",
-            y=1 - 0.10 / fig.get_figheight(),
-        )
+        group_figsize = figsize or (1.2 + 2.5 * cols, 0.9 + 1.9 * rows)
+        with plt.rc_context(style):
+            fig, axs = plt.subplots(rows, cols, figsize=group_figsize, sharex=True, squeeze=False, layout="constrained")
+            for row_idx, shock_name in enumerate(shock_names):
+                duration = shock_durations.get(shock_name)
+                for col_idx, variable in enumerate(variables):
+                    ax = axs[row_idx, col_idx]
+                    key = (shock_name, variable)
+                    if key not in summary.index.droplevel("horizon"):
+                        ax.set_visible(False)
+                        continue
+                    stats = summary.loc[key]
+                    horizon = stats.index.to_numpy()
+                    if duration:
+                        ax.axvspan(-0.5, duration - 0.5, color="#000000", alpha=0.05, lw=0, zorder=0)
+                    ax.fill_between(horizon, stats["lo"], stats["hi"], color=color, alpha=0.13, lw=0)
+                    ax.fill_between(horizon, stats["lo_in"], stats["hi_in"], color=color, alpha=0.25, lw=0)
+                    ax.plot(horizon, stats["med"], color=color, lw=1.8)
+                    ax.axhline(0.0, color="#333333", lw=0.8, zorder=1)
+                    ax.yaxis.set_major_locator(MaxNLocator(nbins=4, symmetric=False, min_n_ticks=3))
+                    ax.xaxis.set_major_locator(MaxNLocator(nbins=5, integer=True))
+                    ax.set_xlim(horizon.min() - 0.5, horizon.max())
+                    if row_idx == 0:
+                        title, unit = _split_irf_label(IRF_PANEL_LABELS[variable])
+                        ax.set_title(
+                            f"$\\bf{{{title.replace(' ', '~')}}}$\n{unit}" if unit else title,
+                            fontsize=9.5,
+                            pad=6,
+                        )
+                    if col_idx == 0:
+                        ax.set_ylabel(_format_irf_shock_label(shock_name), fontweight="bold")
+                    if row_idx == rows - 1:
+                        ax.set_xlabel("Quarters after shock")
+            note = f"Median across {n_seeds} paired seeds; bands: {inner_pct}% and {outer_pct}% of seeds"
+            if shock_durations:
+                note += "; grey: quarters with active impulse"
+            fig.suptitle(f"{group_name} ({country})", fontweight="bold", fontsize=12)
+            fig.text(0.5, -0.005, note, ha="center", va="top", fontsize=8.5, color="#555555")
         figures.append(fig)
         if show:
             plt.show()

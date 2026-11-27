@@ -532,3 +532,80 @@ def test_run_one_writes_window_and_only_keeps_full_h5_on_request(
             assert "FRA/households/consumption" in handle
     else:
         assert stale.read_bytes() == b"previous full run"  # fixed-path file is never touched
+
+
+def test_run_one_captures_credit_and_illiquid_asset_diagnostics(tmp_path, monkeypatch):
+    """Consumer-credit and illiquid-asset series are exported per offset, to trace unspent transfers."""
+    import h5py
+    import numpy as np
+
+    from macromodel.timeseries import TimeSeries
+
+    traced = {
+        "target_consumption_loans": np.array([5.0, 0.0]),
+        "received_consumption_loans": np.array([4.0, 0.0]),
+        "illiquid_financial_assets": np.array([10.0, 20.0]),
+    }
+
+    class FakeModel:
+        def __init__(self):
+            self.posthooks = []
+            self.prehooks = []
+            ts = TimeSeries(income=np.ones(2), **traced)
+            self.countries = {"FRA": SimpleNamespace(households=SimpleNamespace(ts=ts))}
+
+        def run(self):
+            for t in range(4):
+                for hook in self.posthooks:
+                    hook(self, t, 2014, 1)
+
+        def save(self, save_dir, file_name):
+            with h5py.File(Path(save_dir) / file_name, "w") as handle:
+                handle.create_dataset("FRA/households/consumption", data=np.ones((5, 2)))
+                handle.create_dataset("FRA/economy/cpi_fixed_basket", data=np.ones((5, 1)))
+                handle.create_dataset("FRA/households/target_consumption", data=np.ones((5, 2)))
+                handle.create_dataset("FRA/households/target_consumption_columns", data=np.array([[0, 0], [1, 0]]))
+
+    monkeypatch.setattr(
+        mpc_runner.SimulationConfiguration, "model_validate", staticmethod(lambda payload: SimpleNamespace())
+    )
+    monkeypatch.setattr(mpc_runner.Simulation, "from_datawrapper", staticmethod(lambda **kwargs: FakeModel()))
+    monkeypatch.setattr(
+        mpc_runner,
+        "make_household_metadata",
+        lambda country, seed, pre_shock_row: pd.DataFrame({"household_id": [0, 1]}),
+    )
+    monkeypatch.setattr(
+        mpc_runner,
+        "make_household_labor_state_snapshot",
+        lambda country: {name: np.zeros(2) for name in mpc_runner.HOUSEHOLD_LABOR_STATE_COLUMNS},
+    )
+    monkeypatch.setattr(
+        mpc_runner, "write_selected", lambda model, path, country, paths: model.save(path.parent, path.name)
+    )
+    (tmp_path / "baseline" / "seed-1").mkdir(parents=True)
+
+    metadata = mpc_runner._run_one(
+        data=SimpleNamespace(configuration=SimpleNamespace(year=2014), time_unit=3),
+        country_configurations={
+            "FRA": SimpleNamespace(
+                model_dump=lambda: {}, household_support={"mode": "minimum_income", "goods_floor": False}
+            )
+        },
+        country_code="FRA",
+        seed=1,
+        t_max=4,
+        output_dir=tmp_path / "baseline",
+        shock=False,
+        shock_period=1,
+        shock_fraction=0.01,
+        horizon_periods=2,
+        keep_full_h5=False,
+        output_variables=["cash"],
+        capture_diagnostics=True,
+    )
+
+    for field, values in traced.items():
+        assert field in mpc_runner.MPC_DIAGNOSTIC_FIELDS
+        for offset in range(3):
+            np.testing.assert_allclose(metadata[f"diagnostic_{field}_t{offset}"], values)

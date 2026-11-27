@@ -126,3 +126,144 @@ def classify_households(
     missing = ~(np.isfinite(income) & np.isfinite(m) & np.isfinite(a))
     labels[missing] = np.nan
     return pd.Series(labels, index=panel.index, name="htm_class")
+
+
+# Liquidity-constraint groups (classify_liquidity_groups). HtM = liquidity constrained in the model's own
+# mechanics; poor/wealthy split as in KVW; the three Crawley-Kuchler types as summarised by Muellbauer (2020,
+# pp. 538-539). Warm = constrained, cool = unconstrained.
+LIQUIDITY_GROUP_LABELS = {
+    "PHTM": "Poor hand-to-mouth",
+    "WHTM": "Wealthy hand-to-mouth",
+    "APU": "Asset-poor, unconstrained",
+    "ILU": "Illiquid-wealthy, unconstrained",
+    "DW": "Doubly wealthy",
+}
+LIQUIDITY_GROUP_SHORT = {
+    "PHTM": "Poor\nHtM",
+    "WHTM": "Wealthy\nHtM",
+    "APU": "Asset-poor\nunconstrained",
+    "ILU": "Illiquid-wealthy\nunconstrained",
+    "DW": "Doubly\nwealthy",
+}
+LIQUIDITY_GROUP_COLORS = {
+    "PHTM": "#8c3b1f",
+    "WHTM": "#c0602b",
+    "APU": "#9fbcd6",
+    "ILU": "#6f97bd",
+    "DW": "#1f3b5c",
+}
+LIQUIDITY_DSTI_LIMIT = 0.35  # consumer_credit.dsti_limit (consumption_paper_parameters.yaml)
+_CONSUMER_PAYMENT_COLUMN = "diagnostic_scheduled_consumer_payment_t0"
+_MORTGAGE_PAYMENT_COLUMNS = ("diagnostic_actual_mortgage_payment_t0", "diagnostic_unpaid_mortgage_payment_t0")
+
+
+def consumer_credit_headroom(
+    panel: pd.DataFrame,
+    *,
+    dsti_limit: float = LIQUIDITY_DSTI_LIMIT,
+    consumer_annuity_factor: float | None = None,
+    group_column: str = "seed",
+) -> pd.Series:
+    """Additional consumer loan the DSTI cap still permits, per household (pre-shock quarter).
+
+    Mirrors CreditMarket._cap_consumer_origination_dsti and the Stage 5 fallback:
+
+        K = max( max(dsti * y - S_m, 0) / phi - D_c, 0 ),
+
+    with y quarterly income, S_m the scheduled mortgage service (paid + unpaid, t0), D_c the consumer
+    balance and phi the consumer annuity payment factor. ``consumer_annuity_factor=None`` estimates phi
+    within seed as the median of scheduled consumer service / consumer balance over borrowers.
+    Approximations: y is the panel's income, not the gross cash underwriting income (K is understated
+    when gross exceeds net); overdraft interest in "other service" and the FICP block are omitted.
+    """
+    income = panel["income"].astype(float)
+    mortgage_service = sum(panel[column].astype(float) for column in _MORTGAGE_PAYMENT_COLUMNS)
+    balance = panel["consumption_loan_debt"].astype(float)
+    if consumer_annuity_factor is None:
+        if _CONSUMER_PAYMENT_COLUMN not in panel:
+            raise ValueError(f"Pass consumer_annuity_factor or provide {_CONSUMER_PAYMENT_COLUMN}.")
+        payment = panel[_CONSUMER_PAYMENT_COLUMN].astype(float)
+        groups = panel[group_column] if group_column in panel else pd.Series(0, index=panel.index)
+        borrowers = (balance > 0.0) & (payment > 0.0)
+        ratio = (payment / balance).where(borrowers)
+        factor = ratio.groupby(groups).transform("median")
+        if factor.isna().any():
+            raise ValueError("Cannot estimate the consumer annuity factor: a seed has no serviced consumer loans.")
+    else:
+        if not consumer_annuity_factor > 0.0:
+            raise ValueError("consumer_annuity_factor must be positive.")
+        factor = pd.Series(float(consumer_annuity_factor), index=panel.index)
+    service_room = np.maximum(dsti_limit * income - mortgage_service, 0.0)
+    return np.maximum(service_room / factor - balance, 0.0).rename("credit_headroom")
+
+
+def classify_liquidity_groups(
+    panel: pd.DataFrame,
+    *,
+    cut_column: str = "diagnostic_consumption_cut_amount_t0",
+    pay_periods_per_quarter: float = 3.0,
+    dsti_limit: float = LIQUIDITY_DSTI_LIMIT,
+    consumer_annuity_factor: float | None = None,
+    group_column: str = "seed",
+) -> pd.DataFrame:
+    """Return the liquidity-constraint group per row, measured before the shock.
+
+    All inputs are the state at ``pre_shock_row`` (end of the quarter before the transfer), common
+    to the baseline and shock arms, so no outcome of the shock enters. With quarterly income y,
+
+        tau = y / pay_periods_per_quarter / 2            (KVW: half a monthly pay period)
+        K   = remaining consumer credit under the DSTI cap  (consumer_credit_headroom)
+        constrained = consumption cut binding  or  LFA + K <= tau
+        a   = illiquid financial assets + housing wealth - mortgage debt   (KVW net illiquid wealth)
+
+    A cut binds when ``cut_column`` exceeds the MPC-regime tolerance. LFA is negative in overdraft;
+    an overdraft is repaid before goods and cannot be refinanced with new credit, so it reduces the
+    liquidity available this quarter. Groups (mutually exclusive):
+
+        PHTM  constrained, a <= 0
+        WHTM  constrained, a > 0
+        APU   unconstrained, a <= 0
+        ILU   unconstrained, a > 0, LFA <= tau   (no liquid buffer, smooths with credit)
+        DW    unconstrained, a > 0, LFA > tau    (liquid and illiquid wealth)
+
+    Rows with non-positive or missing income or inputs are NaN.
+    """
+    from src.mpc_analysis import MPC_REGIME_RELATIVE_TOLERANCE
+
+    income = panel["income"].astype(float)
+    lfa = panel["liquid_financial_assets"].astype(float)
+    a = (panel["illiquid_financial_assets"] + panel["housing_wealth"] - panel["mortgage_debt"]).astype(float)
+    tau = income / pay_periods_per_quarter / 2.0
+    headroom = consumer_credit_headroom(
+        panel, dsti_limit=dsti_limit, consumer_annuity_factor=consumer_annuity_factor, group_column=group_column
+    )
+    floor = panel["baseline_subsistence_floor"].abs() if "baseline_subsistence_floor" in panel else 0.0
+    cut = panel[cut_column].astype(float)
+    cut_binding = cut > MPC_REGIME_RELATIVE_TOLERANCE * np.maximum(floor, 1.0)
+    available = lfa + headroom
+    constrained = cut_binding | (available <= tau)
+    code = pd.Series(
+        np.select(
+            [constrained & (a <= 0.0), constrained, a <= 0.0, lfa <= tau],
+            ["PHTM", "WHTM", "APU", "ILU"],
+            default="DW",
+        ),
+        index=panel.index,
+        dtype=object,
+    )
+    inputs = pd.concat([income, lfa, a, headroom, cut], axis=1)
+    known = income.gt(0) & np.isfinite(inputs).all(axis=1)
+    code[~known] = np.nan
+    return pd.DataFrame(
+        {
+            "liquidity_group": code,
+            "liquidity_group_label": code.map(LIQUIDITY_GROUP_LABELS),
+            "liquidity_constrained": constrained.where(known),
+            "consumption_cut_binding": cut_binding.where(known),
+            "credit_headroom": headroom.where(known),
+            "available_liquidity": available.where(known),
+            "liquidity_threshold": tau.where(known),
+            "net_illiquid_wealth": a.where(known),
+        },
+        index=panel.index,
+    )

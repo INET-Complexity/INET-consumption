@@ -10,6 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import to_rgb
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import MaxNLocator
@@ -18,6 +19,14 @@ NAVY = "#1f3b5c"
 STEEL = "#7a9cbf"
 WARM = "#d08c4b"
 GREY = "#8a8a8a"
+U_HATCH = "////"  # unconstrained subgroup boxes: light fill with diagonal lines
+
+
+def _lighten(color, share=0.6):
+    """Blend ``color`` with white; ``share`` is the white weight (no transparency, so hatching stays sharp)."""
+    return tuple(c + (1.0 - c) * share for c in to_rgb(color))
+
+
 ZERO_LINE = dict(color="#333333", linewidth=0.8, zorder=1)
 SHOCK_SHADE = dict(color="#000000", alpha=0.05, lw=0, zorder=0)
 
@@ -161,8 +170,8 @@ def mpc_group_constraint_figure(
     A 2x4 grid, one panel per group (``GROUP_SHORT`` order): low net liquid
     assets (L..) in the top row, high (H..) in the bottom row. Each panel title
     gives the group code and its population share, e.g. "LLL (17%)". Inside, households in the
-    first ``split_order`` category (full colour, "C") and the second (light,
-    "U"), with their share of the group under each box. A hollow diamond
+    first ``split_order`` category (solid group colour, "C") and the second
+    (light, hatched, "U"), with their share of the group under each box. A hollow diamond
     between the boxes marks the group mean, the share-weighted average of the
     two subgroup means, with its value printed above it.
     With ``width_by_share`` box widths are 0.8 x the subgroup share (at least
@@ -205,9 +214,11 @@ def mpc_group_constraint_figure(
                     whiskerprops=dict(color=GREY, linewidth=0.8),
                     capprops=dict(color=GREY, linewidth=0.8),
                 )
-                box["boxes"][0].set(
-                    facecolor=GROUP_COLORS[code], edgecolor=GROUP_COLORS[code], alpha=1.0 if j == 0 else 0.4
-                )
+                color = GROUP_COLORS[code]
+                if j == 0:
+                    box["boxes"][0].set(facecolor=color, edgecolor=color)
+                else:
+                    box["boxes"][0].set(facecolor=_lighten(color), edgecolor=color, hatch=U_HATCH, linewidth=0.8)
                 ax.scatter([j], [sub.mean()], s=14, color="black", zorder=6)
             ax.scatter(
                 [0.5], [group_mean], marker="D", s=42, facecolor="white", edgecolor="black", linewidth=1.3, zorder=7
@@ -234,7 +245,7 @@ def mpc_group_constraint_figure(
         axes[1, 0].set_ylabel(bottom_label)
         handles = [
             Patch(facecolor=GREY, edgecolor=GREY),
-            Patch(facecolor=GREY, edgecolor=GREY, alpha=0.4),
+            Patch(facecolor=_lighten(GREY), edgecolor=GREY, hatch=U_HATCH, linewidth=0.8),
             Line2D([], [], marker="D", ls="", ms=6, markerfacecolor="white", markeredgecolor="black", mew=1.3),
             Line2D([], [], color="black", marker="o", ls="", ms=4),
         ]

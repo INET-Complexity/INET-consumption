@@ -93,7 +93,7 @@ def test_figure_preserves_constant_groups_and_readable_borrowing_label(tmp_path)
     assert groups.loc[groups.variable.eq("illiquid_financial_assets_paper_group"), "n"].sum() == 2
     assert groups.loc[groups.variable.eq("borrowing"), "group"].tolist() == ["No borrowing"]
     assert groups.loc[groups.variable.eq("tenure"), "group"].tolist() == ["Other tenure"]
-    assert (tmp_path / "paper_impact_mpc.pdf").stat().st_size > 0
+    assert (tmp_path / "paper_impact_mpc.png").stat().st_size > 0
 
 
 def test_summary_and_figure_use_same_positive_asset_groups(tmp_path):
@@ -188,5 +188,5 @@ def test_cumulative_figure_uses_identified_rows_without_rebinning(tmp_path):
     table = pd.read_csv(tmp_path / "paper_mpc_summary_cumulative.csv")
     table = table[(table.variable == "income_paper_group") & (table.outcome == "real_cmpc_4q")].set_index("group")
     np.testing.assert_allclose(groups["mean"], table.loc[groups.index, "mean"])
-    assert (tmp_path / "paper_cumulative_4q_mpc.pdf").stat().st_size > 0
-    assert not (tmp_path / "paper_impact_mpc.pdf").exists()
+    assert (tmp_path / "paper_cumulative_4q_mpc.png").stat().st_size > 0
+    assert not (tmp_path / "paper_impact_mpc.png").exists()

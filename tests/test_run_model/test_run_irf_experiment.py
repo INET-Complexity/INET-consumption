@@ -232,3 +232,17 @@ def test_run_one_writes_aggregates_and_only_keeps_full_h5_on_request(tmp_path, m
     else:
         assert result == npz
         assert stale.read_bytes() == b"previous full run"  # fixed-path file is never touched
+
+
+def test_pair_run_outputs_pairs_each_shock_with_its_own_seed_baseline():
+    specs = (
+        irf_runner.ShockSpec(name="gov", kind="government_consumption", period=0, magnitude=0.05),
+        irf_runner.ShockSpec(name="tax", kind="income_tax", period=0, magnitude=0.01),
+    )
+    outputs = {(seed, name): Path(f"{seed}-{name}") for seed in (3, 7) for name in (None, "gov", "tax")}
+
+    rows = irf_runner._pair_run_outputs([3, 7], specs, outputs)
+
+    assert [(r["seed"], r["shock_name"]) for r in rows] == [(3, "gov"), (3, "tax"), (7, "gov"), (7, "tax")]
+    assert all(r["baseline_output"] == Path(f"{r['seed']}-None") for r in rows)
+    assert all(r["shock_output"] == Path(f"{r['seed']}-{r['shock_name']}") for r in rows)

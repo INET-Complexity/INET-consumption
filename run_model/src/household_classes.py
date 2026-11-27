@@ -32,15 +32,17 @@ HTM_CLASSES = ("P-HtM", "R-HtM", "DW", "Other")
 
 # Paper classification (consumption-notebooks/src/consumption_calibration.py, group_label_map;
 # paper table tab:household_groups): H/L on NLA/y, IFA/y, HA/y, H = strictly above the median.
+# Neutral descriptions: which ratios to income are above the median. The split describes balance
+# sheets, not hand-to-mouth status (see the constrained/unconstrained split in the paper).
 GROUP_LABELS = {
-    "LLL": "Poor hand-to-mouth",
-    "LLH": "Housing-rich hand-to-mouth",
-    "LHL": "Financially wealthy hand-to-mouth",
-    "LHH": "Doubly wealthy hand-to-mouth",
-    "HLL": "Liquid-wealth households",
-    "HLH": "Liquid homeowners",
-    "HHL": "Financially wealthy unconstrained",
-    "HHH": "Fully diversified wealthy",
+    "LLL": "None above median",
+    "LLH": "Housing only",
+    "LHL": "Illiquid financial only",
+    "LHH": "Illiquid financial and housing",
+    "HLL": "Liquid only",
+    "HLH": "Liquid and housing",
+    "HHL": "Liquid and illiquid financial",
+    "HHH": "All above median",
 }
 # Collapse for the main figure (KVW logic: low liquidity = hand-to-mouth).
 # HLL (liquid wealth only) has no illiquid wealth; it is grouped with DW as non-hand-to-mouth.

@@ -68,7 +68,7 @@ def test_paper_eight_groups_median_split_and_three_group_collapse():
     )
     out = classify_balance_sheet_groups(panel)
     assert list(out.group_code[:4]) == ["LLL", "LLH", "HHL", "HHH"]
-    assert out.group_label[1] == "Housing-rich hand-to-mouth"
+    assert out.group_label[1] == "Housing only"
     assert list(out.group_3[:4]) == [
         "Poor hand-to-mouth",
         "Wealthy hand-to-mouth",

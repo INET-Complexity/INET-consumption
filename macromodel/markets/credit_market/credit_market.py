@@ -1440,8 +1440,9 @@ class CreditMarket:
         self._add_new_loans("cons_loans", pending_loans)
         self._capture_consumer_refinancing_opening_terms()
         self._consumer_loan_remodulation_maturity = consumer_loan_maturity
-        booked_principal = self.states["cons_loans"][0] - opening_principal
-        if not np.allclose(booked_principal, settlement, rtol=1e-10, atol=1e-8):
+        # Compare stocks, not the differenced flow: (opening + new) - opening loses ~ulp(opening)
+        # (≈1e-7 at 1e9 principal), which a flow-relative tolerance rejects for small top-ups.
+        if not np.allclose(self.states["cons_loans"][0], opening_principal + settlement, rtol=1e-10, atol=1e-8):
             raise RuntimeError("Consumer-credit household liabilities and bank assets were not booked exactly once.")
         self._pending_consumer_loans_this_period = None
 

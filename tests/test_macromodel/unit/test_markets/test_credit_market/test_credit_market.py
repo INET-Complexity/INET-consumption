@@ -538,6 +538,36 @@ def test_granted_consumer_credit_remodulates_the_aggregate_household_schedule():
     np.testing.assert_allclose(market.states["mort_loans"], np.zeros_like(market.states["mort_loans"]))
 
 
+def test_small_grant_on_large_consumer_balance_settles_despite_float_cancellation():
+    # Regression: (5.77e9 + 37.3) - 5.77e9 differs from 37.3 by ~1.9e-7, above the 1e-8 atol.
+    opening = 5_770_000_000.0
+    cons_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    cons_loans[0, 0, 0] = opening
+    cons_loans[1, 0, 0] = 0.02
+    cons_loans[2, 0, 0] = opening * _annuity_payment_factor(0.02, 12)
+    market = CreditMarket.from_data(
+        country_name="TST",
+        st_loans=_empty_loan_state(n_banks=1, n_borrowers=1),
+        lt_loans=_empty_loan_state(n_banks=1, n_borrowers=1),
+        cons_loans=cons_loans,
+        mort_loans=_empty_loan_state(n_banks=1, n_borrowers=1),
+    )
+    market._serviceable_loans_this_period["cons_loans"] = cons_loans.copy()
+    settled_loans = _empty_loan_state(n_banks=1, n_borrowers=1)
+    settled_loans[0, 0, 0] = 37.3
+    settled_loans[1, 0, 0] = 0.02
+    settled_loans[2, 0, 0] = 37.3 * _annuity_payment_factor(0.02, 12)
+    market._pending_consumer_loans_this_period = settled_loans
+
+    market.settle_granted_consumption_loans(
+        credit_granted=np.array([37.3]),
+        granted_consumer_credit_by_bank_and_household=settled_loans[0],
+        consumer_loan_maturity=12,
+    )
+
+    np.testing.assert_allclose(market.states["cons_loans"][0, 0, 0], opening + 37.3, rtol=1e-12)
+
+
 def test_granted_consumption_loan_settlement_rejects_double_booking(test_credit_market):
     test_credit_market._serviceable_loans_this_period["cons_loans"] = test_credit_market.states["cons_loans"].copy()
     settlement = np.zeros_like(test_credit_market.states["cons_loans"][0])

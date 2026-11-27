@@ -61,6 +61,34 @@ STATE_BIN_ROUND_DECIMALS = 8
 FULL_H5_NAME = "multi_country_simulation.h5"
 WINDOW_NAME = "mpc_window.npz"
 
+# Household series captured per arm and offset as ``diagnostic_<field>_t<offset>``.
+# Credit and illiquid-asset flows trace where a transfer goes when it is not spent:
+# requested and received consumer credit, and the illiquid financial-asset stock.
+MPC_DIAGNOSTIC_FIELDS = (
+    "income",
+    "income_employee",
+    "income_social_transfers",
+    "income_rental",
+    "income_financial_assets",
+    "current_net_housing_cash_need",
+    "housing_lfa_draw",
+    "consumption_cut_amount",
+    "consumption",
+    "target_consumption",
+    "overdraft_repayment",
+    "early_consumer_repayment",
+    "scheduled_consumer_payment",
+    "actual_consumer_payment",
+    "unpaid_consumer_payment",
+    "actual_mortgage_payment",
+    "unpaid_mortgage_payment",
+    "liquid_financial_assets",
+    "target_consumption_calibrated_total",
+    "target_consumption_loans",
+    "received_consumption_loans",
+    "illiquid_financial_assets",
+)
+
 
 def _resolve_run_model_path(path: str | Path) -> Path:
     resolved = Path(path)
@@ -180,27 +208,7 @@ def _run_one(
 
     pre_shock_row = int(shock_period)
     metadata: list[pd.DataFrame] = []
-    diagnostic_fields = (
-        "income",
-        "income_employee",
-        "income_social_transfers",
-        "income_rental",
-        "income_financial_assets",
-        "current_net_housing_cash_need",
-        "housing_lfa_draw",
-        "consumption_cut_amount",
-        "consumption",
-        "target_consumption",
-        "overdraft_repayment",
-        "early_consumer_repayment",
-        "scheduled_consumer_payment",
-        "actual_consumer_payment",
-        "unpaid_consumer_payment",
-        "actual_mortgage_payment",
-        "unpaid_mortgage_payment",
-        "liquid_financial_assets",
-        "target_consumption_calibrated_total",
-    )
+    diagnostic_fields = MPC_DIAGNOSTIC_FIELDS
     window_state_columns: dict[str, dict[str, np.ndarray]] = {
         state_name: {} for state_name in HOUSEHOLD_LABOR_STATE_COLUMNS
     }

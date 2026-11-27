@@ -173,59 +173,28 @@ def _run_one(
     return write_irf_series(seed_dir / AGGREGATES_NAME, series)
 
 
-def _run_seed(
-    *,
-    data: DataWrapper,
-    country_configurations: dict[str, CountryConfiguration],
-    country_code: str,
-    seed: int,
-    t_max: int,
-    baseline_dir: Path,
-    shocks_dir: Path,
+def _pair_run_outputs(
+    seed_list: list[int],
     shock_specs: tuple[ShockSpec, ...],
-    data_paths: DataPaths | None = None,
-    keep_full_h5: bool = False,
-    output_variables: list[str] | None = None,
+    outputs: dict[tuple[int, str | None], Path],
 ) -> list[dict[str, object]]:
-    baseline_output = _run_one(
-        data=data,
-        country_configurations=country_configurations,
-        country_code=country_code,
-        seed=seed,
-        t_max=t_max,
-        output_dir=baseline_dir,
-        shock_spec=None,
-        data_paths=data_paths,
-        keep_full_h5=keep_full_h5,
-        output_variables=output_variables,
-    )
+    """Pair each shock arm with its seed's single baseline (key ``(seed, None)``)."""
     rows: list[dict[str, object]] = []
-    for spec in shock_specs:
-        shock_output = _run_one(
-            data=data,
-            country_configurations=country_configurations,
-            country_code=country_code,
-            seed=seed,
-            t_max=t_max,
-            output_dir=shocks_dir / spec.name,
-            shock_spec=spec,
-            data_paths=data_paths,
-            keep_full_h5=keep_full_h5,
-            output_variables=output_variables,
-        )
-        rows.append(
-            {
-                "seed": int(seed),
-                "shock_name": spec.name,
-                "shock_kind": spec.kind,
-                "shock_period": spec.period,
-                "shock_magnitude": spec.magnitude,
-                "shock_duration": spec.duration,
-                "shock_mode": spec.mode,
-                "baseline_output": baseline_output,
-                "shock_output": shock_output,
-            }
-        )
+    for seed in seed_list:
+        for spec in shock_specs:
+            rows.append(
+                {
+                    "seed": int(seed),
+                    "shock_name": spec.name,
+                    "shock_kind": spec.kind,
+                    "shock_period": spec.period,
+                    "shock_magnitude": spec.magnitude,
+                    "shock_duration": spec.duration,
+                    "shock_mode": spec.mode,
+                    "baseline_output": outputs[(seed, None)],
+                    "shock_output": outputs[(seed, spec.name)],
+                }
+            )
     return rows
 
 
@@ -371,23 +340,30 @@ def run_irf_experiment(
     analysis_dir.mkdir(parents=True, exist_ok=True)
     _shock_specs_frame(shock_specs).to_csv(analysis_dir / "irf_shock_specs.csv", index=False)
 
-    run_rows_nested = Parallel(n_jobs=n_jobs, backend=backend, verbose=verbose, batch_size=batch_size)(
-        delayed(_run_seed)(
+    # One joblib task per simulation (seed x {baseline, shocks}), not per seed: every run is an
+    # independent simulation from t=0 with the same seed, so workers stay busy until the last run
+    # instead of idling while one worker finishes a whole seed. Pairing happens afterwards.
+    tasks: list[tuple[int, ShockSpec | None]] = [(seed, spec) for seed in seed_list for spec in (None, *shock_specs)]
+    task_outputs = Parallel(n_jobs=n_jobs, backend=backend, verbose=verbose, batch_size=batch_size)(
+        delayed(_run_one)(
             data=data,
             country_configurations=country_configurations,
             country_code=country_code,
             seed=seed,
             t_max=t_max,
-            baseline_dir=baseline_dir,
-            shocks_dir=shocks_dir,
-            shock_specs=shock_specs,
+            output_dir=baseline_dir if spec is None else shocks_dir / spec.name,
+            shock_spec=spec,
             data_paths=data_paths,
             keep_full_h5=keep_full_h5,
             output_variables=output_variables,
         )
-        for seed in seed_list
+        for seed, spec in tasks
     )
-    run_rows = [row for rows in run_rows_nested for row in rows]
+    outputs = {
+        (seed, None if spec is None else spec.name): path
+        for (seed, spec), path in zip(tasks, task_outputs, strict=True)
+    }
+    run_rows = _pair_run_outputs(seed_list, shock_specs, outputs)
     run_index = pd.DataFrame(run_rows)
     run_index.to_csv(analysis_dir / "irf_run_index.csv", index=False)
 

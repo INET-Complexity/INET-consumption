@@ -174,6 +174,7 @@ class EuroStatReader:
             "general_gov_debt_ratio": "eurostat_general_govdebt_ratios",
             "nonfinancial_transactions": "nasa_10_nf_tr",
             "cash_social_benefits": "nasa_10_nf_tr_d62",
+            "government_cash_social_benefits": "gov_10a_exp_d62",
             "longterm_central_gov_bond_rates": "eurostat_longterm_govbond_rates",
             "shortterm_interest_rates": "irt_st_a",
             "financial_balance_sheets": "nasa_10_f_bs",
@@ -789,6 +790,28 @@ class EuroStatReader:
         if isinstance(country, Region):
             return None
         df = self.data["cash_social_benefits"]
+        if df.loc[df["geo"] == country].empty:
+            return None
+        return float(self.find_value(df, country, str(year))) * 1e6
+
+    def government_cash_social_benefits(self, country: Country, year: int, cofog: str) -> Optional[float]:
+        """
+        Get cash social benefits (D62) paid by general government (S13) for one COFOG function.
+
+        Args:
+            country (Country): Country to get the aggregate for
+            year (int): Year to get the aggregate for
+            cofog (str): COFOG code, e.g. "GF10" (social protection), "GF1002" (old age),
+                "GF1003" (survivors), "GF1005" (unemployment)
+
+        Returns:
+            Optional[float]: Annual benefits in national currency units, or None for a region or a
+            country/function with no such series. No fallback is applied, because the value is an absolute amount.
+        """
+        if isinstance(country, Region):
+            return None
+        df = self.data["government_cash_social_benefits"]
+        df = df.loc[df["cofog99"] == cofog]
         if df.loc[df["geo"] == country].empty:
             return None
         return float(self.find_value(df, country, str(year))) * 1e6

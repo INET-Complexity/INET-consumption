@@ -429,7 +429,7 @@ def test__load_country_configuration_resolves_real_fra_tax_overrides():
     assert overrides.value_added_tax_rate == pytest.approx(0.13)
     assert overrides.household_investment_vat_rate == pytest.approx(0.13)
     assert overrides.household_capital_formation_rate == 0.0
-    assert overrides.firm_capital_formation_rate == 0.0
+    assert overrides.firm_capital_formation_rate == pytest.approx(0.05)  # ICIO GFCF product-tax rate
     assert overrides.production_tax_vector_scale == pytest.approx(1.0)
 
 

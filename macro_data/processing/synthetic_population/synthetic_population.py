@@ -305,6 +305,7 @@ class SyntheticPopulation(ABC):
         *,
         financial_income_tax: float,
         total_property_income: Optional[float] = None,
+        public_pension_share: Optional[float] = None,
     ) -> None:
         """Compute and update household income from all sources.
 

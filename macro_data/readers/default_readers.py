@@ -648,7 +648,10 @@ class DataReaders:
             * self.world_bank.get_current_scaled_gdp(country_name, year, rescale_factor=yearly_factor)
             for year in years
         ]
-        other = [self._all_benefits_lcu(country_name, year, yearly_factor) - unemp[i] for i, year in enumerate(years)]
+        other = [
+            self.get_non_unemployment_benefits_lcu(country_name, year, yearly_factor, unemp[i])
+            for i, year in enumerate(years)
+        ]
 
         benefits_data = pd.DataFrame(
             data={"Unemployment Benefits": unemp, "Other Total Benefits": other},
@@ -686,11 +689,47 @@ class DataReaders:
         """
         return self._all_benefits_lcu(country_name, year, yearly_factor)
 
-    def _all_benefits_lcu(self, country_name: Country, year: int, yearly_factor: float) -> float:
-        """Benefits paid in cash per period: national accounts D62, or the SOCX share of GDP without that series.
+    def get_non_unemployment_benefits_lcu(
+        self, country_name: Country, year: int, yearly_factor: float, unemployment_benefits_lcu: float
+    ) -> float:
+        """Government cash benefits other than unemployment, per period.
 
+        With Eurostat COFOG data: S13 D62 social protection (GF10) minus unemployment (GF1005), so the
+        envelope does not depend on a separately sourced unemployment figure. Otherwise: all benefits
+        minus ``unemployment_benefits_lcu``.
+        """
+        social_protection = self.eurostat.government_cash_social_benefits(country_name, year, "GF10")
+        unemployment = self.eurostat.government_cash_social_benefits(country_name, year, "GF1005")
+        if social_protection is not None and unemployment is not None:
+            return (social_protection - unemployment) / yearly_factor
+        return self._all_benefits_lcu(country_name, year, yearly_factor) - unemployment_benefits_lcu
+
+    def get_public_pension_share(self, country_name: Country, year: int) -> Optional[float]:
+        """Old-age plus survivors share of government non-unemployment cash benefits (S13 D62, COFOG).
+
+        Returns None without COFOG data; the household survey composition is then used instead.
+        """
+        values = {
+            code: self.eurostat.government_cash_social_benefits(country_name, year, code)
+            for code in ("GF10", "GF1002", "GF1003", "GF1005")
+        }
+        if any(v is None for v in values.values()):
+            return None
+        non_unemployment = values["GF10"] - values["GF1005"]
+        if non_unemployment <= 0.0:
+            return None
+        return (values["GF1002"] + values["GF1003"]) / non_unemployment
+
+    def _all_benefits_lcu(self, country_name: Country, year: int, yearly_factor: float) -> float:
+        """Benefits paid in cash per period.
+
+        Preference order: general government D62 for social protection (S13, COFOG GF10); household D62
+        received (S14_S15, which also contains employer and insurer benefits); the SOCX share of GDP.
         SOCX includes benefits in kind, which government consumption already contains.
         """
+        government_benefits = self.eurostat.government_cash_social_benefits(country_name, year, "GF10")
+        if government_benefits is not None:
+            return government_benefits / yearly_factor
         cash_benefits = self.eurostat.household_cash_social_benefits(country_name, year)
         if cash_benefits is not None:
             return cash_benefits / yearly_factor

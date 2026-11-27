@@ -950,3 +950,17 @@ def test_bank_credit_supply_caps_subtract_overdrafts_from_capital_headroom():
     )
     caps = _compute_bank_credit_supply_caps(SimpleNamespace(banks=banks, economy=None, credit_market=None))
     np.testing.assert_allclose(caps["total"], [[40.0, 50.0]])
+
+
+def test_irf_active_quarters_covers_rehiring_lockout():
+    from src.visual_helpers import irf_active_quarters
+
+    specs = pd.DataFrame(
+        {
+            "shock_name": ["policy", "job_loss", "transfer"],
+            "shock_duration": [4, 1, 1],
+            "shock_rehiring_lockout_duration": [np.nan, 4, np.nan],
+        }
+    )
+    assert irf_active_quarters(specs) == {"policy": 4, "job_loss": 4, "transfer": 1}
+    assert irf_active_quarters(specs.drop(columns="shock_rehiring_lockout_duration"))["job_loss"] == 1

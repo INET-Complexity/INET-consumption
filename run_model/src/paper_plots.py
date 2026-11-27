@@ -177,8 +177,13 @@ def mpc_group_constraint_figure(
     with plt.rc_context(STYLE):
         fig, axes = plt.subplots(2, n_cols, figsize=(2.6 * n_cols, 5.6), sharey=True, squeeze=False)
         for ax, code in zip(axes.flat, codes):
-            in_group = panel.group_code.eq(code)
+            # Households without a constraint label (e.g. minimum-income recipients, arrears-only cases) are
+            # left out, so the C and U shares add to 100% and the diamond is exactly their weighted average.
+            in_group = panel.group_code.eq(code) & panel[split_column].isin(split_order).fillna(False)
             group_values = panel.loc[in_group, outcome].dropna()
+            if group_values.empty:
+                ax.set_visible(False)
+                continue
             group_mean = group_values.mean()
             rows.append({"panel": "group_code", "group": code, "n": len(group_values), "mean": group_mean})
             labels = []

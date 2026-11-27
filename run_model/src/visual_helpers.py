@@ -156,7 +156,7 @@ IRF_PANEL_GROUPS = {
 }
 
 
-def _prepare_irf_plot_panel(panel: pd.DataFrame, periods_per_year: int = 1) -> pd.DataFrame:
+def _prepare_irf_plot_panel(panel: pd.DataFrame, periods_per_year: int = 4) -> pd.DataFrame:
     """Convert stored IRF deltas to plot units and derive real aggregates.
 
     Interest rates are stored per model period; ``periods_per_year`` scales
@@ -255,6 +255,20 @@ def _split_irf_label(label: str) -> tuple[str, str]:
     return label, ""
 
 
+def irf_active_quarters(shock_specs: pd.DataFrame) -> dict[str, int]:
+    """Quarters in which each shock is active, for grey shading in IRF plots.
+
+    ``shock_specs`` is ``irf_shock_specs.csv`` from the IRF analysis folder.
+    A shock is active for its impulse duration and, for job-loss shocks with
+    a hiring restriction, for the rehiring lockout, whichever is longer.
+    """
+    duration = shock_specs["shock_duration"].fillna(1).astype(int)
+    if "shock_rehiring_lockout_duration" in shock_specs.columns:
+        lockout = pd.to_numeric(shock_specs["shock_rehiring_lockout_duration"], errors="coerce").fillna(0).astype(int)
+        duration = np.maximum(duration, lockout)
+    return dict(zip(shock_specs["shock_name"], duration.astype(int)))
+
+
 def plot_irf_panels(
     panel: pd.DataFrame,
     shock_names: list[str] | tuple[str, ...],
@@ -305,6 +319,7 @@ def plot_irf_panels(
     inner_pct = int(round((1.0 - 2.0 * inner_confidence) * 100))
     n_seeds = plot_panel["seed"].nunique()
     if shock_durations is None and "shock_duration" in panel.columns:
+        # Fallback without the specs file: impulse duration only (no rehiring lockout).
         shock_durations = panel.dropna(subset=["shock_duration"]).groupby("shock_name")["shock_duration"].first()
         shock_durations = {name: int(value) for name, value in shock_durations.items()}
     shock_durations = shock_durations or {}
@@ -370,7 +385,7 @@ def plot_irf_panels(
                         ax.set_xlabel("Quarters after shock")
             note = f"Median across {n_seeds} paired seeds; bands: {inner_pct}% and {outer_pct}% of seeds"
             if shock_durations:
-                note += "; grey: quarters with active impulse"
+                note += "; grey: quarters with the shock or hiring freeze active"
             fig.suptitle(f"{group_name} ({country})", fontweight="bold", fontsize=12)
             fig.text(0.5, -0.005, note, ha="center", va="top", fontsize=8.5, color="#555555")
         figures.append(fig)

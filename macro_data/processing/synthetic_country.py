@@ -954,6 +954,9 @@ class SyntheticCountry:
             independents=independents,
             financial_income_tax=tax_data.income_tax,
             total_property_income=household_property_income,
+            public_pension_share=central_government.central_gov_data.get(
+                "Public Pension Share", pd.Series([None])
+            ).values[0],
         )
         if consumption_initialisation is not None and consumption_initialisation.balance_sheet_scaling:
             if is_scaled(population):

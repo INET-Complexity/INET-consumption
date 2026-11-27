@@ -26,6 +26,7 @@ Note:
 
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
@@ -168,23 +169,27 @@ class DefaultSyntheticCGovernment(SyntheticCentralGovernment):
                 year,
                 yearly_factor=yearly_factor,
             )
-            current_other_benefits = (
-                readers.get_total_benefits_lcu(country_name, year, yearly_factor=yearly_factor)
-                - current_unemployment_benefits
+            current_other_benefits = readers.get_non_unemployment_benefits_lcu(
+                country_name, year, yearly_factor, current_unemployment_benefits
             )
 
         # TODO: debt in USD or in local currency?
 
         debt = readers.world_bank.get_central_gov_debt(country_name, year)
+        # Old-age plus survivors share of the envelope from S13 COFOG data; NaN means
+        # the synthetic population uses the household survey composition instead.
+        public_pension_share = readers.get_public_pension_share(country_name, year)
+        public_pension_share = np.nan if public_pension_share is None else float(public_pension_share)
 
         central_gov_data = pd.DataFrame(
             data={
                 "Total Unemployment Benefits": [current_unemployment_benefits],
-                # The OECD aggregate is the portable reader-derived envelope for
-                # non-unemployment cash benefits.  Synthetic-population
-                # initialisation splits it into public pensions and other
-                # transfers using HFCS source weights.
+                # Reader-derived envelope for non-unemployment cash benefits (S13
+                # COFOG where available). Synthetic-population initialisation
+                # splits it into public pensions and other transfers: totals from
+                # "Public Pension Share" when available, HFCS only for allocation.
                 "Reader Non-Unemployment Social Benefits": [current_other_benefits],
+                "Public Pension Share": [public_pension_share],
                 "Public Pension Benefits": [0.0],
                 "Other Social Benefits": [current_other_benefits],
                 "Debt": [debt],

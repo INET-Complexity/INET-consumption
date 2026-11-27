@@ -529,6 +529,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         *,
         financial_income_tax: float,
         total_property_income: Optional[float] = None,
+        public_pension_share: Optional[float] = None,
     ) -> None:
         """
         Computes the household income based on the given total social transfers.
@@ -536,6 +537,8 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         Args:
             total_social_transfers (float): The total amount of social transfers.
             independents (Optional[list[str]]): The list of independent variables. Defaults to ["Income", "Debt"].
+            public_pension_share (Optional[float]): Public-pension share of the transfer envelope from
+                national accounts. None uses the household survey composition.
 
         Returns:
             None
@@ -547,6 +550,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         self.set_household_social_transfers(
             total_social_transfers=total_social_transfers,
             independents=independents,
+            public_pension_share=public_pension_share,
         )
         self.set_household_employee_income()
         self.set_household_income_from_financial_assets(total_property_income=total_property_income)
@@ -734,7 +738,10 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
         ]
 
     def set_household_social_transfers(
-        self, total_social_transfers: float, independents: Optional[list[str]] = None
+        self,
+        total_social_transfers: float,
+        independents: Optional[list[str]] = None,
+        public_pension_share: Optional[float] = None,
     ) -> None:
         """
         Sets the household social transfers based on the total social transfers and independent variables.
@@ -783,13 +790,19 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
                 return np.full(len(weights), budget / len(weights), dtype=float)
             return budget * weights / weight_sum
 
-        # The reader-derived non-unemployment envelope is authoritative. HFCS
-        # values supply only the composition weights, so sampling scale and the
-        # survey-weight bootstrap cannot change its total.
-        composition_total = public_pension_source.clip(lower=0.0).sum() + other_transfer_source.clip(lower=0.0).sum()
-        public_pension_share = (
-            public_pension_source.clip(lower=0.0).sum() / composition_total if composition_total > 0.0 else 0.0
-        )
+        # The reader-derived non-unemployment envelope is authoritative. The
+        # pension/other split comes from national accounts when supplied;
+        # otherwise from the HFCS composition. HFCS values always supply the
+        # allocation weights across households, so sampling scale and the
+        # survey-weight bootstrap cannot change either total.
+        if public_pension_share is None or not np.isfinite(public_pension_share):
+            composition_total = (
+                public_pension_source.clip(lower=0.0).sum() + other_transfer_source.clip(lower=0.0).sum()
+            )
+            public_pension_share = (
+                public_pension_source.clip(lower=0.0).sum() / composition_total if composition_total > 0.0 else 0.0
+            )
+        public_pension_share = min(max(float(public_pension_share), 0.0), 1.0)
         public_pension_budget = total_social_transfers * public_pension_share
         other_transfer_budget = max(total_social_transfers - public_pension_budget, 0.0)
 

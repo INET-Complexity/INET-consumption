@@ -213,7 +213,7 @@ def test_top_up_ignores_period_t_planned_rent_and_the_mpc_receipt(test_country, 
     n = test_country.households.ts.current("n_households")
     shock = np.full(n, 5000.0)
     test_country.stage_household_income_shock(shock, exempt_from_support_test=True)
-    planned_rent = np.full(n, 1e6)
+    planned_rent = np.full(n, 1e5)
 
     for country in (twin, test_country):
         monkeypatch.setattr(country.households, "compute_rental_income", lambda **_kwargs: planned_rent)

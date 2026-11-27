@@ -1146,9 +1146,21 @@ def build_macro_output_df(model, country_code):
     gdp = get_column("gdp")
     household_consumption = get_column("household_consumption")
     government_consumption = get_column("government_consumption")
-    total_consumption = None
     if household_consumption is not None and government_consumption is not None:
-        total_consumption = add_column("total_consumption", household_consumption + government_consumption)
+        add_column("total_consumption", household_consumption + government_consumption)
+
+    # "Household Consumption" is goods only (VAT-inclusive, excluding rent), while
+    # GDP_Expenditure includes paid and imputed rent via household FCE
+    # (economy.py, household_fce_na). Ratios to GDP use FCE so that numerator and
+    # denominator share one concept; the goods-only ratio is kept under its own name.
+    household_fce = None
+    fce_values = _safe_ts_values(country.economy.ts, "total_household_fce")
+    if fce_values is not None:
+        household_fce = add_column("household_fce", as_output_series(fce_values))
+    household_consumption_for_ratio = household_fce if household_fce is not None else household_consumption
+    total_consumption_for_ratio = None
+    if household_consumption_for_ratio is not None and government_consumption is not None:
+        total_consumption_for_ratio = household_consumption_for_ratio + government_consumption
 
     ppi = get_column("ppi")
     if gdp is not None:
@@ -1207,9 +1219,10 @@ def build_macro_output_df(model, country_code):
             productivity_values.index = out_index
             add_ratio("total_productivity_investment_to_gdp", productivity_values, gdp)
 
-    add_ratio("household_consumption_to_gdp", household_consumption, gdp)
+    add_ratio("household_consumption_to_gdp", household_consumption_for_ratio, gdp)
+    add_ratio("household_goods_consumption_to_gdp", household_consumption, gdp)
     add_ratio("government_consumption_to_gdp", government_consumption, gdp)
-    add_ratio("total_consumption_to_gdp", total_consumption, gdp)
+    add_ratio("total_consumption_to_gdp", total_consumption_for_ratio, gdp)
     add_ratio("investment_to_gdp", get_column("gfcf"), gdp)
     exports = get_column("exports")
     imports = get_column("imports")

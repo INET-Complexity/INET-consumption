@@ -1261,12 +1261,18 @@ class CreditMarket:
         future_cons_service: np.ndarray,
         old_mortgage_service: np.ndarray,
     ) -> np.ndarray:
-        """All-or-nothing mortgage test: total service after the grant against income."""
+        """All-or-nothing mortgage test: total service after the grant against income.
+
+        When insolvency opens FICP, households under an FICP ban are refused.
+        """
         income = np.asarray(households.consumer_underwriting_income, dtype=float)
         limit = float(households.consumer_underwriting_dsti_limit)
         other = np.asarray(households.consumer_underwriting_other_service, dtype=float)
         combined = future_cons_service + old_mortgage_service + mortgage_loans[2].sum(axis=0) + other
-        return (mortgage_loans[0].sum(axis=0) > 0) & (combined > limit * income + 1e-8)
+        refused = combined > limit * income + 1e-8
+        if getattr(households, "consumer_insolvency_opens_ficp", False):
+            refused = refused | households.current_ficp_active()
+        return (mortgage_loans[0].sum(axis=0) > 0) & refused
 
     def _complete_property_purchases(
         self,

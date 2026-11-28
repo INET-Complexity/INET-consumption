@@ -50,12 +50,17 @@ def compute_stage6_consumer_distress_state(
     ficp_exclusion_periods: int,
     prior_ficp_episode_missed_payment_count: np.ndarray | None = None,
     prior_ficp_episode_status: np.ndarray | None = None,
+    forced_ficp_trigger: np.ndarray | None = None,
 ) -> Stage6ConsumerDistressState:
     """Classify authoritative consumer-payment settlement without mutating it.
 
     Misses accumulate over the household's history. The second miss starts the
     configured FICP exclusion; while that exclusion is active, a fully paid
     period decrements its remaining duration but does not reset the miss count.
+
+    ``forced_ficp_trigger`` opens an episode without a missed payment: a
+    household found insolvent at the end of the previous period enters FICP
+    (over-indebtedness procedure). It is ignored where an exclusion is active.
     """
     scheduled = np.asarray(scheduled_consumer_payments, dtype=float)
     actual_payment = np.asarray(actual_consumer_payments, dtype=float)
@@ -121,6 +126,13 @@ def compute_stage6_consumer_distress_state(
     else:
         episode_missed_payment_count = missed_payment_count.copy()
         new_ficp_trigger = payment_missed & (missed_payment_count >= 2) & (cleaned_prior_exclusion == 0)
+    if forced_ficp_trigger is not None:
+        forced = np.asarray(forced_ficp_trigger, dtype=bool)
+        if forced.shape != expected_shape:
+            raise ValueError(
+                f"forced_ficp_trigger must match scheduled_consumer_payments shape {expected_shape}; got {forced.shape}."
+            )
+        new_ficp_trigger = new_ficp_trigger | (forced & (cleaned_prior_exclusion == 0))
     exclusion_remaining = np.where(
         new_ficp_trigger,
         ficp_exclusion_periods,

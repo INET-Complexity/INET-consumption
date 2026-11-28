@@ -2540,11 +2540,14 @@ class Households(Agent):
         )
 
     def current_financing_income(self) -> np.ndarray:
-        """Known current wages/benefits plus remaining cash-receipt forecasts."""
+        """Known current wages/benefits plus remaining cash-receipt forecasts, net of housing taxes."""
+        if getattr(self, "_known_receipts_ready", False):
+            return self.ts.current("financing_income")
+        # Housing taxes are paid from deposits at settlement (fixed at the start of the period).
         return (
-            self.ts.current("financing_income")
-            if getattr(self, "_known_receipts_ready", False)
-            else self.ts.current("expected_income")
+            self.ts.current("expected_income")
+            - self.ts.current("housing_taxes_property")
+            - self.ts.current("housing_taxes_residence")
         )
 
     def refresh_post_labour_feasibility(self, scheduled_debt_service: np.ndarray) -> None:

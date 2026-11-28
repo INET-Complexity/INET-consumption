@@ -789,6 +789,8 @@ class Country:
         )
         # The expected social income removed above contains the period's minimum income T once; carry it back.
         receipts = receipts + wages + pension + unemployment + other + minimum_income
+        # Housing taxes are paid from deposits at settlement: plan for them.
+        receipts = receipts - self._current_household_housing_taxes()
         hh.ts.override_current("financing_income", receipts)
         hh._known_receipts_ready = True
 
@@ -2362,13 +2364,42 @@ class Country:
             self.households.ts.expected_income_dividend_distributions.append(expected_dividend_income)
             self.households.ts.total_expected_income_dividend_distributions.append([expected_dividend_income.sum()])
 
+        if not replace_current:
+            self._append_household_housing_taxes()
         expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
             self.households.ts.override_current("expected_income", expected_household_income)
         else:
             self.households._known_receipts_ready = False
             self.households.ts.expected_income.append(expected_household_income)
-            self.households.ts.financing_income.append(expected_household_income.copy())
+            self.households.ts.financing_income.append(
+                expected_household_income - self._current_household_housing_taxes()
+            )
+
+    def _append_household_housing_taxes(self) -> None:
+        """Fix this period's housing taxes before households plan.
+
+        Owner and occupant are those at the start of the period, as French
+        property and residence taxes are fixed on 1 January; the occupant's
+        rental value is the latest recorded rent (cash or imputed). The plan
+        (financing income) and the settlement (realised income) use this one
+        amount, so a household that spends its whole plan is not overdrawn by
+        the tax.
+        """
+        properties = self.housing_market.states["properties"]
+        property_tax, residence_tax = self.central_government.compute_household_housing_taxes(
+            property_values=properties["Value"].fillna(0.0).values,
+            property_owner_ids=properties["Corresponding Owner Household ID"].values,
+            occupant_rental_value=self.households.ts.current("rent") + self.households.ts.current("rent_imputed"),
+        )
+        self.households.ts.housing_taxes_property.append(property_tax)
+        self.households.ts.housing_taxes_residence.append(residence_tax)
+
+    def _current_household_housing_taxes(self) -> np.ndarray:
+        """This period's property and residence taxes by household."""
+        return np.asarray(self.households.ts.current("housing_taxes_property"), dtype=float) + np.asarray(
+            self.households.ts.current("housing_taxes_residence"), dtype=float
+        )
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
@@ -5112,16 +5143,8 @@ class Country:
             [self.households.ts.current("income_financial_assets").sum()]
         )
         self.reconcile_realised_household_support()
-        # Housing taxes: owner pays property tax on every owned dwelling (incl. rented-out), occupant pays
-        # residence tax on rental value (cash or imputed rent). Netted from income, hence from deposits.
-        properties = self.housing_market.states["properties"]
-        housing_taxes_property, housing_taxes_residence = self.central_government.compute_household_housing_taxes(
-            property_values=properties["Value"].fillna(0.0).values,
-            property_owner_ids=properties["Corresponding Owner Household ID"].values,
-            occupant_rental_value=self.households.ts.current("rent") + self.households.ts.current("rent_imputed"),
-        )
-        self.households.ts.housing_taxes_property.append(housing_taxes_property)
-        self.households.ts.housing_taxes_residence.append(housing_taxes_residence)
+        # Housing taxes (fixed at the start of the period, see _append_household_housing_taxes) are netted
+        # from realised income, hence from deposits, by compute_income.
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
         # The staged one-off transfer is paid by the central government: keep its total for the deficit.
         staged_shock = self._staged_household_income_shock

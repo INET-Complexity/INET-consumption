@@ -369,6 +369,7 @@ class Households(Agent):
         self.housing_input_weights = np.zeros(n_industries)
         self.initial_housing_input_goods = 0.0
         self.uses_feasibility_resolver = uses_feasibility_resolver
+        self._validate_ficp_routing_resolver()
         self.financial_feasibility = HouseholdFinancialFeasibility()
         self.pre_grant_feasible_plan: PreGrantFeasiblePlan | None = None
         self.post_grant_feasible_plan: PostGrantFeasiblePlan | None = None
@@ -710,7 +711,10 @@ class Households(Agent):
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
         # Households found insolvent at the end of a period; they enter FICP in
         # the next period when the insolvency handler routes insolvency to FICP.
+        # Stage 6 consumes (zeroes) the pending trigger; the consumed value is
+        # kept, one row per Stage 6, in ficp_generic_insolvency_trigger_consumed.
         ts["ficp_generic_insolvency_trigger"] = np.full(n_households_at_init, False)
+        ts["ficp_generic_insolvency_trigger_consumed"] = np.full(n_households_at_init, False)
 
         # Households living in social housing (no dwelling), recorded after each housing clearing.
         ts["social_housing_tenant"] = np.asarray(states["Corresponding Inhabited House ID"]) == -1
@@ -806,6 +810,7 @@ class Households(Agent):
     ) -> None:
         """Configure whether the live Stage 5 feasibility handoff is active."""
         self.uses_feasibility_resolver = bool(uses_feasibility_resolver)
+        self._validate_ficp_routing_resolver()
         if (
             not self.uses_feasibility_resolver
             and type(self.functions["wealth"]).__name__ == "PaperAssetReturnWealthSetter"
@@ -820,6 +825,14 @@ class Households(Agent):
         self.pre_grant_feasible_plan = None
         if clear_post_grant or not self.uses_feasibility_resolver:
             self.post_grant_feasible_plan = None
+
+    def _validate_ficp_routing_resolver(self) -> None:
+        """Fail fast: the FICP credit ban is enforced only by the Stage 5 feasibility resolver."""
+        if self.consumer_insolvency_opens_ficp and not self.uses_feasibility_resolver:
+            raise ValueError(
+                "insolvency consumer_insolvency_opens_ficp: true requires households uses_feasibility_resolver: true "
+                "(the FICP ban on new consumer credit is enforced only in the resolver path)."
+            )
 
     def clear_pre_grant_feasible_plan(self) -> None:
         """Clear the runtime Stage 5 live feasibility carrier."""
@@ -935,11 +948,15 @@ class Households(Agent):
 
         When insolvency opens FICP, a household flagged insolvent at the end of
         the previous period is gated from the start of this period, before
-        Stage 6 opens its episode.
+        Stage 6 opens its episode. Stage 6 consumes the trigger, so after Stage 6
+        the gate is ``ficp_exclusion_remaining_periods > 0`` only.
         """
         remaining = np.asarray(self.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
         active = np.isfinite(remaining) & (remaining > 0.0)
         if self.consumer_insolvency_opens_ficp:
+            # A pending trigger also makes the household eligible for early consumer repayment
+            # (populate_post_grant_early_repayment_capacity) before Stage 6 opens the episode,
+            # which lowers the balance the episode opens with.
             active = active | np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool)
         return active
 
@@ -1396,16 +1413,16 @@ class Households(Agent):
         contractual_principal = _household_vector("consumer_contractual_principal", consumer_contractual_principal)
         principal_arrears = _household_vector("consumer_principal_arrears", consumer_principal_arrears)
         interest_arrears = _household_vector("consumer_interest_arrears", consumer_interest_arrears)
+        pending_generic_trigger = np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool).copy()
         forced_ficp_trigger = None
         if self.consumer_insolvency_opens_ficp:
             # Insolvency at the end of the previous period opens FICP now, unless
-            # an earlier forgiveness event is still being processed.
+            # an earlier forgiveness event is still being processed. A masked
+            # trigger is dropped; F2 re-tests the household this period.
             pending_event = np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool) & (
                 np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float) < 3.0
             )
-            forced_ficp_trigger = (
-                np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool) & ~pending_event
-            )
+            forced_ficp_trigger = pending_generic_trigger & ~pending_event
         state = compute_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled_consumer_payments,
             actual_consumer_payments=actual_consumer_payments,
@@ -1532,6 +1549,11 @@ class Households(Agent):
         }
         for field_name, values in event_fields.items():
             getattr(self.ts, field_name).append(values)
+        # Consume the generic-insolvency trigger: from here on every reader of
+        # current_ficp_active() relies on ficp_exclusion_remaining_periods. A
+        # trigger masked above must not survive into remodulation or F2.
+        self.ts.ficp_generic_insolvency_trigger_consumed.append(pending_generic_trigger)
+        self.ts.override_current("ficp_generic_insolvency_trigger", np.zeros(n_households, dtype=bool))
 
         return tuple(
             FICPForgivenessEvent(

@@ -106,9 +106,11 @@ FRA:
         name: DefaultHouseholdInsolvencyHandler
         path_name: insolvency
         parameters:
-          # true routes insolvent households to FICP (20-quarter ban on consumer
-          # credit and mortgages, rescheduled repayment, residual forgiven with a
-          # bank loss). false (current default) keeps the legacy instant consumer
+          # true routes insolvent households with consumer loans to FICP (5-year
+          # ban on consumer credit and mortgages, rescheduled repayment, residual
+          # forgiven with a bank loss); requires uses_feasibility_resolver: true.
+          # Model addition: in the paper FICP opens only on a second missed
+          # payment. false (current default) keeps the legacy instant consumer
           # write-off with no bank loss and no ban. Off until the household
           # insolvency incidence is fixed.
           consumer_insolvency_opens_ficp: false

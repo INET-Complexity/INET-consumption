@@ -64,10 +64,20 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
     - NPL ratio calculations
 
     With ``consumer_insolvency_opens_ficp`` an insolvent household keeps its
-    consumer loans and enters FICP in the next period (20-quarter ban,
-    rescheduled repayment, residual forgiven with a bank loss at the end).
-    Without it, consumer loans are removed with no bank loss (legacy).
-    Mortgages are removed and booked as bank losses in both cases.
+    consumer loans. If it has consumer loans and is not already under FICP, it
+    enters FICP in the next period (5-year ban, rescheduled repayment, residual
+    forgiven with a bank loss at the end). A household insolvent only through
+    an overdraft or a mortgage does not enter FICP. Without the flag, consumer
+    loans are removed with no bank loss (legacy). Mortgages are removed and
+    booked as bank losses in both cases.
+
+    The generic insolvency path is a model addition: in the paper, FICP is
+    entered only by a second missed payment.
+
+    No back-to-back bans: at the end of an episode the residual consumer debt
+    is forgiven (F2, before this handler runs), so the household has no
+    consumer loans and cannot be re-triggered at once. Re-entry needs new
+    borrowing after the ban.
     """
 
     def __init__(self, consumer_insolvency_opens_ficp: bool = False):
@@ -105,7 +115,10 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
         if self.consumer_insolvency_opens_ficp:
             # Consumer loans stay with the household; FICP settles them.
             consumer_terminal_removal_exclusion = np.ones_like(credit_market.states["cons_loans"][0], dtype=bool)
-            self.last_ficp_trigger = insolvent_mask & ~households.current_ficp_active()
+            # FICP needs consumer debt: overdraft- or mortgage-only insolvency does not open an episode.
+            # Consumer interest arrears alone (they can come from unpaid overdraft interest) do not count.
+            has_consumer_loans = credit_market.states["cons_loans"][0].sum(axis=0) > 0.0
+            self.last_ficp_trigger = insolvent_mask & has_consumer_loans & ~households.current_ficp_active()
         else:
             self.last_ficp_trigger = None
         bad_hh_cons_loans, bad_mortgages = credit_market.remove_loans_to_households(

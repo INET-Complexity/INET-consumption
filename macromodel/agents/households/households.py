@@ -708,6 +708,9 @@ class Households(Agent):
         # state distinct from the Stage 5 pre-support diagnostic layer.
         for _field_name, _zero_value in _STAGE6_DISTRESS_INITIAL_VALUES.items():
             ts[_field_name] = np.full(n_households_at_init, _zero_value)
+        # Households found insolvent at the end of a period; they enter FICP in
+        # the next period when the insolvency handler routes insolvency to FICP.
+        ts["ficp_generic_insolvency_trigger"] = np.full(n_households_at_init, False)
 
         # Households living in social housing (no dwelling), recorded after each housing clearing.
         ts["social_housing_tenant"] = np.asarray(states["Corresponding Inhabited House ID"]) == -1
@@ -921,10 +924,24 @@ class Households(Agent):
         credit_requested = np.asarray(credit_requested, dtype=float)
         return np.where(np.isfinite(credit_requested), np.maximum(credit_requested, 0.0), 0.0)
 
+    @property
+    def consumer_insolvency_opens_ficp(self) -> bool:
+        """Whether generic insolvency opens an FICP episode instead of forgiving consumer debt."""
+        handler = (getattr(self, "functions", None) or {}).get("insolvency")
+        return bool(getattr(handler, "consumer_insolvency_opens_ficp", False))
+
     def current_ficp_active(self) -> np.ndarray:
-        """Return the persisted operational FICP gate for the current period."""
+        """Return the persisted operational FICP gate for the current period.
+
+        When insolvency opens FICP, a household flagged insolvent at the end of
+        the previous period is gated from the start of this period, before
+        Stage 6 opens its episode.
+        """
         remaining = np.asarray(self.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
-        return np.isfinite(remaining) & (remaining > 0.0)
+        active = np.isfinite(remaining) & (remaining > 0.0)
+        if self.consumer_insolvency_opens_ficp:
+            active = active | np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool)
+        return active
 
     def populate_pre_grant_feasible_plan_planned_liquidation(
         self,
@@ -1379,6 +1396,16 @@ class Households(Agent):
         contractual_principal = _household_vector("consumer_contractual_principal", consumer_contractual_principal)
         principal_arrears = _household_vector("consumer_principal_arrears", consumer_principal_arrears)
         interest_arrears = _household_vector("consumer_interest_arrears", consumer_interest_arrears)
+        forced_ficp_trigger = None
+        if self.consumer_insolvency_opens_ficp:
+            # Insolvency at the end of the previous period opens FICP now, unless
+            # an earlier forgiveness event is still being processed.
+            pending_event = np.asarray(self.ts.current("ficp_forgiveness_event_emitted"), dtype=bool) & (
+                np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float) < 3.0
+            )
+            forced_ficp_trigger = (
+                np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool) & ~pending_event
+            )
         state = compute_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled_consumer_payments,
             actual_consumer_payments=actual_consumer_payments,
@@ -1388,6 +1415,7 @@ class Households(Agent):
             ficp_exclusion_periods=5 * (12 // time_unit),
             prior_ficp_episode_missed_payment_count=self.ts.current("ficp_episode_missed_payment_count"),
             prior_ficp_episode_status=self.ts.current("ficp_episode_status"),
+            forced_ficp_trigger=forced_ficp_trigger,
         )
         prior_exclusion = np.asarray(self.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
         if debt_components_missing and (
@@ -4858,7 +4886,12 @@ class Households(Agent):
         }
         if "consumer_terminal_removal_exclusion" in parameters:
             kwargs["consumer_terminal_removal_exclusion"] = consumer_terminal_removal_exclusion
-        return handler(**kwargs)
+        result = handler(**kwargs)
+        trigger = getattr(self.functions["insolvency"], "last_ficp_trigger", None)
+        if trigger is None:
+            trigger = np.zeros(int(self.ts.current("n_households")), dtype=bool)
+        self.ts.ficp_generic_insolvency_trigger.append(np.asarray(trigger, dtype=bool))
+        return result
 
     def save_to_h5(self, group: h5py.Group):
         """Save household data to HDF5.

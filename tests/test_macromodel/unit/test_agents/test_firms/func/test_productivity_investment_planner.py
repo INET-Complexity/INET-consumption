@@ -548,6 +548,170 @@ class TestTargetIntensityTFPInvestmentPlanner:
                 **{**create_test_params(1, n_industries=18), "current_nominal_production": np.array([1000.0])},
             )
 
+    @staticmethod
+    def _plan_berd(planner, effective_cost_rate, available_cash=None):
+        """Plan for 4 firms in 3 sectors with BERD-scale targets (pinned regression set-up)."""
+        if available_cash is None:
+            available_cash = np.full(4, 1e6)
+        return planner.plan_productivity_investment(
+            current_tfp=np.ones(4),
+            current_production=np.full(4, 100.0),
+            current_unit_costs=np.full(4, 10.0),
+            available_cash=available_cash,
+            current_prices=np.ones(3),
+            n_industries=3,
+            input_usage=np.ones((4, 3)),
+            current_tech_multipliers=np.ones((4, 3)),
+            substitution_bundle_matrix=None,
+            current_nominal_production=np.array([1000.0, 2000.0, 500.0, 1500.0]),
+            firm_industries=np.array([0, 1, 2, 0]),
+            effective_cost_rate=effective_cost_rate,
+        )
+
+    @staticmethod
+    def _berd_planner(**overrides):
+        params = {
+            "n_firms": 4,
+            "sector_innovation_intensity": {"0": 0.03, "1": 0.005, "2": 0.0001},
+            "cap_multiplier": 2.5,
+            "investment_effectiveness": 0.005,
+            "investment_elasticity": 0.3,
+            "reference_effective_cost_rate": 0.01,
+            "adjustment_cost_lambda": 1.0,
+            "tfp_risk_premium": 0.001,
+        }
+        params.update(overrides)
+        return TargetIntensityTFPInvestmentPlanner(**params)
+
+    def test_zero_rd_depreciation_reproduces_pre_change_outputs(self):
+        # Values pinned from origin/main (2475648b) before rd_depreciation_rate existed. Compared with a
+        # tight tolerance because np.power can differ in the last ulp across platforms (macOS vs CI Linux).
+        rates = np.array([0.0025, 0.004, 0.02, 0.0025])
+        cash = np.array([1e6, 1e6, 1e6, 0.5])
+        default = self._berd_planner()
+        explicit_zero = self._berd_planner(rd_depreciation_rate=0.0)
+        _, tfp_default, _ = self._plan_berd(default, rates, available_cash=cash)
+        _, tfp_zero, _ = self._plan_berd(explicit_zero, rates, available_cash=cash)
+        diagnostics = explicit_zero.last_diagnostics
+
+        # Adding delta = 0.0 to the cost is bitwise neutral.
+        assert np.array_equal(tfp_default, tfp_zero)
+        assert np.array_equal(diagnostics["user_cost"], diagnostics["effective_cost_rate"])
+        for key in ("desired_intensity", "desired_marginal_cost", "cash_binding"):
+            assert np.array_equal(default.last_diagnostics[key], diagnostics[key])
+
+        np.testing.assert_allclose(
+            tfp_zero, [33.51498362322307, 13.86539638155515, 0.017530533876910618, 0.5], rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            diagnostics["desired_intensity"],
+            [0.03351498362322307, 0.006932698190777575, 3.506106775382124e-05, 0.03351498362322307],
+            rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["desired_marginal_cost"],
+            [0.03701498362322307, 0.011932698190777576, 0.021035061067753824, 0.03701498362322307],
+            rtol=1e-12,
+        )
+        assert diagnostics["cash_binding"].tolist() == [0.0, 0.0, 0.0, 1.0]
+
+    def test_rd_depreciation_raises_user_cost_and_lowers_desired_intensity_at_same_omega(self):
+        rates = np.array([0.0025, 0.004, 0.02, 0.0025])
+        base = self._berd_planner()
+        depreciating = self._berd_planner(rd_depreciation_rate=0.0537)
+
+        self._plan_berd(base, rates)
+        self._plan_berd(depreciating, rates)
+        base_diag = base.last_diagnostics
+        dep_diag = depreciating.last_diagnostics
+
+        # Numeric reference rate: omega does not depend on delta.
+        target = np.array([0.03, 0.005, 0.0001, 0.03])
+        assert np.array_equal(
+            base._private_value_weight_by_firm(target, base_diag["user_cost"]),
+            depreciating._private_value_weight_by_firm(target, dep_diag["user_cost"]),
+        )
+        assert np.allclose(dep_diag["effective_cost_rate"], rates + 0.001)
+        assert np.allclose(dep_diag["user_cost"], rates + 0.001 + 0.0537)
+        # Marginal cost at a common intensity rises by exactly delta.
+        assert np.allclose(
+            dep_diag["desired_marginal_cost"] - dep_diag["desired_intensity"],
+            base_diag["desired_marginal_cost"] - base_diag["desired_intensity"] + 0.0537,
+        )
+        assert np.all(dep_diag["desired_intensity"] < base_diag["desired_intensity"])
+        # FOC still holds at the depreciating optimum.
+        assert np.allclose(dep_diag["desired_mb_mc_ratio"], 1.0, rtol=1e-8)
+
+    def test_initial_reference_calibrates_omega_at_opening_user_cost(self):
+        planner = self._berd_planner(reference_effective_cost_rate="initial", rd_depreciation_rate=0.0537)
+        rates = np.array([0.0025, 0.004, 0.02, 0.0025])
+        target = np.array([0.03, 0.005, 0.0001, 0.03])
+
+        self._plan_berd(planner, rates)
+
+        c_t0 = rates + 0.001 + 0.0537
+        expected_omega = (c_t0 + 1.0 * target) / (0.005 * 0.3 * np.power(target, 0.3 - 1.0))
+        assert np.allclose(planner.initial_private_value_weight, expected_omega, rtol=1e-14)
+        assert np.allclose(planner.last_diagnostics["desired_intensity"], target, rtol=1e-10)
+        assert np.allclose(planner.last_diagnostics["planned_intensity"], target, rtol=1e-10)
+        assert np.allclose(planner.last_diagnostics["cash_binding"], 0.0)
+
+    def test_initial_reference_keeps_omega_fixed_after_first_call(self):
+        planner = self._berd_planner(reference_effective_cost_rate="initial", rd_depreciation_rate=0.0537)
+        rates = np.array([0.0025, 0.004, 0.02, 0.0025])
+
+        self._plan_berd(planner, rates)
+        omega_t0 = planner.initial_private_value_weight.copy()
+        first = planner.last_diagnostics["desired_intensity"].copy()
+
+        self._plan_berd(planner, rates + 0.005)
+
+        assert np.array_equal(planner.initial_private_value_weight, omega_t0)
+        assert np.all(planner.last_diagnostics["desired_intensity"] < first)
+
+    def test_initial_reference_omega_cleared_on_config_reset(self):
+        params = {
+            "n_firms": 4,
+            "sector_innovation_intensity": {"0": 0.03, "1": 0.005, "2": 0.0001},
+            "cap_multiplier": 2.5,
+            "investment_effectiveness": 0.005,
+            "investment_elasticity": 0.3,
+            "reference_effective_cost_rate": "initial",
+            "rd_depreciation_rate": 0.0537,
+        }
+        planner = TargetIntensityTFPInvestmentPlanner(**params)
+        self._plan_berd(planner, np.full(4, 0.0025))
+        assert planner.initial_private_value_weight is not None
+
+        planner.update_parameters_from_config(params)
+
+        assert planner.initial_private_value_weight is None
+        self._plan_berd(planner, np.full(4, 0.01))
+        assert np.allclose(planner.last_diagnostics["desired_intensity"], [0.03, 0.005, 0.0001, 0.03], rtol=1e-10)
+
+    def test_initial_reference_requires_effective_cost_rate(self):
+        planner = self._berd_planner(reference_effective_cost_rate="initial")
+        with pytest.raises(ValueError, match="'initial' requires effective_cost_rate"):
+            self._plan_berd(planner, None)
+
+    @pytest.mark.parametrize(
+        "kwargs,match",
+        [
+            ({"rd_depreciation_rate": -0.01}, "rd_depreciation_rate"),
+            ({"rd_depreciation_rate": np.nan}, "rd_depreciation_rate"),
+            ({"reference_effective_cost_rate": "opening"}, "'initial'"),
+            ({"reference_effective_cost_rate": -0.01}, "reference_effective_cost_rate"),
+        ],
+    )
+    def test_rejects_invalid_cost_parameters(self, kwargs, match):
+        with pytest.raises(ValueError, match=match):
+            TargetIntensityTFPInvestmentPlanner(n_firms=1, **kwargs)
+
+    def test_other_planners_accept_rd_depreciation_rate_key(self):
+        planner = SimpleProductivityInvestmentPlanner(n_firms=1, rd_depreciation_rate=0.05)
+
+        assert planner.n_firms == 1
+
     def test_configuration_accepts_target_intensity_planner_name(self):
         config = ProductivityInvestmentPlanner(name="TargetIntensityTFPInvestmentPlanner")
 

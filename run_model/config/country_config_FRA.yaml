@@ -319,30 +319,35 @@ FRA:
           cap_multiplier: 2.5
           investment_elasticity: 0.3  # alpha: expected TFP returns used to plan investment; match tfp_investment_elasticity below
           n_firms: 18
-          private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference rate
-          # Quarterly reference cost for omega calibration. ECB cost-of-borrowing data for
-          # French NFCs averages ~1.0% quarterly in 2003-2008 and ~0.9% in 2022-2026.
-          reference_effective_cost_rate: 0.01
+          private_value_weight: null  # calibrated internally from sector targets, phi, alpha, lambda, and reference cost
+          # omega calibrated at the model's opening user cost (nominal long-term firm-loan rate + delta_q),
+          # so firms choose the sector target at t0.
+          reference_effective_cost_rate: initial
+          # Quarterly R&D depreciation, 1-(1-0.198)^(1/4); 0.198/yr recovered from French national accounts
+          # by perpetual inventory (Eurostat nama_10_nfa_st N1171N net stock, OECD GFCF R&D N1171G
+          # previous-year prices); see run_model/data/raw_data/berd/README.md (local-only, excluded from git).
+          rd_depreciation_rate: 0.0537
           sector_innovation_intensity:
-            # Sector R&D/turnover calibration using sector means from firm-level data.
-            '0': 0.0594
-            '1': 0.0049
-            '2': 0.0399
-            '3': 0.0059
-            '4': 0.0041
-            '5': 0.0031
-            '6': 0.0126
-            '7': 0.0062
-            '8': 0.0047
-            '9': 0.0391
-            '10': 0.0172
-            '11': 0.0006
-            '12': 0.0113
-            '13': 0.0379
-            '14': 0.005
-            '15': 0.006
-            '16': 0.108
-            '17': 0.0139
+            # BERD by industry orientation (OECD ANBERD, IO, 2014) / gross output P1 (Eurostat nama_10_a64, 2014);
+            # floor 0.0001 for G, I, L, O, P
+            '0': 0.006217  # A
+            '1': 0.039135  # B
+            '2': 0.029760  # C
+            '3': 0.004840  # D
+            '4': 0.004840  # E
+            '5': 0.000336  # F
+            '6': 0.000100  # G
+            '7': 0.000403  # H
+            '8': 0.000100  # I
+            '9': 0.023095  # J
+            '10': 0.000905  # K
+            '11': 0.000100  # L
+            '12': 0.007493  # M
+            '13': 0.000679  # N
+            '14': 0.000100  # O
+            '15': 0.000100  # P
+            '16': 0.000174  # Q
+            '17': 0.000115  # R_S
           silence_technical_investment: true
           target_innovation_intensity: 0.02  # fallback for sectors absent from sector_innovation_intensity
           tfp_risk_premium: 0.0

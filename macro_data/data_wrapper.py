@@ -295,6 +295,11 @@ class DataWrapper:
             **{country: 1 for country in consumption_sources},
         }
 
+        support_countries = {
+            getattr(country, "value", str(country))
+            for country, country_config in configuration.country_configs.items()
+            if getattr(country_config, "consumption_source_support", "hard_valid") == "calibration_support"
+        }
         readers = DataReaders.from_raw_data(
             raw_data_path=raw_data_path,
             country_names=country_names,
@@ -304,6 +309,7 @@ class DataWrapper:
             prune_date=prune_date,
             force_single_hfcs_survey=single_hfcs_survey,
             **({"hfcs_num_surveys": hfcs_extractions} if hfcs_extractions else {}),
+            **({"hfcs_support_countries": support_countries} if support_countries else {}),
             single_icio_survey=single_icio_survey,
             proxy_country_dict=proxy_country_dict,
             aggregate_industries=configuration.aggregate_industries,

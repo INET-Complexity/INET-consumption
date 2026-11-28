@@ -94,11 +94,13 @@ asset_returns:
     # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy).
     # Vault: experiments/2026-11-20-payout-earnings-sna.
     dividend_fund_firm_payout_ratio: 0.467
-    # Maximum bank payout share of the model base (interest margin net of credit losses, before operating
-    # costs and tax; operating costs and fees sit in industry-K firms). Data counterpart, six French groups
-    # (ACPR "Situation des grands groupes bancaires français" + group reports), 2010-18 pooled (sum/sum):
-    # distributions to outside owners (incl. parts sociales) / (net interest margin - cost of risk) = 0.086
-    # (= 27.0% of net profit). Upper bound: K firms already pay part of the sector's dividends.
+    # Maximum bank payout share of the model base (interest margin net of credit losses plus household
+    # asset-sale fees, before operating costs and tax; operating costs and other fee income sit in
+    # industry-K firms). Data counterpart, six French groups (ACPR "Situation des grands groupes bancaires
+    # français" + group reports), 2010-18 pooled (sum/sum): distributions to outside owners (incl. parts
+    # sociales) / (net interest margin - cost of risk) = 0.086 (= 27.0% of net profit). Upper bound:
+    # K firms already pay part of the sector's dividends, and sale fees (~13% of the base, one seed) raise
+    # the payout on the margin by ~15%.
     # Was 0.40 (provisional, EBA EU-bank payouts on net profit). Issue #250.
     # Vault: experiments/2026-11-28-bank-payout-acpr.
     dividend_fund_bank_payout_ratio: 0.086

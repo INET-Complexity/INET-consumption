@@ -1875,10 +1875,12 @@ class Households(Agent):
         forecast cash), or (iii) its cash after debt service and the facility
         repayment does not cover the planned amount at settlement.
 
-        At t = 1 the current rows are the opening t0 rows, which are zero: no
-        declaration exists before the first period, so nothing is settled at
-        t = 1 and the forecast is zero as well, with no surprise. The first
-        payment, at t = 2, is the declaration made at the end of t = 1.
+        At t = 1 the current rows are the opening t0 rows. On the aligned
+        behavioural-income path they hold the opening declaration
+        (``Country._seed_opening_dividend_declaration``), so the first payment
+        is at t = 1. On the legacy cash-income path they are zero: nothing is
+        settled at t = 1 and the forecast is zero as well, with no surprise;
+        the first payment, at t = 2, is the declaration made at the end of t = 1.
         """
         declared = np.asarray(self.ts.current("dividend_fund_declared_firm_distribution"), dtype=float) + np.asarray(
             self.ts.current("dividend_fund_declared_bank_distribution"), dtype=float

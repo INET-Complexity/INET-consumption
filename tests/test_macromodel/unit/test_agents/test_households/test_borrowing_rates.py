@@ -180,3 +180,41 @@ def test_cashflow_equation_uses_quarterly_payment_change_and_preserves_other_com
         "real_lagged_consumption",
     ):
         np.testing.assert_array_equal(observed["target_consumption_" + key], baseline["target_consumption_" + key])
+
+
+@pytest.mark.parametrize("months_per_period, rows_per_year", [(3, 4), (1, 12)])
+def test_borrowing_rate_income_window_is_one_year_whatever_the_consumption_window(months_per_period, rows_per_year):
+    """The consumption denominator window (history_window) does not move the borrowing-rate index."""
+    units = MonetaryUnits("EUR", 1)
+    tags = dict(period_id=2, pass_kind="first", household_layout_key="rate-test")
+    k = rows_per_year + 4
+    incomes = np.outer(np.arange(1.0, k + 1.0), [100.0, 200.0, 80.0])
+    prices = np.linspace(1.0, 1.5, k)
+
+    def prepared(window):
+        history = IncomeHistories(
+            behavioural_income_nominal_history=incomes,
+            guard_nominal_history=np.ones((k, 3)),
+            consumer_price_history=prices,
+            current_consumer_price=prices[-1],
+            initial_consumer_price=1.0,
+            price_history_layout="aligned",
+            income_units=units,
+            guard_units=units,
+            months_per_period=months_per_period,
+            history_window=window,
+        )
+        base = prepared_inputs()
+        pi = PermanentIncomePayload(
+            **tags, units=units, monetary_income_nominal=np.ones(3), pi_log_ratio_original=[0] * 3
+        )
+        return prepare_inputs(history, base.opening_snapshot, pi, **tags)
+
+    # Independent: geometric mean of the last year of prior real income, at the prior CPI, annualised.
+    prior = slice(k - 1 - rows_per_year, k - 1)
+    real = incomes[prior] / prices[prior, None]
+    expected = (12 / months_per_period) * np.exp(np.log(real).mean(axis=0)) * prices[k - 2]
+    results = [rates(prepared(window)) for window in (1, 2, rows_per_year, 2 * rows_per_year)]
+    for result in results:
+        np.testing.assert_allclose(result["lagged_annual_income_nominal"], expected, rtol=1e-12)
+        np.testing.assert_array_equal(result["real_borrowing_rate"], results[0]["real_borrowing_rate"])

@@ -17,13 +17,18 @@ def lagged_annual_income_nominal(prepared: ConsumptionInputs) -> np.ndarray:
     Exclude the current planning observation. With no prior observation, use
     the sole initial observation as the startup reference. Each historical
     income/floor uses its own dated deflator before temporal smoothing.
+
+    The smoothing window is fixed at one year (12 / months_per_period periods),
+    independent of the consumption denominator's configurable window
+    (``history.history_window``): the borrowing-rate exposure is scaled by
+    annual income whatever denominator the consumption rule uses.
     """
     history = prepared.histories
     prices = history.consumer_price_history
     if history.price_history_layout == "missing_current":
         prices = np.append(prices, history.current_consumer_price)
     stop = max(1, len(prices) - 1)
-    start = max(0, stop - history.history_window)
+    start = max(0, stop - max(1, int(round(12.0 / history.months_per_period))))
     deflators = prices / history.initial_consumer_price
     observations = np.maximum(
         history.behavioural_income_nominal_history[start:stop],

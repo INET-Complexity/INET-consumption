@@ -707,8 +707,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         idiosyncratic_sd: float = 0.0,
         idiosyncratic_persistence: str = "fixed_effect",
         idiosyncratic_seed: int | None = None,
-        income_denominator: str = "current",
-        income_denominator_window: int = 20,
+        income_denominator: str | None = None,
+        income_denominator_window: int | None = None,
         uses_aligned_behavioural_income: bool = False,
         debt_service_cashflow_propensity: float = -0.75,
     ):
@@ -968,11 +968,23 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # Denominator of the three balance-sheet ratios and of C/y.
         #   "current"           (v1) -- current-period income, annualised.
         #   "geometric_average" (v2) -- trailing geometric mean of real income over
-        #                               `income_denominator_window` periods, which is
+        #                               `income_denominator_window`, which is
         #                               the concept the HFCS calibration divides by
         #                               (disp_geom_avg_income, a smoothed multi-year
         #                               income). The single-period denominator is the
         #                               near-zero-income mechanism behind issue #90.
+        # Units of the window: the prepared (aligned) path reads it in QUARTERS
+        # (4 = one year) and converts it to model periods with the time unit
+        # (prepared_income_window_periods). The legacy cash-income helper
+        # _geometric_average_income counts it in model periods, as before; the two
+        # agree in quarterly runs. The prepared path requires both keys explicitly
+        # (it fails loudly otherwise); the legacy path keeps its defaults
+        # ("current", 20).
+        self._income_denominator_explicit = income_denominator is not None and income_denominator_window is not None
+        if income_denominator is None:
+            income_denominator = "current"
+        if income_denominator_window is None:
+            income_denominator_window = 20
         if income_denominator not in ("current", "geometric_average"):
             raise ValueError(
                 f"income_denominator must be 'current' or 'geometric_average', got {income_denominator!r}."
@@ -1228,10 +1240,27 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             )
         return np.where(np.isfinite(eps), eps, 0.0)
 
-    @property
-    def prepared_income_window(self) -> int:
-        """Periods of income history behind the prepared denominator: one under "current", else the window."""
-        return 1 if self.income_denominator == "current" else self.income_denominator_window
+    def prepared_income_window_periods(self, months_per_period: float) -> int:
+        """Periods of income history behind the prepared denominator.
+
+        "current" uses the current period only. "geometric_average" reads ``income_denominator_window`` in
+        quarters (4 = one year) and converts it to model periods: x1 in quarterly runs, x3 in monthly runs.
+        The prepared path has no default denominator: both keys must be configured explicitly.
+        """
+        if not self._income_denominator_explicit:
+            raise ValueError(
+                "The prepared consumption path requires explicit income_denominator and "
+                "income_denominator_window in the consumption parameters."
+            )
+        if self.income_denominator == "current":
+            return 1
+        periods = self.income_denominator_window * 3.0 / float(months_per_period)
+        if not periods.is_integer() or periods < 1:
+            raise ValueError(
+                f"income_denominator_window={self.income_denominator_window} quarters is not a whole number of "
+                f"{months_per_period}-month periods."
+            )
+        return int(periods)
 
     def _geometric_average_income(
         self,

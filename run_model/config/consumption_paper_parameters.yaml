@@ -91,15 +91,17 @@ asset_returns:
     dividend_fund_payout_ratio: 0.10
     # Maximum firm payout share of after-tax payout earnings (user decision 2026-11-21).
     # French S11 consolidated D.42 / (B4N - D.42 received - D.51), Eurostat nasa_10_nf_tr, mean 2010-19.
-    # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy). Bank ratio unchanged.
+    # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy).
     # Vault: experiments/2026-11-20-payout-earnings-sna.
     dividend_fund_firm_payout_ratio: 0.467
     # Maximum bank payout share of the model base (interest margin net of credit losses, before operating
     # costs and tax; operating costs and fees sit in industry-K firms). Data counterpart, six French groups
     # (ACPR "Situation des grands groupes bancaires français" + group reports), 2010-18 pooled:
     # distributions to outside owners (incl. parts sociales) / (net interest margin - cost of risk) = 0.086
-    # (= 27.0% of net profit). Upper bound: K firms already pay part of the sector's dividends. Issue #250.
-    dividend_fund_bank_payout_ratio: 0.09
+    # (= 27.0% of net profit). Upper bound: K firms already pay part of the sector's dividends.
+    # Was 0.40 (provisional, EBA EU-bank payouts on net profit). Issue #250.
+    # Vault: experiments/2026-11-28-bank-payout-acpr.
+    dividend_fund_bank_payout_ratio: 0.086
 
 desired_consumption:
   credit_augmented:

@@ -344,3 +344,32 @@ def test__income_belief_learning_falls_back_to_zero_when_prior_variance_non_fini
     assert not np.isfinite(outputs.predicted_variance[0])
     assert outputs.posterior_variance[0] == 0.0
     assert outputs.posterior_fallback_used[0]
+
+
+def test__income_belief_learning_missing_mask_is_a_missing_observation_and_validates_shape():
+    n = 4
+    priors = {
+        "income_belief_mu": np.full(n, 0.1),
+        "income_belief_p": np.full(n, 0.5),
+        "income_belief_rho": np.full(n, 0.8),
+        "sigma2_xi": np.full(n, 1.0),
+        "sigma2_v": np.full(n, 0.2),
+    }
+    current = np.array([100.0, 110.0, 120.0, 100.0])
+    lagged = np.full(n, 100.0)
+    missing = np.array([False, False, False, True])
+
+    outputs = compute_income_belief_learning_outputs(
+        current_income=current, lagged_income=lagged, priors=priors, missing=missing
+    )
+    # Positive income, yet no update and no weight in the common component.
+    assert outputs.kalman_gain[3] == 0.0
+    assert outputs.posterior_mean[3] == pytest.approx(outputs.predicted_mean[3])
+    assert outputs.common_income_growth_signal == pytest.approx(np.log(current[:3] / 100.0).mean())
+    np.testing.assert_array_equal(outputs.floor_used, missing)
+    default = compute_income_belief_learning_outputs(current_income=current, lagged_income=lagged, priors=priors)
+    assert not default.floor_used.any()
+    with pytest.raises(ValueError, match="missing must have shape"):
+        compute_income_belief_learning_outputs(
+            current_income=current, lagged_income=lagged, priors=priors, missing=np.zeros(n + 1, dtype=bool)
+        )

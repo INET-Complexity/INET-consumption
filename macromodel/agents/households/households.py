@@ -1413,6 +1413,7 @@ class Households(Agent):
         contractual_principal = _household_vector("consumer_contractual_principal", consumer_contractual_principal)
         principal_arrears = _household_vector("consumer_principal_arrears", consumer_principal_arrears)
         interest_arrears = _household_vector("consumer_interest_arrears", consumer_interest_arrears)
+        current_balance = contractual_principal + principal_arrears + interest_arrears
         pending_generic_trigger = np.asarray(self.ts.current("ficp_generic_insolvency_trigger"), dtype=bool).copy()
         forced_ficp_trigger = None
         if self.consumer_insolvency_opens_ficp:
@@ -1423,6 +1424,12 @@ class Households(Agent):
                 np.asarray(self.ts.current("ficp_forgiveness_event_stage"), dtype=float) < 3.0
             )
             forced_ficp_trigger = pending_generic_trigger & ~pending_event
+            if not debt_components_missing:
+                # The episode must open with a positive consumer balance. A pending
+                # household can repay early before Stage 6; if that clears its balance
+                # the trigger is consumed below without opening an episode.
+                # (Missing components keep the trigger so the lifecycle check raises.)
+                forced_ficp_trigger = forced_ficp_trigger & (current_balance > 0.0)
         state = compute_stage6_consumer_distress_state(
             scheduled_consumer_payments=scheduled_consumer_payments,
             actual_consumer_payments=actual_consumer_payments,
@@ -1459,7 +1466,6 @@ class Households(Agent):
             )
         ):
             raise ValueError("Persisted FICP event stages must be integers from zero through three.")
-        current_balance = contractual_principal + principal_arrears + interest_arrears
         episode_id = np.where(state.ficp_episode_triggered, prior_episode_id + 1, prior_episode_id)
         episode_start_period = np.where(state.ficp_episode_triggered, period, prior_start_period)
         episode_end_period = np.where(

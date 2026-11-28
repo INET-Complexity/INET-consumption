@@ -67,7 +67,9 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
     consumer loans. If it has consumer loans and is not already under FICP, it
     enters FICP in the next period (5-year ban, rescheduled repayment, residual
     forgiven with a bank loss at the end). A household insolvent only through
-    an overdraft or a mortgage does not enter FICP. Without the flag, consumer
+    an overdraft or a mortgage does not enter FICP, nor does one whose only
+    consumer claim is interest arrears (treated as overdraft-only, by design).
+    Stage 6 opens the episode only if the consumer balance is still positive. Without the flag, consumer
     loans are removed with no bank loss (legacy). Mortgages are removed and
     booked as bank losses in both cases.
 
@@ -115,8 +117,11 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
         if self.consumer_insolvency_opens_ficp:
             # Consumer loans stay with the household; FICP settles them.
             consumer_terminal_removal_exclusion = np.ones_like(credit_market.states["cons_loans"][0], dtype=bool)
-            # FICP needs consumer debt: overdraft- or mortgage-only insolvency does not open an episode.
-            # Consumer interest arrears alone (they can come from unpaid overdraft interest) do not count.
+            # FICP needs consumer principal (contractual principal incl. principal arrears).
+            # By design (user decision), overdraft- or mortgage-only insolvency does not open an
+            # episode, and neither do consumer interest arrears alone: they can come from unpaid
+            # overdraft interest, so a household whose only consumer claim is interest arrears
+            # is treated as overdraft-only and stays outside FICP.
             has_consumer_loans = credit_market.states["cons_loans"][0].sum(axis=0) > 0.0
             self.last_ficp_trigger = insolvent_mask & has_consumer_loans & ~households.current_ficp_active()
         else:

@@ -167,6 +167,40 @@ class TestHouseholdsWiring:
         assert test_households.ts.current("ficp_episode_id")[0] == 1
         assert test_households.ts.current("ficp_open_balance")[0] == pytest.approx(25.0)
 
+    def test_pending_trigger_with_balance_repaid_to_zero_opens_no_episode(self, test_households, monkeypatch):
+        """Household 0 repaid its whole consumer balance early before Stage 6: its trigger is
+        consumed without opening an episode or a ban. Household 1 still owes 25 and enters FICP."""
+        n = int(test_households.ts.current("n_households"))
+        monkeypatch.setitem(
+            test_households.functions,
+            "insolvency",
+            DefaultHouseholdInsolvencyHandler(consumer_insolvency_opens_ficp=True),
+        )
+        trigger = np.zeros(n, dtype=bool)
+        trigger[:2] = True
+        test_households.ts.ficp_generic_insolvency_trigger.append(trigger)
+        principal = np.zeros(n)
+        principal[1] = 25.0
+
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=np.zeros(n),
+            actual_consumer_payments=np.zeros(n),
+            unpaid_consumer_payments=np.zeros(n),
+            time_unit=3,
+            consumer_contractual_principal=principal,
+            consumer_principal_arrears=np.zeros(n),
+            consumer_interest_arrears=np.zeros(n),
+        )
+
+        remaining = np.asarray(test_households.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
+        assert remaining[0] == 0 and remaining[1] == 20
+        assert test_households.ts.current("ficp_episode_id")[0] == 0
+        assert test_households.ts.current("ficp_open_balance")[0] == 0.0
+        assert not test_households.ts.current("ficp_state")[0]
+        assert not np.any(test_households.ts.current("ficp_generic_insolvency_trigger"))
+        np.testing.assert_array_equal(test_households.ts.current("ficp_generic_insolvency_trigger_consumed"), trigger)
+        assert not test_households.current_ficp_active()[0]
+
     def test_trigger_ignored_without_routing(self, test_households):
         n = int(test_households.ts.current("n_households"))
         trigger = np.ones(n, dtype=bool)
@@ -197,6 +231,20 @@ def test_ficp_trigger_requires_consumer_loans():
     np.testing.assert_allclose(market.states["mort_loans"][0], [[0.0, 0.0, 0.0, 0.0]])
     np.testing.assert_allclose(market._mortgage_credit_loss_by_bank, [200.0])
     np.testing.assert_allclose(market._consumer_interest_arrears_by_cell, [[0.0, 0.0, 0.0, 5.0]])
+
+
+def test_interest_arrears_only_household_stays_outside_ficp():
+    """User decision: a household whose only consumer-side claim is interest arrears (e.g. unpaid
+    overdraft interest) is treated as overdraft-only and is not triggered, though insolvent."""
+    market = _market(cons_principal=np.asarray([[0.0]]), mort_principal=np.asarray([[0.0]]))
+    market._consumer_interest_arrears_by_cell[0, 0] = 5.0
+    households = _households(net_wealth=[-1.0], liquid=[-1.0], ficp_active=[False])
+    handler = DefaultHouseholdInsolvencyHandler(consumer_insolvency_opens_ficp=True)
+
+    handler.handle_insolvency(households=households, banks=None, credit_market=market)
+
+    assert market.current_consumer_balance_by_household()[0] == pytest.approx(5.0)
+    np.testing.assert_array_equal(handler.last_ficp_trigger, [False])
 
 
 def test_planned_uses_never_open_a_new_overdraft_for_a_banned_household():

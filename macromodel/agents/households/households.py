@@ -2103,6 +2103,15 @@ class Households(Agent):
         )
         return self.housing_input_rate * flows
 
+    def _initial_income_quintile(self) -> np.ndarray:
+        """Opening income quintile (0..4; -1 = legacy fallback) persisted by the DNA opening allocator."""
+        if "initial_hfcs_income_quintile" not in self.ts.dicts:
+            raise ValueError(
+                "initial_state_intercepts='income_quintile' requires the DNA quintile opening allocation "
+                "(household_consumption_initialisation.dna_quintile_c_y)."
+            )
+        return self.ts.initial("initial_hfcs_income_quintile")
+
     def compute_target_consumption(self, *args, **kwargs) -> np.ndarray:
         """Return target goods, including the housing inputs that owners and private tenants buy."""
         target_consumption = self._compute_market_target_consumption(*args, **kwargs)
@@ -2389,6 +2398,11 @@ class Households(Agent):
                 time_unit=time_unit,
                 **({"consumption_inputs": consumption_inputs} if integrated else {}),
                 **({"debt_service_payments": debt_service_payments} if debt_service_payments is not None else {}),
+                **(
+                    {"initial_income_quintile": self._initial_income_quintile()}
+                    if getattr(self.functions["consumption"], "initial_state_intercepts", "none") == "income_quintile"
+                    else {}
+                ),
             )
             components = getattr(self.functions["consumption"], "last_target_consumption_components", None)
             if components is not None:

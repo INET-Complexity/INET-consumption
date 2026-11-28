@@ -1,6 +1,7 @@
 """Scenario overrides that change the data configuration (e.g. worker productivity rho)."""
 
 import math
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -103,3 +104,50 @@ def test_cache_with_other_rho_setting_requires_rebuild():
     off = nw.apply_data_config_overrides(data_config, {"worker_productivity": None})
     assert nw._requires_worker_productivity_cache_rebuild(cached(rho), off)
     assert not nw._requires_worker_productivity_cache_rebuild(cached(None), off)
+
+
+_RESIDUAL_KEYS = ("initial_state_intercepts", "initial_state_residual_sd", "initial_state_residual_persistence")
+
+
+def _consumption_parameters_with_preset(name):
+    country = nw._load_country_config(FRA_CFG)
+    nw.apply_country_config_overrides(country, SCENARIO_PRESETS[name])
+    return dict(country.households.functions.consumption.parameters)
+
+
+def _notebook_default_scenario():
+    source = (RUN_MODEL_PATH / "run_model.ipynb").read_text()
+    return re.search(r'^\s*"SCENARIO_NAME = \\"(\w+)\\"', source, flags=re.MULTILINE).group(1)
+
+
+@pytest.mark.parametrize(
+    ("name", "persistence"),
+    [("consumption_residual_persistent", "fixed"), ("consumption_residual_iid", "iid")],
+)
+def test_consumption_residual_presets_reach_paper_referenced_parameters(name, persistence):
+    """Overrides land after paper_parameter_ref resolution; only the three keys differ from the default scenario."""
+    default = _consumption_parameters_with_preset(_notebook_default_scenario())
+    assert not any(key in default for key in _RESIDUAL_KEYS)
+    resolved = _consumption_parameters_with_preset(name)
+    assert resolved["initial_state_intercepts"] == "income_quintile"
+    assert resolved["initial_state_residual_sd"] == 0.41
+    assert resolved["initial_state_residual_persistence"] == persistence
+    assert {k: v for k, v in resolved.items() if k not in _RESIDUAL_KEYS} == default
+    # Same country-level overrides as the default scenario (the three keys are the only addition).
+    base = SCENARIO_PRESETS[_notebook_default_scenario()]
+    assert {k: v for k, v in SCENARIO_PRESETS[name].items() if "initial_state_" not in k} == base
+
+
+@pytest.mark.parametrize("name", ["consumption_residual_persistent", "consumption_residual_iid"])
+def test_consumption_residual_presets_construct_the_consumption_rule(name):
+    from macromodel.util.function_mapping import functions_from_model
+
+    country = nw._load_country_config(FRA_CFG)
+    nw.apply_country_config_overrides(country, SCENARIO_PRESETS[name])
+    rule = functions_from_model(country.households.functions, loc="macromodel.agents.households")["consumption"]
+    assert rule.initial_state_intercepts == "income_quintile"
+    assert rule.initial_state_residual_sd == 0.41
+    assert (
+        rule.initial_state_residual_persistence
+        == SCENARIO_PRESETS[name]["households.functions.consumption.parameters['initial_state_residual_persistence']"]
+    )

@@ -15,6 +15,8 @@ class InitialConsumptionAllocation:
     total: np.ndarray
     goods_scale: float
     legacy_fallback: np.ndarray | None = None
+    # DNA allocator only: opening income quintile (0..4) of each feasible household, -1 for legacy fallback.
+    quintile: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -246,6 +248,7 @@ def allocate_dna_quintile_consumption(
     goods = (C - H) / (1 + vat). Total C (housing included) is scaled, so the shape holds exactly.
     Fallback households keep legacy goods: income <= 0, raw HFCS total below housing, or allocated total
     below housing (iterated until none remain). Their number is ``legacy_fallback.sum()``.
+    ``quintile`` returns the quintile index (0..4) of every non-fallback household and -1 for fallback households.
     ``goods_scale`` holds lambda.
     """
     values = {
@@ -322,4 +325,6 @@ def allocate_dna_quintile_consumption(
     if not np.isfinite(total).all():
         raise ValueError("Reconciled initial expenditure must remain finite.")
     candidate_goods = np.where(fallback, values["legacy_goods"], np.maximum(candidate - housing, 0.0) / vat1)
-    return InitialConsumptionAllocation(candidate, candidate_goods, goods, total, float(lam), fallback)
+    return InitialConsumptionAllocation(
+        candidate, candidate_goods, goods, total, float(lam), fallback, np.where(fallback, -1, quintile)
+    )

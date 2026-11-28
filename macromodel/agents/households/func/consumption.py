@@ -712,6 +712,9 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         uses_aligned_behavioural_income: bool = False,
         debt_service_cashflow_propensity: float = -0.75,
         income_belief_signal: str = "non_property",
+        initial_state_intercepts: str = "none",
+        initial_state_residual_sd: float | None = None,
+        initial_state_residual_persistence: str = "fixed",
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -983,6 +986,41 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         )
         self._household_epsilon: np.ndarray | None = None
 
+        # Opt-in B+F split of the initial_state back-out (see _initial_state_split_epsilon). All defaults
+        # reproduce the plain back-out exactly.
+        if initial_state_intercepts not in ("none", "income_quintile"):
+            raise ValueError(
+                f"initial_state_intercepts must be 'none' or 'income_quintile', got {initial_state_intercepts!r}."
+            )
+        if initial_state_residual_persistence not in ("fixed", "iid"):
+            raise ValueError(
+                f"initial_state_residual_persistence must be 'fixed' or 'iid', got {initial_state_residual_persistence!r}."
+            )
+        if initial_state_residual_sd is not None and (
+            isinstance(initial_state_residual_sd, bool)
+            or not isinstance(initial_state_residual_sd, (int, float))
+            or not np.isfinite(initial_state_residual_sd)
+            or initial_state_residual_sd <= 0.0
+        ):
+            raise ValueError(
+                f"initial_state_residual_sd must be null or a finite positive number, got {initial_state_residual_sd!r}."
+            )
+        opted_in = (
+            initial_state_intercepts != "none"
+            or initial_state_residual_sd is not None
+            or initial_state_residual_persistence != "fixed"
+        )
+        if opted_in and idiosyncratic_persistence != "initial_state":
+            raise ValueError("The initial_state_* options require idiosyncratic_persistence='initial_state'.")
+        if initial_state_residual_sd is not None and initial_state_intercepts != "income_quintile":
+            raise ValueError("initial_state_residual_sd requires initial_state_intercepts='income_quintile'.")
+        if initial_state_residual_persistence == "iid" and initial_state_residual_sd is None:
+            raise ValueError("initial_state_residual_persistence='iid' requires initial_state_residual_sd.")
+        self.initial_state_intercepts = initial_state_intercepts
+        self.initial_state_residual_sd = None if initial_state_residual_sd is None else float(initial_state_residual_sd)
+        self.initial_state_residual_persistence = initial_state_residual_persistence
+        self._reset_initial_state_split()
+
         # Denominator of the three balance-sheet ratios and of C/y.
         #   "current"           (v1) -- current-period income, annualised.
         #   "geometric_average" (v2) -- trailing geometric mean of real income over
@@ -1185,6 +1223,17 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self._idiosyncratic_rng = np.random.default_rng(0x00C0FFEE if seed is None else int(seed))
         self._household_epsilon = None
         self._prepared_residual_layout = None
+        self._reset_initial_state_split()
+
+    def _reset_initial_state_split(self) -> None:
+        """Drop the B+F back-out state: group kappa, diagnostics and the iid per-period cache."""
+        self._initial_state_group: np.ndarray | None = None
+        self._initial_state_kappa: np.ndarray | None = None
+        self._initial_state_valid: np.ndarray | None = None
+        self._iid_period: int | None = None
+        self._iid_epsilon: np.ndarray | None = None
+        # kappa_g (per group 0..4 income quintile, 5 legacy fallback), c_g, pooled s, group sizes.
+        self.initial_state_diagnostics: dict[str, np.ndarray | float] = {}
 
     def _epsilon(self, n_households: int) -> np.ndarray:
         """Idiosyncratic term in log(C/Y), as a fixed household effect.
@@ -1240,7 +1289,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             )
         return self._household_epsilon[:n_households]
 
-    def _initial_state_epsilon(self, income: np.ndarray, target_inputs: dict) -> np.ndarray:
+    def _initial_state_epsilon(
+        self,
+        income: np.ndarray,
+        target_inputs: dict,
+        initial_income_quintile: np.ndarray | None = None,
+        current_time: int = 0,
+    ) -> np.ndarray:
         """Anchor each household's fixed effect to its previous desired real budget.
 
         eps_i = log(C_previous_i / b_i) - x_i on the prepared path, where x_i
@@ -1248,6 +1303,10 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         This back-out does not impose zero residual mean, fitted-sigma dispersion
         or a random draw. The intercept offsets at the initial anchor. Legacy
         calls retain their supplied income base. Non-finite residuals get zero.
+
+        With ``initial_state_intercepts='income_quintile'`` the back-out is split
+        into quintile intercepts and a household residual (see
+        ``_initial_state_split_epsilon``).
         """
         components, _ = self._evaluate_target(income=income, epsilon=None, **target_inputs)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -1256,7 +1315,105 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 - np.log(components["target_consumption_real_income"])
                 - components["target_consumption_log_long_run"]
             )
-        return np.where(np.isfinite(eps), eps, 0.0)
+        eps = np.where(np.isfinite(eps), eps, 0.0)
+        if self.initial_state_intercepts == "none":
+            return eps
+        return self._initial_state_split_epsilon(components, eps, initial_income_quintile, current_time)
+
+    @staticmethod
+    def _log_sum_exp(values: np.ndarray) -> float:
+        peak = float(np.max(values))
+        return peak + float(np.log(np.sum(np.exp(values - peak))))
+
+    def _initial_state_split_epsilon(
+        self, components: dict, eps: np.ndarray, initial_income_quintile: np.ndarray | None, current_time: int
+    ) -> np.ndarray:
+        """B+F: quintile intercepts kappa_g and a household residual, on the model's own inputs.
+
+        Groups g: the household's opening income quintile 0..4 (the one the opening allocator used, fixed for the
+        run) and group 5 for the allocator's legacy-fallback households (index -1: non-positive income or opening
+        total below housing). Fallback households carry legacy goods rather than the DNA shape, so pooling them into
+        a quintile would distort its total; their own group keeps every quintile total exactly the allocator's.
+
+        With a_i = x_i + ln b_i, C_i the opening real consumption and V_g the valid members of g (finite, positive
+        C_i and b_i, finite x_i; all others keep eps = 0 as in the plain back-out):
+            kappa_g = ln sum_{V_g} C_i - ln sum_{V_g} exp(a_i)
+            eta_i   = eps_i - kappa_g                       (eps_i = ln C_i - a_i)
+        persistence 'fixed':   eps_i = kappa_g + c_g + (sigma/s) (eta_i - mean_g eta)
+            s = pooled sd (ddof 0) of the within-group-demeaned eta over all valid households,
+            c_g = ln sum C_i - kappa_g - ln sum exp(a_i + (sigma/s)(eta_i - mean_g eta)),
+            so that sum_{V_g} exp(a_i + eps_i) = sum_{V_g} C_i for every group (per-group Jensen correction).
+            Without initial_state_residual_sd the residual is unscaled: eps equals the plain back-out.
+        persistence 'iid':     eps_it = kappa_g - sigma^2/2 + u_it, u_it ~ N(0, sigma^2), one draw per household
+            and period (see _iid_period_epsilon). kappa_g stays fixed from this call.
+        """
+        if initial_income_quintile is None:
+            raise ValueError("initial_state_intercepts='income_quintile' requires initial_income_quintile.")
+        quintile = np.asarray(initial_income_quintile, dtype=float)
+        if quintile.shape != eps.shape or not np.all(np.isin(quintile, (-1.0, 0.0, 1.0, 2.0, 3.0, 4.0))):
+            raise ValueError("initial_income_quintile must hold one of -1, 0..4 per household.")
+        group = np.where(quintile < 0, 5, quintile).astype(int)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            log_c = np.log(components["target_consumption_real_lagged_consumption"])
+            a = np.log(components["target_consumption_real_income"]) + components["target_consumption_log_long_run"]
+        valid = np.isfinite(log_c) & np.isfinite(a)
+        kappa = np.zeros(6)
+        shift = np.zeros(6)
+        count = np.zeros(6, dtype=int)
+        demeaned = np.zeros_like(eps)
+        for g in range(6):
+            members = valid & (group == g)
+            count[g] = int(members.sum())
+            if count[g] == 0:
+                continue
+            kappa[g] = self._log_sum_exp(log_c[members]) - self._log_sum_exp(a[members])
+            eta = eps[members] - kappa[g]
+            demeaned[members] = eta - eta.mean()
+        self._initial_state_group = group
+        self._initial_state_kappa = kappa
+        pooled_sd = float(np.sqrt(np.sum(demeaned[valid] ** 2) / max(int(valid.sum()), 1)))
+        self.initial_state_diagnostics = {"kappa": kappa, "count": count, "pooled_sd_before": pooled_sd}
+        sigma = self.initial_state_residual_sd
+        if sigma is None:
+            # B alone: eps = kappa_g + eta_i is the plain back-out; keep it bitwise.
+            return eps
+        if self.initial_state_residual_persistence == "iid":
+            return self._iid_period_epsilon(current_time, eps.size, valid)
+        if not pooled_sd > 0.0:
+            raise ValueError("initial_state_residual_sd cannot rescale a back-out without within-group dispersion.")
+        scale = sigma / pooled_sd
+        out = np.zeros_like(eps)
+        for g in range(6):
+            members = valid & (group == g)
+            if count[g] == 0:
+                continue
+            shift[g] = (
+                self._log_sum_exp(log_c[members]) - kappa[g] - self._log_sum_exp(a[members] + scale * demeaned[members])
+            )
+            out[members] = kappa[g] + shift[g] + scale * demeaned[members]
+        self.initial_state_diagnostics["shift"] = shift
+        return out
+
+    def _iid_period_epsilon(self, current_time: int, n_households: int, valid: np.ndarray | None = None) -> np.ndarray:
+        """eps_it = kappa_g - sigma^2/2 + u_it with one cached N(0, sigma^2) draw per household and period.
+
+        The rule is evaluated twice per model period (planning and replacement pass) and each evaluation also
+        probes the MPC, so the draw is keyed on ``current_time`` (the household total-consumption history length,
+        equal in both passes and distinct across periods) and reused within it. Draws come from the dedicated
+        generator in call order, so paired runs that evaluate the same periods see identical shocks.
+        Invalid households (see _initial_state_split_epsilon) keep eps = 0 but still consume a draw.
+        """
+        if self._initial_state_group is None or self._initial_state_group.size != n_households:
+            raise ValueError("Household count changed after the initial_state back-out; reset consumption state.")
+        if valid is not None:
+            self._initial_state_valid = valid
+        if self._iid_period != current_time:
+            sigma = self.initial_state_residual_sd
+            draw = self._idiosyncratic_rng.normal(0.0, sigma, n_households)
+            eps = self._initial_state_kappa[self._initial_state_group] - 0.5 * sigma**2 + draw
+            self._iid_epsilon = np.where(self._initial_state_valid, eps, 0.0)
+            self._iid_period = current_time
+        return self._iid_epsilon
 
     def prepared_income_window_periods(self, months_per_period: float) -> int:
         """Periods of income history behind the prepared denominator.
@@ -2167,6 +2324,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         subsistence_income: np.ndarray | float | None = None,
         consumption_inputs: ConsumptionInputs | None = None,
         debt_service_payments: DebtServicePayments | None = None,
+        initial_income_quintile: np.ndarray | None = None,
     ) -> np.ndarray:
         if self.uses_aligned_behavioural_income and self.uses_income_belief_learning and consumption_inputs is None:
             raise ValueError("Aligned monetary learning consumption requires consumption_inputs.")
@@ -2287,8 +2445,13 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             consumption_inputs=consumption_inputs,
         )
         if self.idiosyncratic_persistence == "initial_state" and self._household_epsilon is None:
-            self._household_epsilon = self._initial_state_epsilon(income, target_inputs)
+            self._household_epsilon = self._initial_state_epsilon(
+                income, target_inputs, initial_income_quintile, current_time
+            )
             epsilon = self._household_epsilon
+        elif self.initial_state_residual_persistence == "iid":
+            # Per-period shock; _household_epsilon holds the current period's draw (a backed-out marker for the guards).
+            epsilon = self._household_epsilon = self._iid_period_epsilon(current_time, income.size)
         components, target_total = self._evaluate_target(income=income, epsilon=epsilon, **target_inputs)
         if consumption_inputs is not None:
             self._prepared_residual_layout = consumption_inputs.household_layout_key

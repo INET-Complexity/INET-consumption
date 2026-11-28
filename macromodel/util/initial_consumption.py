@@ -103,5 +103,9 @@ def initialise_hfcs_consumption(
         ),
     }.items():
         hh.ts[name] = values
+    if result.quintile is not None:
+        # Opening income quintile (0..4; -1 = legacy fallback), fixed per household for the consumption rule's
+        # opt-in quintile intercepts (initial_state_intercepts="income_quintile").
+        hh.ts["initial_hfcs_income_quintile"] = result.quintile.astype(float)
     # National-accounts goods and VAT aggregates are unchanged by redistribution.
     return result

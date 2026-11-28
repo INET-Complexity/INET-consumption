@@ -73,6 +73,9 @@ def _country(signal="behavioural"):
     country.households.compute_non_property_income = lambda: (
         ts.current("income_employee") + ts.current("income_social_transfers")
     )
+    country.households.current_housing_taxes = lambda: (
+        ts.current("housing_taxes_property") + ts.current("housing_taxes_residence")
+    )
     country.banks = SimpleNamespace(
         ts=TimeSeries(interest_rate_on_household_deposits=np.zeros(1), overdraft_rate_on_household_deposits=np.zeros(1))
     )
@@ -231,6 +234,45 @@ def test_common_regressor_row_0_is_on_the_runtime_basis():
     assert reference[0] == reference[1] == 100.0
     # Before t1 is realised there is only the t0 row: the index is its own base.
     np.testing.assert_array_equal(_country()._permanent_income_simulation_sources().real_pc_income, [100.0])
+
+
+def test_common_regressor_index_is_rebuilt_on_every_call():
+    """The row-0 carry-back is stateless: nothing caches the index or its base between calls or periods."""
+    country = _country()
+    _add_period(country)
+    _add_period(country, wages=WAGES * 1.1)
+    ts = country.households.ts
+    state = (set(vars(country)), set(vars(country.households)), set(ts.dicts))
+    first = country._permanent_income_simulation_sources().real_pc_income
+    assert (set(vars(country)), set(vars(country.households)), set(ts.dicts)) == state
+    # A different t1 row moves the carried-back base on the next call: no earlier base was kept.
+    ts.dicts["behavioural_income_signal_raw"][1] = 2.0 * ts.dicts["behavioural_income_signal_raw"][1]
+    second = country._permanent_income_simulation_sources().real_pc_income
+    assert second[0] == second[1] == 100.0
+    np.testing.assert_allclose(second[2], first[2] / 2.0)
+    # The next period reads the same t1 row: the earlier entries are unchanged.
+    _add_period(country, wages=WAGES * 1.2)
+    third = country._permanent_income_simulation_sources().real_pc_income
+    np.testing.assert_array_equal(third[:3], second)
+
+
+def test_t0_signal_row_includes_the_seeded_t0_housing_taxes():
+    """The t0 raw signal deducts the t0 housing taxes, as every later row does."""
+    country = _country()
+    ts = country.households.ts
+    assert TAXES.sum() > 0.0 and len(ts.historic("behavioural_income_signal_raw")) == 1
+    np.testing.assert_allclose(ts.initial("behavioural_income_signal_raw"), _reconcile(WAGES)["raw"])
+    untaxed = reconcile_behavioural_income(
+        non_property=WAGES,
+        rental=ZERO,
+        financial=FINANCIAL,
+        deposit_receipts=ZERO,
+        borrower_interest=LOAN_INTEREST,
+        imputed_rent=ZERO,
+        subsistence=GUARD,
+        housing_taxes=ZERO,
+    )
+    np.testing.assert_allclose(ts.initial("behavioural_income_signal_raw"), untaxed["raw"] - TAXES)
 
 
 def test_common_regressor_sums_raw_y_not_the_guard_floored_signal():
@@ -415,12 +457,33 @@ def behavioural_signal_run(datawrapper):
     return calls, prior
 
 
-def test_runs_shorter_than_five_periods_make_no_kalman_update(behavioural_signal_run):
+def test_first_kalman_update_is_at_t5_none_in_the_first_four_periods(behavioural_signal_run):
     calls, prior = behavioural_signal_run
     assert [call["rows"] for call in calls] == [2, 3, 4, 5, 6]
     for call in calls[:4]:
         assert call["lagged"] is None and call["missing"] is None and call["outputs"] is None
         np.testing.assert_array_equal(call["posterior"], prior)
+
+
+def test_live_t0_signal_row_is_net_of_the_seeded_t0_housing_taxes(datawrapper, monkeypatch):
+    """On the live country, the t0 raw signal row is lower by exactly the t0 housing taxes seeded at construction."""
+    from tests.test_macromodel.unit.test_country.test_consumption_inputs_integration import _aligned_simulation
+
+    rows = {}
+    for taxed in (False, True):
+        simulation, _ = _aligned_simulation(
+            datawrapper,
+            monkeypatch,
+            housing_taxes=taxed,
+            consumption_parameters={"income_belief_signal": "behavioural"},
+        )
+        hh = simulation.countries["FRA"].households
+        assert len(hh.ts.historic("behavioural_income_signal_raw")) == 1
+        rows[taxed] = (hh.ts.initial("behavioural_income_signal_raw").copy(), hh.current_housing_taxes().copy())
+    (untaxed_row, untaxed_taxes), (taxed_row, taxes) = rows[False], rows[True]
+    np.testing.assert_array_equal(untaxed_taxes, 0.0)
+    assert taxes.sum() > 0.0
+    np.testing.assert_allclose(taxed_row, untaxed_row - taxes, rtol=1e-12, atol=1e-6)
 
 
 def test_missing_mask_is_threaded_from_the_realised_step_into_the_kalman_update(behavioural_signal_run):

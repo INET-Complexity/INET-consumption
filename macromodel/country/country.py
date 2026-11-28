@@ -5913,6 +5913,9 @@ class Country:
             # Row 0 of y is the realised t0 income, which has no dividends (the opening declaration first settles
             # at t1), so it is not on the runtime basis of later rows. Carry the t1 real per-capita level back to
             # t0: the index is 100 at t0 and t1, and no spurious t0 -> t1 jump enters the regressor.
+            # The index is rebuilt from the full history on every call and nothing is cached between periods, so
+            # the carry-back is stateless: it always reads the current t1 row. The t1 level, which carries the
+            # opening-declaration dividend, is assumed representative of the runtime basis.
             real_pc_income_levels[0] = real_pc_income_levels[1]
         real_pc_income = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
 

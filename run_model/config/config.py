@@ -218,6 +218,25 @@ HOUSEHOLD_SUPPORT_OVERRIDES: dict[str, Any] = {
     "household_support.['mode']": "legacy_stage5",
 }
 
+# Opening-consumption residual (B+F initial_state options of CreditAugmentedConsumption). Both presets sit on
+# the notebook's default scenario (wage_competition_anchor) and add only the three initial_state_* keys.
+# 0.41 = residual sd attainable with the calibration's own inputs (vault: experiments/2026-11-28-opening-consumption-income-gap-diagnosis).
+_CONSUMPTION_PARAMETERS = "households.functions.consumption.parameters"
+
+# Opening intercepts by income quintile, residual rescaled to sd 0.41 and kept fixed per household.
+CONSUMPTION_RESIDUAL_PERSISTENT_OVERRIDES: dict[str, Any] = {
+    **WAGE_COMPETITION_ANCHOR_OVERRIDES,
+    f"{_CONSUMPTION_PARAMETERS}['initial_state_intercepts']": "income_quintile",
+    f"{_CONSUMPTION_PARAMETERS}['initial_state_residual_sd']": 0.41,
+    f"{_CONSUMPTION_PARAMETERS}['initial_state_residual_persistence']": "fixed",
+}
+
+# Same opening state, but the residual is redrawn iid each period instead of staying fixed per household.
+CONSUMPTION_RESIDUAL_IID_OVERRIDES: dict[str, Any] = {
+    **CONSUMPTION_RESIDUAL_PERSISTENT_OVERRIDES,
+    f"{_CONSUMPTION_PARAMETERS}['initial_state_residual_persistence']": "iid",
+}
+
 SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "country_config": {},
     "wage_competition": {},
@@ -229,6 +248,8 @@ SCENARIO_PRESETS: dict[str, dict[str, Any]] = {
     "wage_competition_anchor_rate_at_floor": WAGE_COMPETITION_ANCHOR_RATE_AT_FLOOR_OVERRIDES,
     "wage_competition_off": WAGE_COMPETITION_OFF_OVERRIDES,
     "calibrated_consumption": CALIBRATED_CONSUMPTION_OVERRIDES,
+    "consumption_residual_persistent": CONSUMPTION_RESIDUAL_PERSISTENT_OVERRIDES,
+    "consumption_residual_iid": CONSUMPTION_RESIDUAL_IID_OVERRIDES,
     **EXPERIMENTAL_OVERRIDE_PRESETS,
 }
 

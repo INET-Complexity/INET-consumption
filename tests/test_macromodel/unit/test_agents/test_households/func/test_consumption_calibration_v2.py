@@ -161,6 +161,15 @@ class TestIdiosyncraticTerm:
 
 
 class TestGeometricAverageIncome:
+    @pytest.mark.parametrize("time_unit", [1, 12])
+    def test_legacy_window_rejects_non_quarterly_runs(self, time_unit):
+        """The legacy window counts model periods, which are quarters only when time_unit is 3."""
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=4)
+        history = np.ones((4, 1))
+        with pytest.raises(ValueError, match="time_unit=3"):
+            rule._geometric_average_income(history, 1.0, np.ones(4), time_unit=time_unit)
+        np.testing.assert_allclose(rule._geometric_average_income(history, 1.0, np.ones(4), time_unit=3), [1.0])
+
     def test_geometric_mean_over_the_window(self):
         rule = _rule(income_denominator="geometric_average", income_denominator_window=4)
         history = np.array([[1.0], [10.0], [100.0], [1000.0]])

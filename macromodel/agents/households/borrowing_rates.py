@@ -8,7 +8,7 @@ the consumption-income denominator and loan contracts are not modified here.
 import numpy as np
 
 from macro_data.util.rates import annualized_fisher_real_rate
-from macromodel.agents.households.consumption_inputs import ConsumptionInputs
+from macromodel.agents.households.consumption_inputs import ConsumptionInputs, whole_periods
 
 
 def lagged_annual_income_nominal(prepared: ConsumptionInputs) -> np.ndarray:
@@ -18,17 +18,18 @@ def lagged_annual_income_nominal(prepared: ConsumptionInputs) -> np.ndarray:
     the sole initial observation as the startup reference. Each historical
     income/floor uses its own dated deflator before temporal smoothing.
 
-    The smoothing window is fixed at one year (12 / months_per_period periods),
-    independent of the consumption denominator's configurable window
-    (``history.history_window``): the borrowing-rate exposure is scaled by
-    annual income whatever denominator the consumption rule uses.
+    The smoothing window is fixed at one year (12 / months_per_period periods,
+    which must be a whole number), independent of the consumption
+    denominator's configurable window (``history.history_window``): the
+    borrowing-rate exposure is scaled by annual income whatever denominator
+    the consumption rule uses.
     """
     history = prepared.histories
     prices = history.consumer_price_history
     if history.price_history_layout == "missing_current":
         prices = np.append(prices, history.current_consumer_price)
     stop = max(1, len(prices) - 1)
-    start = max(0, stop - max(1, int(round(12.0 / history.months_per_period))))
+    start = max(0, stop - whole_periods(12, history.months_per_period))
     deflators = prices / history.initial_consumer_price
     observations = np.maximum(
         history.behavioural_income_nominal_history[start:stop],

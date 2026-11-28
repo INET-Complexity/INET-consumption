@@ -46,6 +46,17 @@ def _positive_scalar(value, name):
     return value
 
 
+def whole_periods(months: float, months_per_period: float) -> int:
+    """Number of model periods spanning ``months``; raises unless it is a positive whole number.
+
+    Shared by the consumption denominator window and the one-year borrowing-rate income window.
+    """
+    periods = float(months) / float(months_per_period)
+    if not periods.is_integer() or periods < 1:
+        raise ValueError(f"{months} months is not a whole number of {months_per_period}-month periods.")
+    return int(periods)
+
+
 def _identity(period_id, household_layout_key, pass_kind="first"):
     if isinstance(period_id, (bool, np.bool_)) or not isinstance(period_id, (int, np.integer)) or period_id < 0:
         raise ValueError("period_id must be a nonnegative integer.")

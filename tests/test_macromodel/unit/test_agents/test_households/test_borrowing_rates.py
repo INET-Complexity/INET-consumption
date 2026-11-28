@@ -1,6 +1,7 @@
 """Independent arithmetic for current rates on lagged borrowing exposure."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -16,6 +17,7 @@ from macromodel.agents.households.consumption_inputs import (
     OpeningStockValues,
     PermanentIncomePayload,
     prepare_inputs,
+    whole_periods,
 )
 
 
@@ -218,3 +220,16 @@ def test_borrowing_rate_income_window_is_one_year_whatever_the_consumption_windo
     for result in results:
         np.testing.assert_allclose(result["lagged_annual_income_nominal"], expected, rtol=1e-12)
         np.testing.assert_array_equal(result["real_borrowing_rate"], results[0]["real_borrowing_rate"])
+
+
+@pytest.mark.parametrize("months_per_period", [5, 7, 24])
+def test_borrowing_rate_income_window_requires_a_whole_number_of_periods_per_year(months_per_period):
+    """One year must be a whole number of periods; the shared helper also converts the consumption window."""
+    histories = SimpleNamespace(
+        consumer_price_history=np.ones(3), price_history_layout="aligned", months_per_period=months_per_period
+    )
+    with pytest.raises(ValueError, match="whole number"):
+        lagged_annual_income_nominal(SimpleNamespace(histories=histories))
+    with pytest.raises(ValueError, match="whole number"):
+        whole_periods(12, months_per_period)
+    assert whole_periods(12, 3) == 4 and whole_periods(12, 1) == 12

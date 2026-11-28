@@ -642,6 +642,14 @@ class Country:
         self._initialize_nominal_employee_income()
         # The t0 behavioural-income lower bound, before the t0 income records that it floors.
         self._set_opening_income_guard()
+        if (
+            isinstance(consumption, CreditAugmentedConsumption)
+            and consumption.uses_aligned_behavioural_income
+            and consumption.uses_income_belief_learning
+        ):
+            # The prepared consumption path has no default denominator: missing keys or a window that is not a
+            # whole number of periods fail here, at construction, not at the first planning pass.
+            consumption.prepared_income_window_periods(self.economy.time_unit)
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
@@ -4532,13 +4540,19 @@ class Country:
         Projects realised non-debt cash costs at estimated nominal growth; next-period scheduled interest and
         principal and the carried operating facility (with interest) are reserved. No future refinance is
         presumed. May be negative; the planned distribution floors it at zero.
+
+        At t0 (the opening declaration) the growth and PPI-inflation estimates do not exist yet (NaN). The
+        projection then uses a nominal growth factor of 1, i.e. it projects the current flows flat, so the
+        opening cap is the runtime formula with neutral growth. Without this, ``max(0, nan)`` evaluates to 0
+        and silently drops the projected operating cash. With finite estimates the factor is unchanged.
         """
         next_service = self.credit_market.compute_scheduled_firm_installments_preview()
-        nominal_growth = max(
-            0.0,
-            (1 + float(self.economy.ts.current("estimated_growth")[0]))
-            * (1 + float(self.economy.ts.current("estimated_ppi_inflation")[0])),
-        )
+        estimated_growth = float(self.economy.ts.current("estimated_growth")[0])
+        estimated_ppi_inflation = float(self.economy.ts.current("estimated_ppi_inflation")[0])
+        if np.isfinite(estimated_growth) and np.isfinite(estimated_ppi_inflation):
+            nominal_growth = max(0.0, (1 + estimated_growth) * (1 + estimated_ppi_inflation))
+        else:
+            nominal_growth = 1.0
         projected_operating_cash = nominal_growth * (
             self.firms.ts.current("nominal_amount_sold_in_lcu")
             - self.firms.ts.current("total_wage")

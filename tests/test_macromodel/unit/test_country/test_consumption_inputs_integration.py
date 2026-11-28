@@ -520,18 +520,52 @@ def _expected_profit_ceiling(country):
     return ratio * np.where(gate, np.maximum(earnings, 0.0), 0.0)
 
 
+def _expected_opening_forecast_cash_capacity(country):
+    """Opening forecast cash after senior uses, rebuilt from the underlying series (independent of the helper).
+
+    At t0 the growth and PPI-inflation estimates are NaN, so current flows are projected flat (factor 1).
+    """
+    firms = country.firms.ts
+    for name in ("estimated_growth", "estimated_ppi_inflation"):
+        assert not np.isfinite(country.economy.ts.current(name)[0])
+    operating_cash = (
+        firms.current("nominal_amount_sold_in_lcu")
+        - firms.current("total_wage")
+        - firms.current("nominal_amount_spent_in_lcu").sum(axis=1)
+        - country.firms.direct_tfp_investment_cash_expense()
+        - firms.current("taxes_paid_on_production")
+        - firms.current("corporate_taxes_paid")
+        - firms.current("capital_formation_taxes_paid")
+        - firms.current("interest_paid_on_deposits")
+    )
+    service = country.credit_market.compute_scheduled_firm_installments_preview()
+    facility = firms.current("operating_revolving_closing_balance") * (1 + firms.current("operating_revolving_rate"))
+    capacity = (
+        firms.current("deposits")
+        + operating_cash
+        - service["scheduled_interest_due"]
+        - service["scheduled_principal_due"]
+        - facility
+    )
+    return capacity, operating_cash
+
+
 def test_opening_declaration_is_the_runtime_declaration_capped_by_forecast_cash(aligned_country):
     country, _ = aligned_country
     hh, firms, banks = country.households, country.firms.ts, country.banks.ts
     wealth = hh.functions["wealth"]
     assert wealth.dividend_fund_firm_payout_ratio > 0 and wealth.dividend_fund_bank_payout_ratio > 0
     ceiling = _expected_profit_ceiling(country)
-    capacity = np.maximum(country._firm_dividend_forecast_cash_capacity(), 0.0)
+    raw_capacity, operating_cash = _expected_opening_forecast_cash_capacity(country)
+    # The projected operating cash is material and enters the cap (a NaN growth term would drop it).
+    assert np.all(operating_cash > 0.0)
+    capacity = np.maximum(raw_capacity, 0.0)
     firm_declared = np.minimum(ceiling, capacity)
     np.testing.assert_allclose(firms.current("dividend_fund_profit_ceiling"), ceiling)
     np.testing.assert_allclose(firms.current("dividend_fund_forecast_cash_capacity"), capacity)
     np.testing.assert_allclose(firms.current("dividend_fund_declared_distribution"), firm_declared)
-    # The forecast-cash cap binds for some firms in this calibration: the declaration is not the bare ceiling.
+    # The forecast-cash cap binds for some firms in this fixture (2 of 18, whose scheduled service exceeds deposits
+    # plus operating cash): the declaration is not the bare ceiling.
     assert np.any(firm_declared < ceiling - 1e-9) and firm_declared.sum() > 0
     bank_declared = wealth.dividend_fund_bank_payout_ratio * np.maximum(banks.current("cash_distributable_profits"), 0)
     assert bank_declared.sum() > 0
@@ -780,7 +814,6 @@ def test_denominator_mode_and_window_are_honoured(datawrapper, monkeypatch, mode
 
 
 @pytest.mark.parametrize("missing", ["income_denominator", "income_denominator_window"])
-def test_prepared_path_without_explicit_denominator_keys_fails_loudly(datawrapper, monkeypatch, missing):
-    simulation, _ = _aligned_simulation(datawrapper, monkeypatch, drop_parameters=(missing,))
+def test_prepared_path_without_explicit_denominator_keys_fails_at_construction(datawrapper, monkeypatch, missing):
     with pytest.raises(ValueError, match="explicit income_denominator"):
-        simulation.iterate(0)
+        _aligned_simulation(datawrapper, monkeypatch, drop_parameters=(missing,))

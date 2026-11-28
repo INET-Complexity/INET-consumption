@@ -2850,11 +2850,13 @@ class Households(Agent):
         current_income: np.ndarray,
         lagged_income: np.ndarray | None,
         noise_variances: dict[str, np.ndarray] | None = None,
+        missing: np.ndarray | None = None,
     ) -> IncomeBeliefLearningOutputs | None:
         """Advance optional income-belief posterior state.
 
         ``noise_variances`` (``sigma2_v``/``sigma2_xi``) overrides the static priors' noise
         variances for this update only; posterior mean and variance carry over unchanged.
+        ``missing`` marks households whose observation is unusable (gain 0, as for a floored income).
         """
         priors = self.states.get("income_belief_priors")
         if priors is None:
@@ -2875,6 +2877,7 @@ class Households(Agent):
             prior_mean=runtime_state["posterior_mean"],
             prior_variance=runtime_state["posterior_variance"],
             growth_clip_bound=getattr(self.functions["consumption"], "income_belief_growth_clip_bound", 1.0),
+            missing=missing,
         )
         runtime_state["posterior_mean"] = outputs.posterior_mean.copy()
         runtime_state["posterior_variance"] = outputs.posterior_variance.copy()

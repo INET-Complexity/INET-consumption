@@ -154,6 +154,7 @@ def compute_income_belief_learning_outputs(
     prior_variance: np.ndarray | None = None,
     income_floor: float = 1e-12,
     growth_clip_bound: float = 1.0,
+    missing: np.ndarray | None = None,
 ) -> IncomeBeliefLearningOutputs:
     """Return one-period Bayesian income-learning outputs for households.
 
@@ -168,6 +169,9 @@ def compute_income_belief_learning_outputs(
     draw) income in one period imply tens of log-units of "growth", which then
     persists in posterior_mean across periods (see GH issue #90). The default
     of 1.0 (~2.7x) is already generous for one quarter.
+
+    ``missing`` (boolean, one per household) marks observations the caller deems unusable, for example income at
+    the behavioural-income guard. They are treated like floored incomes: gain 0 and excluded from the common signal.
     """
     current_income = np.asarray(current_income, dtype=float)
     lagged_income = np.asarray(lagged_income, dtype=float)
@@ -197,6 +201,11 @@ def compute_income_belief_learning_outputs(
     signal_variance = _household_array(priors, "sigma2_xi", n_households)
 
     floor_used = (current_income <= income_floor) | (lagged_income <= income_floor)
+    if missing is not None:
+        missing = np.asarray(missing, dtype=bool)
+        if missing.shape != current_income.shape:
+            raise ValueError(f"missing must have shape {current_income.shape}, got {missing.shape}.")
+        floor_used = floor_used | missing
     log_current_income = np.log(np.maximum(current_income, income_floor))
     log_lagged_income = np.log(np.maximum(lagged_income, income_floor))
     raw_income_growth = log_current_income - log_lagged_income

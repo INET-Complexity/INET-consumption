@@ -711,6 +711,7 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         income_denominator_window: int | None = None,
         uses_aligned_behavioural_income: bool = False,
         debt_service_cashflow_propensity: float = -0.75,
+        income_belief_signal: str = "non_property",
     ):
         super().__init__(
             consumption_smoothing_fraction,
@@ -728,6 +729,23 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         self.uses_aligned_behavioural_income = uses_aligned_behavioural_income
         # Income-belief learning is implemented by this rule only.
         self.uses_income_belief_learning = uses_income_belief_learning
+        # Income concept of the Kalman signal, the permanent-income projection and the common-forecast regressor.
+        #   "non_property" (default) -- wages + transfers.
+        #   "behavioural"            -- the full behavioural income y of the calibration
+        #                               (sqrt(N(N+P)) - debt interest - housing taxes + imputed rent), shock-free
+        #                               for the signal and the regressor.
+        if income_belief_signal not in ("non_property", "behavioural"):
+            raise ValueError(
+                f"income_belief_signal must be 'non_property' or 'behavioural', got {income_belief_signal!r}."
+            )
+        if income_belief_signal == "behavioural" and not (
+            uses_aligned_behavioural_income and uses_income_belief_learning
+        ):
+            raise ValueError(
+                "income_belief_signal='behavioural' requires uses_aligned_behavioural_income and "
+                "uses_income_belief_learning."
+            )
+        self.income_belief_signal = income_belief_signal
         self.income_belief_growth_clip_bound = income_belief_growth_clip_bound
         # Re-select sigma2_v/sigma2_xi each quarter from members' current employment status.
         self.uses_state_dependent_income_belief_noise = uses_state_dependent_income_belief_noise

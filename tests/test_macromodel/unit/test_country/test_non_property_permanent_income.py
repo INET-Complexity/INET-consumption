@@ -38,6 +38,7 @@ def test_initial_pi_excludes_property_receipts_and_preserves_behavioural_income(
         functions={"wealth": object()},
         compute_interest_paid_on_deposits=lambda **kwargs: np.full(3, -10.0 * scale),
         current_consumption_imputed_rent=lambda: np.full(3, 5.0 * scale),
+        current_housing_taxes=lambda: zero.copy(),
     )
     country.banks = SimpleNamespace(
         ts=TimeSeries(

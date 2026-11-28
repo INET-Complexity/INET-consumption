@@ -2539,10 +2539,13 @@ class Country:
             # Realised income without the staged shock, for the learning signal and the common regressor: the
             # shock must neither feed beliefs nor the macro forecast. y is non-linear in N, so recompute with the
             # pre-shock N rather than subtracting the shock from y.
+            # The Kalman signal is the guard-floored y (guard-bound households are missing observations); the
+            # common regressor sums the raw y, as the guard top-up is not income in the national accounts.
             shock_free = parts if self._staged_household_income_shock is None else reconcile(shock_free_non_property)
             signal, bound = shock_free["income"], (shock_free["income"] <= guard).astype(float)
             for key, values in (
                 ("behavioural_income_signal", signal),
+                ("behavioural_income_signal_raw", shock_free["raw"]),
                 ("behavioural_income_signal_guard_bound", bound),
             ):
                 if initial:
@@ -2594,8 +2597,8 @@ class Country:
 
         ``income_belief_signal="behavioural"``: the shock-free behavioural income y (capital-gains mode keeps
         every component of y nonnegative, so #90 does not recur). A household whose current or lagged y is at
-        the guard is a missing observation. Row 0 of the series lacks dividends and housing taxes, so the lagged
-        row must be >= 1: the first update is at t = 5, not t = 4.
+        the guard is a missing observation. Row 0 of the series lacks dividends (the opening declaration first
+        settles at t1), so the lagged row must be >= 1: the first update is at t = 5, not t = 4.
 
         The lag is ``None`` until enough history exists.
         """
@@ -5891,7 +5894,7 @@ class Country:
         )
         if self._uses_behavioural_income_signal():
             total_income_history = np.asarray(
-                [float(np.sum(y)) for y in self.households.ts.dicts["behavioural_income_signal"]], dtype=float
+                [float(np.sum(y)) for y in self.households.ts.dicts["behavioural_income_signal_raw"]], dtype=float
             )
         else:
             total_income_history = np.asarray(
@@ -5906,6 +5909,11 @@ class Country:
                 dtype=float,
             )
         real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals_history
+        if self._uses_behavioural_income_signal() and real_pc_income_levels.size > 1:
+            # Row 0 of y is the realised t0 income, which has no dividends (the opening declaration first settles
+            # at t1), so it is not on the runtime basis of later rows. Carry the t1 real per-capita level back to
+            # t0: the index is 100 at t0 and t1, and no spurious t0 -> t1 jump enters the regressor.
+            real_pc_income_levels[0] = real_pc_income_levels[1]
         real_pc_income = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
 
         # policy_rate is appended during estimation_phase (start of period) while

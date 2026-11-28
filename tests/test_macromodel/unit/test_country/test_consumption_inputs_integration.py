@@ -12,12 +12,15 @@ from macromodel.configurations import CountryConfiguration, SimulationConfigurat
 from macromodel.simulation import Simulation
 
 
-def _aligned_simulation(datawrapper, monkeypatch, *, aligned=True, housing_taxes=False, drop_parameters=()):
+def _aligned_simulation(
+    datawrapper, monkeypatch, *, aligned=True, housing_taxes=False, drop_parameters=(), consumption_parameters=None
+):
     root = Path(__file__).resolve().parents[4]
     production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     config = CountryConfiguration()
     config.households = production.households
     config.households.functions.consumption.parameters["uses_aligned_behavioural_income"] = aligned
+    config.households.functions.consumption.parameters.update(consumption_parameters or {})
     for name in drop_parameters:
         del config.households.functions.consumption.parameters[name]
     if housing_taxes:

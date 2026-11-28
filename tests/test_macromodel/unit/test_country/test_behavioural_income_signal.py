@@ -206,14 +206,44 @@ def test_staged_shock_enters_planning_income_but_not_the_signal_or_regressor():
 def test_common_regressor_uses_behavioural_income_per_capita_in_real_terms_when_flag_on():
     country = _country()
     _add_period(country, price=2.0)
-    y0, y1 = (_reconcile(WAGES)["income"].sum(),) * 2
+    _add_period(country, wages=WAGES * 1.1, price=2.2)
+    y1, y2 = _reconcile(WAGES)["raw"].sum(), _reconcile(WAGES * 1.1)["raw"].sum()
     sources = country._permanent_income_simulation_sources()
-    np.testing.assert_allclose(sources.real_pc_income, [100.0, 100.0 * (y1 / 2.0) / y0])
-    # Flag off: the regressor stays on wages + transfers.
+    # Row 0 is carried back from row 1 (100 at t0 and t1); later rows are real per-capita y relative to t1.
+    np.testing.assert_allclose(sources.real_pc_income, [100.0, 100.0, 100.0 * (y2 / 2.2) / (y1 / 2.0)])
+    # Flag off: the regressor stays on wages + transfers, rebased on row 0 as before.
     country.households.functions["consumption"].income_belief_signal = "non_property"
     wages = WAGES.sum()
     np.testing.assert_allclose(
-        country._permanent_income_simulation_sources().real_pc_income, [100.0, 100.0 * (wages / 2.0) / wages]
+        country._permanent_income_simulation_sources().real_pc_income,
+        [100.0, 100.0 * (wages / 2.0) / wages, 100.0 * (1.1 * wages / 2.2) / wages],
+    )
+
+
+def test_common_regressor_row_0_is_on_the_runtime_basis():
+    """Row 0 of y has no dividends; the carried-back base makes the t0 -> t1 step zero whatever row 0 holds."""
+    country = _country()
+    _add_period(country)
+    _add_period(country, wages=WAGES * 1.2)
+    reference = country._permanent_income_simulation_sources().real_pc_income
+    country.households.ts.dicts["behavioural_income_signal_raw"][0] = 0.5 * _reconcile(WAGES)["raw"]
+    np.testing.assert_array_equal(country._permanent_income_simulation_sources().real_pc_income, reference)
+    assert reference[0] == reference[1] == 100.0
+    # Before t1 is realised there is only the t0 row: the index is its own base.
+    np.testing.assert_array_equal(_country()._permanent_income_simulation_sources().real_pc_income, [100.0])
+
+
+def test_common_regressor_sums_raw_y_not_the_guard_floored_signal():
+    country = _country()
+    _add_period(country)
+    _add_period(country, wages=np.array([100.0, 50.0, 0.1]))
+    ts = country.households.ts
+    raw = [_reconcile(WAGES)["raw"], _reconcile(np.array([100.0, 50.0, 0.1]))["raw"]]
+    np.testing.assert_allclose(ts.current("behavioural_income_signal_raw"), raw[1])
+    # The third household is below the guard: the Kalman signal is floored, the regressor input is not.
+    assert raw[1][2] < GUARD[2] == ts.current("behavioural_income_signal")[2]
+    np.testing.assert_allclose(
+        country._permanent_income_simulation_sources().real_pc_income[2], 100.0 * raw[1].sum() / raw[0].sum()
     )
 
 
@@ -343,3 +373,63 @@ def test_t0_bridge_seed_is_unchanged_on_the_default_basis():
     ts = country.households.ts
     np.testing.assert_allclose(ts.current("income_bridge_current"), np.maximum(WAGES, GUARD))
     np.testing.assert_array_equal(ts.current("income_bridge_floor_used"), [0.0, 0.0, 1.0])
+
+
+# ---- live country: missing-observation threading and short runs ------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def behavioural_signal_run(datawrapper):
+    """Five periods with income_belief_signal="behavioural"; records every Kalman-update call."""
+    from tests.test_macromodel.unit.test_country.test_consumption_inputs_integration import _aligned_simulation
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        simulation, _ = _aligned_simulation(
+            datawrapper, monkeypatch, consumption_parameters={"income_belief_signal": "behavioural"}
+        )
+        country = simulation.countries["FRA"]
+        hh = country.households
+        calls, update = [], hh.update_income_belief_learning_state
+
+        def record(**kwargs):
+            bound = hh.ts.dicts["behavioural_income_signal_guard_bound"]
+            outputs = update(**kwargs)
+            calls.append(
+                dict(
+                    rows=len(hh.ts.dicts["behavioural_income_signal"]),
+                    lagged=kwargs["lagged_income"],
+                    missing=kwargs["missing"],
+                    expected_missing=(bound[-1] > 0) | (bound[-5] > 0) if len(bound) >= 6 else None,
+                    outputs=outputs,
+                    posterior=hh._income_belief_runtime_state(hh.states["income_belief_priors"])[
+                        "posterior_mean"
+                    ].copy(),
+                )
+            )
+            return outputs
+
+        monkeypatch.setattr(hh, "update_income_belief_learning_state", record)
+        prior = hh._income_belief_runtime_state(hh.states["income_belief_priors"])["posterior_mean"].copy()
+        for t in range(5):
+            simulation.iterate(t)
+    return calls, prior
+
+
+def test_runs_shorter_than_five_periods_make_no_kalman_update(behavioural_signal_run):
+    calls, prior = behavioural_signal_run
+    assert [call["rows"] for call in calls] == [2, 3, 4, 5, 6]
+    for call in calls[:4]:
+        assert call["lagged"] is None and call["missing"] is None and call["outputs"] is None
+        np.testing.assert_array_equal(call["posterior"], prior)
+
+
+def test_missing_mask_is_threaded_from_the_realised_step_into_the_kalman_update(behavioural_signal_run):
+    calls, _ = behavioural_signal_run
+    first = calls[4]
+    assert first["lagged"] is not None and first["outputs"] is not None
+    np.testing.assert_array_equal(first["missing"], first["expected_missing"])
+    # Guard-bound households exist in this calibration, so the mask is not trivially all False.
+    assert first["missing"].any() and not first["missing"].all()
+    assert np.all(first["outputs"].kalman_gain[~first["missing"] & ~first["outputs"].floor_used] > 0)
+    np.testing.assert_array_equal(first["outputs"].floor_used[first["missing"]], True)
+    np.testing.assert_array_equal(first["outputs"].kalman_gain[first["missing"]], 0.0)

@@ -2462,6 +2462,11 @@ class Country:
         if getattr(wealth_function, "illiquid_returns_are_capital_gains", False):
             hh.override_current("expected_income_financial_assets", expected_dividend_income.copy())
 
+    def _uses_behavioural_income_signal(self) -> bool:
+        """Whether the permanent-income term is built on full behavioural income (``income_belief_signal``)."""
+        consumption = getattr(self.households, "functions", {}).get("consumption")
+        return getattr(consumption, "income_belief_signal", "non_property") == "behavioural"
+
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
     ) -> None:
@@ -2480,10 +2485,12 @@ class Country:
                 "Construct a fresh country with uses_aligned_behavioural_income=True; "
                 "do not switch an existing cash-income history in place."
             )
-        non_property = hh.ts.current(prefix + "income_employee") + hh.ts.current(prefix + "income_social_transfers")
+        shock_free_non_property = hh.ts.current(prefix + "income_employee") + hh.ts.current(
+            prefix + "income_social_transfers"
+        )
         # A staged income intervention enters non-property income once. The
         # existing cash-income route books it independently; this is a diagnostic.
-        non_property = self._apply_household_income_shock(non_property)
+        non_property = self._apply_household_income_shock(shock_free_non_property)
         paper_returns = getattr(hh.functions["wealth"], "illiquid_returns_are_capital_gains", False)
         financial_series = "income_dividend_distributions" if paper_returns else "income_financial_assets"
         financial = hh.ts.current(prefix + financial_series)
@@ -2503,16 +2510,20 @@ class Country:
             deposit_paid = hh.ts.current("interest_paid_on_deposits")
             loan_interest = hh.ts.current("interest_paid_on_loans")
         guard = self.economy.ts.current("income_guard")
-        parts = reconcile_behavioural_income(
-            non_property=non_property,
-            rental=hh.ts.current("income_rental"),
-            financial=financial,
-            deposit_receipts=np.maximum(-deposit_paid, 0.0),
-            borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
-            imputed_rent=hh.current_consumption_imputed_rent(),
-            subsistence=guard,
-            housing_taxes=hh.current_housing_taxes(),
-        )
+
+        def reconcile(n: np.ndarray) -> dict[str, np.ndarray]:
+            return reconcile_behavioural_income(
+                non_property=n,
+                rental=hh.ts.current("income_rental"),
+                financial=financial,
+                deposit_receipts=np.maximum(-deposit_paid, 0.0),
+                borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
+                imputed_rent=hh.current_consumption_imputed_rent(),
+                subsistence=guard,
+                housing_taxes=hh.current_housing_taxes(),
+            )
+
+        parts = reconcile(non_property)
         # Keep loan interest separate from deposit/overdraft interest so only
         # the contractual opening-loan amount is frozen across planning passes.
         parts["loan_interest"] = loan_interest
@@ -2524,6 +2535,20 @@ class Country:
                 hh.ts.override_current(key, values.copy())
             else:
                 hh.ts.dicts[key].append(values.copy())
+        if not expected and self._uses_behavioural_income_signal():
+            # Realised income without the staged shock, for the learning signal and the common regressor: the
+            # shock must neither feed beliefs nor the macro forecast. y is non-linear in N, so recompute with the
+            # pre-shock N rather than subtracting the shock from y.
+            shock_free = parts if self._staged_household_income_shock is None else reconcile(shock_free_non_property)
+            signal, bound = shock_free["income"], (shock_free["income"] <= guard).astype(float)
+            for key, values in (
+                ("behavioural_income_signal", signal),
+                ("behavioural_income_signal_guard_bound", bound),
+            ):
+                if initial:
+                    hh.ts[key] = values.copy()
+                else:
+                    hh.ts.dicts[key].append(values.copy())
         if expected:
             # Planning income is the floored series entering the consumption rule: flag where the guard binds,
             # strictly below it. Raw income is kept in the _raw series.
@@ -2536,14 +2561,19 @@ class Country:
                 hh.ts.income_guard_bound.append(bound)
 
         if initial and expected:
-            # PI forecasts wages/transfers only. Keep the legacy bridge field
-            # names, but seed them on the same non-property basis as planning.
-            # Property receipts remain in behavioural income and cash accounts.
-            n = parts["non_property"]
-            hh.ts.override_current("income_bridge_current", np.maximum(n, guard))
-            hh.ts.override_current("income_bridge_property", np.zeros_like(n))
-            hh.ts.override_current("income_bridge_floor_used", (n < guard).astype(float))
-            hh.ts.override_current("income_bridge_component_floor_used", (parts["non_property_raw"] < 0).astype(float))
+            # Seed the bridge fields on the basis the planning pass feeds the bridge: wages/transfers
+            # (``income_belief_signal="non_property"``) or all of y (``"behavioural"``). Property receipts
+            # remain in behavioural income and cash accounts.
+            if self._uses_behavioural_income_signal():
+                # The multiplier acts on all of y: seed the bridge fields as monetary_income_moments returns them
+                # for N = raw y, P = 0.
+                base, component_raw = parts["raw"], parts["raw"]
+            else:
+                base, component_raw = parts["non_property"], parts["non_property_raw"]
+            hh.ts.override_current("income_bridge_current", np.maximum(base, guard))
+            hh.ts.override_current("income_bridge_property", np.zeros_like(base))
+            hh.ts.override_current("income_bridge_floor_used", (base < guard).astype(float))
+            hh.ts.override_current("income_bridge_component_floor_used", (component_raw < 0).astype(float))
             if isinstance(hh.functions.get("consumption"), CreditAugmentedConsumption):
                 service = self._contractual_debt_service_components()
                 service.update(
@@ -2553,6 +2583,44 @@ class Country:
                 )
                 for name, values in service.items():
                     hh.ts["consumption_debt_service_" + name] = values.copy()
+
+    def _income_belief_signal_inputs(self) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None]:
+        """Real current and four-quarter-lagged income for the Kalman update, and the missing-observation mask.
+
+        Default: non-property income (employment + social transfers), not the full income total used elsewhere:
+        total income includes stochastic income_financial_assets, which can be large and negative after a bad
+        market draw and is unrelated to the permanent-income concept this module targets (GH issue #90). Both
+        the current and lagged signal use the same basis, or the growth ratio mixes income definitions.
+
+        ``income_belief_signal="behavioural"``: the shock-free behavioural income y (capital-gains mode keeps
+        every component of y nonnegative, so #90 does not recur). A household whose current or lagged y is at
+        the guard is a missing observation. Row 0 of the series lacks dividends and housing taxes, so the lagged
+        row must be >= 1: the first update is at t = 5, not t = 4.
+
+        The lag is ``None`` until enough history exists.
+        """
+        cpi_series = self.economy.consumer_price_level_series_name()
+        cpi_history = self.economy.ts.historic(cpi_series)
+        current_price = self.economy.ts.current(cpi_series)[0]
+        if self._uses_behavioural_income_signal():
+            signal = self.households.ts.dicts["behavioural_income_signal"]
+            bound = self.households.ts.dicts["behavioural_income_signal_guard_bound"]
+            if len(signal) < 6 or len(cpi_history) < 6:
+                return signal[-1] / current_price, None, None
+            return (
+                signal[-1] / current_price,
+                signal[-5] / cpi_history[-5][0],
+                (bound[-1] > 0) | (bound[-5] > 0),
+            )
+        income_employee = self.households.ts.historic("income_employee")
+        if len(income_employee) < 5 or len(cpi_history) < 5:
+            return self.households.compute_non_property_income() / current_price, None, None
+        lagged_non_property_income = income_employee[-5] + self.households.ts.dicts["income_social_transfers"][-5]
+        return (
+            self.households.compute_non_property_income() / current_price,
+            lagged_non_property_income / cpi_history[-5][0],
+            None,
+        )
 
     def _consumption_input_sources_and_layout(self) -> tuple[ConsumptionSources, str]:
         """Declare source units and ordered household membership for this run."""
@@ -2709,9 +2777,14 @@ class Country:
                 # Reuse the component snapshot recorded above: do not reapply
                 # shocks, add property receipts/housing services or subtract
                 # borrower interest. P=0 retains the existing floored Gaussian
-                # projection and uncertainty calculation for wages/transfers.
+                # projection and uncertainty calculation for wages/transfers,
+                # or for all of y when income_belief_signal="behavioural".
                 hh = self.households
-                non_property = hh.ts.current("expected_behavioural_income_non_property_raw")
+                non_property = hh.ts.current(
+                    "expected_behavioural_income_raw"
+                    if self._uses_behavioural_income_signal()
+                    else "expected_behavioural_income_non_property_raw"
+                )
                 bridge_arguments["monetary_income_components"] = {
                     "non_property": non_property,
                     "property_income": np.zeros_like(non_property),
@@ -5246,28 +5319,12 @@ class Country:
         if getattr(self.households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=False)
         if getattr(self.households.functions["consumption"], "uses_income_belief_learning", False):
-            cpi_series = self.economy.consumer_price_level_series_name()
-            # Use non-property income (employment + social transfers), not the
-            # full income total used elsewhere, as the Kalman-update signal: total income
-            # includes stochastic income_financial_assets, which can be large and negative
-            # after a bad market draw and is unrelated to the permanent-income concept this
-            # learning module targets -- see compute_non_property_income's docstring and
-            # GH issue #90. Both the current- and lagged-period signal must use the same
-            # (non-property) basis, or the resulting growth ratio mixes income definitions.
-            lagged_real_non_property_income = None
-            if (
-                len(self.households.ts.historic("income_employee")) >= 5
-                and len(self.economy.ts.historic(cpi_series)) >= 5
-            ):
-                lagged_non_property_income = (
-                    self.households.ts.dicts["income_employee"][-5]
-                    + self.households.ts.dicts["income_social_transfers"][-5]
-                )
-                lagged_real_non_property_income = lagged_non_property_income / self.economy.ts.dicts[cpi_series][-5][0]
+            current_real_income, lagged_real_income, missing = self._income_belief_signal_inputs()
             self.households.update_income_belief_learning_state(
-                current_income=self.households.compute_non_property_income() / self.economy.ts.current(cpi_series)[0],
-                lagged_income=lagged_real_non_property_income,
+                current_income=current_real_income,
+                lagged_income=lagged_real_income,
                 noise_variances=self._current_income_belief_noise_variances(),
+                missing=missing,
             )
         self.households.ts.income_histogram.append(get_histogram(self.households.ts.current("income"), self.scale))
         self._clear_household_income_shock()
@@ -5826,23 +5883,28 @@ class Country:
         )
 
         # Match the household forecast and learning signal: wages/transfers
-        # only, not the broader cash-income series. Deflate and divide by
-        # population, then rebase to real_pc_idx=100 at start_period.
+        # (or, with income_belief_signal="behavioural", the shock-free behavioural income y), not the broader
+        # cash-income series. Deflate and divide by population, then rebase to real_pc_idx=100 at start_period.
         n_individuals_history = np.asarray(
             [np.asarray(value).reshape(-1)[0] for value in self.individuals.ts.dicts["n_individuals"]],
             dtype=float,
         )
-        total_income_history = np.asarray(
-            [
-                float(np.sum(employee + transfers))
-                for employee, transfers in zip(
-                    self.households.ts.dicts["income_employee"],
-                    self.households.ts.dicts["income_social_transfers"],
-                    strict=True,
-                )
-            ],
-            dtype=float,
-        )
+        if self._uses_behavioural_income_signal():
+            total_income_history = np.asarray(
+                [float(np.sum(y)) for y in self.households.ts.dicts["behavioural_income_signal"]], dtype=float
+            )
+        else:
+            total_income_history = np.asarray(
+                [
+                    float(np.sum(employee + transfers))
+                    for employee, transfers in zip(
+                        self.households.ts.dicts["income_employee"],
+                        self.households.ts.dicts["income_social_transfers"],
+                        strict=True,
+                    )
+                ],
+                dtype=float,
+            )
         real_pc_income_levels = total_income_history / cpi_fixed_basket / n_individuals_history
         real_pc_income = rebase_real_pc_income_index(real_pc_income_levels, base_period_index=0)
 

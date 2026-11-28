@@ -94,10 +94,12 @@ asset_returns:
     # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy). Bank ratio unchanged.
     # Vault: experiments/2026-11-20-payout-earnings-sna.
     dividend_fund_firm_payout_ratio: 0.467
-    # Maximum bank payout share. PROVISIONAL 0.40 (paper 2026-11-25): lower end of EBA EU-bank payouts
-    # (dividends + buybacks: ~40% planned 2023, 51% of 2024 profits; EBA Risk Assessment Report).
-    # Upper bound for dividends only; French mutualist groups distribute less. Was 0.10. See issue #250.
-    dividend_fund_bank_payout_ratio: 0.40
+    # Maximum bank payout share of the model base (interest margin net of credit losses, before operating
+    # costs and tax; operating costs and fees sit in industry-K firms). Data counterpart, six French groups
+    # (ACPR "Situation des grands groupes bancaires français" + group reports), 2010-18 pooled:
+    # distributions to outside owners (incl. parts sociales) / (net interest margin - cost of risk) = 0.086
+    # (= 27.0% of net profit). Upper bound: K firms already pay part of the sector's dividends. Issue #250.
+    dividend_fund_bank_payout_ratio: 0.09
 
 desired_consumption:
   credit_augmented:

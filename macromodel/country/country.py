@@ -644,6 +644,9 @@ class Country:
         self._set_opening_income_guard()
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
+        # The t0 dividend declaration and housing taxes precede the t0 income records that count them.
+        self._seed_opening_dividend_declaration()
+        self._seed_opening_household_housing_taxes()
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
             self._record_behavioural_income(expected=True, initial=True)
             self._record_behavioural_income(expected=False, initial=True)
@@ -2380,35 +2383,105 @@ class Country:
                 expected_household_income - self.households.current_housing_taxes()
             )
 
-    def _append_household_housing_taxes(self) -> None:
-        """Fix this period's housing taxes before households plan, once per period.
+    def _household_housing_taxes_at_start_of_period(self) -> tuple[np.ndarray, np.ndarray]:
+        """Property and residence taxes by household, from the owner and occupant at the start of the period.
 
-        Owner and occupant are those at the start of the period, as French
-        property and residence taxes are fixed on 1 January. The residence tax
-        is levied on the occupant at the start of the period on the latest
-        recorded rent (cash or imputed): a household that moves within the
-        period pays on its previous dwelling's rent, and a newly housed
-        household pays from the next period. The plan (financing income) and
-        the settlement (realised income, central government revenue) use this
-        one amount, so a household that spends its whole plan is not
-        overdrawn by the tax.
-
-        Idempotent within a period: the realised ``income`` row is appended
-        once per period in update_realised_metrics, so the housing-tax series
-        has one row more than ``income`` once this period's taxes are fixed.
-        A repeated call in the same period keeps the start-of-period amount.
+        French property and residence taxes are fixed on 1 January. The residence tax is levied on the
+        occupant at the start of the period on the latest recorded rent (cash or imputed): a household that
+        moves within the period pays on its previous dwelling's rent, and a newly housed household pays from
+        the next period.
         """
-        hh_ts = self.households.ts
-        if len(hh_ts.historic("housing_taxes_property")) > len(hh_ts.historic("income")):
-            return
         properties = self.housing_market.states["properties"]
-        property_tax, residence_tax = self.central_government.compute_household_housing_taxes(
+        return self.central_government.compute_household_housing_taxes(
             property_values=properties["Value"].fillna(0.0).values,
             property_owner_ids=properties["Corresponding Owner Household ID"].values,
             occupant_rental_value=self.households.ts.current("rent") + self.households.ts.current("rent_imputed"),
         )
-        self.households.ts.housing_taxes_property.append(property_tax)
-        self.households.ts.housing_taxes_residence.append(residence_tax)
+
+    def _append_household_housing_taxes(self) -> None:
+        """Fix this period's housing taxes before households plan, once per period.
+
+        The plan (financing income) and the settlement (realised income, central government revenue) use
+        this one amount, so a household that spends its whole plan is not overdrawn by the tax.
+
+        Idempotent within a period: the realised ``income`` row is appended once per period in
+        update_realised_metrics, so the housing-tax series has one row more than ``income`` once this
+        period's taxes are fixed. A repeated call in the same period keeps the start-of-period amount.
+        """
+        hh_ts = self.households.ts
+        if len(hh_ts.historic("housing_taxes_property")) > len(hh_ts.historic("income")):
+            return
+        property_tax, residence_tax = self._household_housing_taxes_at_start_of_period()
+        hh_ts.housing_taxes_property.append(property_tax)
+        hh_ts.housing_taxes_residence.append(residence_tax)
+
+    def _seed_opening_household_housing_taxes(self) -> None:
+        """Record the t0 housing taxes (rates are calibrated before construction) in the t0 row.
+
+        The t0 behavioural income then deducts them as every later period does. No cash moves at t0.
+        """
+        property_tax, residence_tax = self._household_housing_taxes_at_start_of_period()
+        self.households.ts.override_current("housing_taxes_property", property_tax)
+        self.households.ts.override_current("housing_taxes_residence", residence_tax)
+
+    def _seed_opening_dividend_declaration(self) -> None:
+        """Declare the opening distribution, so that households are paid dividends from t1.
+
+        Settlement at t is the declaration of t-1, so without a t0 declaration nothing is paid at t1 and t1
+        income is lower than from t2 on. The declaration applies the runtime payout rule (payout ratio x
+        after-tax earnings, distress gate, owner quota) to the opening state, with no cash cap: the t1
+        plan reserves only what forecast cash allows and settlement pays only from firm cash, so no money
+        is created. The t0 expected dividend income is the same declaration net of withholding.
+        """
+        from macromodel.country.diagnostic_dividend_fund import compute_diagnostic_dividend_fund
+
+        wealth_function = self.households.functions["wealth"]
+        firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", 0.0))
+        bank_payout_ratio = float(getattr(wealth_function, "dividend_fund_bank_payout_ratio", 0.0))
+        quota = self.households.states["dividend_fund_ownership_quota"]
+        if float(np.sum(quota)) <= 0.0 or (firm_payout_ratio <= 0.0 and bank_payout_ratio <= 0.0):
+            return
+        firms, banks, hh = self.firms.ts, self.banks.ts, self.households.ts
+        after_tax_earnings = (
+            firms.current("profits")
+            - firms.current("corporate_taxes_paid")
+            - firms.current("firm_settlement_capitalized_interest")
+        )
+        result = compute_diagnostic_dividend_fund(
+            beginning_ifa=hh.current("illiquid_financial_assets"),
+            firm_cash_profit_after_settlement=after_tax_earnings,
+            firm_closing_deposits=firms.current("deposits"),
+            firm_unpaid_interest=firms.current("firm_settlement_unpaid_interest"),
+            firm_closing_principal_arrears=firms.current("firm_settlement_closing_principal_arrears"),
+            firm_residual_overdraft_exposure=firms.current("firm_settlement_residual_overdraft_exposure"),
+            firm_default_flag=firms.current("firm_settlement_default_flag"),
+            bank_cash_distributable_profits=banks.current("cash_distributable_profits"),
+            ownership_quota=quota,
+            cap_firm_by_closing_cash=False,
+        )
+        firm_declared = result.firm_distributable_profit_candidate * firm_payout_ratio
+        bank_declared = result.bank_distributable_profit_candidate * bank_payout_ratio
+        for ts, name, values in (
+            (firms, "dividend_fund_after_tax_earnings", after_tax_earnings),
+            (firms, "dividend_fund_cash_distributable_profit_candidate", result.firm_distributable_profit_candidate),
+            (firms, "dividend_fund_distress_gate_passed", result.firm_distress_gate_passed),
+            (firms, "dividend_fund_profit_ceiling", firm_declared),
+            (firms, "dividend_fund_declared_distribution", firm_declared),
+            (banks, "dividend_fund_cash_distributable_profit_candidate", result.bank_distributable_profit_candidate),
+            (banks, "dividend_fund_declared_distribution", bank_declared),
+            (hh, "dividend_fund_declared_firm_distribution", result.ownership_quota * float(firm_declared.sum())),
+            (hh, "dividend_fund_declared_bank_distribution", result.ownership_quota * float(bank_declared.sum())),
+            (hh, "dividend_fund_total_firm_declared_distribution", [float(firm_declared.sum())]),
+            (hh, "dividend_fund_total_bank_declared_distribution", [float(bank_declared.sum())]),
+        ):
+            ts.override_current(name, values)
+        expected_dividend_income = self.households.compute_expected_dividend_income(
+            income_tax_rate=self.central_government.states["Income Tax"]
+        )
+        hh.override_current("expected_income_dividend_distributions", expected_dividend_income)
+        hh.override_current("total_expected_income_dividend_distributions", [expected_dividend_income.sum()])
+        if getattr(wealth_function, "illiquid_returns_are_capital_gains", False):
+            hh.override_current("expected_income_financial_assets", expected_dividend_income.copy())
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
@@ -2701,6 +2774,7 @@ class Country:
                 household_layout_key=input_layout,
                 current_consumer_price=self.economy.current_consumer_price_level(),
                 price_history_layout="aligned" if price_rows == income_rows else "missing_current",
+                history_window=consumption_function.prepared_income_window,
                 # Current real income is valued at the nominalization price CPI_{t-1}(1 + Pi^e).
                 expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             )
@@ -2777,7 +2851,6 @@ class Country:
             consumer_contractual_rate,
             expected_consumer_inflation,
             n_periods_per_year,
-                history_window=consumption_function.prepared_income_window,
         )
         real_mortgage_rate = annualized_fisher_real_rate(
             mortgage_contractual_rate,

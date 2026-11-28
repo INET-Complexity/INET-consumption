@@ -477,6 +477,83 @@ def test_initial_payment_history_anchors_contractual_obligation_and_cash_income(
     np.testing.assert_array_equal(hh.ts.current(prefix + "income_nominal"), expected_income)
 
 
+# ---- Opening (t0) income on the runtime definition -------------------------------------------------
+
+
+def test_opening_dividend_declaration_applies_the_runtime_payout_rule(aligned_country):
+    country, _ = aligned_country
+    hh, firms, banks = country.households, country.firms.ts, country.banks.ts
+    wealth = hh.functions["wealth"]
+    assert wealth.dividend_fund_firm_payout_ratio > 0 and wealth.dividend_fund_bank_payout_ratio > 0
+    earnings = np.maximum(firms.current("profits") - firms.current("corporate_taxes_paid"), 0.0)
+    gate = (firms.current("deposits") > -np.inf) & (firms.current("firm_settlement_closing_principal_arrears") <= 1e-9)
+    firm_declared = wealth.dividend_fund_firm_payout_ratio * earnings[gate].sum()
+    bank_declared = (
+        wealth.dividend_fund_bank_payout_ratio * np.maximum(banks.current("cash_distributable_profits"), 0).sum()
+    )
+    assert firm_declared > 0 and bank_declared > 0
+    np.testing.assert_allclose(firms.current("dividend_fund_declared_distribution").sum(), firm_declared)
+    np.testing.assert_allclose(banks.current("dividend_fund_declared_distribution").sum(), bank_declared)
+    quota = hh.states["dividend_fund_ownership_quota"]
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_declared_firm_distribution"), quota * firm_declared)
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_declared_bank_distribution"), quota * bank_declared)
+    tax = country.central_government.states["Income Tax"]
+    np.testing.assert_allclose(
+        hh.ts.current("expected_income_dividend_distributions"), (1 - tax) * quota * (firm_declared + bank_declared)
+    )
+    assert hh.ts.current("expected_behavioural_income_financial").sum() > 0
+
+
+def test_opening_behavioural_income_equals_the_runtime_recompute(aligned_country):
+    """The t0 row has the definition of every later row: re-deriving it on the runtime path changes nothing."""
+    country, _ = aligned_country
+    country.central_government.states["Property Tax Rate"] = 0.004
+    country.central_government.states["Residence Tax Rate"] = 0.002
+    country._seed_opening_household_housing_taxes()
+    country._record_behavioural_income(expected=True, initial=True)
+    hh = country.households
+    tax = hh.ts.current("housing_taxes_property") + hh.ts.current("housing_taxes_residence")
+    assert tax.sum() > 0
+    np.testing.assert_allclose(hh.ts.current("expected_behavioural_income_housing_taxes"), tax)
+    opening = {
+        name: hh.ts.current(name).copy()
+        for name in ("expected_behavioural_income_raw", "expected_behavioural_income_financial")
+    }
+    country._record_behavioural_income(expected=True, replace_current=True)
+    for name, values in opening.items():
+        np.testing.assert_allclose(hh.ts.current(name), values)
+
+
+def test_opening_housing_taxes_match_the_period_start_computation(aligned_country):
+    country, _ = aligned_country
+    country.central_government.states["Property Tax Rate"] = 0.004
+    country.central_government.states["Residence Tax Rate"] = 0.002
+    country._seed_opening_household_housing_taxes()
+    expected = country._household_housing_taxes_at_start_of_period()
+    np.testing.assert_array_equal(country.households.ts.current("housing_taxes_property"), expected[0])
+    np.testing.assert_array_equal(country.households.ts.current("housing_taxes_residence"), expected[1])
+    assert expected[0].sum() > 0 and expected[1].sum() > 0
+
+
+def test_opening_dividends_are_paid_at_t1_from_firm_and_bank_cash(datawrapper, monkeypatch):
+    simulation, _ = _aligned_simulation(datawrapper, monkeypatch)
+    country = simulation.countries["FRA"]
+    hh = country.households
+    declared = (
+        hh.ts.current("dividend_fund_declared_firm_distribution").sum()
+        + hh.ts.current("dividend_fund_declared_bank_distribution").sum()
+    )
+    assert declared > 0
+    simulation.iterate(0)
+    settled = hh.ts.current("dividend_fund_total_settled_distribution")[0]
+    firm_debit = country.firms.ts.current("dividend_fund_settlement_debit").sum()
+    bank_debit = country.banks.ts.current("dividend_fund_settlement_debit").sum()
+    assert 0 < settled <= declared + 1e-9
+    np.testing.assert_allclose(settled, firm_debit + bank_debit)
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_settlement_identity_error"), 0.0, atol=1e-9)
+    assert hh.ts.current("income_dividend_distributions").sum() > 0
+
+
 # ---- income_denominator / income_denominator_window drive the prepared path ---------------------------
 
 

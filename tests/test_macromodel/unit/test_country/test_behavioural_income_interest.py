@@ -36,6 +36,9 @@ def _country_with_market(market):
         functions={"wealth": object()},
         compute_interest_paid_on_deposits=lambda **kwargs: np.zeros(1),
         current_consumption_imputed_rent=lambda: np.zeros(1),
+        current_housing_taxes=lambda: (
+            household_ts.current("housing_taxes_property") + household_ts.current("housing_taxes_residence")
+        ),
     )
     country.banks = SimpleNamespace(
         ts=TimeSeries(

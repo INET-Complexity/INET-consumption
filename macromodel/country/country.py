@@ -2459,7 +2459,7 @@ class Country:
             borrower_interest=loan_interest + np.maximum(deposit_paid, 0.0),
             imputed_rent=hh.current_consumption_imputed_rent(),
             subsistence=guard,
-            housing_taxes=hh.ts.current("housing_taxes_property") + hh.ts.current("housing_taxes_residence"),
+            housing_taxes=hh.current_housing_taxes(),
         )
         # Keep loan interest separate from deposit/overdraft interest so only
         # the contractual opening-loan amount is frozen across planning passes.
@@ -5155,6 +5155,10 @@ class Country:
         # Housing taxes (fixed at the start of the period, see _append_household_housing_taxes) are netted
         # from realised income, hence from deposits, by compute_income.
         self.households.ts.income.append(self._apply_household_income_shock(self.households.compute_income()))
+        # The housing-tax rows are appended once per period before the plan; settlement must leave them aligned.
+        assert len(self.households.ts.historic("housing_taxes_property")) == len(
+            self.households.ts.historic("income")
+        ), "housing_taxes_property and income rows are misaligned after settlement"
         # The staged one-off transfer is paid by the central government: keep its total for the deficit.
         staged_shock = self._staged_household_income_shock
         self._settled_one_off_transfer_total = 0.0 if staged_shock is None else float(np.sum(staged_shock))

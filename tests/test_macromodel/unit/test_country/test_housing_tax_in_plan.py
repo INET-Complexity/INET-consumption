@@ -10,6 +10,12 @@ from tests.test_macromodel.unit.test_country.test_minimum_income_entitlement imp
 PROPERTY_RATE, RESIDENCE_RATE = 0.002, 0.05
 OWNER = "Corresponding Owner Household ID"
 TAX_SERIES = ("housing_taxes_property", "housing_taxes_residence")
+SETTLEMENT_SERIES = (
+    "liquid_financial_assets",
+    "illiquid_financial_assets",
+    "portfolio_settlement_committed_adjustment_cost",
+    "stage5_cash_ledger_residual",
+)
 
 
 def _set_housing_tax_rates(country, property_rate: float, residence_rate: float) -> None:
@@ -112,7 +118,8 @@ def settled_period(datawrapper):
 
     Before #261 the tax was recomputed in update_realised_metrics right after reconcile_realised_household_support.
     The wrapper changes owners, values and the residence rate at that point; the inputs are restored after
-    update_realised_metrics so the rest of the period is unaffected.
+    update_realised_metrics so the rest of the period is unaffected. At the wealth update, a copy of the households
+    is settled on income gross of the tax, for the asset-side SFC check.
     """
     simulation = _production_simulation(datawrapper, {"mode": "minimum_income"})
     country = simulation.countries["FRA"]
@@ -147,9 +154,20 @@ def settled_period(datawrapper):
             properties[[OWNER, "Value"]] = saved
             government.states["Residence Tax Rate"] = residence_rate
 
+    def update_wealth_and_untaxed_copy(*args, **kwargs):
+        # Counterfactual settlement: the same household and flows, with realised income gross of the housing tax.
+        # Country.__deepcopy__ handles the TimeSeries copy protocol; a bare Households deepcopy does not.
+        untaxed = deepcopy(country).households
+        untaxed.ts.override_current("income", hh.ts.current("income") + hh.current_housing_taxes())
+        type(hh).update_wealth(untaxed, *args, **kwargs)
+        record["untaxed"] = {name: untaxed.ts.current(name).copy() for name in SETTLEMENT_SERIES}
+        return update_wealth(*args, **kwargs)
+
+    update_wealth = hh.update_wealth
     country._append_household_housing_taxes = append_and_record
     country.reconcile_realised_household_support = reconcile_after_input_change
     country.update_realised_metrics = realise_and_restore
+    hh.update_wealth = update_wealth_and_untaxed_copy
     simulation.iterate(t=0)
     return country, record
 
@@ -177,3 +195,30 @@ def test_household_housing_tax_debit_equals_government_revenue(settled_period):
         debit = float(fixed[series].sum())
         assert debit > 0.0
         np.testing.assert_allclose(government.ts.current(revenue)[0], debit, rtol=1e-12)
+
+
+def test_household_financial_assets_carry_the_housing_tax_debit(settled_period):
+    """Asset side of the SFC check: the tax leaves household deposits, not only the income accounts.
+
+    Compared with the same settlement on income gross of the tax, closing liquid plus illiquid financial assets are
+    lower by exactly the tax, once the portfolio adjustment cost (which depends on the wealth being rebalanced) is
+    netted. The saving rule splits the debit between deposits and illiquid purchases, so deposits alone carry most
+    of it, not all.
+    """
+    country, record = settled_period
+    hh = country.households
+    taxes = sum(record["fixed"][name] for name in TAX_SERIES)
+    assert taxes.sum() > 0.0
+    diff = {name: hh.ts.current(name) - record["untaxed"][name] for name in SETTLEMENT_SERIES}
+    np.testing.assert_allclose(
+        diff["liquid_financial_assets"]
+        + diff["illiquid_financial_assets"]
+        + diff["portfolio_settlement_committed_adjustment_cost"],
+        -taxes,
+        rtol=1e-9,
+        atol=1e-3,
+    )
+    assert diff["liquid_financial_assets"].sum() < 0.0
+    # The realised cash ledger closes in both settlements: the tax is a cash use, not a ledger residual.
+    for residual in (hh.ts.current("stage5_cash_ledger_residual"), record["untaxed"]["stage5_cash_ledger_residual"]):
+        np.testing.assert_allclose(residual, 0.0, atol=1e-7)

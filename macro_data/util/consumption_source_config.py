@@ -69,18 +69,60 @@ def configured_hfcs_extractions(configuration):
     return result
 
 
+# Bump when the calibration-support construction changes; only builds with the opt-in field on carry it.
+CALIBRATION_SUPPORT_STAGE = "calibration_support_v1"
+
+
+def _signature_configuration(configuration):
+    """Configuration for the signature; the default ``consumption_source_support`` is left out so that
+    caches built before the field existed (or with the default) stay valid."""
+    config = configuration if isinstance(configuration, dict) else configuration.model_dump(mode="json")
+    countries = config.get("country_configs")
+    if not isinstance(countries, dict):
+        return config
+    cleaned = {
+        country: (
+            {k: v for k, v in fields.items() if not (k == "consumption_source_support" and v == "hard_valid")}
+            if isinstance(fields, dict)
+            else fields
+        )
+        for country, fields in countries.items()
+    }
+    return {**config, "country_configs": cleaned}
+
+
+def _support_countries(configuration):
+    countries = (
+        configuration.get("country_configs", {})
+        if isinstance(configuration, dict)
+        else getattr(configuration, "country_configs", {})
+    )
+    return sorted(
+        getattr(country, "value", str(country))
+        for country, fields in countries.items()
+        if (
+            fields.get("consumption_source_support")
+            if isinstance(fields, dict)
+            else getattr(fields, "consumption_source_support", None)
+        )
+        == "calibration_support"
+    )
+
+
 def consumption_data_signature(configuration, raw_data_path, *, single_hfcs_survey=False):
     """None preserves compatibility with genuinely legacy data pickles."""
     sources = configured_consumption_inputs(configuration, raw_data_path)
     extraction = configured_hfcs_extractions(configuration)
     if not sources and not extraction:
         return None
+    support = _support_countries(configuration)
     return {
         "stage": CONSUMPTION_DATA_STAGE if sources else "legacy_first_implicate_individual_pensions_retirement_v3",
         "extraction": extraction,
         "legacy_history_selection": bool(single_hfcs_survey),
-        "configuration": configuration if isinstance(configuration, dict) else configuration.model_dump(mode="json"),
+        "configuration": _signature_configuration(configuration),
         "sources": sources,
+        **({"calibration_support": {"stage": CALIBRATION_SUPPORT_STAGE, "countries": support}} if support else {}),
     }
 
 

@@ -107,6 +107,10 @@ from macro_data.processing.synthetic_population.balance_sheet_scaling import (
     is_scaled,
     scale_household_balance_sheet,
 )
+from macro_data.processing.synthetic_population.hfcs_consumption_support import (
+    attach_calibration_support,
+    support_inputs_from_readers,
+)
 from macro_data.processing.synthetic_population.hfcs_synthetic_population import (
     SyntheticHFCSPopulation,
 )
@@ -265,6 +269,15 @@ class SyntheticCountry:
             time_unit=time_unit,
         )
 
+        if getattr(country_configuration, "consumption_source_support", "hard_valid") == "calibration_support":
+            if consumption_source is None:
+                raise ValueError("consumption_source_support: calibration_support needs a registered hfcs_cy source.")
+            consumption_source = attach_calibration_support(
+                consumption_source,
+                readers.hfcs[country].households_df,
+                scaling_income_concept=country_configuration.household_consumption_initialisation.scaling_income_concept,
+                **support_inputs_from_readers(readers, country, year),
+            )
         population: SyntheticHFCSPopulation = SyntheticHFCSPopulation.from_readers(
             readers=readers,
             country_name=country,
@@ -977,6 +990,7 @@ class SyntheticCountry:
                     employee_social_insurance_tax=tax_data.employee_social_insurance_tax,
                     minimum_annual_rental_yield=minimum_annual_rental_yield,
                     rental_income_taxes=tax_data.income_tax,
+                    stock_anchor_factors=getattr(population, "stock_anchor_factors", None),
                 )
                 if housing_market is not None:
                     housing_market.housing_market_data = scaled_housing

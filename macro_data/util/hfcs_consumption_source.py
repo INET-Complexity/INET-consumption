@@ -9,6 +9,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -55,6 +56,15 @@ class HFCSConsumptionSource:
     winsorised: WinsorisedConsumptionRatios
     sha256: str
     survey_weights: np.ndarray
+    # Registered c_y before capping, the registered threshold-pool mask and percentile probabilities.
+    c_y: Optional[np.ndarray] = None
+    threshold_pool: Optional[np.ndarray] = None
+    quantiles: tuple[float, float] = (0.01, 0.99)
+    # Opt-in calibration support (consumption_source_support), built from the survey records in the model:
+    # boolean mask aligned to source_ids, its thresholds per variable, and the per-stock re-anchoring factors k_S.
+    support: Optional[np.ndarray] = None
+    support_thresholds: Optional[dict] = None
+    stock_anchor_factors: Optional[dict] = None
 
     def ratios_for(self, source_ids: np.ndarray) -> np.ndarray:
         """Link in draw order, allowing replacement draws but never fallback.
@@ -164,5 +174,12 @@ def read_hfcs_consumption_source(
         upper_quantile=registration.upper_quantile,
     )
     return HFCSConsumptionSource(
-        ids, int(wave), winsorised, digest, frame["survey_weight"].to_numpy(dtype=float, copy=True)
+        ids,
+        int(wave),
+        winsorised,
+        digest,
+        frame["survey_weight"].to_numpy(dtype=float, copy=True),
+        c_y=frame["c_y"].to_numpy(dtype=float, copy=True),
+        threshold_pool=frame["threshold_pool"].to_numpy(dtype=bool, copy=True),
+        quantiles=(float(registration.lower_quantile), float(registration.upper_quantile)),
     )

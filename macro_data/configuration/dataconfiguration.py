@@ -229,6 +229,9 @@ class CountryDataConfiguration(BaseModel):
         eu_proxy_country (Country, optional): EU country to use as proxy for non-EU countries
         carbon_price (float): Carbon price per tonne of CO2 in local currency units
         worker_productivity (WorkerProductivityConfiguration, optional): Fixed worker labour inputs
+        consumption_source_support (str): ``hard_valid`` (default) draws every hard-valid HFCS record;
+            ``calibration_support`` draws only records inside the calibration's joint percentile trim and re-anchors
+            the opening stocks (see ``hfcs_consumption_support``).
         employer_social_insurance_rate (float, optional): Build rate replacing the OECD reader value.
             Must equal the runtime central government override when one is set.
         minimum_annual_rental_yield (float): Annual gross rent/value floor phi applied to the
@@ -244,6 +247,10 @@ class CountryDataConfiguration(BaseModel):
     single_government_entity: bool
     scale: int
     hfcs_implicate: Optional[Literal[1]] = None
+    # "calibration_support": draw only the households inside the calibration's joint p1/p99 trim, built from the survey
+    # records in the model, and re-anchor each balance-sheet stock to its default aggregate S/y (k_S). Needs hfcs_cy
+    # and balance_sheet_scaling. "hard_valid" (default): draw every hard-valid record, build unchanged.
+    consumption_source_support: Literal["hard_valid", "calibration_support"] = "hard_valid"
     household_consumption_initialisation: HouseholdConsumptionInitialisationConfiguration = Field(
         default_factory=HouseholdConsumptionInitialisationConfiguration
     )
@@ -252,6 +259,17 @@ class CountryDataConfiguration(BaseModel):
     worker_productivity: Optional[WorkerProductivityConfiguration] = None
     employer_social_insurance_rate: Optional[float] = None
     minimum_annual_rental_yield: float = Field(default=0.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def validate_consumption_source_support(self):
+        if self.consumption_source_support == "calibration_support":
+            initialisation = self.household_consumption_initialisation
+            if initialisation.method != "hfcs_cy" or not initialisation.balance_sheet_scaling:
+                raise ValueError(
+                    "consumption_source_support: calibration_support requires household_consumption_initialisation "
+                    "method hfcs_cy with balance_sheet_scaling on."
+                )
+        return self
 
 
 class ROWDataConfiguration(BaseModel):

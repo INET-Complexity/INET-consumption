@@ -469,7 +469,7 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
 
         individual_data = ensure_minimum_workers_in_industries(individual_data, n_industries=len(industries))
 
-        return cls(
+        population = cls(
             country_name=country_name,
             country_name_short=country_name_short,
             scale=scale,
@@ -489,6 +489,10 @@ class SyntheticHFCSPopulation(SyntheticPopulation):
                 else None
             ),
         )
+        if consumption_source is not None and consumption_source.stock_anchor_factors is not None:
+            # Opt-in calibration support: applied once, after the balance-sheet scaling.
+            population.stock_anchor_factors = consumption_source.stock_anchor_factors
+        return population
 
     def restrict(self) -> None:
         diagnostics = [
@@ -1249,7 +1253,9 @@ def eligible_hfcs_consumption_households(
     if source_ids_fingerprint(ids) != source_ids_fingerprint(source.source_ids):
         raise ValueError("HFCS reader source population differs from the registered source ID set.")
     positions = pd.Index(source.source_ids).get_indexer(ids)
-    eligible = households.loc[source.winsorised.valid[positions]].copy()
+    # Default: every hard-valid record. Opt-in calibration support: only records inside the calibration's trim.
+    drawable = source.winsorised.valid if source.support is None else source.support
+    eligible = households.loc[drawable[positions]].copy()
     if eligible.empty:
         raise ValueError("No hard-valid HFCS households remain for sampling.")
     if not eligible.index.isin(individuals["Corresponding Household ID"]).all():
@@ -1257,7 +1263,7 @@ def eligible_hfcs_consumption_households(
     weights = pd.to_numeric(eligible["Weight"], errors="coerce").to_numpy(float)
     if not np.all(np.isfinite(weights)) or np.any(weights <= 0) or not np.isfinite(weights.sum()):
         raise ValueError("Eligible HFCS survey weights must be finite and positive.")
-    expected_weights = source.survey_weights[positions][source.winsorised.valid[positions]]
+    expected_weights = source.survey_weights[positions][drawable[positions]]
     if not np.allclose(weights, expected_weights, rtol=1e-12, atol=1e-8):
         raise ValueError("HFCS reader weights differ from the registered source survey weights.")
     eligible["HFCS Consumption Ratio"] = source.ratios_for(eligible["HFCS Source ID"].to_numpy())

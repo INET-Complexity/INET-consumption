@@ -18,7 +18,7 @@ Steps (spec: vault ``experiments/specs/2026-11-24-balance-sheet-scaling``):
 5. Banks and debt installments are built afterwards from these stocks.
 """
 
-from typing import Optional
+from typing import Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -111,15 +111,25 @@ def household_income_factors(model_annual: np.ndarray, hfcs_annual_scaled: np.nd
     return factors, int((~valid).sum())
 
 
-def scale_housing_market(housing_df: pd.DataFrame, factors: np.ndarray) -> pd.DataFrame:
+def scale_housing_market(
+    housing_df: pd.DataFrame, factors: np.ndarray, anchor: Optional[Mapping[str, float]] = None
+) -> pd.DataFrame:
     """Dwelling values by the owner's k_i. Rents are flows anchored to the national accounts and stay unchanged.
 
-    Dwellings without a household owner (social housing) are unchanged.
+    Dwellings without a household owner (social housing) are unchanged. ``anchor`` (opt-in calibration support)
+    multiplies owner-occupied values by k_S of the main residence and rented dwellings by k_S of other properties.
     """
     owners = pd.to_numeric(housing_df["Corresponding Owner Household ID"], errors="coerce").to_numpy()
     has_owner = np.isfinite(owners) & (owners >= 0) & (owners < len(factors))
     owner_factor = np.ones(len(housing_df))
     owner_factor[has_owner] = factors[owners[has_owner].astype(int)]
+    if anchor is not None:
+        owner_occupied = housing_df["Is Owner-Occupied"].to_numpy(dtype=bool)
+        owner_factor = owner_factor * np.where(
+            has_owner,
+            np.where(owner_occupied, anchor["Value of the Main Residence"], anchor["Value of other Properties"]),
+            1.0,
+        )
     housing_df = housing_df.copy()
     housing_df["Value"] = housing_df["Value"].to_numpy(dtype=float) * owner_factor
     return housing_df
@@ -148,10 +158,12 @@ def scale_household_balance_sheet(
     employee_social_insurance_tax: float,
     minimum_annual_rental_yield: float = 0.0,
     rental_income_taxes: float = 0.0,
+    stock_anchor_factors: Optional[Mapping[str, float]] = None,
 ) -> tuple[Optional[pd.DataFrame], dict]:
     """Apply steps 1-4 in place on ``population.household_data``; return the scaled housing table and diagnostics.
 
     ``minimum_annual_rental_yield`` and ``rental_income_taxes`` are those used when the housing table was built.
+    ``stock_anchor_factors`` (opt-in calibration support) multiplies each stock by its k_S after the k_i scaling.
     """
     if is_scaled(population):
         raise ValueError("Household balance sheet is already scaled; re-apply only the financial-asset yield.")
@@ -175,13 +187,14 @@ def scale_household_balance_sheet(
     # Step 2. IFA restarts from the survey level, i.e. without the national-accounts anchor.
     data["Wealth in Other Financial Assets"] /= getattr(population, "ifa_anchor_factor", 1.0)
     for name in HOUSEHOLD_STOCK_COLUMNS:
-        data[name] = data[name].to_numpy(dtype=float) * factors
+        stock_factors = factors if stock_anchor_factors is None else factors * stock_anchor_factors[name]
+        data[name] = data[name].to_numpy(dtype=float) * stock_factors
     population.set_household_total_real_assets()
     population.set_household_financial_assets()
     population.set_household_wealth()
     population.set_household_debt()
     population.set_household_net_wealth()
-    scaled_housing = None if housing_df is None else scale_housing_market(housing_df, factors)
+    scaled_housing = None if housing_df is None else scale_housing_market(housing_df, factors, stock_anchor_factors)
 
     # Step 3. Scaled values can put rents below the rent/value floor; raise them to it.
     floor_diagnostics = {}
@@ -216,6 +229,7 @@ def scale_household_balance_sheet(
         "factor_p10_p50_p90": [float(v) for v in np.percentile(factors, [10, 50, 90])],
         "n_common_factor_fallback": n_fallback,
         "financial_asset_yield": financial_asset_yield,
+        **({} if stock_anchor_factors is None else {"stock_anchor_factors": dict(stock_anchor_factors)}),
         **floor_diagnostics,
     }
     return scaled_housing, diagnostics

@@ -48,6 +48,12 @@ def residual_case_configuration(base: SimulationConfiguration, case: ResidualCas
         raise ValueError("The sensitivity requires CreditAugmentedConsumption.")
     if parameters.get("idiosyncratic_persistence") != "initial_state":
         raise ValueError("The base must retain the initial_state policy.")
+    if (
+        parameters.get("initial_state_intercepts", "none") != "none"
+        or parameters.get("initial_state_residual_sd") is not None
+        or parameters.get("initial_state_residual_persistence", "fixed") != "fixed"
+    ):
+        raise ValueError("The base must not use the initial_state B+F options.")
     if parameters.get("idiosyncratic_seed") is not None:
         raise ValueError("The retained base must not have an explicit residual seed.")
     sigma = parameters.get("idiosyncratic_sd")

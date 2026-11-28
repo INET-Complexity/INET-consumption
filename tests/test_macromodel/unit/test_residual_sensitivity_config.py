@@ -104,6 +104,9 @@ def test_bad_case_rejected(base, case):
         ("idiosyncratic_seed", 7),
         ("idiosyncratic_sd", float("nan")),
         ("idiosyncratic_sd", 0),
+        ("initial_state_intercepts", "income_quintile"),
+        ("initial_state_residual_sd", 0.41),
+        ("initial_state_residual_persistence", "iid"),
     ],
 )
 def test_bad_baseline_rejected(base, key, value):

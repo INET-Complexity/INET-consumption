@@ -1871,7 +1871,9 @@ class Firms(Agent):
             else np.zeros(n_firms)
         )
         planned_tfp_investment_costs = (
-            self.ts.current("planned_tfp_investment") if len(self.ts.planned_tfp_investment) > 0 else np.zeros(n_firms)
+            self.ts.current("planned_tfp_investment")
+            if len(self.ts.planned_tfp_investment) > 0 and self.charges_direct_tfp_investment()
+            else np.zeros(n_firms)
         )
         planned_technical_investment_costs = (
             planned_technical_investment_costs
@@ -2897,7 +2899,10 @@ class Firms(Agent):
         feasible_capital = target_capital * capital_scale[:, None]
         feasible_capital_costs = planned_capital_costs * capital_scale
         residual_investment_finance = np.maximum(0.0, available_finance - feasible_capital_costs)
-        planned_productivity_costs = planned_technical_costs + planned_tfp_costs
+        # Uncharged direct TFP needs no finance: it is neither budgeted nor scaled.
+        charge_tfp = self.charges_direct_tfp_investment()
+        financed_tfp_costs = planned_tfp_costs if charge_tfp else np.zeros_like(planned_tfp_costs)
+        planned_productivity_costs = planned_technical_costs + financed_tfp_costs
         productivity_scale = np.divide(
             np.minimum(residual_investment_finance, planned_productivity_costs),
             planned_productivity_costs,
@@ -2906,15 +2911,15 @@ class Firms(Agent):
         )
         feasible_technical = planned_technical * productivity_scale[:, None]
         feasible_technical_costs = planned_technical_costs * productivity_scale
-        feasible_tfp = planned_tfp * productivity_scale
-        feasible_tfp_costs = planned_tfp_costs * productivity_scale
+        tfp_scale = productivity_scale if charge_tfp else np.ones(n_firms)
+        feasible_tfp = planned_tfp * tfp_scale
+        feasible_tfp_costs = planned_tfp_costs * tfp_scale
         finance_gap = np.maximum(0.0, planned_capital_costs + planned_productivity_costs - available_finance)
         feasibility_residual = available_finance - (
-            feasible_capital_costs + feasible_technical_costs + feasible_tfp_costs
+            feasible_capital_costs + feasible_technical_costs + financed_tfp_costs * tfp_scale
         )
         intermediate_scale = np.ones(n_firms)
         technical_scale = productivity_scale
-        tfp_scale = productivity_scale
 
         self.ts.override_current("target_intermediate_inputs", feasible_intermediate)
         self.ts.override_current("target_capital_inputs", feasible_capital)
@@ -3954,12 +3959,19 @@ class Firms(Agent):
             - self.ts.current("dividend_fund_settlement_debit")
         )
 
+    def charges_direct_tfp_investment(self) -> bool:
+        """Return whether direct TFP investment is charged to firm cash (`charge_direct_tfp_investment`)."""
+        return bool(getattr(self.configuration.parameters, "charge_direct_tfp_investment", True))
+
     def direct_tfp_investment_cash_expense(self) -> np.ndarray:
         """Return current direct-TFP spending charged to firm cash accounts.
 
         Forced productivity investment is excluded because it is injected by
-        policy hooks rather than paid from firm deposits.
+        policy hooks rather than paid from firm deposits. Zero when
+        `charge_direct_tfp_investment` is False.
         """
+        if not self.charges_direct_tfp_investment():
+            return np.zeros(self.ts.current("n_firms"))
         if len(self.ts.direct_tfp_investment_cash_expense) > 0:
             return self.ts.current("direct_tfp_investment_cash_expense")
         if len(self.ts.planned_tfp_investment) == 0:
@@ -4519,6 +4531,8 @@ class Firms(Agent):
                 executed_tfp_investment = planned_tfp_investment * execution_ratio + forced_productivity_investment
                 direct_tfp_cash_expense = planned_tfp_investment * execution_ratio
                 executed_technical_investment = planned_technical_investment * execution_ratio[:, np.newaxis]
+        if not self.charges_direct_tfp_investment():
+            direct_tfp_cash_expense = np.zeros_like(direct_tfp_cash_expense)
         real_executed_investment = self.compute_real_productivity_investment(executed_productivity_investment)
 
         # Store in time series

@@ -446,6 +446,15 @@ class FirmsParameters(BaseModel):
     intermediate_inputs_utilisation_rate: float = Field(1.0, ge=0.0, le=1.0)
     tfp_base_growth_rate: float = Field(0.0025, ge=0.0, le=0.1, description="Base TFP growth rate (quarterly)")
     tfp_investment_elasticity: float = Field(0.3, ge=0.0, le=1.0, description="Returns to scale for TFP investment")
+    charge_direct_tfp_investment: bool = Field(
+        True,
+        description=(
+            "Charge direct TFP investment to firm cash. True (default) debits it from deposits and profits and "
+            "includes it in credit demand and the post-credit finance revision. False keeps the planner's choice "
+            "and TFP growth from executed intensity but charges nothing and requests no finance for it, for "
+            "calibrations where R&D is already in the opening wage bill and purchases."
+        ),
+    )
 
     # Productivity investment allocation parameters
     max_productivity_investment_fraction: float = Field(

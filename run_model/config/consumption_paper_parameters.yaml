@@ -96,7 +96,7 @@ asset_returns:
     dividend_fund_firm_payout_ratio: 0.467
     # Maximum bank payout share of the model base (interest margin net of credit losses, before operating
     # costs and tax; operating costs and fees sit in industry-K firms). Data counterpart, six French groups
-    # (ACPR "Situation des grands groupes bancaires français" + group reports), 2010-18 pooled:
+    # (ACPR "Situation des grands groupes bancaires français" + group reports), 2010-18 pooled (sum/sum):
     # distributions to outside owners (incl. parts sociales) / (net interest margin - cost of risk) = 0.086
     # (= 27.0% of net profit). Upper bound: K firms already pay part of the sector's dividends.
     # Was 0.40 (provisional, EBA EU-bank payouts on net profit). Issue #250.

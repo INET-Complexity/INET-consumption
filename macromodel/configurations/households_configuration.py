@@ -88,6 +88,10 @@ class FinancialAssetsFunction(BaseModel):
 class ConsumptionFunction(BaseModel):
     """
     The function used to set household consumption.
+
+    For CreditAugmentedConsumption on the prepared (aligned) path, ``income_denominator`` and
+    ``income_denominator_window`` are required; the window counts quarters (4 = one year) and is converted to
+    model periods with the time unit.
     """
 
     path_name: str = "consumption"

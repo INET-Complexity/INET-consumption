@@ -12,12 +12,19 @@ from macromodel.configurations import CountryConfiguration, SimulationConfigurat
 from macromodel.simulation import Simulation
 
 
-@pytest.fixture
-def aligned_country(datawrapper, monkeypatch):
+def _aligned_simulation(datawrapper, monkeypatch, *, aligned=True, housing_taxes=False, drop_parameters=()):
     root = Path(__file__).resolve().parents[4]
     production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     config = CountryConfiguration()
     config.households = production.households
+    config.households.functions.consumption.parameters["uses_aligned_behavioural_income"] = aligned
+    for name in drop_parameters:
+        del config.households.functions.consumption.parameters[name]
+    if housing_taxes:
+        # The FRA annual revenue targets; the rates are calibrated on the t0 base at construction.
+        production_taxes, taxes = production.central_government.tax_overrides, config.central_government.tax_overrides
+        taxes.property_tax_revenue_target_annual = production_taxes.property_tax_revenue_target_annual
+        taxes.residence_tax_revenue_target_annual = production_taxes.residence_tax_revenue_target_annual
     config.households.functions.wealth.parameters["frm_coefficients_path"] = str(
         root / "run_model/data/raw_data/portfolio/FR_portfolio_frm_coefficients.json"
     )
@@ -33,7 +40,13 @@ def aligned_country(datawrapper, monkeypatch):
     )
     country = simulation.countries["FRA"]
     monkeypatch.setattr(country.economy, "current_expected_consumer_period_inflation", lambda: 0.0)
-    return country, config
+    return simulation, config
+
+
+@pytest.fixture
+def aligned_country(datawrapper, monkeypatch):
+    simulation, config = _aligned_simulation(datawrapper, monkeypatch)
+    return simulation.countries["FRA"], config
 
 
 def test_deposit_repricing_does_not_raise_nonproperty_permanent_income(aligned_country, monkeypatch):
@@ -470,3 +483,337 @@ def test_initial_payment_history_anchors_contractual_obligation_and_cash_income(
         hh.ts.current("expected_behavioural_income"), country.economy.ts.current("subsistence_consumption")
     )
     np.testing.assert_array_equal(hh.ts.current(prefix + "income_nominal"), expected_income)
+
+
+# ---- Opening (t0) income on the runtime definition -------------------------------------------------
+
+
+DECLARATION_ROWS = (
+    ("firms", "dividend_fund_declared_distribution"),
+    ("firms", "dividend_fund_profit_ceiling"),
+    ("firms", "dividend_fund_cash_distributable_profit_candidate"),
+    ("banks", "dividend_fund_declared_distribution"),
+    ("households", "dividend_fund_declared_firm_distribution"),
+    ("households", "dividend_fund_declared_bank_distribution"),
+)
+
+
+def _ts(country, owner):
+    return getattr(country, owner).ts
+
+
+def _expected_profit_ceiling(country):
+    """Payout ratio x positive after-tax earnings, zero for a firm failing any distress condition (independent)."""
+    firms = country.firms.ts
+    earnings = (
+        firms.current("profits")
+        - firms.current("corporate_taxes_paid")
+        - firms.current("firm_settlement_capitalized_interest")
+    )
+    gate = (
+        (firms.current("firm_settlement_unpaid_interest") <= 1e-9)
+        & (firms.current("firm_settlement_closing_principal_arrears") <= 1e-9)
+        & (firms.current("firm_settlement_residual_overdraft_exposure") <= 1e-9)
+        & ~np.asarray(firms.current("firm_settlement_default_flag"), dtype=bool)
+    )
+    ratio = country.households.functions["wealth"].dividend_fund_firm_payout_ratio
+    return ratio * np.where(gate, np.maximum(earnings, 0.0), 0.0)
+
+
+def _expected_opening_forecast_cash_capacity(country):
+    """Opening forecast cash after senior uses, rebuilt from the underlying series (independent of the helper).
+
+    At t0 the growth and PPI-inflation estimates are NaN, so current flows are projected flat (factor 1).
+    """
+    firms = country.firms.ts
+    for name in ("estimated_growth", "estimated_ppi_inflation"):
+        assert not np.isfinite(country.economy.ts.current(name)[0])
+    operating_cash = (
+        firms.current("nominal_amount_sold_in_lcu")
+        - firms.current("total_wage")
+        - firms.current("nominal_amount_spent_in_lcu").sum(axis=1)
+        - country.firms.direct_tfp_investment_cash_expense()
+        - firms.current("taxes_paid_on_production")
+        - firms.current("corporate_taxes_paid")
+        - firms.current("capital_formation_taxes_paid")
+        - firms.current("interest_paid_on_deposits")
+    )
+    service = country.credit_market.compute_scheduled_firm_installments_preview()
+    facility = firms.current("operating_revolving_closing_balance") * (1 + firms.current("operating_revolving_rate"))
+    capacity = (
+        firms.current("deposits")
+        + operating_cash
+        - service["scheduled_interest_due"]
+        - service["scheduled_principal_due"]
+        - facility
+    )
+    return capacity, operating_cash
+
+
+def test_opening_declaration_is_the_runtime_declaration_capped_by_forecast_cash(aligned_country):
+    country, _ = aligned_country
+    hh, firms, banks = country.households, country.firms.ts, country.banks.ts
+    wealth = hh.functions["wealth"]
+    assert wealth.dividend_fund_firm_payout_ratio > 0 and wealth.dividend_fund_bank_payout_ratio > 0
+    ceiling = _expected_profit_ceiling(country)
+    raw_capacity, operating_cash = _expected_opening_forecast_cash_capacity(country)
+    # The projected operating cash is material and enters the cap (a NaN growth term would drop it).
+    assert np.all(operating_cash > 0.0)
+    capacity = np.maximum(raw_capacity, 0.0)
+    firm_declared = np.minimum(ceiling, capacity)
+    np.testing.assert_allclose(firms.current("dividend_fund_profit_ceiling"), ceiling)
+    np.testing.assert_allclose(firms.current("dividend_fund_forecast_cash_capacity"), capacity)
+    np.testing.assert_allclose(firms.current("dividend_fund_declared_distribution"), firm_declared)
+    # The forecast-cash cap binds for some firms in this fixture (2 of 18, whose scheduled service exceeds deposits
+    # plus operating cash): the declaration is not the bare ceiling.
+    assert np.any(firm_declared < ceiling - 1e-9) and firm_declared.sum() > 0
+    bank_declared = wealth.dividend_fund_bank_payout_ratio * np.maximum(banks.current("cash_distributable_profits"), 0)
+    assert bank_declared.sum() > 0
+    np.testing.assert_allclose(banks.current("dividend_fund_declared_distribution"), bank_declared)
+    quota = hh.states["dividend_fund_ownership_quota"]
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_declared_firm_distribution"), quota * firm_declared.sum())
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_declared_bank_distribution"), quota * bank_declared.sum())
+    tax = country.central_government.states["Income Tax"]
+    np.testing.assert_allclose(
+        hh.ts.current("expected_income_dividend_distributions"),
+        (1 - tax) * quota * (firm_declared.sum() + bank_declared.sum()),
+    )
+    assert hh.ts.current("expected_behavioural_income_financial").sum() > 0
+    # Diagnostics seeded as the runtime records them: retained capacity, totals, zero identity errors.
+    firm_candidate = firms.current("dividend_fund_cash_distributable_profit_candidate")
+    np.testing.assert_allclose(firms.current("dividend_fund_retained_capacity"), firm_candidate - firm_declared)
+    np.testing.assert_allclose(
+        hh.ts.current("dividend_fund_total_firm_retained_capacity")[0], (firm_candidate - firm_declared).sum()
+    )
+    np.testing.assert_allclose(
+        hh.ts.current("dividend_fund_total_firm_distributable_profit_candidate")[0], firm_candidate.sum()
+    )
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_total_firm_declared_distribution")[0], firm_declared.sum())
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_total_bank_declared_distribution")[0], bank_declared.sum())
+    for name in (
+        "dividend_fund_firm_retained_capacity_identity_error",
+        "dividend_fund_bank_retained_capacity_identity_error",
+        "dividend_fund_fund_identity_error",
+    ):
+        np.testing.assert_allclose(hh.ts.current(name), 0.0, atol=1e-6)
+
+
+def test_opening_declaration_is_zero_for_distressed_firms_losses_and_bank_losses(aligned_country):
+    country, _ = aligned_country
+    firms, banks = country.firms.ts, country.banks.ts
+    payers = np.flatnonzero(firms.current("dividend_fund_declared_distribution") > 0)
+    assert payers.size >= 5
+    unpaid, arrears, overdraft, default, loss = payers[:5]
+    for name, firm, value in (
+        ("firm_settlement_unpaid_interest", unpaid, 1.0),
+        ("firm_settlement_closing_principal_arrears", arrears, 1.0),
+        ("firm_settlement_residual_overdraft_exposure", overdraft, 1.0),
+    ):
+        values = np.array(firms.current(name), dtype=float)
+        values[firm] = value
+        firms.override_current(name, values)
+    flags = np.array(firms.current("firm_settlement_default_flag"), dtype=bool)
+    flags[default] = True
+    firms.override_current("firm_settlement_default_flag", flags)
+    profits = np.array(firms.current("profits"), dtype=float)
+    profits[loss] = -abs(profits[loss]) - 1.0
+    firms.override_current("profits", profits)
+    bank_profits = np.array(banks.current("cash_distributable_profits"), dtype=float)
+    assert np.all(bank_profits > 0)
+    bank_profits[0] = -1.0
+    banks.override_current("cash_distributable_profits", bank_profits)
+
+    country._seed_opening_dividend_declaration()
+
+    declared = firms.current("dividend_fund_declared_distribution")
+    gate = firms.current("dividend_fund_distress_gate_passed")
+    np.testing.assert_array_equal(declared[[unpaid, arrears, overdraft, default, loss]], 0.0)
+    np.testing.assert_array_equal(gate[[unpaid, arrears, overdraft, default]], False)
+    assert gate[loss] and declared[np.setdiff1d(payers, payers[:5])].min() > 0
+    np.testing.assert_array_equal(banks.current("dividend_fund_declared_distribution") > 0, bank_profits > 0)
+
+
+def test_opening_declaration_is_not_seeded_without_owners(aligned_country):
+    country, _ = aligned_country
+    hh = country.households
+    for owner, name in DECLARATION_ROWS:
+        _ts(country, owner).override_current(name, np.zeros_like(_ts(country, owner).current(name)))
+    hh.ts.override_current("expected_income_dividend_distributions", np.zeros(hh.ts.current("n_households")))
+    hh.states["dividend_fund_ownership_quota"] = np.zeros_like(hh.states["dividend_fund_ownership_quota"])
+
+    country._seed_opening_dividend_declaration()
+
+    for owner, name in DECLARATION_ROWS:
+        np.testing.assert_array_equal(_ts(country, owner).current(name), 0.0)
+    np.testing.assert_array_equal(hh.ts.current("expected_income_dividend_distributions"), 0.0)
+
+
+def test_legacy_cash_income_path_has_no_opening_seeds(datawrapper, monkeypatch):
+    simulation, _ = _aligned_simulation(datawrapper, monkeypatch, aligned=False, housing_taxes=True)
+    country = simulation.countries["FRA"]
+    assert not country.households.functions["consumption"].uses_aligned_behavioural_income
+    assert country.central_government.states["Property Tax Rate"] > 0
+    assert country.central_government.states["Residence Tax Rate"] > 0
+    for owner, name in DECLARATION_ROWS:
+        np.testing.assert_array_equal(_ts(country, owner).current(name), 0.0)
+    hh = country.households.ts
+    for name in ("expected_income_dividend_distributions", "housing_taxes_property", "housing_taxes_residence"):
+        np.testing.assert_array_equal(hh.current(name), 0.0)
+
+
+@pytest.fixture
+def taxed_aligned_country(datawrapper, monkeypatch):
+    simulation, config = _aligned_simulation(datawrapper, monkeypatch, housing_taxes=True)
+    return simulation, config
+
+
+def test_opening_housing_taxes_are_the_calibrated_fra_taxes_on_the_t0_base(taxed_aligned_country):
+    simulation, config = taxed_aligned_country
+    country = simulation.countries["FRA"]
+    hh, government = country.households, country.central_government
+    targets = config.central_government.tax_overrides
+    periods_per_year = 12 / country.economy.time_unit
+    property_tax, residence_tax = hh.ts.current("housing_taxes_property"), hh.ts.current("housing_taxes_residence")
+    # Calibration identity: the t0 base yields the annual target over one year.
+    np.testing.assert_allclose(property_tax.sum(), targets.property_tax_revenue_target_annual / periods_per_year)
+    np.testing.assert_allclose(residence_tax.sum(), targets.residence_tax_revenue_target_annual / periods_per_year)
+    properties = country.housing_market.states["properties"]
+    owners = properties["Corresponding Owner Household ID"].to_numpy()
+    owned = owners >= 0
+    owned_value = np.bincount(
+        owners[owned].astype(int),
+        weights=properties["Value"].fillna(0.0).to_numpy()[owned],
+        minlength=property_tax.size,
+    )
+    np.testing.assert_allclose(property_tax, government.states["Property Tax Rate"] * owned_value)
+    np.testing.assert_allclose(
+        residence_tax,
+        government.states["Residence Tax Rate"] * (hh.ts.current("rent") + hh.ts.current("rent_imputed")),
+    )
+    # The t0 behavioural income deducts them, as every later row does.
+    np.testing.assert_allclose(hh.ts.current("expected_behavioural_income_housing_taxes"), property_tax + residence_tax)
+
+
+def test_opening_behavioural_income_is_net_of_the_t0_housing_taxes(datawrapper, monkeypatch, taxed_aligned_country):
+    taxed = taxed_aligned_country[0].countries["FRA"].households.ts
+    untaxed = _aligned_simulation(datawrapper, monkeypatch)[0].countries["FRA"].households.ts
+    tax = taxed.current("housing_taxes_property") + taxed.current("housing_taxes_residence")
+    assert tax.sum() > 0
+    np.testing.assert_array_equal(untaxed.current("expected_behavioural_income_housing_taxes"), 0.0)
+    for prefix in ("expected_", ""):
+        np.testing.assert_allclose(
+            taxed.current(prefix + "behavioural_income_raw"),
+            untaxed.current(prefix + "behavioural_income_raw") - tax,
+            rtol=1e-12,
+            atol=1e-6,
+        )
+
+
+def test_housing_tax_series_stays_aligned_with_realised_income(taxed_aligned_country):
+    simulation, _ = taxed_aligned_country
+    country = simulation.countries["FRA"]
+    hh = country.households.ts
+    tax_rows = lambda: len(hh.historic("housing_taxes_property"))  # noqa: E731
+    # The t0 seed overrides the opening row: one row per realised income row after construction.
+    assert tax_rows() == len(hh.historic("housing_taxes_residence")) == len(hh.historic("income")) == 1
+    lengths, realise = [], country.update_realised_metrics
+
+    def realise_and_record(*args, **kwargs):
+        lengths.append((tax_rows(), len(hh.historic("income"))))
+        return realise(*args, **kwargs)
+
+    country.update_realised_metrics = realise_and_record
+    for t in range(2):
+        simulation.iterate(t)
+        # Settled: aligned again.
+        assert tax_rows() == len(hh.historic("housing_taxes_residence")) == len(hh.historic("income")) == t + 2
+    # From the expectations step until settlement, the tax series is one row ahead of realised income.
+    assert lengths == [(2, 1), (3, 2)]
+
+
+def test_opening_dividends_settle_within_plan_and_declaration_at_t1(datawrapper, monkeypatch):
+    simulation, _ = _aligned_simulation(datawrapper, monkeypatch)
+    country = simulation.countries["FRA"]
+    hh, firms = country.households, country.firms.ts
+    declared_firm = firms.current("dividend_fund_declared_distribution").copy()
+    declared = (
+        hh.ts.current("dividend_fund_declared_firm_distribution").sum()
+        + hh.ts.current("dividend_fund_declared_bank_distribution").sum()
+    )
+    assert declared > 0
+    simulation.iterate(0)
+    planned = firms.current("dividend_fund_planned_distribution")
+    settled_firm = firms.current("dividend_fund_settlement_debit")
+    # Per firm: settled at t1 <= planned at t1 <= declared at t0.
+    assert np.all(settled_firm <= planned + 1e-9) and np.all(planned <= declared_firm + 1e-9)
+    settled = hh.ts.current("dividend_fund_total_settled_distribution")[0]
+    bank_debit = country.banks.ts.current("dividend_fund_settlement_debit").sum()
+    assert 0 < settled <= declared + 1e-9
+    np.testing.assert_allclose(settled, settled_firm.sum() + bank_debit)
+    np.testing.assert_allclose(hh.ts.current("dividend_fund_settlement_identity_error"), 0.0, atol=1e-9)
+    assert hh.ts.current("income_dividend_distributions").sum() > 0
+
+
+# ---- income_denominator / income_denominator_window drive the prepared path ---------------------------
+
+
+def _record_prepared_inputs(country, monkeypatch, *, force_window=None):
+    """Capture ConsumptionInputs from the live adapter; optionally force the window (the old hard-coded 4)."""
+    adapter, original, captured = (
+        country._consumption_input_adapter,
+        country._consumption_input_adapter.collect_inputs,
+        [],
+    )
+
+    def collect(*args, **kwargs):
+        if force_window is not None:
+            kwargs["history_window"] = force_window
+        captured.append(original(*args, **kwargs))
+        return captured[-1]
+
+    monkeypatch.setattr(adapter, "collect_inputs", collect)
+    return captured
+
+
+def test_paper_yaml_denominator_keys_reach_the_consumption_rule():
+    root = Path(__file__).resolve().parents[4]
+    production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+    parameters = production.households.functions.consumption.parameters
+    assert (parameters["income_denominator"], parameters["income_denominator_window"]) == ("geometric_average", 4)
+
+
+def _run_periods(datawrapper, monkeypatch, periods=3, *, mode=None, window=None, force_window=None):
+    simulation, _ = _aligned_simulation(datawrapper, monkeypatch)
+    country = simulation.countries["FRA"]
+    rule = country.households.functions["consumption"]
+    if mode is not None:
+        rule.income_denominator, rule.income_denominator_window = mode, window
+    captured = _record_prepared_inputs(country, monkeypatch, force_window=force_window)
+    for t in range(periods):
+        simulation.iterate(t)
+    return rule, captured
+
+
+def test_current_yaml_values_reproduce_the_previous_fixed_window(datawrapper, monkeypatch):
+    """geometric_average / 4 is what the prepared path always used: the inputs are identical."""
+    rule, configured = _run_periods(datawrapper, monkeypatch)
+    assert (rule.income_denominator, rule.income_denominator_window) == ("geometric_average", 4)
+    _, fixed = _run_periods(datawrapper, monkeypatch, force_window=4)
+    assert len(configured) == len(fixed) > 1
+    assert configured[-1].window_row_count > 1
+    for a, b in zip(configured, fixed):
+        assert a.histories.history_window == b.histories.history_window == 4
+        for name in ("income_base_real", "annual_income_base_real", "pi_log_ratio_rebased"):
+            np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
+
+
+@pytest.mark.parametrize("mode, window, expected", [("current", 4, 1), ("geometric_average", 2, 2)])
+def test_denominator_mode_and_window_are_honoured(datawrapper, monkeypatch, mode, window, expected):
+    _, captured = _run_periods(datawrapper, monkeypatch, mode=mode, window=window)
+    assert captured[-1].histories.history_window == captured[-1].window_row_count == expected
+
+
+@pytest.mark.parametrize("missing", ["income_denominator", "income_denominator_window"])
+def test_prepared_path_without_explicit_denominator_keys_fails_at_construction(datawrapper, monkeypatch, missing):
+    with pytest.raises(ValueError, match="explicit income_denominator"):
+        _aligned_simulation(datawrapper, monkeypatch, drop_parameters=(missing,))

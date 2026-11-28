@@ -642,9 +642,21 @@ class Country:
         self._initialize_nominal_employee_income()
         # The t0 behavioural-income lower bound, before the t0 income records that it floors.
         self._set_opening_income_guard()
+        if (
+            isinstance(consumption, CreditAugmentedConsumption)
+            and consumption.uses_aligned_behavioural_income
+            and consumption.uses_income_belief_learning
+        ):
+            # The prepared consumption path has no default denominator: missing keys or a window that is not a
+            # whole number of periods fail here, at construction, not at the first planning pass.
+            consumption.prepared_income_window_periods(self.economy.time_unit)
         # Both direct construction and from_pickled_country pass here. Seed
         # aligned t0 income after all initial social components are in place.
         if getattr(households.functions["consumption"], "uses_aligned_behavioural_income", False):
+            # The t0 dividend declaration and housing taxes precede the t0 income records that count them.
+            # The legacy cash-income path keeps its previous t0 (no opening declaration, no t0 housing taxes).
+            self._seed_opening_dividend_declaration()
+            self._seed_opening_household_housing_taxes()
             self._record_behavioural_income(expected=True, initial=True)
             self._record_behavioural_income(expected=False, initial=True)
 
@@ -2380,35 +2392,75 @@ class Country:
                 expected_household_income - self.households.current_housing_taxes()
             )
 
-    def _append_household_housing_taxes(self) -> None:
-        """Fix this period's housing taxes before households plan, once per period.
+    def _household_housing_taxes_at_start_of_period(self) -> tuple[np.ndarray, np.ndarray]:
+        """Property and residence taxes by household, from the owner and occupant at the start of the period.
 
-        Owner and occupant are those at the start of the period, as French
-        property and residence taxes are fixed on 1 January. The residence tax
-        is levied on the occupant at the start of the period on the latest
-        recorded rent (cash or imputed): a household that moves within the
-        period pays on its previous dwelling's rent, and a newly housed
-        household pays from the next period. The plan (financing income) and
-        the settlement (realised income, central government revenue) use this
-        one amount, so a household that spends its whole plan is not
-        overdrawn by the tax.
-
-        Idempotent within a period: the realised ``income`` row is appended
-        once per period in update_realised_metrics, so the housing-tax series
-        has one row more than ``income`` once this period's taxes are fixed.
-        A repeated call in the same period keeps the start-of-period amount.
+        French property and residence taxes are fixed on 1 January. The residence tax is levied on the
+        occupant at the start of the period on the latest recorded rent (cash or imputed): a household that
+        moves within the period pays on its previous dwelling's rent, and a newly housed household pays from
+        the next period.
         """
-        hh_ts = self.households.ts
-        if len(hh_ts.historic("housing_taxes_property")) > len(hh_ts.historic("income")):
-            return
         properties = self.housing_market.states["properties"]
-        property_tax, residence_tax = self.central_government.compute_household_housing_taxes(
+        return self.central_government.compute_household_housing_taxes(
             property_values=properties["Value"].fillna(0.0).values,
             property_owner_ids=properties["Corresponding Owner Household ID"].values,
             occupant_rental_value=self.households.ts.current("rent") + self.households.ts.current("rent_imputed"),
         )
-        self.households.ts.housing_taxes_property.append(property_tax)
-        self.households.ts.housing_taxes_residence.append(residence_tax)
+
+    def _append_household_housing_taxes(self) -> None:
+        """Fix this period's housing taxes before households plan, once per period.
+
+        The plan (financing income) and the settlement (realised income, central government revenue) use
+        this one amount, so a household that spends its whole plan is not overdrawn by the tax.
+
+        Idempotent within a period: the realised ``income`` row is appended once per period in
+        update_realised_metrics, so the housing-tax series has one row more than ``income`` once this
+        period's taxes are fixed. A repeated call in the same period keeps the start-of-period amount.
+        """
+        hh_ts = self.households.ts
+        if len(hh_ts.historic("housing_taxes_property")) > len(hh_ts.historic("income")):
+            return
+        property_tax, residence_tax = self._household_housing_taxes_at_start_of_period()
+        hh_ts.housing_taxes_property.append(property_tax)
+        hh_ts.housing_taxes_residence.append(residence_tax)
+
+    def _seed_opening_household_housing_taxes(self) -> None:
+        """Record the t0 housing taxes (rates are calibrated before construction) in the t0 row.
+
+        The t0 behavioural income then deducts them as every later period does. No cash moves at t0.
+        """
+        property_tax, residence_tax = self._household_housing_taxes_at_start_of_period()
+        self.households.ts.override_current("housing_taxes_property", property_tax)
+        self.households.ts.override_current("housing_taxes_residence", residence_tax)
+
+    def _seed_opening_dividend_declaration(self) -> None:
+        """Declare the opening distribution, so that households are paid dividends from t1.
+
+        Settlement at t is the declaration of t-1, so without a t0 declaration nothing is paid at t1 and t1
+        income is lower than from t2 on. The declaration is the runtime one (record_diagnostic_dividend_fund)
+        applied to the opening state: payout ratio x after-tax earnings behind the distress gate, capped by the
+        firm's forecast cash capacity for t1, and payout ratio x bank cash-distributable profits, allocated by
+        the ownership quota. Every declaration row the runtime appends is written to the t0 row. Nothing is
+        credited at t0. At t1 firms reserve and pay only what cash allows; banks settle the declaration without
+        a cash gate, as at every later period. The t0 expected dividend income is the declaration net of
+        withholding. Without owners (zero quotas) nothing is seeded, as the runtime declares nothing.
+        """
+        wealth_function = self.households.functions["wealth"]
+        firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", 0.0))
+        bank_payout_ratio = float(getattr(wealth_function, "dividend_fund_bank_payout_ratio", 0.0))
+        quota = self.households.states["dividend_fund_ownership_quota"]
+        if float(np.sum(quota)) <= 0.0 or (firm_payout_ratio <= 0.0 and bank_payout_ratio <= 0.0):
+            return
+        for ts, name, values in self._dividend_declaration_rows():
+            ts.override_current(name, values)
+        hh = self.households.ts
+        expected_dividend_income = self.households.compute_expected_dividend_income(
+            income_tax_rate=self.central_government.states["Income Tax"]
+        )
+        hh.override_current("expected_income_dividend_distributions", expected_dividend_income)
+        hh.override_current("total_expected_income_dividend_distributions", [expected_dividend_income.sum()])
+        if getattr(wealth_function, "illiquid_returns_are_capital_gains", False):
+            hh.override_current("expected_income_financial_assets", expected_dividend_income.copy())
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False
@@ -2701,6 +2753,7 @@ class Country:
                 household_layout_key=input_layout,
                 current_consumer_price=self.economy.current_consumer_price_level(),
                 price_history_layout="aligned" if price_rows == income_rows else "missing_current",
+                history_window=consumption_function.prepared_income_window_periods(self.economy.time_unit),
                 # Current real income is valued at the nominalization price CPI_{t-1}(1 + Pi^e).
                 expected_inflation=self.economy.current_expected_consumer_period_inflation(),
             )
@@ -4481,13 +4534,54 @@ class Country:
             [float(firm_receipts.sum() + bank_receipts.sum() - firm_debit.sum() - bank_debit.sum())]
         )
 
-    def record_diagnostic_dividend_fund(self) -> None:
-        """Record a conditional next-period proposal; only settlement declares cash.
+    def _firm_dividend_forecast_cash_capacity(self) -> np.ndarray:
+        """Forecast next-period firm cash after senior uses, the cap on the declared firm distribution.
 
-        The legacy declared_distribution carriers retain their names for saved
-        output compatibility. They represent proposals which can expire.
+        Projects realised non-debt cash costs at estimated nominal growth; next-period scheduled interest and
+        principal and the carried operating facility (with interest) are reserved. No future refinance is
+        presumed. May be negative; the planned distribution floors it at zero.
+
+        At t0 (the opening declaration) the growth and PPI-inflation estimates do not exist yet (NaN). The
+        projection then uses a nominal growth factor of 1, i.e. it projects the current flows flat, so the
+        opening cap is the runtime formula with neutral growth. Without this, ``max(0, nan)`` evaluates to 0
+        and silently drops the projected operating cash. With finite estimates the factor is unchanged.
         """
-        from macromodel.country.diagnostic_dividend_fund import compute_diagnostic_dividend_fund
+        next_service = self.credit_market.compute_scheduled_firm_installments_preview()
+        estimated_growth = float(self.economy.ts.current("estimated_growth")[0])
+        estimated_ppi_inflation = float(self.economy.ts.current("estimated_ppi_inflation")[0])
+        if np.isfinite(estimated_growth) and np.isfinite(estimated_ppi_inflation):
+            nominal_growth = max(0.0, (1 + estimated_growth) * (1 + estimated_ppi_inflation))
+        else:
+            nominal_growth = 1.0
+        projected_operating_cash = nominal_growth * (
+            self.firms.ts.current("nominal_amount_sold_in_lcu")
+            - self.firms.ts.current("total_wage")
+            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
+            - self.firms.direct_tfp_investment_cash_expense()
+            - self.firms.ts.current("taxes_paid_on_production")
+            - self.firms.ts.current("corporate_taxes_paid")
+            - self.firms.ts.current("capital_formation_taxes_paid")
+            - self.firms.ts.current("interest_paid_on_deposits")
+        )
+        carried_facility = self.firms.ts.current("operating_revolving_closing_balance")
+        return (
+            self.firms.ts.current("deposits")
+            + projected_operating_cash
+            - next_service["scheduled_interest_due"]
+            - next_service["scheduled_principal_due"]
+            - carried_facility * (1 + self.firms.ts.current("operating_revolving_rate"))
+        )
+
+    def _dividend_declaration_rows(self) -> list[tuple[Any, str, Any]]:
+        """This period's declaration and its diagnostics, as (time series, name, value) rows.
+
+        The runtime appends these rows each period (record_diagnostic_dividend_fund); the opening seed
+        writes the same rows into t0 (_seed_opening_dividend_declaration).
+        """
+        from macromodel.country.diagnostic_dividend_fund import (
+            compute_diagnostic_dividend_fund,
+            compute_planned_firm_distribution,
+        )
 
         # Preserve model revenue/capital conventions; accrue unpaid ordinary
         # interest for payout earnings even though the cash ledger capitalises it.
@@ -4512,7 +4606,7 @@ class Country:
         firm_payout_ratio = float(getattr(wealth_function, "dividend_fund_firm_payout_ratio", 0.0))
         bank_payout_ratio = float(getattr(wealth_function, "dividend_fund_bank_payout_ratio", 0.0))
         has_owners = float(result.ownership_quota.sum()) > 0.0
-        firm_declared = (
+        profit_ceiling = (
             result.firm_distributable_profit_candidate * firm_payout_ratio
             if has_owners
             else np.zeros_like(result.firm_distributable_profit_candidate)
@@ -4522,75 +4616,62 @@ class Country:
             if has_owners
             else np.zeros_like(result.bank_distributable_profit_candidate)
         )
-        from macromodel.country.diagnostic_dividend_fund import compute_planned_firm_distribution
-
-        profit_ceiling = firm_declared.copy()
-        next_service = self.credit_market.compute_scheduled_firm_installments_preview()
-        nominal_growth = max(
-            0.0,
-            (1 + float(self.economy.ts.current("estimated_growth")[0]))
-            * (1 + float(self.economy.ts.current("estimated_ppi_inflation")[0])),
-        )
-        # Project realised non-debt cash costs; ordinary principal and facility
-        # repayment are reserved separately. No future refinance is presumed.
-        projected_operating_cash = nominal_growth * (
-            self.firms.ts.current("nominal_amount_sold_in_lcu")
-            - self.firms.ts.current("total_wage")
-            - self.firms.ts.current("nominal_amount_spent_in_lcu").sum(axis=1)
-            - self.firms.direct_tfp_investment_cash_expense()
-            - self.firms.ts.current("taxes_paid_on_production")
-            - self.firms.ts.current("corporate_taxes_paid")
-            - self.firms.ts.current("capital_formation_taxes_paid")
-            - self.firms.ts.current("interest_paid_on_deposits")
-        )
-        carried_facility = self.firms.ts.current("operating_revolving_closing_balance")
-        forecast_capacity = (
-            self.firms.ts.current("deposits")
-            + projected_operating_cash
-            - next_service["scheduled_interest_due"]
-            - next_service["scheduled_principal_due"]
-            - carried_facility * (1 + self.firms.ts.current("operating_revolving_rate"))
-        )
+        forecast_capacity = self._firm_dividend_forecast_cash_capacity()
         firm_declared = compute_planned_firm_distribution(
             proposal=profit_ceiling,
             cash_after_senior_uses=forecast_capacity,
         )
-        self.firms.ts.dividend_fund_after_tax_earnings.append(firm_cash_profit_after_settlement.copy())
-        self.firms.ts.dividend_fund_profit_ceiling.append(profit_ceiling)
-        self.firms.ts.dividend_fund_forecast_cash_capacity.append(np.maximum(forecast_capacity, 0.0))
         firm_retained = result.firm_distributable_profit_candidate - firm_declared
         bank_retained = result.bank_distributable_profit_candidate - bank_declared
-        ts = self.households.ts
-        ts.dividend_fund_declared_firm_distribution.append(result.ownership_quota * float(firm_declared.sum()))
-        ts.dividend_fund_declared_bank_distribution.append(result.ownership_quota * float(bank_declared.sum()))
-        ts.dividend_fund_total_firm_distributable_profit_candidate.append(
-            [float(result.firm_distributable_profit_candidate.sum())]
-        )
-        ts.dividend_fund_total_bank_distributable_profit_candidate.append(
-            [float(result.bank_distributable_profit_candidate.sum())]
-        )
-        ts.dividend_fund_total_firm_declared_distribution.append([float(firm_declared.sum())])
-        ts.dividend_fund_total_bank_declared_distribution.append([float(bank_declared.sum())])
-        ts.dividend_fund_total_firm_retained_capacity.append([float(firm_retained.sum())])
-        ts.dividend_fund_total_bank_retained_capacity.append([float(bank_retained.sum())])
-        ts.dividend_fund_firm_retained_capacity_identity_error.append(
-            [float((firm_declared + firm_retained - result.firm_distributable_profit_candidate).sum())]
-        )
-        ts.dividend_fund_bank_retained_capacity_identity_error.append(
-            [float((bank_declared + bank_retained - result.bank_distributable_profit_candidate).sum())]
-        )
-        ts.dividend_fund_fund_identity_error.append([result.fund_identity_error])
-        self.firms.ts.dividend_fund_cash_distributable_profit_candidate.append(
-            result.firm_distributable_profit_candidate
-        )
-        self.firms.ts.dividend_fund_distress_gate_passed.append(result.firm_distress_gate_passed)
-        self.firms.ts.dividend_fund_declared_distribution.append(firm_declared)
-        self.firms.ts.dividend_fund_retained_capacity.append(firm_retained)
-        self.banks.ts.dividend_fund_cash_distributable_profit_candidate.append(
-            result.bank_distributable_profit_candidate
-        )
-        self.banks.ts.dividend_fund_declared_distribution.append(bank_declared)
-        self.banks.ts.dividend_fund_retained_capacity.append(bank_retained)
+        firms, banks, hh = self.firms.ts, self.banks.ts, self.households.ts
+        return [
+            (firms, "dividend_fund_after_tax_earnings", firm_cash_profit_after_settlement.copy()),
+            (firms, "dividend_fund_profit_ceiling", profit_ceiling),
+            (firms, "dividend_fund_forecast_cash_capacity", np.maximum(forecast_capacity, 0.0)),
+            (hh, "dividend_fund_declared_firm_distribution", result.ownership_quota * float(firm_declared.sum())),
+            (hh, "dividend_fund_declared_bank_distribution", result.ownership_quota * float(bank_declared.sum())),
+            (
+                hh,
+                "dividend_fund_total_firm_distributable_profit_candidate",
+                [float(result.firm_distributable_profit_candidate.sum())],
+            ),
+            (
+                hh,
+                "dividend_fund_total_bank_distributable_profit_candidate",
+                [float(result.bank_distributable_profit_candidate.sum())],
+            ),
+            (hh, "dividend_fund_total_firm_declared_distribution", [float(firm_declared.sum())]),
+            (hh, "dividend_fund_total_bank_declared_distribution", [float(bank_declared.sum())]),
+            (hh, "dividend_fund_total_firm_retained_capacity", [float(firm_retained.sum())]),
+            (hh, "dividend_fund_total_bank_retained_capacity", [float(bank_retained.sum())]),
+            (
+                hh,
+                "dividend_fund_firm_retained_capacity_identity_error",
+                [float((firm_declared + firm_retained - result.firm_distributable_profit_candidate).sum())],
+            ),
+            (
+                hh,
+                "dividend_fund_bank_retained_capacity_identity_error",
+                [float((bank_declared + bank_retained - result.bank_distributable_profit_candidate).sum())],
+            ),
+            (hh, "dividend_fund_fund_identity_error", [result.fund_identity_error]),
+            (firms, "dividend_fund_cash_distributable_profit_candidate", result.firm_distributable_profit_candidate),
+            (firms, "dividend_fund_distress_gate_passed", result.firm_distress_gate_passed),
+            (firms, "dividend_fund_declared_distribution", firm_declared),
+            (firms, "dividend_fund_retained_capacity", firm_retained),
+            (banks, "dividend_fund_cash_distributable_profit_candidate", result.bank_distributable_profit_candidate),
+            (banks, "dividend_fund_declared_distribution", bank_declared),
+            (banks, "dividend_fund_retained_capacity", bank_retained),
+        ]
+
+    def record_diagnostic_dividend_fund(self) -> None:
+        """Record a conditional next-period proposal; only settlement declares cash.
+
+        The legacy declared_distribution carriers retain their names for saved
+        output compatibility. They represent proposals which can expire.
+        """
+        for ts, name, values in self._dividend_declaration_rows():
+            ts.dicts[name].append(values)
 
     def update_realised_metrics(self, period_index: int | None = None) -> None:
         """Update realized economic outcomes after market clearing.

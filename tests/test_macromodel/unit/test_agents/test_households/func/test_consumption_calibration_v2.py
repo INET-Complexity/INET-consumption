@@ -161,6 +161,15 @@ class TestIdiosyncraticTerm:
 
 
 class TestGeometricAverageIncome:
+    @pytest.mark.parametrize("time_unit", [1, 12])
+    def test_legacy_window_rejects_non_quarterly_runs(self, time_unit):
+        """The legacy window counts model periods, which are quarters only when time_unit is 3."""
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=4)
+        history = np.ones((4, 1))
+        with pytest.raises(ValueError, match="time_unit=3"):
+            rule._geometric_average_income(history, 1.0, np.ones(4), time_unit=time_unit)
+        np.testing.assert_allclose(rule._geometric_average_income(history, 1.0, np.ones(4), time_unit=3), [1.0])
+
     def test_geometric_mean_over_the_window(self):
         rule = _rule(income_denominator="geometric_average", income_denominator_window=4)
         history = np.array([[1.0], [10.0], [100.0], [1000.0]])
@@ -219,12 +228,55 @@ class TestGeometricAverageIncome:
             rule._geometric_average_income(np.array([1.0, 2.0]), 1.0, np.ones(1))
 
 
+class TestPreparedIncomeWindow:
+    """The prepared (production) path takes its income window from the configured denominator, in quarters."""
+
+    def test_current_uses_one_period(self):
+        rule = _rule(income_denominator="current", income_denominator_window=4)
+        assert rule.prepared_income_window_periods(3) == rule.prepared_income_window_periods(1) == 1
+
+    @pytest.mark.parametrize("window", [1, 2, 4, 8])
+    def test_quarterly_runs_use_the_window_as_is(self, window):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=window)
+        assert rule.prepared_income_window_periods(3) == window
+
+    @pytest.mark.parametrize("window", [1, 4])
+    def test_monthly_runs_cover_the_same_span(self, window):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=window)
+        assert rule.prepared_income_window_periods(1) == 3 * window
+
+    def test_window_that_is_not_a_whole_number_of_periods_fails(self):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=1)
+        with pytest.raises(ValueError, match="whole number"):
+            rule.prepared_income_window_periods(6)
+
+    def test_numpy_integer_window_is_accepted(self):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=np.int64(3))
+        assert rule.prepared_income_window_periods(3) == 3
+
+    @pytest.mark.parametrize(
+        "keys",
+        [{}, {"income_denominator": "geometric_average"}, {"income_denominator_window": 4}],
+    )
+    def test_prepared_path_requires_explicit_keys(self, keys):
+        with pytest.raises(ValueError, match="explicit income_denominator"):
+            _rule(**keys).prepared_income_window_periods(3)
+
+    def test_legacy_defaults_are_unchanged(self):
+        rule = _rule()
+        assert (rule.income_denominator, rule.income_denominator_window) == ("current", 20)
+
+
 class TestConfigValidation:
     @pytest.mark.parametrize(
         "kwargs, match",
         [
             ({"income_denominator": "mean"}, "income_denominator"),
             ({"income_denominator_window": 0}, "window"),
+            ({"income_denominator_window": -4}, "window"),
+            ({"income_denominator_window": 4.5}, "window"),
+            ({"income_denominator_window": True}, "window"),
+            ({"income_denominator_window": "4"}, "window"),
             ({"idiosyncratic_persistence": "ar1"}, "persistence"),
             ({"continuous_wealth_calibration": dict(V2, index_construction="pca")}, "index_construction"),
         ],

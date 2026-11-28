@@ -22,7 +22,7 @@ import numpy as np
 from numba import njit
 
 from macromodel.agents.households.cashflow_rates import DebtServicePayments
-from macromodel.agents.households.consumption_inputs import ConsumptionInputs, OpeningStockValues
+from macromodel.agents.households.consumption_inputs import ConsumptionInputs, OpeningStockValues, whole_periods
 from macromodel.util.housing_flows import normalise_housing_flows
 
 
@@ -707,8 +707,8 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         idiosyncratic_sd: float = 0.0,
         idiosyncratic_persistence: str = "fixed_effect",
         idiosyncratic_seed: int | None = None,
-        income_denominator: str = "current",
-        income_denominator_window: int = 20,
+        income_denominator: str | None = None,
+        income_denominator_window: int | None = None,
         uses_aligned_behavioural_income: bool = False,
         debt_service_cashflow_propensity: float = -0.75,
     ):
@@ -968,17 +968,35 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         # Denominator of the three balance-sheet ratios and of C/y.
         #   "current"           (v1) -- current-period income, annualised.
         #   "geometric_average" (v2) -- trailing geometric mean of real income over
-        #                               `income_denominator_window` periods, which is
+        #                               `income_denominator_window`, which is
         #                               the concept the HFCS calibration divides by
         #                               (disp_geom_avg_income, a smoothed multi-year
         #                               income). The single-period denominator is the
         #                               near-zero-income mechanism behind issue #90.
+        # Units of the window: the prepared (aligned) path reads it in QUARTERS
+        # (4 = one year) and converts it to model periods with the time unit
+        # (prepared_income_window_periods). The legacy cash-income helper
+        # _geometric_average_income counts it in model periods, as before, and
+        # rejects any run that is not quarterly, where the two would disagree. The prepared path requires both keys explicitly
+        # (it fails loudly otherwise); the legacy path keeps its defaults
+        # ("current", 20).
+        self._income_denominator_explicit = income_denominator is not None and income_denominator_window is not None
+        if income_denominator is None:
+            income_denominator = "current"
+        if income_denominator_window is None:
+            income_denominator_window = 20
         if income_denominator not in ("current", "geometric_average"):
             raise ValueError(
                 f"income_denominator must be 'current' or 'geometric_average', got {income_denominator!r}."
             )
-        if income_denominator_window < 1:
-            raise ValueError(f"income_denominator_window must be >= 1, got {income_denominator_window}.")
+        if (
+            isinstance(income_denominator_window, (bool, np.bool_))
+            or not isinstance(income_denominator_window, (int, np.integer))
+            or income_denominator_window < 1
+        ):
+            raise ValueError(
+                f"income_denominator_window must be a positive integer, got {income_denominator_window!r}."
+            )
         self.income_denominator = income_denominator
         self.income_denominator_window = int(income_denominator_window)
 
@@ -1222,6 +1240,25 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             )
         return np.where(np.isfinite(eps), eps, 0.0)
 
+    def prepared_income_window_periods(self, months_per_period: float) -> int:
+        """Periods of income history behind the prepared denominator.
+
+        "current" uses the current period only. "geometric_average" reads ``income_denominator_window`` in
+        quarters (4 = one year) and converts it to model periods: x1 in quarterly runs, x3 in monthly runs.
+        The prepared path has no default denominator: both keys must be configured explicitly.
+        """
+        if not self._income_denominator_explicit:
+            raise ValueError(
+                "The prepared consumption path requires explicit income_denominator and "
+                "income_denominator_window in the consumption parameters."
+            )
+        if self.income_denominator == "current":
+            return 1
+        try:
+            return whole_periods(3 * self.income_denominator_window, months_per_period)
+        except ValueError as error:
+            raise ValueError(f"income_denominator_window={self.income_denominator_window} quarters: {error}") from error
+
     def _geometric_average_income(
         self,
         historic_income: np.ndarray,
@@ -1229,8 +1266,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         historic_deflator: np.ndarray | None = None,
         subsistence_income: np.ndarray | float | None = None,
         expected_inflation: float = 0.0,
+        time_unit: int = 3,
     ) -> np.ndarray:
         """Trailing geometric mean of real income over the configured window.
+
+        Legacy cash-income path only. Its window counts model periods, which equal the quarters of
+        ``income_denominator_window`` only in quarterly runs, so any other ``time_unit`` (months per period) is
+        rejected rather than silently reading the window in the wrong unit. The prepared path converts the
+        window instead (``prepared_income_window_periods``).
 
         This is temporal smoothing of runtime behavioural income. The HFCS
         ``disp_geom_avg_income`` is instead a same-year component blend; it does
@@ -1266,6 +1309,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
         fallback: if this case can occur for the caller's inputs, it must supply
         ``subsistence_income``.
         """
+        if time_unit != 3:
+            raise ValueError(
+                "income_denominator='geometric_average' on the legacy cash-income path counts "
+                f"income_denominator_window in model periods and supports quarterly runs only (time_unit=3); got "
+                f"time_unit={time_unit}. Use the prepared (aligned behavioural-income) path, which converts the window."
+            )
         history = np.asarray(historic_income, dtype=float)
         if history.ndim != 2:
             raise ValueError(f"historic_income must be 2-D (periods, households), got shape {history.shape}.")
@@ -2175,7 +2224,12 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                     "(periods x households); none was supplied by the caller."
                 )
             ratio_denominator = self._geometric_average_income(
-                historic_income, current_cpi, historic_deflator, subsistence_income, expected_inflation
+                historic_income,
+                current_cpi,
+                historic_deflator,
+                subsistence_income,
+                expected_inflation,
+                time_unit=time_unit,
             )
         else:
             ratio_denominator = None

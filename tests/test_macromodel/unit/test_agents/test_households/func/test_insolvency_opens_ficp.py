@@ -201,6 +201,41 @@ class TestHouseholdsWiring:
         np.testing.assert_array_equal(test_households.ts.current("ficp_generic_insolvency_trigger_consumed"), trigger)
         assert not test_households.current_ficp_active()[0]
 
+    def test_pending_trigger_with_only_interest_arrears_left_opens_no_episode(self, test_households, monkeypatch):
+        """Household 0 repaid all consumer principal early but still owes interest arrears of 5: no
+        episode opens and its trigger is consumed (user decision 10). Household 1 owes principal and enters."""
+        n = int(test_households.ts.current("n_households"))
+        monkeypatch.setitem(
+            test_households.functions,
+            "insolvency",
+            DefaultHouseholdInsolvencyHandler(consumer_insolvency_opens_ficp=True),
+        )
+        trigger = np.zeros(n, dtype=bool)
+        trigger[:2] = True
+        test_households.ts.ficp_generic_insolvency_trigger.append(trigger)
+        principal, interest_arrears = np.zeros(n), np.zeros(n)
+        principal[1] = 25.0
+        interest_arrears[0] = 5.0
+
+        test_households.record_stage6_consumer_distress_state(
+            scheduled_consumer_payments=np.zeros(n),
+            actual_consumer_payments=np.zeros(n),
+            unpaid_consumer_payments=np.zeros(n),
+            time_unit=3,
+            consumer_contractual_principal=principal,
+            consumer_principal_arrears=np.zeros(n),
+            consumer_interest_arrears=interest_arrears,
+        )
+
+        remaining = np.asarray(test_households.ts.current("ficp_exclusion_remaining_periods"), dtype=float)
+        assert remaining[0] == 0 and remaining[1] == 20
+        assert test_households.ts.current("ficp_episode_id")[0] == 0
+        assert test_households.ts.current("ficp_open_balance")[0] == 0.0
+        assert not test_households.ts.current("ficp_state")[0]
+        assert not np.any(test_households.ts.current("ficp_generic_insolvency_trigger"))
+        np.testing.assert_array_equal(test_households.ts.current("ficp_generic_insolvency_trigger_consumed"), trigger)
+        assert not test_households.current_ficp_active()[0]
+
     def test_trigger_ignored_without_routing(self, test_households):
         n = int(test_households.ts.current("n_households"))
         trigger = np.ones(n, dtype=bool)
@@ -247,55 +282,85 @@ def test_interest_arrears_only_household_stays_outside_ficp():
     np.testing.assert_array_equal(handler.last_ficp_trigger, [False])
 
 
-def test_planned_uses_never_open_a_new_overdraft_for_a_banned_household():
-    """A banned household gets no consumer credit (K = 0); the Stage 5 allocation spends only
-    income + max(LFA, 0), so planned closing deposits stay >= min(opening LFA, 0).
+def test_stage5_resolver_grants_no_credit_and_opens_no_overdraft_under_ficp(test_households, monkeypatch):
+    """Run the household Stage 5 resolver with positive credit requested for everyone.
 
-    Households: overdrawn (-50), small positive balance (20), zero balance. Desired uses far
-    exceed income, so the allocation is binding for all three.
+    Household 0 is in an FICP episode (overdrawn, LFA -50), household 1 has a pending generic-insolvency
+    trigger (LFA 20), household 2 is a control outside FICP (LFA 0). Desired uses far exceed resources.
+    The banned households get no credit after the grant and close with deposits >= min(opening LFA, 0).
     """
-    from macromodel.agents.households.func.financial_feasibility import (
-        HouseholdFinancialFeasibility,
-        PostGrantFeasiblePlan,
+    hh = test_households
+    monkeypatch.setitem(
+        hh.functions, "insolvency", DefaultHouseholdInsolvencyHandler(consumer_insolvency_opens_ficp=True)
     )
+    assert hh.uses_feasibility_resolver
+    n = int(hh.ts.current("n_households"))
+    zeros = np.zeros(n)
+    remaining = zeros.copy()
+    remaining[0] = 20.0
+    hh.ts.override_current("ficp_exclusion_remaining_periods", remaining)
+    trigger = np.zeros(n, dtype=bool)
+    trigger[1] = True
+    hh.ts.override_current("ficp_generic_insolvency_trigger", trigger)
+    banned = hh.current_ficp_active()
+    assert banned[0] and banned[1] and not banned[2:].any()
+    lfa = np.asarray(hh.ts.current("liquid_financial_assets"), dtype=float).copy()
+    lfa[:3] = [-50.0, 20.0, 0.0]
+    hh.ts.override_current("liquid_financial_assets", lfa)
+    # No housing transactions this period (the opening rows are NaN before the first housing round).
+    for name in ("price_paid_for_property", "received_mortgages"):
+        hh.ts.override_current(name, zeros.copy())
 
-    lfa = np.asarray([-50.0, 20.0, 0.0])
-    income = np.full(3, 100.0)
-    rent = np.full(3, 30.0)
-    floor = np.full(3, 40.0)
-    service = np.full(3, 20.0)
-    overdraft_interest = np.asarray([2.0, 0.0, 0.0])
-    zeros = np.zeros(3)
-    plan = PostGrantFeasiblePlan(
-        credit_granted=zeros,
-        credit_rationing_gap=zeros,
-        planned_liquidation_total=zeros,
-        residual_shortfall_after_granted_credit=zeros,
+    # Pre-grant plan: a shortfall well beyond liquid assets, so every household requests credit.
+    shortfall = np.full(n, 500.0)
+    funded = np.minimum(shortfall, np.maximum(lfa, 0.0))
+    hh.populate_pre_grant_feasible_plan_from_liquid_asset_drawdown(
+        liquidity_shortfall_before_repair=shortfall,
+        funded_from_liquid_assets=funded,
+        residual_shortfall_after_lfa=shortfall - funded,
     )
+    hh.populate_pre_grant_feasible_plan_credit_requested(credit_requested=shortfall - funded)
+    hh.populate_pre_grant_feasible_plan_planned_liquidation(planned_liquidation_total=zeros, current_ifa=zeros)
+    assert np.all(hh.current_live_credit_requested()[:3] > 0.0)
+    hh.compute_target_credit(current_sales=None)
+    requested = np.asarray(hh.ts.current("target_consumption_loans"), dtype=float)
+    np.testing.assert_array_equal(requested[banned], 0.0)
+    assert requested[2] > 0.0
+
+    # The market grants the request in full (its capacity cap also zeroes banned households).
+    hh.populate_post_grant_feasible_plan_from_granted_credit(credit_granted=requested)
+    hh.reserve_post_grant_executable_liquidation(available_pre_stage4_ifa=zeros, minimum_sale_size=zeros)
+    granted = hh.current_post_grant_credit_granted()
+    np.testing.assert_array_equal(granted[banned], 0.0)
+    assert granted[2] > 0.0
+
+    income = np.asarray(hh.current_financing_income(), dtype=float)
+    rent, service = np.full(n, 30.0), np.full(n, 20.0)
+    overdraft_interest = np.where(lfa < 0.0, 2.0, 0.0)
     for support_enabled in (True, False):
-        settled = HouseholdFinancialFeasibility().settle_consumption_floor(
-            plan,
-            consumption_before_floor=np.full(3, 300.0),
-            subsistence_floor=floor,
+        hh.apply_consumption_floor_to_post_grant_plan(
+            consumption_before_floor=income + 1000.0,
+            subsistence_floor=np.full(n, 40.0),
             cash_rent=rent,
-            resources=income + np.maximum(lfa, 0.0),
+            resources=hh.current_floor_settlement_resources(),
             scheduled_consumer_service=service,
             scheduled_mortgage_service=zeros,
-            investment=np.full(3, 50.0),
+            investment=np.full(n, 50.0),
             support_enabled=support_enabled,
             scheduled_overdraft_interest=overdraft_interest,
-            opening_overdraft=np.maximum(-lfa, 0.0),
+            opening_overdraft=hh.current_opening_overdraft(),
         )
+        plan = hh.post_grant_feasible_plan
+        np.testing.assert_array_equal(plan.credit_granted[banned], 0.0)
         uses = (
-            settled.consumption_after_floor
-            + (rent - settled.unpaid_rent)
-            + (service - settled.unpaid_consumer_service)
-            + (overdraft_interest - settled.unpaid_overdraft_interest)
-            + settled.investment_after_floor
+            plan.consumption_after_floor
+            + (rent - plan.unpaid_rent)
+            + (service - plan.unpaid_consumer_service)
+            + (overdraft_interest - plan.unpaid_overdraft_interest)
+            + plan.investment_after_floor
         )
-        closing = lfa + income + settled.floor_support - uses
-
-        assert np.all(closing >= np.minimum(lfa, 0.0) - 1e-9), (support_enabled, closing)
+        closing = lfa + income + plan.floor_support + plan.credit_granted - uses
+        assert np.all(closing[banned] >= np.minimum(lfa, 0.0)[banned] - 1e-6), (support_enabled, closing[:3])
 
 
 def test_mortgage_refused_under_ficp_ban_through_purchase_completion():
@@ -482,3 +547,25 @@ class TestTriggerLifecycle:
 
         with pytest.raises(ValueError, match="uses_feasibility_resolver"):
             test_households.configure_feasibility_resolver(False)
+
+
+def test_constructing_households_with_routing_and_without_the_resolver_fails(datawrapper):
+    from macromodel.agents.households import Households
+    from macromodel.configurations import HouseholdsConfiguration
+
+    configuration = HouseholdsConfiguration()
+    configuration.functions.insolvency.parameters = {"consumer_insolvency_opens_ficp": True}
+    configuration.parameters.uses_feasibility_resolver = False
+    country = datawrapper.synthetic_countries["FRA"]
+    with pytest.raises(ValueError, match="uses_feasibility_resolver"):
+        Households.from_pickled_agent(
+            synthetic_population=country.population,
+            configuration=configuration,
+            country_name="FRA",
+            all_country_names=["FRA", "ROW"],
+            industries=datawrapper.industries,
+            initial_consumption_by_industry=country.industry_data["industry_vectors"]["Household Consumption in LCU"],
+            value_added_tax=country.tax_data.value_added_tax,
+            scale=datawrapper.configuration.country_configs["FRA"].scale,
+            synthetic_country=country,
+        )

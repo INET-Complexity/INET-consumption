@@ -69,9 +69,10 @@ class DefaultHouseholdInsolvencyHandler(HouseholdInsolvencyHandler):
     forgiven with a bank loss at the end). A household insolvent only through
     an overdraft or a mortgage does not enter FICP, nor does one whose only
     consumer claim is interest arrears (treated as overdraft-only, by design).
-    Stage 6 opens the episode only if the consumer balance is still positive. Without the flag, consumer
-    loans are removed with no bank loss (legacy). Mortgages are removed and
-    booked as bank losses in both cases.
+    Stage 6 opens the episode only if consumer principal (contractual
+    principal plus principal arrears) is still positive. Without the flag,
+    consumer loans are removed with no bank loss (legacy). Mortgages are
+    removed and booked as bank losses in both cases.
 
     The generic insolvency path is a model addition: in the paper, FICP is
     entered only by a second missed payment.

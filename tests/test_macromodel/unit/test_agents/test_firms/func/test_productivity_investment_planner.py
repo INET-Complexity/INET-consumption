@@ -583,29 +583,37 @@ class TestTargetIntensityTFPInvestmentPlanner:
         params.update(overrides)
         return TargetIntensityTFPInvestmentPlanner(**params)
 
-    def test_zero_rd_depreciation_reproduces_pre_change_outputs_exactly(self):
-        # Values pinned from origin/main (2475648b) before rd_depreciation_rate existed.
+    def test_zero_rd_depreciation_reproduces_pre_change_outputs(self):
+        # Values pinned from origin/main (2475648b) before rd_depreciation_rate existed. Compared with a
+        # tight tolerance because np.power can differ in the last ulp across platforms (macOS vs CI Linux).
         rates = np.array([0.0025, 0.004, 0.02, 0.0025])
         cash = np.array([1e6, 1e6, 1e6, 0.5])
-        for planner in (self._berd_planner(), self._berd_planner(rd_depreciation_rate=0.0)):
-            _, tfp, _ = self._plan_berd(planner, rates, available_cash=cash)
-            diagnostics = planner.last_diagnostics
+        default = self._berd_planner()
+        explicit_zero = self._berd_planner(rd_depreciation_rate=0.0)
+        _, tfp_default, _ = self._plan_berd(default, rates, available_cash=cash)
+        _, tfp_zero, _ = self._plan_berd(explicit_zero, rates, available_cash=cash)
+        diagnostics = explicit_zero.last_diagnostics
 
-            assert tfp.tolist() == [33.51498362322307, 13.86539638155515, 0.017530533876910618, 0.5]
-            assert diagnostics["desired_intensity"].tolist() == [
-                0.03351498362322307,
-                0.006932698190777575,
-                3.506106775382124e-05,
-                0.03351498362322307,
-            ]
-            assert diagnostics["desired_marginal_cost"].tolist() == [
-                0.03701498362322307,
-                0.011932698190777576,
-                0.021035061067753824,
-                0.03701498362322307,
-            ]
-            assert diagnostics["cash_binding"].tolist() == [0.0, 0.0, 0.0, 1.0]
-            assert np.array_equal(diagnostics["user_cost"], diagnostics["effective_cost_rate"])
+        # Adding delta = 0.0 to the cost is bitwise neutral.
+        assert np.array_equal(tfp_default, tfp_zero)
+        assert np.array_equal(diagnostics["user_cost"], diagnostics["effective_cost_rate"])
+        for key in ("desired_intensity", "desired_marginal_cost", "cash_binding"):
+            assert np.array_equal(default.last_diagnostics[key], diagnostics[key])
+
+        np.testing.assert_allclose(
+            tfp_zero, [33.51498362322307, 13.86539638155515, 0.017530533876910618, 0.5], rtol=1e-12
+        )
+        np.testing.assert_allclose(
+            diagnostics["desired_intensity"],
+            [0.03351498362322307, 0.006932698190777575, 3.506106775382124e-05, 0.03351498362322307],
+            rtol=1e-12,
+        )
+        np.testing.assert_allclose(
+            diagnostics["desired_marginal_cost"],
+            [0.03701498362322307, 0.011932698190777576, 0.021035061067753824, 0.03701498362322307],
+            rtol=1e-12,
+        )
+        assert diagnostics["cash_binding"].tolist() == [0.0, 0.0, 0.0, 1.0]
 
     def test_rd_depreciation_raises_user_cost_and_lowers_desired_intensity_at_same_omega(self):
         rates = np.array([0.0025, 0.004, 0.02, 0.0025])

@@ -80,6 +80,26 @@ def prepare(history=None, opening=None, pi=None, **tags):
 
 
 @pytest.mark.parametrize(
+    "window,expected",
+    [
+        (1, [80, 160]),
+        (2, [np.sqrt(40 * 80), np.sqrt(80 * 160)]),
+        (3, [(20 * 40 * 80) ** (1 / 3), (40 * 80 * 160) ** (1 / 3)]),
+    ],
+)
+def test_configured_window_selects_the_trailing_rows(window, expected):
+    result = prepare(histories(history_window=window))
+    np.testing.assert_allclose(result.income_base_real, expected, rtol=1e-10, atol=1e-12)
+    assert result.window_row_count == window
+
+
+def test_quarterly_default_window_is_four():
+    default, explicit = prepare(histories()), prepare(histories(history_window=4))
+    np.testing.assert_array_equal(default.income_base_real, explicit.income_base_real)
+    assert default.histories.history_window == 4
+
+
+@pytest.mark.parametrize(
     "rows,expected",
     [
         (1, [80, 160]),
@@ -168,7 +188,6 @@ def test_declared_missing_current_appends_once(rows):
         ({"months_per_period": np.inf}, "months_per_period"),
         ({"history_window": 0}, "history_window"),
         ({"history_window": True}, "history_window"),
-        ({"history_window": 2}, "quarterly history_window"),
         ({"upstream_floor_used_history": np.full((4, 2), 2)}, "upstream_floor"),
         ({"upstream_raw_history": np.ones((1, 2))}, "upstream_raw"),
     ],

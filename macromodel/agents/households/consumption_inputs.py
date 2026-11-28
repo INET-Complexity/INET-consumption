@@ -216,8 +216,6 @@ class IncomeHistories(_ImmutableRecord):
             or self.history_window <= 0
         ):
             raise ValueError("history_window must be a positive integer.")
-        if self.months_per_period == 3 and self.history_window != 4:
-            raise ValueError("quarterly history_window must be 4.")
         for name in ("behavioural_income_nominal_history", "guard_nominal_history", "consumer_price_history"):
             object.__setattr__(
                 self,

@@ -2777,6 +2777,7 @@ class Country:
             consumer_contractual_rate,
             expected_consumer_inflation,
             n_periods_per_year,
+                history_window=consumption_function.prepared_income_window,
         )
         real_mortgage_rate = annualized_fisher_real_rate(
             mortgage_contractual_rate,

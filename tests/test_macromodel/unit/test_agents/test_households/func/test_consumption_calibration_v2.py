@@ -219,12 +219,34 @@ class TestGeometricAverageIncome:
             rule._geometric_average_income(np.array([1.0, 2.0]), 1.0, np.ones(1))
 
 
+class TestPreparedIncomeWindow:
+    """The prepared (production) path takes its income window from the configured denominator."""
+
+    def test_current_uses_one_period(self):
+        assert _rule(income_denominator="current", income_denominator_window=4).prepared_income_window == 1
+
+    @pytest.mark.parametrize("window", [1, 2, 4, 8])
+    def test_geometric_average_uses_the_configured_window(self, window):
+        rule = _rule(income_denominator="geometric_average", income_denominator_window=window)
+        assert rule.prepared_income_window == window
+
+    def test_numpy_integer_window_is_accepted(self):
+        assert (
+            _rule(income_denominator="geometric_average", income_denominator_window=np.int64(3)).prepared_income_window
+            == 3
+        )
+
+
 class TestConfigValidation:
     @pytest.mark.parametrize(
         "kwargs, match",
         [
             ({"income_denominator": "mean"}, "income_denominator"),
             ({"income_denominator_window": 0}, "window"),
+            ({"income_denominator_window": -4}, "window"),
+            ({"income_denominator_window": 4.5}, "window"),
+            ({"income_denominator_window": True}, "window"),
+            ({"income_denominator_window": "4"}, "window"),
             ({"idiosyncratic_persistence": "ar1"}, "persistence"),
             ({"continuous_wealth_calibration": dict(V2, index_construction="pca")}, "index_construction"),
         ],

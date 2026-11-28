@@ -12,8 +12,7 @@ from macromodel.configurations import CountryConfiguration, SimulationConfigurat
 from macromodel.simulation import Simulation
 
 
-@pytest.fixture
-def aligned_country(datawrapper, monkeypatch):
+def _aligned_simulation(datawrapper, monkeypatch):
     root = Path(__file__).resolve().parents[4]
     production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
     config = CountryConfiguration()
@@ -33,7 +32,13 @@ def aligned_country(datawrapper, monkeypatch):
     )
     country = simulation.countries["FRA"]
     monkeypatch.setattr(country.economy, "current_expected_consumer_period_inflation", lambda: 0.0)
-    return country, config
+    return simulation, config
+
+
+@pytest.fixture
+def aligned_country(datawrapper, monkeypatch):
+    simulation, config = _aligned_simulation(datawrapper, monkeypatch)
+    return simulation.countries["FRA"], config
 
 
 def test_deposit_repricing_does_not_raise_nonproperty_permanent_income(aligned_country, monkeypatch):
@@ -470,3 +475,62 @@ def test_initial_payment_history_anchors_contractual_obligation_and_cash_income(
         hh.ts.current("expected_behavioural_income"), country.economy.ts.current("subsistence_consumption")
     )
     np.testing.assert_array_equal(hh.ts.current(prefix + "income_nominal"), expected_income)
+
+
+# ---- income_denominator / income_denominator_window drive the prepared path ---------------------------
+
+
+def _record_prepared_inputs(country, monkeypatch, *, force_window=None):
+    """Capture ConsumptionInputs from the live adapter; optionally force the window (the old hard-coded 4)."""
+    adapter, original, captured = (
+        country._consumption_input_adapter,
+        country._consumption_input_adapter.collect_inputs,
+        [],
+    )
+
+    def collect(*args, **kwargs):
+        if force_window is not None:
+            kwargs["history_window"] = force_window
+        captured.append(original(*args, **kwargs))
+        return captured[-1]
+
+    monkeypatch.setattr(adapter, "collect_inputs", collect)
+    return captured
+
+
+def test_paper_yaml_denominator_keys_reach_the_consumption_rule():
+    root = Path(__file__).resolve().parents[4]
+    production = load_country_configuration(root / "run_model/config/country_config_FRA.yaml", country_iso3="FRA")
+    parameters = production.households.functions.consumption.parameters
+    assert (parameters["income_denominator"], parameters["income_denominator_window"]) == ("geometric_average", 4)
+
+
+def _run_periods(datawrapper, monkeypatch, periods=3, *, mode=None, window=None, force_window=None):
+    simulation, _ = _aligned_simulation(datawrapper, monkeypatch)
+    country = simulation.countries["FRA"]
+    rule = country.households.functions["consumption"]
+    if mode is not None:
+        rule.income_denominator, rule.income_denominator_window = mode, window
+    captured = _record_prepared_inputs(country, monkeypatch, force_window=force_window)
+    for t in range(periods):
+        simulation.iterate(t)
+    return rule, captured
+
+
+def test_current_yaml_values_reproduce_the_previous_fixed_window(datawrapper, monkeypatch):
+    """geometric_average / 4 is what the prepared path always used: the inputs are identical."""
+    rule, configured = _run_periods(datawrapper, monkeypatch)
+    assert (rule.income_denominator, rule.income_denominator_window) == ("geometric_average", 4)
+    _, fixed = _run_periods(datawrapper, monkeypatch, force_window=4)
+    assert len(configured) == len(fixed) > 1
+    assert configured[-1].window_row_count > 1
+    for a, b in zip(configured, fixed):
+        assert a.histories.history_window == b.histories.history_window == 4
+        for name in ("income_base_real", "annual_income_base_real", "pi_log_ratio_rebased"):
+            np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
+
+
+@pytest.mark.parametrize("mode, window, expected", [("current", 4, 1), ("geometric_average", 2, 2)])
+def test_denominator_mode_and_window_are_honoured(datawrapper, monkeypatch, mode, window, expected):
+    _, captured = _run_periods(datawrapper, monkeypatch, mode=mode, window=window)
+    assert captured[-1].histories.history_window == captured[-1].window_row_count == expected

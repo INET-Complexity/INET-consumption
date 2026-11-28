@@ -977,8 +977,14 @@ class CreditAugmentedConsumption(HouseholdConsumption):
             raise ValueError(
                 f"income_denominator must be 'current' or 'geometric_average', got {income_denominator!r}."
             )
-        if income_denominator_window < 1:
-            raise ValueError(f"income_denominator_window must be >= 1, got {income_denominator_window}.")
+        if (
+            isinstance(income_denominator_window, (bool, np.bool_))
+            or not isinstance(income_denominator_window, (int, np.integer))
+            or income_denominator_window < 1
+        ):
+            raise ValueError(
+                f"income_denominator_window must be a positive integer, got {income_denominator_window!r}."
+            )
         self.income_denominator = income_denominator
         self.income_denominator_window = int(income_denominator_window)
 
@@ -1221,6 +1227,11 @@ class CreditAugmentedConsumption(HouseholdConsumption):
                 - components["target_consumption_log_long_run"]
             )
         return np.where(np.isfinite(eps), eps, 0.0)
+
+    @property
+    def prepared_income_window(self) -> int:
+        """Periods of income history behind the prepared denominator: one under "current", else the window."""
+        return 1 if self.income_denominator == "current" else self.income_denominator_window
 
     def _geometric_average_income(
         self,

@@ -2039,7 +2039,13 @@ class Households(Agent):
         else:
             income = income + self.ts.current("income_financial_assets")
         # Housing taxes are paid from deposits: net them like the other taxes withheld at source.
-        return income - self.ts.current("housing_taxes_property") - self.ts.current("housing_taxes_residence")
+        return income - self.current_housing_taxes()
+
+    def current_housing_taxes(self) -> np.ndarray:
+        """This period's property plus residence taxes by household, fixed at the start of the period."""
+        return np.asarray(self.ts.current("housing_taxes_property"), dtype=float) + np.asarray(
+            self.ts.current("housing_taxes_residence"), dtype=float
+        )
 
     def compute_non_property_income(self) -> np.ndarray:
         """Calculate non-property current income (employment + social transfers).
@@ -2544,11 +2550,7 @@ class Households(Agent):
         if getattr(self, "_known_receipts_ready", False):
             return self.ts.current("financing_income")
         # Housing taxes are paid from deposits at settlement (fixed at the start of the period).
-        return (
-            self.ts.current("expected_income")
-            - self.ts.current("housing_taxes_property")
-            - self.ts.current("housing_taxes_residence")
-        )
+        return self.ts.current("expected_income") - self.current_housing_taxes()
 
     def refresh_post_labour_feasibility(self, scheduled_debt_service: np.ndarray) -> None:
         """Refresh cash needs without rebooking loans or authorising new sales."""

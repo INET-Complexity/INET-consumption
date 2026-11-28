@@ -790,7 +790,7 @@ class Country:
         # The expected social income removed above contains the period's minimum income T once; carry it back.
         receipts = receipts + wages + pension + unemployment + other + minimum_income
         # Housing taxes are paid from deposits at settlement: plan for them.
-        receipts = receipts - self._current_household_housing_taxes()
+        receipts = receipts - hh.current_housing_taxes()
         hh.ts.override_current("financing_income", receipts)
         hh._known_receipts_ready = True
 
@@ -2365,6 +2365,10 @@ class Country:
             self.households.ts.total_expected_income_dividend_distributions.append([expected_dividend_income.sum()])
 
         if not replace_current:
+            # Timing: the period's taxes are fixed here, before the plan. Financing income, realised income
+            # (compute_income), behavioural income (expected and realised passes) and the support reconciliation
+            # all read this period-t row; before #261 the behavioural income and the reconciliation read the t-1
+            # row, as the tax was appended only after them in update_realised_metrics.
             self._append_household_housing_taxes()
         expected_household_income = self._apply_household_income_shock(self.households.compute_expected_income())
         if replace_current:
@@ -2373,19 +2377,30 @@ class Country:
             self.households._known_receipts_ready = False
             self.households.ts.expected_income.append(expected_household_income)
             self.households.ts.financing_income.append(
-                expected_household_income - self._current_household_housing_taxes()
+                expected_household_income - self.households.current_housing_taxes()
             )
 
     def _append_household_housing_taxes(self) -> None:
-        """Fix this period's housing taxes before households plan.
+        """Fix this period's housing taxes before households plan, once per period.
 
         Owner and occupant are those at the start of the period, as French
-        property and residence taxes are fixed on 1 January; the occupant's
-        rental value is the latest recorded rent (cash or imputed). The plan
-        (financing income) and the settlement (realised income) use this one
-        amount, so a household that spends its whole plan is not overdrawn by
-        the tax.
+        property and residence taxes are fixed on 1 January. The residence tax
+        is levied on the occupant at the start of the period on the latest
+        recorded rent (cash or imputed): a household that moves within the
+        period pays on its previous dwelling's rent, and a newly housed
+        household pays from the next period. The plan (financing income) and
+        the settlement (realised income, central government revenue) use this
+        one amount, so a household that spends its whole plan is not
+        overdrawn by the tax.
+
+        Idempotent within a period: the realised ``income`` row is appended
+        once per period in update_realised_metrics, so the housing-tax series
+        has one row more than ``income`` once this period's taxes are fixed.
+        A repeated call in the same period keeps the start-of-period amount.
         """
+        hh_ts = self.households.ts
+        if len(hh_ts.historic("housing_taxes_property")) > len(hh_ts.historic("income")):
+            return
         properties = self.housing_market.states["properties"]
         property_tax, residence_tax = self.central_government.compute_household_housing_taxes(
             property_values=properties["Value"].fillna(0.0).values,
@@ -2394,12 +2409,6 @@ class Country:
         )
         self.households.ts.housing_taxes_property.append(property_tax)
         self.households.ts.housing_taxes_residence.append(residence_tax)
-
-    def _current_household_housing_taxes(self) -> np.ndarray:
-        """This period's property and residence taxes by household."""
-        return np.asarray(self.households.ts.current("housing_taxes_property"), dtype=float) + np.asarray(
-            self.households.ts.current("housing_taxes_residence"), dtype=float
-        )
 
     def _record_behavioural_income(
         self, *, expected: bool, replace_current: bool = False, initial: bool = False

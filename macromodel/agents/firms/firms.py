@@ -803,6 +803,7 @@ class Firms(Agent):
 
         firm_fields = {
             "effective_cost_rate": "tfp_investment_effective_cost_rate",
+            "user_cost": "tfp_investment_user_cost",
             "target_intensity": "tfp_investment_target_intensity",
             "cap_intensity": "tfp_investment_cap_intensity",
             "desired_intensity": "tfp_investment_desired_intensity",

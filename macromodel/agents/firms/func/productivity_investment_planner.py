@@ -10,6 +10,7 @@ PRODUCTIVITY_PLANNER_COMPATIBILITY_PARAMETERS = frozenset(
         "cap_multiplier",
         "investment_propensity",
         "private_value_weight",
+        "rd_depreciation_rate",
         "reference_effective_cost_rate",
         "search_steps",
         "sector_innovation_intensity",
@@ -552,7 +553,23 @@ class NoProductivityInvestmentPlanner(ProductivityInvestmentPlanner):
 
 
 class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
-    """Direct TFP investment planner based on target innovation intensity."""
+    """Direct TFP investment planner based on target innovation intensity.
+
+    Each firm chooses intensity i (TFP spending / nominal output) to maximise
+    V(i) = omega * phi * i**alpha - c * i - 0.5 * lambda * i**2, with FOC
+    omega * phi * alpha * i**(alpha - 1) = c + lambda * i, solved by bisection on
+    (0, cap_multiplier * i*_s]. The user cost per unit intensity is
+    c = effective_cost_rate + tfp_risk_premium + rd_depreciation_rate.
+
+    If private_value_weight is None, omega is set so that i*_s solves the FOC at a
+    reference cost: omega_s = (c_ref + lambda * i*_s) / (phi * alpha * i*_s**(alpha - 1)).
+    A numeric reference_effective_cost_rate is used directly as c_ref (recomputed each
+    call). With reference_effective_cost_rate="initial", c_ref is each firm's user cost
+    at the first planning call; omega is stored then and reused unchanged afterwards.
+
+    Diagnostics: "effective_cost_rate" records effective_cost_rate + tfp_risk_premium
+    (excluding R&D depreciation); "user_cost" records the full c.
+    """
 
     executes_direct_tfp_independently = True
 
@@ -567,8 +584,9 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         sector_innovation_intensity: dict[int | str, float] | None = None,
         cap_multiplier: float = 1.0,
         adjustment_cost_lambda: float = 1.0,
-        reference_effective_cost_rate: float = 0.02,
+        reference_effective_cost_rate: float | str = 0.02,
         tfp_risk_premium: float = 0.0,
+        rd_depreciation_rate: float = 0.0,
         private_value_weight: float | list[float] | None = None,
         silence_technical_investment: bool = True,
         bisection_steps: int = 60,
@@ -602,10 +620,18 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
             raise ValueError("cap_multiplier must be finite and positive.")
         if not np.isfinite(adjustment_cost_lambda) or adjustment_cost_lambda < 0:
             raise ValueError("adjustment_cost_lambda must be finite and non-negative.")
-        if not np.isfinite(reference_effective_cost_rate) or reference_effective_cost_rate < 0:
+        if isinstance(reference_effective_cost_rate, str):
+            if reference_effective_cost_rate != "initial":
+                raise ValueError(
+                    "reference_effective_cost_rate must be a finite non-negative number or 'initial'; "
+                    f"got {reference_effective_cost_rate!r}."
+                )
+        elif not np.isfinite(reference_effective_cost_rate) or reference_effective_cost_rate < 0:
             raise ValueError("reference_effective_cost_rate must be finite and non-negative.")
         if not np.isfinite(tfp_risk_premium) or tfp_risk_premium < 0:
             raise ValueError("tfp_risk_premium must be finite and non-negative.")
+        if not np.isfinite(rd_depreciation_rate) or rd_depreciation_rate < 0:
+            raise ValueError("rd_depreciation_rate must be finite and non-negative.")
         if np.any(~np.isfinite(self.investment_effectiveness)) or np.any(self.investment_effectiveness <= 0):
             raise ValueError("investment_effectiveness must contain finite positive values.")
         if (
@@ -619,8 +645,15 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         self.sector_innovation_intensity = self._validate_sector_intensity_map(sector_innovation_intensity or {})
         self.cap_multiplier = float(cap_multiplier)
         self.adjustment_cost_lambda = float(adjustment_cost_lambda)
-        self.reference_effective_cost_rate = float(reference_effective_cost_rate)
+        self.reference_effective_cost_rate: float | str = (
+            reference_effective_cost_rate
+            if isinstance(reference_effective_cost_rate, str)
+            else float(reference_effective_cost_rate)
+        )
         self.tfp_risk_premium = float(tfp_risk_premium)
+        self.rd_depreciation_rate = float(rd_depreciation_rate)
+        # Per-firm omega fixed at the first planning call when reference_effective_cost_rate == "initial".
+        self.initial_private_value_weight: np.ndarray | None = None
         self.private_value_weight = (
             None if private_value_weight is None else self._to_array(private_value_weight, n_firms)
         )
@@ -629,6 +662,10 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         self.last_diagnostics: dict[str, np.ndarray] = {}
         if self.bisection_steps <= 0:
             raise ValueError("bisection_steps must be positive.")
+
+    def update_parameters_from_config(self, parameters: dict) -> None:
+        """Re-initialise on reset so parameters are validated and the stored initial omega is cleared."""
+        TargetIntensityTFPInvestmentPlanner.__init__(self, **parameters)
 
     @staticmethod
     def _validate_sector_intensity_map(sector_innovation_intensity: dict[int | str, float]) -> dict[int, float]:
@@ -652,15 +689,24 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
             target[firm_industries == sector] = intensity
         return target
 
-    def _private_value_weight_by_firm(self, target_intensity: np.ndarray) -> np.ndarray:
+    def _private_value_weight_by_firm(self, target_intensity: np.ndarray, user_cost: np.ndarray) -> np.ndarray:
         if self.private_value_weight is not None:
             return self.private_value_weight
+        if self.reference_effective_cost_rate == "initial":
+            if self.initial_private_value_weight is None:
+                self.initial_private_value_weight = self._calibrated_private_value_weight(target_intensity, user_cost)
+            return self.initial_private_value_weight
+        return self._calibrated_private_value_weight(target_intensity, self.reference_effective_cost_rate)
+
+    def _calibrated_private_value_weight(
+        self, target_intensity: np.ndarray, reference_cost: float | np.ndarray
+    ) -> np.ndarray:
         denominator = (
             self.investment_effectiveness
             * self.investment_elasticity
             * np.power(target_intensity, self.investment_elasticity - 1.0)
         )
-        numerator = self.reference_effective_cost_rate + self.adjustment_cost_lambda * target_intensity
+        numerator = reference_cost + self.adjustment_cost_lambda * target_intensity
         return np.divide(numerator, denominator, out=np.zeros_like(target_intensity), where=denominator > 0)
 
     def _marginal_value(
@@ -699,15 +745,16 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         cap_intensity: np.ndarray,
         private_value_weight: np.ndarray,
         effective_rate: np.ndarray,
+        user_cost: np.ndarray,
         desired_intensity: np.ndarray,
         planned_intensity: np.ndarray,
         target_tfp_investment: np.ndarray,
         tfp_investment: np.ndarray,
     ) -> None:
         desired_mb = self._marginal_benefit(desired_intensity, private_value_weight)
-        desired_mc = effective_rate + self.adjustment_cost_lambda * desired_intensity
+        desired_mc = user_cost + self.adjustment_cost_lambda * desired_intensity
         planned_mb = self._marginal_benefit(planned_intensity, private_value_weight)
-        planned_mc = effective_rate + self.adjustment_cost_lambda * planned_intensity
+        planned_mc = user_cost + self.adjustment_cost_lambda * planned_intensity
 
         desired_ratio = np.divide(
             desired_mb,
@@ -722,9 +769,10 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
             where=np.isfinite(planned_mb) & np.isfinite(planned_mc) & (planned_mc > 0),
         )
 
-        marginal_at_cap = self._marginal_value(cap_intensity, private_value_weight, effective_rate)
+        marginal_at_cap = self._marginal_value(cap_intensity, private_value_weight, user_cost)
         self.last_diagnostics = {
             "effective_cost_rate": effective_rate.copy(),
+            "user_cost": user_cost.copy(),
             "target_intensity": target_intensity.copy(),
             "cap_intensity": cap_intensity.copy(),
             "desired_intensity": desired_intensity.copy(),
@@ -810,6 +858,11 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
             )
 
         if effective_cost_rate is None:
+            if self.reference_effective_cost_rate == "initial":
+                raise ValueError(
+                    "reference_effective_cost_rate='initial' requires effective_cost_rate to be passed "
+                    "to plan_productivity_investment (no numeric reference rate to fall back on)."
+                )
             effective_rate = np.full(len(current_nominal_production), self.reference_effective_cost_rate)
         else:
             effective_rate = np.asarray(effective_cost_rate, dtype=float)
@@ -820,11 +873,12 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
         effective_rate = effective_rate + self.tfp_risk_premium
         if np.any(~np.isfinite(effective_rate)) or np.any(effective_rate < 0):
             raise ValueError("effective_cost_rate must contain finite non-negative values.")
+        user_cost = effective_rate + self.rd_depreciation_rate
 
         target_intensity = self._target_intensity_by_firm(firm_industries)
         cap_intensity = self.cap_multiplier * target_intensity
-        private_value_weight = self._private_value_weight_by_firm(target_intensity)
-        desired_intensity = self._solve_desired_intensity(cap_intensity, private_value_weight, effective_rate)
+        private_value_weight = self._private_value_weight_by_firm(target_intensity, user_cost)
+        desired_intensity = self._solve_desired_intensity(cap_intensity, private_value_weight, user_cost)
 
         target_tfp_investment = desired_intensity * current_nominal_production
         tfp_investment = np.minimum(target_tfp_investment, np.maximum(0.0, available_cash))
@@ -839,6 +893,7 @@ class TargetIntensityTFPInvestmentPlanner(ProductivityInvestmentPlanner):
             cap_intensity=cap_intensity,
             private_value_weight=private_value_weight,
             effective_rate=effective_rate,
+            user_cost=user_cost,
             desired_intensity=desired_intensity,
             planned_intensity=planned_intensity,
             target_tfp_investment=target_tfp_investment,

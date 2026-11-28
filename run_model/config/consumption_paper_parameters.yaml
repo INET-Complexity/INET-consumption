@@ -94,7 +94,7 @@ asset_returns:
     # No R&D adjustment (+2-5 pts if netted). Was 0.10 (household property-income proxy).
     # Vault: experiments/2026-11-20-payout-earnings-sna.
     dividend_fund_firm_payout_ratio: 0.467
-    # Maximum bank payout share of the model base (interest margin net of credit losses plus household
+    # Bank payout share of the model base (interest margin net of credit losses plus household
     # asset-sale fees, before operating costs and tax; operating costs and other fee income sit in
     # industry-K firms). Data counterpart, six French groups (ACPR "Situation des grands groupes bancaires
     # français" + group reports), 2010-18 pooled (sum/sum): distributions to outside owners (incl. parts

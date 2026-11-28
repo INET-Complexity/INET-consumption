@@ -140,6 +140,16 @@ var_mapping = {
     "SA0200": "Survey Year",  # Survey year
 }
 
+# Extra HFCS variables read only for the calibration-support redraw (consumption_source_support), so that the
+# default households_df is unchanged. Flows are monthly or annual as published; see hfcs_consumption_support.
+support_var_mapping = {
+    "DI1412": "Interest Payments",  # Annual interest paid on household debt
+    "DL2100": "Mortgage Payments (flow)",  # Monthly mortgage payments
+    "DL2110": "HMR Mortgage Payments (flow)",  # Monthly HMR mortgage payments
+    "HC0110": "Monthly Leasing Payments",  # Monthly leasing payments
+    "HD1320c": "Money Market Funds",  # Mutual funds invested in money-market instruments
+}
+
 # List of variables containing monetary values that need currency conversion
 var_numerical = [
     "Income",  # Total income
@@ -200,6 +210,13 @@ var_numerical = [
     "Gift Amount 3",  # Gift/inheritance amount 3
     "Consumption of Consumer Goods/Services as a Share of Income",  # Spending ratio
 ]
+support_var_numerical = [
+    "Interest Payments",
+    "Mortgage Payments (flow)",
+    "HMR Mortgage Payments (flow)",
+    "Monthly Leasing Payments",
+    "Money Market Funds",
+]
 
 
 class HFCSReader:
@@ -252,6 +269,7 @@ class HFCSReader:
         exchange_rates: ExchangeRatesReader,
         num_surveys: int = 5,
         windfall_threshold: float = 20000.0,
+        support_inputs: bool = False,
     ) -> "HFCSReader":
         """
         Create a HFCSReader instance from CSV files.
@@ -275,6 +293,9 @@ class HFCSReader:
             Exchange rate converter for monetary values
         num_surveys : int, optional
             Number of survey waves to read (default: 5)
+        support_inputs : bool, optional
+            Also read the extra variables (``support_var_mapping``) needed to build the calibration
+            support inside the model. Off by default: the default data are then unchanged.
 
         Returns
         -------
@@ -302,6 +323,7 @@ class HFCSReader:
                         country_name_short=country_name_short,
                         year=year,
                         exchange_rates=exchange_rates,
+                        support_inputs=support_inputs,
                     )
                     for ind_path in individuals_paths
                 ],
@@ -320,6 +342,7 @@ class HFCSReader:
                         country_name_short=country_name_short,
                         year=year,
                         exchange_rates=exchange_rates,
+                        support_inputs=support_inputs,
                     )
                     for hh_path in households_paths
                 ],
@@ -338,6 +361,7 @@ class HFCSReader:
                         country_name_short=country_name_short,
                         year=year,
                         exchange_rates=exchange_rates,
+                        support_inputs=support_inputs,
                     )
                     for der_path in derived_paths
                 ],
@@ -506,6 +530,7 @@ class HFCSReader:
         country_name_short: str,
         year: int,
         exchange_rates: ExchangeRatesReader,
+        support_inputs: bool = False,
     ) -> pd.DataFrame:
         """
         Read and process a single HFCS CSV file.
@@ -529,6 +554,8 @@ class HFCSReader:
             Year for exchange rate lookup
         exchange_rates : ExchangeRatesReader
             Exchange rate converter
+        support_inputs : bool, optional
+            Also keep the ``support_var_mapping`` variables.
 
         Returns
         -------
@@ -550,15 +577,17 @@ class HFCSReader:
             df["SA0010"] = source_ids["SA0010"]
 
         # Filter for country and keep only mapped variables
+        mapping = {**var_mapping, **support_var_mapping} if support_inputs else var_mapping
         df = df[df["SA0100"] == country_name_short]
-        df = df[[col for col in var_mapping.keys() if col in df.columns]]
-        df.rename(columns=var_mapping, inplace=True)
+        df = df[[col for col in mapping.keys() if col in df.columns]]
+        df.rename(columns=mapping, inplace=True)
         df.set_index("ID", inplace=True)
         if "HFCS Source ID" in df:
             df["HFCS Source ID"] = df["HFCS Source ID"].astype("string")
 
         # Convert monetary values to local currency
-        var_numerical_union = [v for v in var_numerical if v in df.columns]
+        numerical = var_numerical + support_var_numerical if support_inputs else var_numerical
+        var_numerical_union = [v for v in numerical if v in df.columns]
         exchange_rate = exchange_rates.from_eur_to_lcu(country=country_name, year=year)
         for column in var_numerical_union:
             numeric = df[column].replace(["A", "M"], np.nan)

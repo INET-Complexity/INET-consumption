@@ -508,6 +508,10 @@ FRA:
       # technical_investment_effectiveness: 0.01
       tfp_base_growth_rate: 0.0  # revised direct-TFP calibration: all TFP growth comes from firm investment
       tfp_investment_elasticity: 0.3  # alpha: realised TFP growth = base + phi * (executed investment / output value)**alpha; match planner above
+      # R&D is already in calibrated compensation (D1) and purchases (ICIO GFCF); TFP investment is chosen by the
+      # planner but not charged, to avoid double counting. Open issue: carve R&D out of the opening wage bill and
+      # pay TFP spending to workers (option E).
+      charge_direct_tfp_investment: false
       # # DEAD (2026-09-01 config audit): dead by two independent routes.
       # (1) Nothing reads FirmsParameters.tfp_investment_share.
       # (2) The planner's own `tfp_investment_share` arg is unset here (default
